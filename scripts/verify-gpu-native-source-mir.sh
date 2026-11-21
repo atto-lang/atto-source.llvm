@@ -12,11 +12,18 @@ echo "source_head=$head"
 echo "source_tree=$tree"
 echo "compiler_guest_executed=false"
 echo "physical_gpu_executed=false"
+if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
+  echo "GPU_SOURCE_MIR_FAIL: dirty source checkout" >&2
+  exit 1
+fi
 for path in \
   src/main/cpp/oreslang/frontend/Parser.cpp \
   src/main/cpp/oreslang/frontend/GpuLaunchSourceMir.hpp \
   tests/gpu_source_launch_mir_test.cpp \
-  tests/atto_gpu_explicit_launch_admission.cmake; do
+  tests/atto_gpu_explicit_launch_admission.cmake \
+  scripts/verify-gpu-native-source-mir.sh \
+  .github/workflows/gpu-native-source-mir.yml \
+  CMakeLists.txt; do
   expected="$(git rev-parse "HEAD:$path")"
   observed="$(git hash-object "$path")"
   [[ "$expected" == "$observed" ]] || { echo "GPU_SOURCE_MIR_FAIL: blob mismatch $path" >&2; exit 1; }

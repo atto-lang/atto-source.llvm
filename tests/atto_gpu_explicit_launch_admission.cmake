@@ -62,12 +62,19 @@ set(expected_literal-argument "GPU-LAUNCH-002")
 foreach(case_name IN LISTS cases)
   # Every rejected source gets an isolated directory. No prior positive
   # compilation artifact can conceal a same-name overwrite.
-  set(case_dir "${WORKDIR}/${case_name}")
+  # Use a fresh directory per invocation: never delete an existing tree,
+  # and never let a stale same-name artifact be part of the baseline.
+  string(RANDOM LENGTH 20 ALPHABET "0123456789abcdef" case_nonce)
+  set(case_dir "${WORKDIR}/case-${case_name}-${case_nonce}")
+  if(EXISTS "${case_dir}")
+    message(FATAL_ERROR "${case_name}: random case workspace already exists")
+  endif()
   file(MAKE_DIRECTORY "${case_dir}")
   set(input "${case_dir}/${case_name}.ores")
   file(WRITE "${input}" "${source_${case_name}}")
   file(SHA256 "${input}" input_digest_before)
-  file(GLOB before RELATIVE "${case_dir}" "${case_dir}/*")
+  file(GLOB_RECURSE before LIST_DIRECTORIES true RELATIVE "${case_dir}"
+    "${case_dir}/*" "${case_dir}/.*")
   execute_process(COMMAND "${COMPILER}" "${input}"
     WORKING_DIRECTORY "${case_dir}"
     RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error
@@ -75,7 +82,9 @@ foreach(case_name IN LISTS cases)
   if("${result}" STREQUAL "0")
     message(FATAL_ERROR "${case_name}: unsupported physical GPU launch was compiled")
   endif()
-  if(NOT "${error}" MATCHES "${expected_${case_name}}")
+  # A diagnostic ID in an unrelated copied source line is not sufficient.
+  # Require the exact code followed by a colon in the compiler's stderr.
+  if(NOT "${error}" MATCHES "(^|[\\r\\n])oreslang-llvmc: ${expected_${case_name}}:")
     message(FATAL_ERROR "${case_name}: missing explicit GPU admission diagnostic: ${error}")
   endif()
   if(NOT "${error}" MATCHES "no implicit CPU fallback")
@@ -88,7 +97,8 @@ foreach(case_name IN LISTS cases)
   if(NOT "${input_digest_before}" STREQUAL "${input_digest_after}")
     message(FATAL_ERROR "${case_name}: compiler altered source bytes")
   endif()
-  file(GLOB after RELATIVE "${case_dir}" "${case_dir}/*")
+  file(GLOB_RECURSE after LIST_DIRECTORIES true RELATIVE "${case_dir}"
+    "${case_dir}/*" "${case_dir}/.*")
   if(NOT "${before}" STREQUAL "${after}")
     message(FATAL_ERROR "${case_name}: invalid GPU launch emitted a compiler artifact")
   endif()
