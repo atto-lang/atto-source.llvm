@@ -1,0 +1,10 @@
+define class Pair as
+  pub let int left = 20;
+  pub let int right = 22;
+end
+pub fnc main(): int {
+  let mut Pair pair = new Pair();
+  const former: int = rt take pair.left;
+  pair.left = former;
+  return pair.left + pair.right;
+}

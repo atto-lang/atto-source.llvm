@@ -264,3 +264,40 @@ and CTest JUnit receipt are checked on exact head. A CTest-registration
 only check or host-only model run must not substitute for actual execution.
 No successful run has been observed; current runner-admission failures
 leave the guest claim explicitly UNVERIFIED.
+
+## Compiler-owned checked reinitialization StoreInst bridge v1
+
+Actual native OwnershipChecker now marks a straight-line, definitely moved
+scalar class field only after its RHS expression passes ownership checking
+and a subsequent direct field assignment restores it. No marker is minted
+for normal field writes, arrays, nested aggregates, conditional, loop,
+caught-throw cleanup or scoped-local effects. Revalidation clears claims.
+
+After validation, SourceNodeIdentity seals the checked write as an immutable
+source-local Reinitialize.write_id equal to its compiler-minted NodeId.
+Pruning/resealing reissues this identity for retained functions; the checker
+fact must exist before LLVM codegen. The FieldWriteLedger binds the ID to
+the actual emitted preoptimization StoreInst, attaching unit/write-ID LLVM
+metadata. A reverse module scan rejects missing, malformed, cloned and
+orphaned reinitialization tags. Production codegen now executes a new
+verify_source_checked_reinitialize_stores check with independent source
+AST census, physical LLVM function/store identity and a bounded moved->owned
+CFG operation transition using the checker-minted WriteId.
+
+The bounded graph does not represent complete source control flow. Full
+typed-MIR completeness, LoanId/SSA use coverage, optimized-code correctness
+and guest proof flags remain false. Other CFG and cleanup effects cannot be
+promoted through this local operation bridge.
+
+Regression host suite expands 114 to 154 authored cases (28 additional
+negative mutations plus 12 nonpromoting controls). The source-node test
+remains 85 cases and the exact focused test inventory remains 16 CTests.
+Separate gates require 50 genuine source/Clang ownership fixtures and the
+tree-shake compiler-linked guest.
+
+The new `.atto` real-compiler guest verifies moved-field reinit metadata
+and a Clang-linked executable exit code 42, an ordinary field write without
+reinit metadata with the same exit code, and compile-time rejection of an
+unrestored moved-field read. It has exact-name CTest/JUnit verification and
+two-guests-one-rejection marker; it cannot be satisfied by a host-only test.
+All work is AUTHORED / NOT_EXECUTED until a real exact-head runner executes.

@@ -44,6 +44,7 @@ struct FieldWriteSite {
     std::uint64_t compiler_source_function_id = 0;
     std::uint64_t compiler_source_unit_id = 0;
     std::string compiler_source_path;
+    std::uint64_t source_checked_reinitialize_write_id = 0;
 };
 
 struct FieldWriteAudit {
@@ -91,7 +92,10 @@ public:
                      !source_function ||
                      !source_function->compiler_source_function_id ||
                      source_function->compiler_source_sealed_name !=
-                         source_function->name)))
+                         source_function->name ||
+                     source.compiler_reinitialize_write_id !=
+                         (source.compiler_checked_field_reinitialization
+                             ? source.compiler_source_node_id : 0))))
             throw std::runtime_error(
                 "ownership violation: invalid compiler field-write source/store origin");
         if (sites_.size() >= 4096)
@@ -121,13 +125,26 @@ public:
                 llvm::ConstantInt::get(i64,
                     static_cast<std::uint64_t>(source.offset)))
         }));
+        const std::uint64_t checked_reinit_id =
+            require_compiler_source_ids_
+                ? source.compiler_reinitialize_write_id : 0;
+        if (checked_reinit_id) {
+            // Metadata is minted only after independent ownership checking
+            // and validated AST sealing, and is attached to the real store.
+            emitted->setMetadata(kReinitMetadataKind, llvm::MDNode::get(ctx, {
+                llvm::ConstantAsMetadata::get(
+                    llvm::ConstantInt::get(i64, source_unit_id_)),
+                llvm::ConstantAsMetadata::get(
+                    llvm::ConstantInt::get(i64, checked_reinit_id))
+            }));
+        }
         sites_.push_back({&source, emitted, destination,
             emitted->getValueOperand(), source.receiver, source.field,
             canonical_place, source.offset, ticket,
             source_function, emitted_function,
             source.compiler_source_node_id,
             source_function ? source_function->compiler_source_function_id : 0,
-            source_unit_id_, source.compiler_source_path});
+            source_unit_id_, source.compiler_source_path, checked_reinit_id});
         return ticket;
     }
 
@@ -138,6 +155,7 @@ public:
         // Reverse inventory: an extra cloned/forged provenance-tagged store
         // must not escape the forward per-source receipt comparison.
         std::map<const llvm::StoreInst*, const llvm::Function*> tagged_stores;
+        std::set<const llvm::StoreInst*> tagged_reinitializations;
         for (const auto& function : module) {
             if (function.isDeclaration()) continue;
             for (const auto& block : function)
@@ -145,6 +163,12 @@ public:
                     live.emplace(&instruction, &function);
                     if (const auto* store =
                             llvm::dyn_cast<llvm::StoreInst>(&instruction)) {
+                        if (store->getMetadata(kReinitMetadataKind)) {
+                            if (tagged_reinitializations.size() >= 4096 ||
+                                    !tagged_reinitializations.insert(store).second)
+                                throw std::runtime_error(
+                                    "ownership violation: duplicate or oversized tagged reinitialization inventory");
+                        }
                         if (store->getMetadata(kMetadataKind)) {
                             if (tagged_stores.size() >= 4096 ||
                                     !tagged_stores.emplace(store, &function).second)
@@ -157,6 +181,8 @@ public:
         std::set<const Statement*> unique_sources;
         std::set<const llvm::Instruction*> unique_stores;
         std::set<std::uint64_t> unique_tickets;
+        std::set<std::uint64_t> unique_reinitialization_ids;
+        std::size_t expected_reinitializations = 0;
         for (std::size_t index = 0; index < sites_.size(); ++index) {
             const auto& record = sites_[index];
             // Source Program is stable for the duration of code emission.
@@ -185,6 +211,36 @@ public:
                     actual->getValueOperand() != record.stored)
                 throw std::runtime_error(
                     "ownership violation: source field-write store mutated or substituted");
+            if (record.source_checked_reinitialize_write_id) {
+                ++expected_reinitializations;
+                if (!unique_reinitialization_ids.insert(
+                        record.source_checked_reinitialize_write_id).second ||
+                        !tagged_reinitializations.count(actual))
+                    throw std::runtime_error(
+                        "ownership violation: reused or untagged checked reinitialization store");
+                const auto* reinit_tag = actual->getMetadata(kReinitMetadataKind);
+                if (!reinit_tag || reinit_tag->getNumOperands() != 2)
+                    throw std::runtime_error(
+                        "ownership violation: invalid checked reinitialization LLVM metadata");
+                const auto uint64_tag = [&](unsigned slot) -> std::uint64_t {
+                    const auto* meta = llvm::dyn_cast<llvm::ConstantAsMetadata>(
+                        reinit_tag->getOperand(slot).get());
+                    const auto* integer = meta
+                        ? llvm::dyn_cast<llvm::ConstantInt>(meta->getValue())
+                        : nullptr;
+                    if (!integer || !integer->getType()->isIntegerTy(64))
+                        throw std::runtime_error(
+                            "ownership violation: noncanonical checked reinitialization metadata");
+                    return integer->getZExtValue();
+                };
+                if (uint64_tag(0) != record.compiler_source_unit_id ||
+                        uint64_tag(1) != record.source_checked_reinitialize_write_id)
+                    throw std::runtime_error(
+                        "ownership violation: checked reinitialization store tag changed");
+            } else if (tagged_reinitializations.count(actual)) {
+                throw std::runtime_error(
+                    "ownership violation: unchecked field store forged reinitialization metadata");
+            }
             const auto bound_tag = tagged_stores.find(actual);
             if (bound_tag == tagged_stores.end() ||
                     bound_tag->second != found->second)
@@ -215,6 +271,9 @@ public:
                 throw std::runtime_error(
                     "ownership violation: emitted field-write provenance metadata changed");
         }
+        if (tagged_reinitializations.size() != expected_reinitializations)
+            throw std::runtime_error(
+                "ownership violation: orphaned LLVM reinitialization provenance tag");
         if (tagged_stores.size() != sites_.size())
             throw std::runtime_error(
                 "ownership violation: invented or unpaired emitted tagged field store");
@@ -318,6 +377,8 @@ public:
                              found->first->compiler_source_node_id ||
                          site.compiler_source_path !=
                              found->first->compiler_source_path ||
+                         site.source_checked_reinitialize_write_id !=
+                             found->first->compiler_reinitialize_write_id ||
                          site.compiler_source_function_id !=
                              found->second->compiler_source_function_id)) ||
                     !matched.insert(site.source).second)
@@ -355,6 +416,8 @@ public:
 private:
     static constexpr const char* kMetadataKind =
         "atto.ownership.field_write.source.v1";
+    static constexpr const char* kReinitMetadataKind =
+        "atto.ownership.reinitialize.source.v1";
     std::vector<FieldWriteSite> sites_;
     std::set<const Statement*> sources_;
     std::set<const llvm::StoreInst*> instructions_;

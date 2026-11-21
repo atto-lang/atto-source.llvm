@@ -218,19 +218,19 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-source-field-store-ledger-75-test)
     # Independent production source-AST direct FieldWrite inventory,
     # cross-checked against the emitted LLVM StoreInst provenance ledger.
-    # 88 negative and 26 positive host cases, including reverse-tag and
+    # 116 negative and 38 positive host cases, including reverse-tag and
     # source-to-native-function declaration cross-checks. No guest NLL proof.
-    add_executable(oreslang-native-source-fieldwrite-coverage-114-test
-        tests/native_source_fieldwrite_coverage_114_test.cpp)
-    target_include_directories(oreslang-native-source-fieldwrite-coverage-114-test PRIVATE
+    add_executable(oreslang-native-source-fieldwrite-coverage-154-test
+        tests/native_source_fieldwrite_coverage_154_test.cpp)
+    target_include_directories(oreslang-native-source-fieldwrite-coverage-154-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
         "${LLVM_INCLUDE_DIRS}")
-    target_compile_options(oreslang-native-source-fieldwrite-coverage-114-test PRIVATE
+    target_compile_options(oreslang-native-source-fieldwrite-coverage-154-test PRIVATE
         -Wall -Wextra -Wpedantic -Werror)
-    target_link_libraries(oreslang-native-source-fieldwrite-coverage-114-test PRIVATE
+    target_link_libraries(oreslang-native-source-fieldwrite-coverage-154-test PRIVATE
         ${ORE_LLVM_LIBS})
-    add_test(NAME native_ownership_source_fieldwrite_coverage_114
-        COMMAND oreslang-native-source-fieldwrite-coverage-114-test)
+    add_test(NAME native_ownership_source_fieldwrite_coverage_154
+        COMMAND oreslang-native-source-fieldwrite-coverage-154-test)
     # Parsed/validated AttoLang source node identity seal; pure host C++.
     # No mocked LLVM stores or guest parity claim.
     add_executable(oreslang-source-node-identity-85-test
@@ -611,6 +611,15 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_tree_shaking_direct_calls PROPERTIES TIMEOUT 120)
+    # Source-checker moved-field restoration: real AttoLang compiler emits
+    # checked LLVM StoreInst metadata, Clang links and native code executes.
+    add_test(NAME native_source_checked_reinitialize_guest
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_source_checked_reinitialize_guest.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_source_checked_reinitialize_guest
+        PROPERTIES TIMEOUT 180)
     # Self-test for a measurement-only compile benchmark. No performance
     # threshold is asserted in CI: runner timing is not reproducible.
     add_test(NAME native_compile_benchmark_harness_selftest

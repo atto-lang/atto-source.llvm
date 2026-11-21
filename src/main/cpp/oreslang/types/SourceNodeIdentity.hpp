@@ -36,7 +36,10 @@ inline void seal_validated_program(Program& program) {
             throw std::runtime_error(
                 "ownership violation: source node identity traversal exceeds bound");
         if (statement.compiler_source_node_id ||
-                !statement.compiler_source_path.empty())
+                !statement.compiler_source_path.empty() ||
+                statement.compiler_reinitialize_write_id ||
+                (statement.compiler_checked_field_reinitialization &&
+                 statement.kind != Statement::Kind::FieldWrite))
             throw std::runtime_error(
                 "ownership violation: preassigned source node identity");
         ++count;
@@ -74,6 +77,12 @@ inline void seal_validated_program(Program& program) {
             const std::string& path) -> void {
         stmt.compiler_source_node_id = ++next_node;
         stmt.compiler_source_path = path;
+        // OwnershipChecker marked this actual direct moved-field restore;
+        // source identity minting fixes its claim before LLVM codegen. The
+        // ordinal belongs to the validated AST, not to emitted LLVM stores.
+        stmt.compiler_reinitialize_write_id =
+            stmt.compiler_checked_field_reinitialization
+                ? stmt.compiler_source_node_id : 0;
         for (std::size_t i = 0; i < stmt.then_statements.size(); ++i)
             self(self, stmt.then_statements[i],
                 path + "/t" + std::to_string(i));
@@ -121,6 +130,11 @@ inline void validate_program_identity(const Program& program) {
         ++expected_node;
         if (stmt.compiler_source_node_id != expected_node ||
                 stmt.compiler_source_path != expected_path ||
+                (stmt.compiler_checked_field_reinitialization &&
+                    stmt.kind != Statement::Kind::FieldWrite) ||
+                stmt.compiler_reinitialize_write_id !=
+                    (stmt.compiler_checked_field_reinitialization
+                        ? stmt.compiler_source_node_id : 0) ||
                 !node_ids.insert(stmt.compiler_source_node_id).second)
             throw std::runtime_error(
                 "ownership violation: stale, copied, reparented or missing source node identity");
@@ -187,6 +201,9 @@ inline void prune_and_reseal_validated_functions(
         const auto reset_tree = [&](const auto& self, Statement& statement) -> void {
             statement.compiler_source_node_id = 0;
             statement.compiler_source_path.clear();
+            // Retain the actual previously checked field reinit marker, but
+            // reissue the source-local write identity for this new epoch.
+            statement.compiler_reinitialize_write_id = 0;
             for (auto& child : statement.then_statements) self(self, child);
             for (auto& child : statement.else_statements) self(self, child);
         };
