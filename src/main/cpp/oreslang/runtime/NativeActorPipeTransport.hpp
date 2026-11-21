@@ -115,6 +115,13 @@ public:
         fail_next_enqueue_.store(true, std::memory_order_release);
     }
 
+    // Fail after graph credit reservation, but before PendingWrite/promise
+    // allocation. This proves every partially charged admission refunds both
+    // credits, and quota denial does not allocate an unused PendingWrite.
+    void fail_next_pending_allocation_for_test() noexcept {
+        fail_next_pending_allocation_.store(true, std::memory_order_release);
+    }
+
     // Verify that a failed waiting-reader deque allocation returns the
     // graph-wide reader promise credit without publishing a dangling reader.
     void fail_next_reader_enqueue_for_test() noexcept {
@@ -147,8 +154,36 @@ public:
         // buffer occupancy; a new write must not bypass old reservations.
         if (buffered && link.writers.size() >= link.capacity)
             return failed_void("native actor pipe pending-write budget exceeded");
-        auto pending = std::make_shared<PendingWrite>(std::move(payload));
-        auto future = pending->promise.get_future().share();
+        // Reject over-budget DATA before allocating a pending-write object,
+        // promise, or shared Future. Otherwise even rejected requests consume
+        // transient heap under sustained graph quota exhaustion.
+        const auto bytes = payload.size();
+        if (buffered) {
+            if (!reserve_graph_buffered_message())
+                return failed_void("native actor pipe graph message budget exhausted");
+            if (!reserve_graph_buffered_bytes(bytes)) {
+                buffered_message_count_.fetch_sub(1, std::memory_order_acq_rel);
+                return failed_void("native actor pipe graph byte credit exhausted");
+            }
+        }
+        std::shared_ptr<PendingWrite> pending;
+        std::shared_future<void> future;
+        try {
+#if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS) || defined(ORES_ACTOR_PIPE_TEST_FAULT_INJECTION)
+            if (fail_next_pending_allocation_.exchange(false, std::memory_order_acq_rel))
+                throw std::bad_alloc();
+#endif
+            pending = std::make_shared<PendingWrite>(std::move(payload));
+            future = pending->promise.get_future().share();
+        } catch (...) {
+            // Includes OOM in PendingWrite, promise shared state, or share().
+            // An awaiting reader is untouched until both objects exist.
+            if (buffered) {
+                graph_buffered_bytes_.fetch_sub(bytes, std::memory_order_acq_rel);
+                buffered_message_count_.fetch_sub(1, std::memory_order_acq_rel);
+            }
+            throw;
+        }
         if (!buffered) {
             auto recipient = std::move(link.readers.front());
             link.readers.pop_front();
@@ -157,13 +192,6 @@ public:
             recipient->set_value(std::move(pending->payload));
             pending->promise.set_value();
             return future;
-        }
-        const auto bytes = pending->payload.size();
-        if (!reserve_graph_buffered_message())
-            return failed_void("native actor pipe graph message budget exhausted");
-        if (!reserve_graph_buffered_bytes(bytes)) {
-            buffered_message_count_.fetch_sub(1, std::memory_order_acq_rel);
-            return failed_void("native actor pipe graph byte credit exhausted");
         }
         // Queued payloads and pending writers both own one reservation.
         // A deque allocation failure must not leak credit or a hidden Future.
@@ -584,6 +612,7 @@ private:
 #if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS) || defined(ORES_ACTOR_PIPE_TEST_FAULT_INJECTION)
     std::atomic<bool> fail_next_promotion_{false};
     std::atomic<bool> fail_next_enqueue_{false};
+    std::atomic<bool> fail_next_pending_allocation_{false};
     std::atomic<bool> fail_next_reader_enqueue_{false};
 #endif
 };

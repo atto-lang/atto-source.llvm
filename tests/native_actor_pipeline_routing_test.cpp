@@ -747,6 +747,147 @@ int main() {
         pipe.close();
     }
 
+    // PendingWrite and Future shared-state allocation happens AFTER graph
+    // admission credits are obtained. Inject failure at that boundary to
+    // prove both credits are rolled back, even with a full mailbox.
+    for (int trial = 0; trial < 16; ++trial) {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 1, 4, 16, 2);
+        pipe.fail_next_pending_allocation_for_test();
+        bool first_oom = false;
+        try { (void)pipe.write_to_async("Producer", "ConsumerA", "fail"); }
+        catch (const std::bad_alloc&) { first_oom = true; }
+        check(first_oom && pipe.buffered_payload_bytes() == 0 &&
+              pipe.buffered_message_count() == 0,
+              "pending shared-state OOM retained first admission credits");
+
+        pipe.write_to_async("Producer", "ConsumerA", "held").get();
+        pipe.fail_next_pending_allocation_for_test();
+        bool writer_oom = false;
+        try { (void)pipe.write_to_async("Producer", "ConsumerA", "bad"); }
+        catch (const std::bad_alloc&) { writer_oom = true; }
+        check(writer_oom && pipe.buffered_payload_bytes() == 4 &&
+              pipe.buffered_message_count() == 1,
+              "pending-writer allocation OOM leaked graph credits");
+        auto queued = pipe.write_to_async("Producer", "ConsumerA", "later");
+        check(queued.wait_for(0ms) == std::future_status::timeout &&
+              pipe.buffered_payload_bytes() == 9 &&
+              pipe.buffered_message_count() == 2,
+              "failed shared-state allocation poisoned pending-writer admission");
+        check(pipe.read_async(0).get() == "held",
+              "pending allocation failure corrupted FIFO");
+        queued.get();
+        check(pipe.read_async(0).get() == "later" &&
+              pipe.buffered_payload_bytes() == 0 &&
+              pipe.buffered_message_count() == 0,
+              "pending allocation error prevented complete credit recovery");
+        pipe.close();
+    }
+
+    // Quota rejection is checked before allocating a PendingWrite, so it
+    // cannot consume the next injected allocation failure. Once credits are
+    // released, the exact next accepted attempt must receive that failure.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 2, 4, 8, 1);
+        pipe.write_to_async("Producer", "ConsumerA", "full").get();
+        pipe.fail_next_pending_allocation_for_test();
+        bool denied = false;
+        try { pipe.write_to_async("Producer", "ConsumerA", "denied").get(); }
+        catch (const std::logic_error&) { denied = true; }
+        check(denied && pipe.buffered_payload_bytes() == 4 &&
+              pipe.buffered_message_count() == 1,
+              "over-budget writer incorrectly consumed pending-allocation fault");
+        check(pipe.read_async(0).get() == "full",
+              "over-budget allocation preflight corrupted buffered DATA");
+        bool deferred_oom = false;
+        try { (void)pipe.write_to_async("Producer", "ConsumerA", "now"); }
+        catch (const std::bad_alloc&) { deferred_oom = true; }
+        check(deferred_oom && pipe.buffered_payload_bytes() == 0 &&
+              pipe.buffered_message_count() == 0,
+              "denied write consumed fault or next reserved allocation leaked");
+        pipe.write_to_async("Producer", "ConsumerA", "okay").get();
+        check(pipe.read_async(0).get() == "okay",
+              "quota denial poisoned later admission");
+        pipe.close();
+    }
+
+    // Failed direct-handoff allocation must not pop or cancel a pending
+    // reader; it owns no buffered byte or message credits.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 1, 4, 16, 2);
+        auto waiting = pipe.read_async(0);
+        pipe.fail_next_pending_allocation_for_test();
+        bool oom = false;
+        try { (void)pipe.write_to_async("Producer", "ConsumerA", "drop"); }
+        catch (const std::bad_alloc&) { oom = true; }
+        check(oom && pipe.pending_reader_count() == 1 &&
+              waiting.wait_for(0ms) == std::future_status::timeout &&
+              pipe.buffered_payload_bytes() == 0 &&
+              pipe.buffered_message_count() == 0,
+              "direct pending-allocation fault lost reader or charged credits");
+        pipe.write_to_async("Producer", "ConsumerA", "recover").get();
+        check(waiting.get() == "recover" &&
+              pipe.pending_reader_count() == 0,
+              "reader could not recover from direct pending-allocation failure");
+        pipe.close();
+    }
+
+    // Concurrency regression: a single admission-allocation fault amid
+    // graph quota contention must neither over-admit nor strand a slot.
+    // Every later rejected write must fail without allocating PendingWrite.
+    {
+        NativeActorPipeTransport pipe(
+            registry, supervisor, graph_stages(), graph_edges(), 16, 4, 4, 4);
+        pipe.fail_next_pending_allocation_for_test();
+        std::atomic<int> admitted{0};
+        std::atomic<int> first_a{0};
+        std::atomic<int> second_b{0};
+        std::atomic<int> oom{0};
+        std::atomic<int> denied{0};
+        std::atomic<int> unexpected{0};
+        std::vector<std::thread> writers;
+        for (int producer = 0; producer < 8; ++producer) {
+            writers.emplace_back([&, producer] {
+                const bool a = producer % 2 == 0;
+                for (int msg = 0; msg < 80; ++msg) {
+                    try {
+                        pipe.write_to_async("Producer",
+                            a ? "ConsumerA" : "ConsumerB", "x").get();
+                        ++admitted;
+                        if (a) ++first_a;
+                        else ++second_b;
+                    } catch (const std::bad_alloc&) {
+                        ++oom;
+                    } catch (const std::logic_error&) {
+                        ++denied;
+                    } catch (...) {
+                        ++unexpected;
+                    }
+                }
+            });
+        }
+        for (auto& writer : writers) writer.join();
+        check(unexpected.load() == 0 &&
+              oom.load() == 1 &&
+              admitted.load() == 4 &&
+              denied.load() == 635 &&
+              pipe.buffered_payload_bytes() == 4 &&
+              pipe.buffered_message_count() == 4,
+              "racing pending allocation OOM overcommitted or leaked graph quotas");
+        for (int edge = 0; edge < 2; ++edge) {
+            const int accepted = edge == 0 ? first_a.load() : second_b.load();
+            for (int msg = 0; msg < accepted; ++msg)
+                check(pipe.read_async(static_cast<std::size_t>(edge)).get() == "x",
+                      "concurrent OOM recovery lost admitted DATA");
+        }
+        check(pipe.buffered_payload_bytes() == 0 &&
+              pipe.buffered_message_count() == 0,
+              "racing allocation fault failed to reclaim drained credits");
+        pipe.close();
+    }
+
     // Buffered insertion can fail after credit reservation. The queue and
     // pending-writer paths must both roll back graph bytes/message credits,
     // and a subsequent write must use the same mailbox successfully.
