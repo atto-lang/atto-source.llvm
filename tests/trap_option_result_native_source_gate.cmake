@@ -51,7 +51,9 @@ set(case_8 [=[pub fnc main():int {
     catch (error) { return error; }
     finally { }
 }]=])
-foreach(n RANGE 1 8)
+set(case_9 [=[pub fnc main():int { raise! Error("unrecoverable"); }]=])
+set(case_10 [=[pub fnc main():int { panic! Error("fatal"); }]=])
+foreach(n RANGE 1 10)
     set(source "${case_${n}}")
     set(path "${CMAKE_CURRENT_BINARY_DIR}/ores_trap_gate_reject_${n}.atto")
     file(WRITE "${path}" "${source}\n")
@@ -76,4 +78,4 @@ foreach(n RANGE 1 8)
         message(FATAL_ERROR "rejected trap source produced LLVM IR in case ${n}")
     endif()
 endforeach()
-message(STATUS "LLVM_TRAP_OPTION_RESULT_NATIVE_SOURCE_GATE=8_REJECTED_1_POSITIVE (not semantic parity)")
+message(STATUS "LLVM_TRAP_OPTION_RESULT_NATIVE_SOURCE_GATE=10_REJECTED_1_POSITIVE (not semantic parity)")
