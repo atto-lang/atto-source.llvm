@@ -460,5 +460,76 @@ int main(void) {
     check(ores_native_actor_pubsub_subscribe_utf8(
         quota, 1, "texts", one) == ORES_NATIVE_PUBSUB_OK);
     ores_native_actor_pubsub_close(quota);
+
+    /*
+     * Cross-backend strict admission: mirrors Java ActorEventBus
+     * tryPublishReliable, which now permits only immediate queue admission,
+     * not the separate asynchronous publish() pending-writer budget.
+     * No recipients still constitutes a committed topic sequence.
+     */
+    OresNativeActorPubSubRuntime* parity =
+        ores_native_actor_pubsub_open(111, 2, 2, 2, 2);
+    check(parity != NULL);
+    const OresSourceActorIdentity parity_pub = actor(401, 111, 1, 1);
+    const OresSourceActorIdentity parity_sub = actor(402, 111, 2, 1);
+    check(ores_native_actor_pubsub_register_source_actor(
+        parity, parity_pub) == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_register_source_actor(
+        parity, parity_sub) == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_create_group(
+        parity, 1, 2) == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_join(
+        parity, 1, parity_pub) == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_join(
+        parity, 1, parity_sub) == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_define_i64_topic(
+        parity, 1, "strict", ORES_NATIVE_PUBSUB_RELIABLE, 1)
+        == ORES_NATIVE_PUBSUB_OK);
+
+    OresNativePubSubTryPublishResultV1 strict_result = {0};
+    check(ores_native_actor_pubsub_try_publish_i64_result_v1(
+        parity, 1, "strict", parity_pub, 10, &strict_result)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(strict_result.tag == ORES_NATIVE_PUBSUB_TRY_OK
+        && strict_result.receipt.sequence == 1
+        && strict_result.receipt.subscribers == 0
+        && strict_result.receipt.accepted == 0);
+    check(ores_native_actor_pubsub_try_publish_i64_result_v1(
+        parity, 1, "strict", parity_pub, 11, &strict_result)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(strict_result.tag == ORES_NATIVE_PUBSUB_TRY_OK
+        && strict_result.receipt.sequence == 2
+        && strict_result.receipt.accepted == 0);
+
+    check(ores_native_actor_pubsub_subscribe_i64(
+        parity, 1, "strict", parity_sub) == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_try_publish_i64_result_v1(
+        parity, 1, "strict", parity_pub, 12, &strict_result)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(strict_result.tag == ORES_NATIVE_PUBSUB_TRY_OK
+        && strict_result.receipt.sequence == 3
+        && strict_result.receipt.accepted == 1);
+    check(ores_native_actor_pubsub_try_publish_i64_result_v1(
+        parity, 1, "strict", parity_pub, 13, &strict_result)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(strict_result.tag == ORES_NATIVE_PUBSUB_TRY_FULL
+        && strict_result.receipt.sequence == 0
+        && strict_result.receipt.accepted == 0);
+    int64_t parity_value = -1;
+    check(ores_native_actor_pubsub_try_read_i64(
+        parity, 1, "strict", parity_sub, &parity_value)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(parity_value == 12);
+    check(ores_native_actor_pubsub_try_publish_i64_result_v1(
+        parity, 1, "strict", parity_pub, 14, &strict_result)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(strict_result.tag == ORES_NATIVE_PUBSUB_TRY_OK
+        && strict_result.receipt.sequence == 4
+        && strict_result.receipt.accepted == 1);
+    check(ores_native_actor_pubsub_try_read_i64(
+        parity, 1, "strict", parity_sub, &parity_value)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(parity_value == 14);
+    ores_native_actor_pubsub_close(parity);
     return 0;
 }
