@@ -45,10 +45,20 @@ inline SourceCheckedReinitializeAudit verify_source_checked_reinitialize_stores(
     // Enumerate the checker-marked source independently of the emitted store
     // ledger. No store ticket can create its own source reinitialization claim.
     for (const auto& function : source.functions) {
-        for (std::size_t i = 0; i < function.statements.size(); ++i) {
+        // Independently produced by OwnershipChecker, not reconstructed
+        // from LLVM store receipts or a synthetic caller-supplied graph.
+        for (const auto& effect : function.compiler_checked_reinitialize_operations) {
+            const std::size_t i = effect.statement_index;
+            if (i >= function.statements.size())
+                throw std::runtime_error(
+                    "ownership violation: compiler MIR reinitialization operation outside AST");
             const auto& statement = function.statements[i];
-            if (!statement.compiler_checked_field_reinitialization) continue;
-            if (statement.kind != Statement::Kind::FieldWrite ||
+            if (!statement.compiler_checked_field_reinitialization ||
+                    effect.sealed_write_id !=
+                        statement.compiler_reinitialize_write_id ||
+                    effect.canonical_place != statement.receiver + "." + statement.field ||
+                    effect.source_offset != statement.offset ||
+                    statement.kind != Statement::Kind::FieldWrite ||
                     statement.compiler_reinitialize_write_id == 0 ||
                     statement.compiler_reinitialize_write_id !=
                         statement.compiler_source_node_id ||
@@ -65,6 +75,10 @@ inline SourceCheckedReinitializeAudit verify_source_checked_reinitialize_stores(
                     "ownership violation: compiler-checked moved field has no physical LLVM store");
             const auto& site = *found->second;
             const auto native = declarations.find(&function);
+            if (effect.sealed_write_id == 0 ||
+                    effect.sealed_write_id != site.source_checked_reinitialize_write_id)
+                throw std::runtime_error(
+                    "ownership violation: checker MIR WriteId differs from emitted store");
             const std::string place = statement.receiver + "." + statement.field;
             if (native == declarations.end() ||
                     site.source_checked_reinitialize_write_id !=

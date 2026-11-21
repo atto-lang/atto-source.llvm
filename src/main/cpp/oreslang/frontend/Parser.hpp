@@ -335,6 +335,16 @@ struct ScalarWhileLoop {
     std::int64_t upper_bound = 0;
 };
 
+// Compiler-generated from the actual ownership checker, independent of
+// emitter StoreInst metadata and distinct from a per-Statement flag.
+// V1 is restricted to direct straight-line moved scalar-field restoration.
+struct CheckedSourceReinitializeOperation {
+    std::size_t statement_index = 0;
+    std::string canonical_place;
+    std::size_t source_offset = 0;
+    std::uint64_t sealed_write_id = 0; // filled only by validated AST sealing
+};
+
 struct Function {
     std::string name;
     std::vector<GenericParameter> generic_parameters;
@@ -388,6 +398,8 @@ struct Function {
     // infer source identity from a Function's allocator address.
     std::uint64_t compiler_source_function_id = 0;
     std::string compiler_source_sealed_name;
+    std::vector<CheckedSourceReinitializeOperation>
+        compiler_checked_reinitialize_operations;
 };
 
 /** Frozen scheduler tier, distinct from ActorGroup-wide parallelism. */

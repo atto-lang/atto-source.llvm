@@ -218,19 +218,19 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-source-field-store-ledger-75-test)
     # Independent production source-AST direct FieldWrite inventory,
     # cross-checked against the emitted LLVM StoreInst provenance ledger.
-    # 116 negative and 38 positive host cases, including reverse-tag and
+    # 128 negative and 42 positive host cases, including reverse-tag and
     # source-to-native-function declaration cross-checks. No guest NLL proof.
-    add_executable(oreslang-native-source-fieldwrite-coverage-154-test
-        tests/native_source_fieldwrite_coverage_154_test.cpp)
-    target_include_directories(oreslang-native-source-fieldwrite-coverage-154-test PRIVATE
+    add_executable(oreslang-native-source-fieldwrite-coverage-170-test
+        tests/native_source_fieldwrite_coverage_170_test.cpp)
+    target_include_directories(oreslang-native-source-fieldwrite-coverage-170-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
         "${LLVM_INCLUDE_DIRS}")
-    target_compile_options(oreslang-native-source-fieldwrite-coverage-154-test PRIVATE
+    target_compile_options(oreslang-native-source-fieldwrite-coverage-170-test PRIVATE
         -Wall -Wextra -Wpedantic -Werror)
-    target_link_libraries(oreslang-native-source-fieldwrite-coverage-154-test PRIVATE
+    target_link_libraries(oreslang-native-source-fieldwrite-coverage-170-test PRIVATE
         ${ORE_LLVM_LIBS})
-    add_test(NAME native_ownership_source_fieldwrite_coverage_154
-        COMMAND oreslang-native-source-fieldwrite-coverage-154-test)
+    add_test(NAME native_ownership_source_fieldwrite_coverage_170
+        COMMAND oreslang-native-source-fieldwrite-coverage-170-test)
     # Parsed/validated AttoLang source node identity seal; pure host C++.
     # No mocked LLVM stores or guest parity claim.
     add_executable(oreslang-source-node-identity-85-test
