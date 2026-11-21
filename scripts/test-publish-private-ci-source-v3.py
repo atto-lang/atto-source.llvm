@@ -71,6 +71,25 @@ def carrier_contract(review_pr=None):
 
 
 class LlvmPrivateCiV3Test(unittest.TestCase):
+
+    def test_atto_migration_identity_does_not_enable_private_source_export(self):
+        # Migration source identity is not permission to publish any source.
+        self.assertEqual(v3.SOURCE_REPO, "atto-lang/atto-source.llvm")
+        self.assertEqual(v3.SOURCE_REPO_ID, 1448700962)
+        with (
+            patch.object(v3, "gh_api") as github_api,
+            patch.object(v3, "run_bounded_gh") as command,
+        ):
+            with self.assertRaisesRegex(v3.Denied, "private CI export disabled"):
+                v3.publish(
+                    "streempilot-test/browser-studio-e2e",
+                    834,
+                    "9" * 40,
+                    "ci/test-plans/llvm-pr834.json",
+                )
+            github_api.assert_not_called()
+            command.assert_not_called()
+
     def test_2048_blob_capacity_acceptance_and_2049_pre_fetch_denial(self):
         # Entirely synthetic, source-free tree metadata and identical test
         # blobs. No GitHub transfer, source checkout or real carrier access.

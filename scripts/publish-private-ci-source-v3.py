@@ -21,8 +21,10 @@ import subprocess
 import sys
 import tempfile
 
-SOURCE_REPO = "ores-truffle-oreslang/oreslang-source.llvm"
-SOURCE_REPO_ID = 1410897874
+# Migrated private source identity only; the unconditional export hold below
+# and incident/carrier independent approvals are unchanged.
+SOURCE_REPO = "atto-lang/atto-source.llvm"
+SOURCE_REPO_ID = 1448700962
 SOURCE_BRANCH = "main"
 INCIDENT_REPO = "ores-truffle-oreslang/oreslang-platform-conformance"
 INCIDENT_GATES = (
