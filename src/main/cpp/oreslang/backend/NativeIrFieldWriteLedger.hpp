@@ -1,6 +1,7 @@
 #pragma once
 
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/types/SourceNodeIdentity.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -37,6 +38,12 @@ struct FieldWriteSite {
     std::uint64_t compiler_ticket = 0;
     const Function* source_function = nullptr;
     const llvm::Function* emitted_function = nullptr;
+    // Value snapshots minted on the validated AST, independent of allocator
+    // address and byte offset; zero is never acceptable in production.
+    std::uint64_t compiler_source_node_id = 0;
+    std::uint64_t compiler_source_function_id = 0;
+    std::uint64_t compiler_source_unit_id = 0;
+    std::string compiler_source_path;
 };
 
 struct FieldWriteAudit {
@@ -48,10 +55,20 @@ struct FieldWriteAudit {
     bool optimized_code_verified = false;
     bool guest_verified = false;
     bool direct_source_writes_complete = false;
+    bool immutable_source_identity_bound = false;
 };
 
 class FieldWriteLedger final {
 public:
+    // Default is for legacy isolated host-IR structural fixtures only.
+    // Production codegen MUST use the validated Program constructor.
+    FieldWriteLedger() = default;
+    explicit FieldWriteLedger(const Program& program)
+        : require_compiler_source_ids_(true),
+          source_unit_id_(program.compiler_source_unit_id) {
+        source_identity::validate_program_identity(program);
+    }
+
     std::uint64_t bind(const Statement& source,
             const std::string& canonical_place,
             const llvm::Value* destination,
@@ -67,7 +84,14 @@ public:
                 !destination || !emitted || !emitted->getParent() ||
                 !emitted->getFunction() ||
                 ((source_function == nullptr) != (emitted_function == nullptr)) ||
-                (emitted_function && emitted->getFunction() != emitted_function))
+                (emitted_function && emitted->getFunction() != emitted_function) ||
+                (require_compiler_source_ids_ &&
+                    (!source.compiler_source_node_id ||
+                     source.compiler_source_path.empty() ||
+                     !source_function ||
+                     !source_function->compiler_source_function_id ||
+                     source_function->compiler_source_sealed_name !=
+                         source_function->name)))
             throw std::runtime_error(
                 "ownership violation: invalid compiler field-write source/store origin");
         if (sites_.size() >= 4096)
@@ -100,7 +124,10 @@ public:
         sites_.push_back({&source, emitted, destination,
             emitted->getValueOperand(), source.receiver, source.field,
             canonical_place, source.offset, ticket,
-            source_function, emitted_function});
+            source_function, emitted_function,
+            source.compiler_source_node_id,
+            source_function ? source_function->compiler_source_function_id : 0,
+            source_unit_id_, source.compiler_source_path});
         return ticket;
     }
 
@@ -203,6 +230,16 @@ public:
             const Program& source, const llvm::Module& module,
             const std::map<const Function*, const llvm::Function*>&
                 independent_function_declarations) const {
+        if (require_compiler_source_ids_) {
+            if (source.compiler_source_unit_id != source_unit_id_)
+                throw std::runtime_error(
+                    "ownership violation: source compilation identity changed");
+            // This runs before any saved source Statement is dereferenced.
+            // Node identity order rejects replaced or reused-address AST
+            // nodes unless the compiler explicitly copied internal receipts,
+            // which the validated language frontend never does.
+            source_identity::validate_program_identity(source);
+        }
         // First enumerate the currently live AST and verify all saved
         // source pointers by identity *without dereferencing them*. A Program
         // or Statement can have been erased/replaced after emission; calling
@@ -274,6 +311,15 @@ public:
                     declaration == independent_function_declarations.end() ||
                     !site.emitted_function ||
                     site.emitted_function != declaration->second ||
+                    (require_compiler_source_ids_ &&
+                        (site.compiler_source_unit_id != source_unit_id_ ||
+                         !site.compiler_source_node_id ||
+                         site.compiler_source_node_id !=
+                             found->first->compiler_source_node_id ||
+                         site.compiler_source_path !=
+                             found->first->compiler_source_path ||
+                         site.compiler_source_function_id !=
+                             found->second->compiler_source_function_id)) ||
                     !matched.insert(site.source).second)
                 throw std::runtime_error(
                     "ownership violation: source field-write/function not bound to emitted store");
@@ -291,6 +337,8 @@ public:
         // Zero expected writes is a vacuous match, not positive evidence
         // of any source field-write instruction being linked to a store.
         result.direct_source_writes_complete = !expected.empty();
+        result.immutable_source_identity_bound =
+            require_compiler_source_ids_ && !expected.empty();
         // The direct FieldWrite inventory is NOT a complete ownership
         // loan-use / deferred-effect / optimized machine-code certificate.
         return result;
@@ -304,6 +352,8 @@ private:
     std::vector<FieldWriteSite> sites_;
     std::set<const Statement*> sources_;
     std::set<const llvm::StoreInst*> instructions_;
+    bool require_compiler_source_ids_ = false;
+    std::uint64_t source_unit_id_ = 0;
 };
 
 } // namespace oreslang::native_ir

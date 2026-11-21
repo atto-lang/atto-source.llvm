@@ -300,6 +300,12 @@ struct Statement {
     std::unique_ptr<Expression> condition_rhs;
     std::vector<Statement> then_statements;
     std::vector<Statement> else_statements;
+    // Minted once after complete source validation; never a pointer, byte
+    // offset or caller-supplied receipt. Zero means not admitted to codegen.
+    std::uint64_t compiler_source_node_id = 0;
+    // Immutable structural route: f<index>/s<index>/t<index>/e<index>.
+    // A moved AST node cannot reuse its earlier branch evidence.
+    std::string compiler_source_path;
 };
 
 // Side-effect-free equality guard with return-only taken branch.
@@ -371,6 +377,10 @@ struct Function {
     FunctionEffects declared_effects{};
     bool has_declared_effects = false;
     std::string return_sum;
+    // Identity scoped to Program::compiler_source_unit_id. Codegen must not
+    // infer source identity from a Function's allocator address.
+    std::uint64_t compiler_source_function_id = 0;
+    std::string compiler_source_sealed_name;
 };
 
 /** Frozen scheduler tier, distinct from ActorGroup-wide parallelism. */
@@ -473,6 +483,11 @@ struct Program {
     std::vector<TypeConstraintDescriptor> type_constraint_descriptors;
     std::vector<std::string> conforms;
     std::vector<NativeSumType> sum_types;
+    // Source validation mints a fresh, compiler-owned unit identity.
+    // Zero means the Program is unresolved/unvalidated.
+    std::uint64_t compiler_source_unit_id = 0;
+    std::uint64_t compiler_source_node_count = 0;
+    std::uint64_t compiler_source_function_count = 0;
 };
 
 // Parse a constrained native subset: i64 expressions, call-scoped borrows and

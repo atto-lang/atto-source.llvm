@@ -805,7 +805,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     llvm::Module module("oreslang-source", context);
     // Compiler-owned source FieldWrite -> real emitted StoreInst evidence.
     // Never interpreted as a complete NLL or optimized machine-code proof.
-    native_ir::FieldWriteLedger field_write_ledger;
+    // Fail closed if this Program was not fully validated/sealed by parser.
+    // Standalone host fixtures may use the legacy default constructor, but
+    // production codegen always requires compiler-minted AST identities.
+    native_ir::FieldWriteLedger field_write_ledger(source);
     // The wasm32 environment is an explicit code-generation target. This
     // emits verified, target-marked IR; object/linking remains in oreslang-wasm.
     // Never infer browser capabilities from the target triple alone.

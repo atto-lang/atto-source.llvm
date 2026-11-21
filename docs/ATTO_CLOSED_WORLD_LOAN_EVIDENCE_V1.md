@@ -163,3 +163,32 @@ to end in _74. The workflow still requires exactly 15 native CTests and
 a separately checked 50-program compiler/Clang guest matrix.
 All native tests remain AUTHORED / NOT_EXECUTED until actual runner admission.
 Ownership completeness, optimized code and guest proof flags remain false.
+
+## Validated compiler source node identities — 2026-11-07
+
+The parser/resolver mints a process-unique compilation-unit epoch after
+ownership and type validation succeed, with immutable local function/node
+identities, sealed function names, structured root/then/else/cleanup paths,
+and source function/node counts. Zero identities are unvalidated.
+Codegen now instantiates FieldWriteLedger from the already validated Program,
+not the host-only default constructor. The production verifier validates
+the sealed program before using a saved Statement pointer and additionally
+compares node IDs, source function IDs, epoch and structural route against
+the emission-time snapshots. This catches ordinary allocator-address reuse,
+source truncation, structural branch reparenting, and duplicate/missing
+source IDs, without relying solely on raw pointer equality or offsets.
+
+Source ID correctness is a trusted compiler-internal invariant, not a
+cryptographic defense against arbitrary C++ memory corruption. Mutation of
+a validated AST while emitting is still unsupported. The SourceNodeIdentity
+host fixture adds 65 assertions, including 45 negative mutations and 20
+nonpromoting controls. The focused CTest matrix now requires 16 distinct
+passing tests with exact inventory/JUnit case matching and zero skips.
+The separate 50 real AttoLang compiler/Clang guest fixtures remain required.
+
+This work does not bind complete loan-use provenance or moved-field
+Reinitialize.write_id across typed MIR and emitted native code. Those
+remain closed pending a separately compiler-backed proof. No optimized
+machine-code or guest execution proof is promoted, and all broad ownership
+and guest flags remain false. Until actual source-org runner admission
+executes nonzero steps, new assertions are AUTHORED / NOT_EXECUTED.

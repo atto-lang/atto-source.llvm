@@ -231,6 +231,16 @@ if(BUILD_TESTING)
         ${ORE_LLVM_LIBS})
     add_test(NAME native_ownership_source_fieldwrite_coverage_74
         COMMAND oreslang-native-source-fieldwrite-coverage-74-test)
+    # Parsed/validated AttoLang source node identity seal; pure host C++.
+    # No mocked LLVM stores or guest parity claim.
+    add_executable(oreslang-source-node-identity-65-test
+        tests/native_source_node_identity_65_test.cpp)
+    target_include_directories(oreslang-source-node-identity-65-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-source-node-identity-65-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_ownership_source_node_identity_65
+        COMMAND oreslang-source-node-identity-65-test)
 
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
