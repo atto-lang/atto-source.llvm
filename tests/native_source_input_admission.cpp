@@ -108,6 +108,22 @@ int main() {
 #endif
         check(!ores_source_stat_stable(before, altered), "mtime change accepted");
         require_valid_source_utf8("valid ASCII");
+
+        // Source-terminal-controls-v1: exactly the first offending UTF-8 byte.
+        rejects_source_at(std::string("/* \x1b */", 7),
+                          "native source contains terminal control at byte offset 3");
+        rejects_source_at(std::string("// \x7f\n", 5),
+                          "native source contains terminal control at byte offset 3");
+        rejects_source_at(std::string("/* caf\xc3\xa9 */\x7f", 12),
+                          "native source contains terminal control at byte offset 11");
+        rejects_source_at(std::string("x\r\n\x1b", 4),
+                          "native source contains terminal control at byte offset 3");
+        rejects_source_at(std::string("\x1b\0", 2),
+                          "native source contains terminal control at byte offset 0");
+        rejects_source_at(std::string("\0\x7f", 2),
+                          "native source contains NUL byte at byte offset 0");
+        require_valid_source_utf8(std::string("\"\\u001b\"", 8)); // visible escape text
+
         // Shared 19-case corpus boundary extensions; compiler-host checks only.
         require_valid_source_utf8(std::string("\xF4\x8F\xBF\xBF", 4));
         require_valid_source_utf8(std::string("e\xCC\x81", 3));
