@@ -1,0 +1,8 @@
+define class Box as
+  pub let int value = 7;
+end
+pub fnc main(): int {
+  let Box box = new Box();
+  const proxy: Proxy<Box> = rt proxy box;
+  return 0;
+}

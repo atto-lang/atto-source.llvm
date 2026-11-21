@@ -22,7 +22,7 @@ struct GenericParameter {
 };
 
 struct Expression {
-    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call, ArrayCall, Copy, Take, Share, Borrow, BorrowMut, Field };
+    enum class Kind { Integer, Variable, Negate, Add, Subtract, Multiply, Call, ArrayCall, Copy, Take, Share, Proxy, Borrow, BorrowMut, Field };
     Kind kind;
     std::size_t offset = 0;
     std::int64_t integer = 0;
@@ -50,6 +50,10 @@ struct LocalBinding {
     bool heap_owned = false;
     bool int_array = false; // non-Copy owned Array<int> local, no escape
     std::string class_name; // only stack-constructed, bounded multi-field i64 class
+    // Compiler-owned opaque Proxy<T> binding. Never lower this capability as
+    // an i64/domain ID; runtime representation remains a distinct ABI object.
+    std::string proxy_class_name;
+    std::string proxy_source;
     bool new_class = false;
     // Pure scalar constructor arguments, evaluated once at call site.
     std::vector<std::unique_ptr<Expression>> constructor_arguments;
@@ -83,7 +87,7 @@ struct ClassDecl {
 // Native source value categories. Future<T> remains a no-IR boundary
 // until the compiler can lower nonblocking pinned continuations.
 struct SourceType {
-    enum class Kind { I64, ActorRef, Future };
+    enum class Kind { I64, ActorRef, Future, Proxy };
     Kind kind = Kind::I64;
     std::string argument;
 };

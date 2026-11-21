@@ -513,6 +513,7 @@ private:
     }
 
     Function function() {
+        consumed_proxy_owners_.clear();
         Function value;
         value.offset = token_.offset;
         value.exported = accept("pub");
@@ -604,7 +605,17 @@ private:
         if (accept("using")) {
             value.has_declared_effects = true;
             do {
-                std::string name = identifier();
+                // 'suspend' is a reserved declaration/control word, but it is
+                // also the canonical effect name in FunctionEffects. Admit it
+                // only in this effect-list position; generic identifier()
+                // must continue rejecting it everywhere else.
+                std::string name;
+                if (token_.text == "suspend") {
+                    name = token_.text;
+                    advance();
+                } else {
+                    name = identifier();
+                }
                 if (accept(".")) name += "." + identifier();
                 FunctionEffect effect;
                 try { effect = FunctionEffects::parse(name); }
@@ -700,6 +711,11 @@ private:
                         else declared_type.argument = identifier();
                         require(">");
                         fail("Future<T> requires native continuation lowering");
+                    } else if (accept("Proxy")) {
+                        require("<");
+                        declared_type.kind = SourceType::Kind::Proxy;
+                        declared_type.argument = identifier();
+                        require(">");
                     } else {
                         if (token_.text == "owned" && !experimental_owned_int_)
                             fail("experimental owned int requires --experimental-owned-int");
@@ -708,6 +724,33 @@ private:
                     }
                 }
                 require("=");
+                if (declared_type.kind == SourceType::Kind::Proxy) {
+                    if (!explicit_type)
+                        fail("Proxy<T> requires explicit source type");
+                    binding.initializer = expression();
+                    if (!binding.initializer ||
+                            binding.initializer->kind != Expression::Kind::Proxy ||
+                            !binding.initializer->left ||
+                            binding.initializer->left->kind != Expression::Kind::Variable)
+                        fail("Proxy<T> requires 'rt proxy' of one named unique owner");
+                    binding.proxy_class_name = declared_type.argument;
+                    binding.proxy_source = binding.initializer->left->name;
+                    if (consumed_proxy_owners_.count(binding.proxy_source))
+                        fail("rt proxy source owner already consumed");
+                    const auto owner = std::find_if(value.locals.begin(), value.locals.end(),
+                        [&](const LocalBinding& local) {
+                            return local.name == binding.proxy_source;
+                        });
+                    if (owner == value.locals.end() ||
+                            owner->class_name != binding.proxy_class_name ||
+                            (!owner->new_class && !owner->move_class) ||
+                            !owner->proxy_class_name.empty())
+                        fail("rt proxy requires a live unique class owner of matching Proxy<T> type");
+                    consumed_proxy_owners_.insert(binding.proxy_source);
+                    require(";");
+                    value.locals.push_back(std::move(binding));
+                    continue;
+                }
                 if (accept("spawn")) {
                     if (explicit_type && !typed_actor_ref)
                         fail("spawn initializer requires ActorRef<T> type or inference");
@@ -1201,7 +1244,8 @@ private:
                             " at byte " + std::to_string(token_.offset));
             }
             if (operation != "borrow" && operation != "copy" &&
-                operation != "take" && operation != "share") {
+                operation != "take" && operation != "share" &&
+                operation != "proxy") {
                 fail("unsupported native rt operation; suspension/ownership lowering is unavailable");
             }
             advance();
@@ -1210,6 +1254,7 @@ private:
                 operation == "copy" ? Expression::Kind::Copy :
                 operation == "take" ? Expression::Kind::Take :
                 operation == "share" ? Expression::Kind::Share :
+                operation == "proxy" ? Expression::Kind::Proxy :
                 mutable_borrow ? Expression::Kind::BorrowMut : Expression::Kind::Borrow,
                 offset);
             if (accept("(")) {
@@ -1253,6 +1298,8 @@ private:
         }
         auto expr = make_expression(Expression::Kind::Variable, offset);
         expr->name = identifier();
+        if (consumed_proxy_owners_.count(expr->name))
+            fail("rt proxy consumed owner is no longer usable");
         if (accept("<")) {
             expr->type_arguments_present = true;
             if (!accept(">")) {
@@ -1503,6 +1550,7 @@ private:
             case Expression::Kind::Copy:
             case Expression::Kind::Take:
             case Expression::Kind::Share:
+            case Expression::Kind::Proxy:
             case Expression::Kind::Borrow:
             case Expression::Kind::BorrowMut:
                 validate_expression(*expr.left, parameters, functions);
@@ -1529,6 +1577,111 @@ private:
     }
 
     static void validate_declared_effects(const Function& fn, const Program& program) {
+        // Proxy creation is suspension-capable even when the function omitted
+        // a using clause entirely. Check this before the ordinary no-effects
+        // fast path so ownership checking cannot obscure the missing effect.
+        std::unordered_set<std::string> proxy_names;
+        for (const auto& local : fn.locals) {
+            if (!local.proxy_class_name.empty()) {
+                proxy_names.insert(local.name);
+                if (!fn.has_declared_effects ||
+                        !fn.declared_effects.has(FunctionEffect::Suspend))
+                    throw std::runtime_error(
+                        "rt proxy admission may suspend and requires using suspend");
+            }
+        }
+
+        // A Proxy<T> variable is not an ordinary source value. Direct use in
+        // returns/arithmetic/call arguments would launder an opaque capability
+        // through the scalar ABI. A direct proxy receiver in a field access is
+        // reserved for the later compiler-owned critical-read/write lowering.
+        std::function<bool(const Expression*, bool)> proxy_escape =
+            [&](const Expression* expr, bool proxy_receiver) -> bool {
+                if (!expr) return false;
+                if (expr->kind == Expression::Kind::Variable) {
+                    return !proxy_receiver && proxy_names.count(expr->name) != 0;
+                }
+                if (expr->kind == Expression::Kind::Field && expr->left &&
+                        expr->left->kind == Expression::Kind::Variable &&
+                        proxy_names.count(expr->left->name) != 0) {
+                    // proxy.field is a future synchronized access, not a raw
+                    // capability escape. Nested uses still inspect arguments.
+                    for (const auto& arg : expr->arguments)
+                        if (proxy_escape(arg.get(), false)) return true;
+                    return false;
+                }
+                if (proxy_escape(expr->left.get(), false) ||
+                        proxy_escape(expr->right.get(), false))
+                    return true;
+                for (const auto& arg : expr->arguments)
+                    if (proxy_escape(arg.get(), false)) return true;
+                return false;
+            };
+
+        std::function<bool(const Expression*)> proxy_read =
+            [&](const Expression* expr) -> bool {
+                if (!expr) return false;
+                if (expr->kind == Expression::Kind::Field && expr->left &&
+                        expr->left->kind == Expression::Kind::Variable &&
+                        proxy_names.count(expr->left->name) != 0)
+                    return true;
+                if (proxy_read(expr->left.get()) || proxy_read(expr->right.get()))
+                    return true;
+                for (const auto& arg : expr->arguments)
+                    if (proxy_read(arg.get())) return true;
+                return false;
+            };
+
+        bool has_proxy_read = false;
+        bool has_proxy_write = false;
+        if (!proxy_names.empty()) {
+            if (proxy_escape(fn.result.get(), false))
+                throw std::runtime_error(
+                    "Proxy<T> capability cannot escape through a scalar return");
+            for (const auto& guard : fn.early_returns) {
+                if (proxy_escape(guard.lhs.get(), false) ||
+                        proxy_escape(guard.rhs.get(), false) ||
+                        proxy_escape(guard.result.get(), false))
+                    throw std::runtime_error(
+                        "Proxy<T> capability cannot escape through a guarded scalar expression");
+            }
+            for (const auto& stmt : fn.statements)
+                if (proxy_escape(stmt.expression.get(), false))
+                    throw std::runtime_error(
+                        "Proxy<T> capability cannot escape through a scalar statement");
+            for (const auto& send : fn.actor_sends)
+                if (proxy_escape(send.payload.get(), false))
+                    throw std::runtime_error(
+                        "Proxy<T> capability serialization/send is unsupported");
+        }
+
+        if (!proxy_names.empty()) {
+            has_proxy_read = proxy_read(fn.result.get());
+            for (const auto& guard : fn.early_returns)
+                has_proxy_read = has_proxy_read ||
+                    proxy_read(guard.lhs.get()) ||
+                    proxy_read(guard.rhs.get()) ||
+                    proxy_read(guard.result.get());
+            for (const auto& stmt : fn.statements) {
+                has_proxy_read = has_proxy_read ||
+                    proxy_read(stmt.expression.get()) ||
+                    proxy_read(stmt.condition_lhs.get()) ||
+                    proxy_read(stmt.condition_rhs.get());
+                if (stmt.kind == Statement::Kind::FieldWrite &&
+                        proxy_names.count(stmt.receiver) != 0)
+                    has_proxy_write = true;
+            }
+            for (const auto& send : fn.actor_sends)
+                has_proxy_read = has_proxy_read || proxy_read(send.payload.get());
+
+            if (has_proxy_write)
+                throw std::runtime_error(
+                    "native Proxy<T> critical-write lowering is pending");
+            if (has_proxy_read)
+                throw std::runtime_error(
+                    "native Proxy<T> critical-read lowering is pending");
+        }
+
         if (!fn.has_declared_effects) return;
         if (!fn.actor_spawns.empty() || !fn.actor_sends.empty()
                 || !fn.actor_stops.empty() || !fn.actor_field_writes.empty()) {
@@ -1573,6 +1726,11 @@ private:
                 throw std::runtime_error("using effects require transitive call summaries");
         if (contains_callable_invocation(fn.result.get()))
             throw std::runtime_error("using effects require transitive call summaries");
+
+        if (!proxy_names.empty())
+            throw std::runtime_error(
+                "native Proxy<T> opaque runtime lowering is pending; "
+                "proxy capabilities may not be encoded as scalar i64");
     }
 
     static void validate(const Program& program) {
@@ -1827,6 +1985,7 @@ private:
     Token token_;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
+    std::unordered_set<std::string> consumed_proxy_owners_;
 };
 
 } // namespace
