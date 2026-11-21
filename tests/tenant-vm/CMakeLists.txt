@@ -38,6 +38,13 @@ endif()
 add_test(NAME tenant_vm_test COMMAND tenant_vm_test)
 set_tests_properties(tenant_vm_test PROPERTIES TIMEOUT 300)
 
+# Host-only policy preflight. This is not a hardware TEE attestation test.
+add_executable(tenant_vm_confidential_attestation_preflight_test
+    confidential_attestation_preflight_test.cpp)
+add_test(NAME tenant_vm_confidential_attestation_preflight_test
+    COMMAND tenant_vm_confidential_attestation_preflight_test)
+set_tests_properties(tenant_vm_confidential_attestation_preflight_test PROPERTIES TIMEOUT 10)
+
 # Enforced path: tenant source or Wasm, admitted and lowered to a loadable library. Needs WABT.
 find_program(WAT2WASM wat2wasm)
 find_program(WASM2C wasm2c)
