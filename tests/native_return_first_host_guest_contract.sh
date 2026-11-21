@@ -12,6 +12,8 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 guests=0
 optimized=0
+void_guests=0
+void_optimized=0
 for header in 'int <- main()' 'int• main()' 'fnc int <- main()' 'fnc int• main()'; do
   for form in braced begin_inline begin_multiline bare bare_semicolon bare_dot; do
     case "$form" in
@@ -55,6 +57,44 @@ for header in 'int <- main()' 'int• main()' 'fnc int <- main()' 'fnc int• ma
     fi
   done
 done
+# Void return-first functions must preserve the process ABI: the guest has
+# no result, while the compiler-generated C main must exit successfully (0).
+# Keep the same four marker forms and three independent body delimiters.
+for header in 'void <- main()' 'void• main()' 'fnc void <- main()' 'fnc void• main()'; do
+  for form in braced begin_inline bare; do
+    case "$form" in
+      braced) printf '%s { return; }\n' "$header" ;;
+      begin_inline) printf '%s begin return; end\n' "$header" ;;
+      bare) printf '%s return; end\n' "$header" ;;
+    esac > "$work/void.atto"
+    if ! "$compiler" --target=host "$work/void.atto" >"$work/void.ll" 2>"$work/void.compiler.err"; then
+      printf 'return-first void host IR rejected header=%s form=%s\n' "$header" "$form" >&2
+      cat "$work/void.compiler.err" >&2
+      exit 1
+    fi
+    test -s "$work/void.ll"
+    grep -Eq '^[[:space:]]*define[[:space:]]+i32[[:space:]]+@main\(' "$work/void.ll" || {
+      printf 'return-first void host C main absent: %s / %s\n' "$header" "$form" >&2
+      exit 1
+    }
+    "$clang" -O0 -x ir "$work/void.ll" -o "$work/void"
+    if "$work/void" >"$work/void.stdout" 2>"$work/void.stderr"; then status=0; else status=$?; fi
+    if [ "$status" -ne 0 ] || [ -s "$work/void.stdout" ] || [ -s "$work/void.stderr" ]; then
+      printf 'void return-first guest status mismatch header=%s form=%s status=%s\n' "$header" "$form" "$status" >&2
+      exit 1
+    fi
+    void_guests=$((void_guests+1))
+    if [ "$form" = begin_inline ]; then
+      "$clang" -O2 -x ir "$work/void.ll" -o "$work/void-o2"
+      if "$work/void-o2" >"$work/void.stdout-o2" 2>"$work/void.stderr-o2"; then status=0; else status=$?; fi
+      if [ "$status" -ne 0 ] || [ -s "$work/void.stdout-o2" ] || [ -s "$work/void.stderr-o2" ]; then
+        printf 'void return-first optimized guest mismatch header=%s status=%s\n' "$header" "$status" >&2
+        exit 1
+      fi
+      void_optimized=$((void_optimized+1))
+    fi
+  done
+done
 # A source mutation must change the observed OS process status. This defeats
 # compilers or test harnesses that replace every valid program with exit 42.
 printf 'fnc int <- main() { return 43; }\n' >"$work/mutant.atto"
@@ -67,4 +107,5 @@ if [ "$status" -ne 43 ] || [ -s "$work/mutant.stdout" ] || [ -s "$work/mutant.st
   exit 1
 fi
 test "$guests" -eq 24 && test "$optimized" -eq 4
-printf 'RETURN_FIRST_NATIVE_GUEST_EXIT_42=%s OPTIMIZED_O2=%s SOURCE_MUTATION_EXIT_43=1 WASM_GUEST_NOT_EXECUTED\n' "$guests" "$optimized"
+test "$void_guests" -eq 12 && test "$void_optimized" -eq 4
+printf 'RETURN_FIRST_NATIVE_GUEST_EXIT_42=%s OPTIMIZED_O2=%s VOID_GUEST_EXIT_0=%s VOID_OPTIMIZED_O2=%s SOURCE_MUTATION_EXIT_43=1 WASM_GUEST_NOT_EXECUTED\n' "$guests" "$optimized" "$void_guests" "$void_optimized"
