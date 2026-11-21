@@ -90,6 +90,41 @@ inline Result inspect_unverified_report(const std::uint8_t* report,
     return Result::UnverifiedPolicyMatch;
 }
 
+// Deterministic host-side REPORT_DATA: SHA512(domain || nonce32 ||
+// image_identity32 || uint32_be(spki_len) || ephemeral_tls_spki_der).
+// The caller must authenticate the image identity and generate the nonce and
+// SPKI key pair in a trusted context. This is *only* a binding primitive;
+// not a complete authenticated transport, endorsement verifier or key broker.
+inline bool compute_bound_report_data(const std::array<std::uint8_t, 32>& nonce,
+                                      const std::array<std::uint8_t, 32>& image_identity,
+                                      const std::uint8_t* spki_der, std::size_t spki_bytes,
+                                      std::array<std::uint8_t, 64>& out) noexcept {
+    out.fill(0);
+    if (!nonzero(nonce.data(), nonce.size()) ||
+        !nonzero(image_identity.data(), image_identity.size()) ||
+        !spki_der || spki_bytes == 0 || spki_bytes > 4096) return false;
+    constexpr char kDomain[] = "atto-sev-snp-report-data-v1";
+    const std::uint8_t len[4] = {
+        static_cast<std::uint8_t>((spki_bytes >> 24) & 0xff),
+        static_cast<std::uint8_t>((spki_bytes >> 16) & 0xff),
+        static_cast<std::uint8_t>((spki_bytes >> 8) & 0xff),
+        static_cast<std::uint8_t>(spki_bytes & 0xff)
+    };
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    if (!ctx) return false;
+    unsigned int size = 0;
+    const bool ok = EVP_DigestInit_ex(ctx, EVP_sha512(), nullptr) == 1 &&
+        EVP_DigestUpdate(ctx, kDomain, sizeof(kDomain) - 1) == 1 &&
+        EVP_DigestUpdate(ctx, nonce.data(), nonce.size()) == 1 &&
+        EVP_DigestUpdate(ctx, image_identity.data(), image_identity.size()) == 1 &&
+        EVP_DigestUpdate(ctx, len, sizeof(len)) == 1 &&
+        EVP_DigestUpdate(ctx, spki_der, spki_bytes) == 1 &&
+        EVP_DigestFinal_ex(ctx, out.data(), &size) == 1 && size == out.size();
+    EVP_MD_CTX_free(ctx);
+    if (!ok) out.fill(0);
+    return ok;
+}
+
 // Verifies the SHA384/P384 ECDSA signature over 0x000..0x29F with an ALREADY
 // authenticated P-384 endorsement public key. This does NOT authenticate a
 // VCEK/VLEK key or verify the AMD certificate chain, CRLs, chip_id or TCB.
