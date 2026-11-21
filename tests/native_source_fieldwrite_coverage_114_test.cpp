@@ -1,4 +1,5 @@
 #include "oreslang/backend/NativeIrFieldWriteLedger.hpp"
+#include "oreslang/backend/NativeIrReinitializeWriteBridge.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -21,6 +22,11 @@ using oreslang::Statement;
 using oreslang::Function;
 using oreslang::Program;
 using oreslang::native_ir::FieldWriteLedger;
+using oreslang::native_ir::CandidateReinitializeAudit;
+using oreslang::native_ir::verify_candidate_reinitialize_store_bridge;
+using oreslang::ownership::Graph;
+using oreslang::ownership::Operation;
+using oreslang::ownership::PlaceState;
 
 struct Fixture {
     llvm::LLVMContext context;
@@ -151,6 +157,33 @@ struct Fixture {
     }
 };
 
+// Candidate CFGs here are synthetic host fixtures, NOT compiler-built typed
+// MIR. The bridge must never upgrade them to guest ownership authority.
+Graph candidate_graph(std::uint64_t ticket=1,
+        const std::string& place="owner.x",
+        oreslang::ownership::ValueMask initial=oreslang::ownership::kMoved) {
+    Graph g;
+    g.entry.emplace(place, PlaceState(initial));
+    g.blocks.resize(1);
+    g.blocks[0].operations.emplace_back(
+        Operation::Kind::Reinitialize, place, std::nullopt, ticket);
+    return g;
+}
+CandidateReinitializeAudit candidate(Fixture& f, Graph g) {
+    std::map<const Function*, Graph> graphs;
+    graphs.emplace(f.source_function, std::move(g));
+    return verify_candidate_reinitialize_store_bridge(
+        f.ledger, f.program, f.module, f.function_map(), graphs);
+}
+bool safe_candidate(CandidateReinitializeAudit result) {
+    return result.checked_claims != 0 &&
+        result.candidate_write_id_store_bound &&
+        !result.typed_mir_complete &&
+        !result.full_loan_use_coverage &&
+        !result.optimized_code_verified &&
+        !result.guest_verified;
+}
+
 bool denied(const std::function<void()>& action) {
     try {action();}
     catch(const std::runtime_error& error) {
@@ -242,8 +275,48 @@ int main() {
         check(denied([]{ Fixture f; f.bind_primary(); f.program.functions.clear(); f.store->setMetadata("atto.ownership.field_write.source.v1",f.store->getMetadata("atto.ownership.field_write.source.v1")); f.cover(); }), "reject cleared source function plus remaining LLVM tag", n);
         check([]{ Fixture f; f.bind_primary(); auto& wrapper=f.wrapper(); auto& yes=f.child(wrapper,true,"y"); auto& no=f.child(wrapper,false,"z"); f.bind(yes,f.another()); f.bind(no,f.another()); return f.complete() && f.ledger.size()==3; }(), "accept both conditional branches fully covered", n);
         check([]{ Fixture f; f.bind_primary(); auto& action=f.add(*f.source_function); auto& caught=f.caught(); f.bind(action,f.another()); f.bind(caught,f.another()); return f.complete() && f.ledger.size()==3; }(), "accept independent direct and caught cleanup field", n);
-        if(n != 74) throw std::runtime_error("wrong test inventory");
-        std::cout<<"PASS 74/74 direct source FieldWrite completeness cases "
+        check(denied([]{ Fixture f; candidate(f,candidate_graph()); }), "missing source-to-store ledger fails bridge", n);
+        check(denied([]{ Fixture f; f.bind_primary(); candidate(f,candidate_graph(0)); }), "zero write ID rejected", n);
+        check(denied([]{ Fixture f; f.bind_primary(); auto g=candidate_graph(); g.blocks[0].operations[0].write_id.reset(); candidate(f,g); }), "missing write ID rejected", n);
+        check(denied([]{ Fixture f; f.bind_primary(); candidate(f,candidate_graph(100)); }), "nonexistent write ID rejected", n);
+        check(denied([]{ Fixture f; f.bind_primary(); candidate(f,candidate_graph(1,"owner.y")); }), "wrong field refused", n);
+        check(denied([]{ Fixture f; f.bind_primary(); candidate(f,candidate_graph(1,"foreign.x")); }), "wrong owning object refused", n);
+        check(denied([]{ Fixture f; f.bind_primary(); candidate(f,candidate_graph(1,"owner.x.y")); }), "wrong nested field refused", n);
+        check(denied([]{ Fixture f; f.bind_primary(); auto& s=f.add(*f.source_function); f.bind(s,f.another()); candidate(f,candidate_graph(2,"owner.x")); }), "wrong ticket for first field refused", n);
+        check(denied([]{ Fixture f; f.bind_primary(); auto& s=f.add(*f.source_function); f.bind(s,f.another()); candidate(f,candidate_graph(2,"owner.x")); }), "wrong field for second ticket refused", n);
+        check(denied([]{ Fixture f; f.bind_primary(); candidate(f,candidate_graph(1,"owner.x",oreslang::ownership::kOwned)); }), "reinitialization on already owned place refused", n);
+        check(denied([]{ Fixture f; f.bind_primary(); candidate(f,candidate_graph(1,"owner.x",oreslang::ownership::kDropped)); }), "reinitialization on dropped place refused", n);
+        check(denied([]{ Fixture f; f.bind_primary(); candidate(f,candidate_graph(1,"owner.x",oreslang::ownership::kUninitialized)); }), "reinitialization on uninitialized place refused", n);
+        check(denied([]{ Fixture f; f.bind_primary(); candidate(f,candidate_graph(1,"owner.x",static_cast<oreslang::ownership::ValueMask>(oreslang::ownership::kOwned|oreslang::ownership::kMoved))); }), "reinitialization on ambiguous place refused", n);
+        check(denied([]{ Fixture f; f.bind_primary(); auto g=candidate_graph(); g.blocks[0].operations.push_back({Operation::Kind::Reinitialize,"owner.x",std::nullopt,1}); candidate(f,g); }), "duplicate ticket in same block refused", n);
+        check(denied([]{ Fixture f; f.bind_primary(); auto g=candidate_graph(); g.blocks[0].operations[0].loan_id=7; candidate(f,g); }), "loan token grafted onto reinitialization refused", n);
+        check(denied([]{ Fixture f; f.bind_primary(); auto g=candidate_graph(); g.blocks.clear(); candidate(f,g); }), "reinitialization graph with no blocks refused", n);
+        check(denied([]{ Fixture f; f.bind_primary(); auto g=candidate_graph(); g.blocks[0].successors={9}; candidate(f,g); }), "bad CFG successor refused", n);
+        check(denied([]{ Fixture f; f.bind_primary(); auto g=candidate_graph(); g.blocks[0].operations.clear(); g.blocks.resize(2); g.blocks[1].operations.emplace_back(Operation::Kind::Reinitialize,"owner.x",std::nullopt,1); candidate(f,g); }), "unreachable reinitialization refused", n);
+        check(denied([]{ Fixture f; f.bind_primary(); std::map<const Function*,Graph> empty; verify_candidate_reinitialize_store_bridge(f.ledger,f.program,f.module,f.function_map(),empty); }), "empty function graph inventory refused", n);
+        check(denied([]{ Fixture f; f.bind_primary(); Function outside; std::map<const Function*,Graph> graphs; graphs.emplace(&outside,candidate_graph()); verify_candidate_reinitialize_store_bridge(f.ledger,f.program,f.module,f.function_map(),graphs); }), "foreign function graph refused", n);
+        check(denied([]{ Fixture f; f.bind_primary(); f.program.functions.emplace_back(); std::map<const Function*,Graph> graphs; graphs.emplace(f.source_function,candidate_graph()); verify_candidate_reinitialize_store_bridge(f.ledger,f.program,f.module,f.function_map(),graphs); }), "missing additional source function graph refused", n);
+        check(denied([]{ Fixture f; f.bind_primary(); f.program.functions.emplace_back(); auto& other=f.program.functions.back(); std::map<const Function*,Graph> graphs; graphs.emplace(f.source_function,candidate_graph()); graphs.emplace(&other,candidate_graph()); verify_candidate_reinitialize_store_bridge(f.ledger,f.program,f.module,f.function_map(),graphs); }), "duplicate claimed ticket across source functions refused", n);
+        check(denied([]{ Fixture f; f.bind_primary(); auto g=candidate_graph(); g.blocks[0].operations[0].kind=Operation::Kind::Read; candidate(f,g); }), "write ID on a Read operation refused", n);
+        check(denied([]{ Fixture f; f.bind_primary(); f.store->eraseFromParent(); candidate(f,candidate_graph()); }), "erased emitted store refused", n);
+        check(denied([]{ Fixture f; f.bind_primary(); f.store->setOperand(0,llvm::ConstantInt::get(f.builder.getInt64Ty(),888)); candidate(f,candidate_graph()); }), "mutated LLVM store value refused", n);
+        check(denied([]{ Fixture f; f.bind_primary(); f.store->setMetadata("atto.ownership.field_write.source.v1",nullptr); candidate(f,candidate_graph()); }), "missing LLVM provenance metadata refused", n);
+        check(denied([]{ Fixture f; f.bind_primary(); llvm::Module foreign("foreign",f.context); std::map<const Function*,Graph> graphs; graphs.emplace(f.source_function,candidate_graph()); verify_candidate_reinitialize_store_bridge(f.ledger,f.program,foreign,f.function_map(),graphs); }), "foreign LLVM module refused", n);
+        check(denied([]{ Fixture f; f.bind_primary(); std::map<const Function*,Graph> graphs; graphs.emplace(f.source_function,candidate_graph()); std::map<const Function*,const llvm::Function*> missing; verify_candidate_reinitialize_store_bridge(f.ledger,f.program,f.module,missing,graphs); }), "invalid declaration mapping refused", n);
+        check([]{ Fixture f; f.bind_primary(); return safe_candidate(candidate(f,candidate_graph())); }(), "matching store ticket and moved-field CFG accepted", n);
+        check([]{ Fixture f; f.bind_primary(); return candidate(f,candidate_graph()).checked_claims==1; }(), "bounded positive claim count exactly one", n);
+        check([]{ Fixture f; f.bind_primary(); Graph g; g.entry.emplace("owner.x",PlaceState(oreslang::ownership::kOwned)); g.blocks.resize(1); g.blocks[0].operations.push_back({Operation::Kind::Read,"owner.x"}); auto a=candidate(f,g); return a.checked_claims==0 && !a.candidate_write_id_store_bound && !a.guest_verified; }(), "no source claim means no promotion", n);
+        check([]{ Fixture f; f.bind_primary(); auto g=candidate_graph(1,"owner.x",oreslang::ownership::kOwned); g.blocks[0].operations.insert(g.blocks[0].operations.begin(),{Operation::Kind::Move,"owner.x"}); g.blocks[0].operations.push_back({Operation::Kind::Read,"owner.x"}); return safe_candidate(candidate(f,g)); }(), "move then reinitialize then read accepted", n);
+        check([]{ Fixture f; f.bind_primary(); auto g=candidate_graph(); g.blocks[0].operations.push_back({Operation::Kind::Read,"owner.x"}); return safe_candidate(candidate(f,g)); }(), "reinitialize followed by read accepted", n);
+        check([]{ Fixture f; f.bind_primary(); auto& other=f.add(*f.source_function); f.bind(other,f.another()); auto g=candidate_graph(); g.entry.emplace("owner.y",PlaceState(oreslang::ownership::kMoved)); g.blocks[0].operations.emplace_back(Operation::Kind::Reinitialize,"owner.y",std::nullopt,2); auto a=candidate(f,g); return safe_candidate(a) && a.checked_claims==2; }(), "two real field stores and two corresponding IDs accepted", n);
+        check([]{ Fixture f; f.bind_primary(); auto& other=f.add(*f.source_function); f.bind(other,f.another()); auto a=candidate(f,candidate_graph()); return safe_candidate(a) && !a.typed_mir_complete; }(), "two stores one reinitialization remains noncomplete", n);
+        check([]{ Fixture f; f.bind_primary(); f.another(); return safe_candidate(candidate(f,candidate_graph())); }(), "ordinary untagged LLVM housekeeping store allowed", n);
+        check([]{ Fixture f; f.bind_primary(); auto g=candidate_graph(); g.entry.emplace("other.y",PlaceState(oreslang::ownership::kOwned)); g.blocks[0].operations.emplace_back(Operation::Kind::Read,"other.y"); return safe_candidate(candidate(f,g)); }(), "unrelated owned field does not weaken exact place proof", n);
+        check([]{ Fixture f; f.bind_primary(); auto a=candidate(f,candidate_graph()); return a.candidate_write_id_store_bound && !a.full_loan_use_coverage && !a.guest_verified; }(), "existing source store certificate not full NLL proof", n);
+        check([]{ Fixture f; f.bind_primary(); auto& other=f.add(*f.source_function); f.bind(other,f.another()); auto g=candidate_graph(2,"owner.y"); return safe_candidate(candidate(f,g)); }(), "valid reinitialization from second store ticket", n);
+        check([]{ Fixture f; f.bind_primary(); return !candidate(f,candidate_graph()).optimized_code_verified; }(), "checked candidate retains optimization proof false", n);
+        if(n != 114) throw std::runtime_error("wrong test inventory");
+        std::cout<<"PASS 114/114 direct source FieldWrite + candidate Reinitialize bridge cases "
                     "(REAL LLVM IR HOST TEST; NOT NLL/GUEST VERIFIED)\n";
         return 0;
     } catch(const std::exception& error) {

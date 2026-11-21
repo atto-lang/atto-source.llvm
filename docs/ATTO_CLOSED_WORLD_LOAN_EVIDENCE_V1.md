@@ -192,3 +192,75 @@ remain closed pending a separately compiler-backed proof. No optimized
 machine-code or guest execution proof is promoted, and all broad ownership
 and guest flags remain false. Until actual source-org runner admission
 executes nonzero steps, new assertions are AUTHORED / NOT_EXECUTED.
+
+## Candidate typed CFG Reinitialize.write_id ↔ real StoreInst bridge (2026-11-07)
+
+New NativeIrReinitializeWriteBridge.hpp supplies a fail-closed, host-level
+candidate verification function. It first verifies the independent
+source-to-Llvm-StoreInst exact ledger, then independently runs the existing
+ownership CFG fixed-point validator and checks every reachable Reinitialize
+write_id against a compiler-minted StoreInst ticket, the same exact source
+Function, the emitted LLVM Function and canonical field place. It rejects
+zero, missing, repeated, unreachable, forged, wrong-field and wrong-function
+claims. No candidate is allowed to invent the ticket or substitute a
+source-only marker for a real live StoreInst.
+
+IMPORTANT: The source compiler does not yet publish a complete typed MIR CFG
+with all moved-field reinitialization operations to codegen. This new
+bridge is NOT called by production emit_verified_llvm_ir; the generated
+graph fixtures are synthetic host checks only. A candidate bridge can
+validate a supplied reinit claim, but cannot prove that no other source
+reinitialization was omitted. It also does not prove LoanId/SSA use closure,
+optimization behavior, cancellation or guest parity. Every wide-scope
+proof flag remains false and no guest execution is claimed.
+
+The existing LLVM source-field-write host CTest is expanded from 74 to
+114 authored assertions (88 negative and 26 positive/nonpromoting), adding
+40 cases for candidate write-ID binding. Its registered test name and
+build target now end in _114. There are still precisely 16 focused CTests
+with exact inventory/JUnit gate and a separate 50 compiler-backed AttoLang
+/Clang fixture matrix. No test is marked executed until a source-org
+runner has admitted the exact head and recorded nonzero steps.
+
+## Verified-source tree-shake reissue and candidate native-store ticket audit
+
+CLI compatibility audit discovered a real integration regression:
+`--tree-shake` validates and emits the whole Program, then removes
+unreachable functions and emits a second time. That removal invalidates
+new compilation-unit, function and Statement IDs. The compiler now
+validates the original seal, retains only a compiler-computed subset
+of original sealed function IDs, and reissues a fresh compilation-unit
+epoch, contiguous function IDs, structural paths and source counts.
+Pruning failure revokes the unit's codegen authority; arbitrary
+post-validation source mutation still fails closed. This is a trusted
+compiler-only transformation, not an input-controlled resealing escape.
+
+Source-node host test expanded to 85 authored cases: 57 negative
+mutations and 28 nonpromoting controls, adding pre-corruption,
+unknown retained IDs, both keep/drop directions, nested path,
+cleanup identity and consecutive reissue tests. The other direct
+source-store host test has 114 authored cases (88 negative, 26
+controls), including candidate CFG-to-LLVM Reinitialize.write_id
+correlation tests. Both tests are covered by the same exact 16-CTest
+inventory and the independent 50-program compiler guest matrix.
+
+No production MIR code currently supplies the complete reinitialization
+CFG to the candidate store bridge. Accordingly typed-MIR completeness,
+guest execution, LoanId coverage and optimizer correctness remain
+explicitly false/unproven. All new cases are authored, NOT_EXECUTED.
+
+### Production compiler/Clang tree-shake identity reseal gate
+
+The previously existing `native_tree_shaking_direct_calls` CTest now runs
+as its own mandatory executed gate in the ownership workflow, separate
+from 16 focused host CTests and the 50 real ownership compiler fixtures.
+It exercises a new source where an unreachable function *precedes* main
+and an invoked helper; deleting the earlier function forces new source
+FunctionId and structural NodeId paths before the second LLVM emission.
+The script requires successful production compiler output, no dead symbol,
+a retained helper, a real Clang-linked binary and exit code 42.
+The marker `ATTO_TREE_SHAKE_SOURCE_RESEAL=COMPILER_CLANG_GUEST_EXECUTED`
+and CTest JUnit receipt are checked on exact head. A CTest-registration
+only check or host-only model run must not substitute for actual execution.
+No successful run has been observed; current runner-admission failures
+leave the guest claim explicitly UNVERIFIED.
