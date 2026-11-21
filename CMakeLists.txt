@@ -591,6 +591,17 @@ endif()
 if(BUILD_TESTING)
     # Real compiler / Clang native guest lane for file-level exports.
     find_program(ORESLANG_EXPORT_CLANG NAMES clang)
+    if(ORESLANG_EXPORT_CLANG AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        # Real production compiler -> host LLVM IR -> Clang -> executable.
+        # Distinct from frontend-only IR admission and from wasm32 guests.
+        add_test(NAME native_return_first_host_guest_execution
+            COMMAND sh
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_return_first_host_guest_contract.sh"
+                "$<TARGET_FILE:oreslang-llvmc>"
+                "${ORESLANG_EXPORT_CLANG}")
+        set_tests_properties(native_return_first_host_guest_execution PROPERTIES
+            TIMEOUT 180)
+    endif()
     if(ORESLANG_EXPORT_CLANG)
         add_test(NAME oreslang-declarative-exports-native
             COMMAND bash
