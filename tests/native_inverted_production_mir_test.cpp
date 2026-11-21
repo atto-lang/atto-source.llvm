@@ -398,5 +398,47 @@ int main() {
         INVERTED_REQUIRE(checked.operands.rows.front()[1] ==
             std::numeric_limits<std::int64_t>::max());
     }
+    // Cross-backend canonical bounded two-i64 SOURCE envelope:
+    // Java's opt-in compiler must use the same capacity [1,256] and
+    // operation count [1,1024] rather than silently advertising parity
+    // with its wider host-only backing store limits.
+    {
+        auto at_limit = make_source();
+        auto& operations = at_limit.inverted_main->operations;
+        operations.clear();
+        using K = InvertedSourceOperation::Kind;
+        for (std::size_t i = 0; i != 511; ++i) {
+            operations.push_back(InvertedSourceOperation{
+                K::Push, 0, "", {{1, 2}}, 0});
+            operations.push_back(InvertedSourceOperation{
+                K::EraseSwap, 0, "", {}, 0});
+        }
+        operations.push_back(InvertedSourceOperation{
+            K::Push, 0, "", {{42, 7}}, 0});
+        operations.push_back(InvertedSourceOperation{
+            K::ReturnRead, 0, "x", {}, 0});
+        INVERTED_REQUIRE(operations.size() == 1024);
+        at_limit.inverted_main->capacity = 1;
+        auto verified = verify_production_inverted_i64(at_limit);
+        INVERTED_REQUIRE(verified.mir.capacity() == 1);
+        INVERTED_REQUIRE(verified.operands.rows.size() == 512);
+        INVERTED_REQUIRE(verified.mir.instructions().size() == 1026);
+
+        auto too_many = at_limit;
+        auto& excess = too_many.inverted_main->operations;
+        excess.insert(excess.end() - 1,
+                      InvertedSourceOperation{K::WriteField, 0, "x", {}, 42});
+        INVERTED_REQUIRE(excess.size() == 1025);
+        reject([&]{ (void)verify_production_inverted_i64(too_many); },
+               "capacity/operation budget");
+    }
+    {
+        // A valid positive upper capacity has already been tested. The next
+        // integer is a strict negative on both source compiler pathways.
+        auto too_wide = make_source();
+        too_wide.inverted_main->capacity = 257;
+        reject([&]{ (void)verify_production_inverted_i64(too_wide); },
+               "capacity/operation budget");
+    }
     return 0;
 }

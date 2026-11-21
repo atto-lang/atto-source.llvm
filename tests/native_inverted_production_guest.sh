@@ -157,6 +157,9 @@ done
 # This validates dense-index behavior only, not stale generation-fenced handles.
 if [[ ! -f "$contracts/swap-reuse.atto" ||
       ! -f "$contracts/column-write-42.atto" ||
+      ! -f "$contracts/capacity-256-42.atto" ||
+      ! -f "$contracts/capacity-257-rejected.atto" ||
+      ! -f "$contracts/capacity-zero-rejected.atto" ||
       ! -f "$contracts/immutable-write-rejected.atto" ||
       ! -f "$contracts/removed-index-trap.atto" ]]; then
     echo "FAIL: canonical DOP v1 fixture corpus absent" >&2
@@ -164,11 +167,33 @@ if [[ ! -f "$contracts/swap-reuse.atto" ||
 fi
 swap_fixture_sha="$(hash_file "$contracts/swap-reuse.atto")" || exit 1
 write_fixture_sha="$(hash_file "$contracts/column-write-42.atto")" || exit 1
+capacity256_sha="$(hash_file "$contracts/capacity-256-42.atto")" || exit 1
+capacity257_sha="$(hash_file "$contracts/capacity-257-rejected.atto")" || exit 1
+capacity0_sha="$(hash_file "$contracts/capacity-zero-rejected.atto")" || exit 1
 immutable_fixture_sha="$(hash_file "$contracts/immutable-write-rejected.atto")" || exit 1
 trap_fixture_sha="$(hash_file "$contracts/removed-index-trap.atto")" || exit 1
+# Independently pin raw Git blob identities of the exact same .atto files
+# in Java and LLVM. Sha256+HEAD receipts alone do not prove *cross-repo*
+# byte identity if another agent changes only one repository's fixture.
+for shared_case in capacity-256-42.atto capacity-257-rejected.atto capacity-zero-rejected.atto; do
+    case "$shared_case" in
+        capacity-256-42.atto)
+            shared_blob_expected=5392eed2f33be3c8c69809f0521efe9c7a20440f ;;
+        capacity-257-rejected.atto)
+            shared_blob_expected=e052544a6cde137cabe0db6bc7f73b1e072db174 ;;
+        capacity-zero-rejected.atto)
+            shared_blob_expected=793b29a0e190124137aebe293629d18c82ae5f08 ;;
+    esac
+    if ! shared_blob_actual="$(git hash-object --no-filters -- "$contracts/$shared_case")" ||
+       [[ "$shared_blob_actual" != "$shared_blob_expected" ]]; then
+        echo "FAIL: shared Java/LLVM capacity fixture identity drifted: $shared_case" >&2
+        exit 1
+    fi
+    printf 'DOP_SHARED_CAPACITY_GIT_BLOB=%s SHA1=%s\n' "$shared_case" "$shared_blob_actual"
+done
 # The exact same column-write source blob is committed to the Java compiler
 # fixture corpus. This is a native guest test, not a Java backend pass.
-for canonical in swap-reuse.atto column-write-42.atto; do
+for canonical in swap-reuse.atto column-write-42.atto capacity-256-42.atto; do
     canonical_sha="$(hash_file "$contracts/$canonical")" || exit 1
     "$compiler" "$contracts/$canonical" > "$tmp/canonical.ll"
     canonical_ir_sha="$(audit_ir "$tmp/canonical.ll")" || exit 1
@@ -308,6 +333,26 @@ if [[ -s "$tmp/unsafe.ll" ]] ||
     exit 1
 fi
 
+# Exact same source files are compiled by Java's opt-in host-reference
+# gate. The LLVM compiler must reject both ends outside [1,256] before any
+# IR is emitted, rather than lowering an unsupported oversized local arena.
+for capacity_negative in capacity-zero-rejected.atto capacity-257-rejected.atto; do
+    capacity_sha="$(hash_file "$contracts/$capacity_negative")" || exit 1
+    if "$compiler" "$contracts/$capacity_negative" > "$tmp/unsafe.ll" 2> "$tmp/error.txt"; then
+        echo "FAIL: unsupported shared owner capacity admitted: $capacity_negative" >&2
+        exit 1
+    fi
+    if [[ -s "$tmp/unsafe.ll" ]] ||
+       ! grep -Fq 'capacity' "$tmp/error.txt"; then
+        echo "FAIL: unsupported shared owner capacity produced IR or no diagnostic: $capacity_negative" >&2
+        cat "$tmp/error.txt" >&2
+        exit 1
+    fi
+    require_digest "$contracts/$capacity_negative" "$capacity_sha" "shared capacity negative fixture"
+    printf 'DOP_SHARED_CAPACITY_NEGATIVE=%s SOURCE_SHA256=%s IR_BYTES=0 REJECTED=true\n' \
+        "$capacity_negative" "$capacity_sha"
+done
+
 # Unsupported runtime/target/analysis options must fail closed before any
 # LLVM IR bytes escape. Do not grant Wasm, hard-RT or allocator claims.
 for option in --profile=native-hard-rt --target=wasm32 \
@@ -329,11 +374,14 @@ if [[ "$(hash_file "$compiler")" != "$compiler_sha" ||
       "$(hash_file "$auditor")" != "$auditor_sha" ||
       "$(hash_file "$contracts/swap-reuse.atto")" != "$swap_fixture_sha" ||
       "$(hash_file "$contracts/column-write-42.atto")" != "$write_fixture_sha" ||
+      "$(hash_file "$contracts/capacity-256-42.atto")" != "$capacity256_sha" ||
+      "$(hash_file "$contracts/capacity-257-rejected.atto")" != "$capacity257_sha" ||
+      "$(hash_file "$contracts/capacity-zero-rejected.atto")" != "$capacity0_sha" ||
       "$(hash_file "$contracts/immutable-write-rejected.atto")" != "$immutable_fixture_sha" ||
       "$(hash_file "$contracts/removed-index-trap.atto")" != "$trap_fixture_sha" ]]; then
     echo 'FAIL: inverted native toolchain or canonical fixture changed during gate' >&2
     exit 1
 fi
-printf 'DOP_SOURCE_COMPILER_SHA256=%s\nDOP_CLANG_SHA256=%s\nDOP_IR_AUDITOR_SHA256=%s\nDOP_SWAP_FIXTURE_SHA256=%s\nDOP_WRITE_FIXTURE_SHA256=%s\nDOP_IMMUTABLE_FIXTURE_SHA256=%s\nDOP_TRAP_FIXTURE_SHA256=%s\n' \
-    "$compiler_sha" "$clang_sha" "$auditor_sha" "$swap_fixture_sha" "$write_fixture_sha" "$immutable_fixture_sha" "$trap_fixture_sha"
-printf 'PASS: production .atto -> typed MIR -> no-GC-screened IR, 12 bounded native exit-42 (O0/O2), 4 bounds signals, 6 source rejects, 5 mode rejects, known-GC denied (linked/FFI audit still unproven)\n'
+printf 'DOP_SOURCE_COMPILER_SHA256=%s\nDOP_CLANG_SHA256=%s\nDOP_IR_AUDITOR_SHA256=%s\nDOP_SWAP_FIXTURE_SHA256=%s\nDOP_WRITE_FIXTURE_SHA256=%s\nDOP_CAPACITY256_SHA256=%s\nDOP_CAPACITY257_SHA256=%s\nDOP_CAPACITY0_SHA256=%s\nDOP_IMMUTABLE_FIXTURE_SHA256=%s\nDOP_TRAP_FIXTURE_SHA256=%s\n' \
+    "$compiler_sha" "$clang_sha" "$auditor_sha" "$swap_fixture_sha" "$write_fixture_sha" "$capacity256_sha" "$capacity257_sha" "$capacity0_sha" "$immutable_fixture_sha" "$trap_fixture_sha"
+printf 'PASS: production .atto -> typed MIR -> no-GC-screened IR, 14 bounded native exit-42 (O0/O2), 4 bounds signals, 8 source rejects, 5 mode rejects, known-GC denied (linked/FFI audit still unproven)\n'
