@@ -1,0 +1,6 @@
+define isolated actor Counter as
+    let count: int = 0;
+    pub fnc on_message(int value): int {
+        return value;
+    }
+end

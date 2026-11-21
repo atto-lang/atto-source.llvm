@@ -376,12 +376,26 @@ struct Function {
 /** Frozen scheduler tier, distinct from ActorGroup-wide parallelism. */
 enum class MaxActorThreads : std::uint8_t { LOW = 1, MEDIUM = 2, HIGH = 3 };
 
+/**
+ * Parsed actor-state schema metadata. This is deliberately not an ordinary
+ * actor field: until sealed handle_state + ledger-backed lowering lands,
+ * source state declarations are validated and then fail closed before codegen.
+ */
+struct ActorStateField {
+    std::string name;
+    ScalarType type = ScalarType::I64;
+    std::size_t offset = 0;
+};
+
 struct ActorDecl {
     std::string name;
-    std::vector<LocalBinding> fields; // bounded, actor-confined integer slots
+    std::vector<LocalBinding> fields; // legacy bounded actor-confined integer slots
+    std::vector<ActorStateField> state_schema; // compiler-owned sealed state metadata
     Function on_message; // exactly one synchronous pub on_message(int): int
     std::size_t offset = 0;
     MaxActorThreads max_actor_threads = MaxActorThreads::LOW;
+    bool isolated = false;
+    bool has_state_schema = false;
 };
 
 // Compiler-only structural contract evidence for the native i64 subset.

@@ -1,4 +1,4 @@
-# Actor persistent state declaration contract (proposal, not yet parsed)
+# Actor persistent state declaration contract (schema metadata parsed; lowering fail-closed)
 
 Actor state belongs to an actor *instance*. Its schema belongs to the actor type.
 Guest code cannot read `self.state`, override `handle_state`, or receive a raw
@@ -51,13 +51,16 @@ until a declaration is provided. This avoids implicit unbounded native storage.
 1. Reserve `state` actor declarations and `critical handle_state` as a
    non-overridable actor intrinsic. Reject direct `self.state` and user-defined overrides.
 2. Type-check the callback against a schema-specific, ephemeral capability.
-3. Permit await/select within the callback using scheduler-owned logical single-flight admission, compiler-approved
-   reentrancy boundaries and continuation fencing. A nested same-continuation
-   state callback temporarily fences the outer state loan, but a distinct
-   continuation must wait for its own lane turn. On await, revoke/segment
-   state-backed loans before releasing the actor lane; do not hold a physical
-   mutex or JVM monitor across suspension. Reject capture/return/store of the
-   state capability and borrowed aliases escaping their valid scope.
+3. Permit await/select within the callback only with scheduler-owned logical
+   single-flight admission and continuation fencing. Suspension releases the
+   physical carrier, **not** the actor-wide logical user lane: the same handler
+   remains active until completion/cancellation, and later messages or user
+   callbacks may queue but may not enter guest actor state. A nested
+   same-continuation state callback temporarily fences the outer state loan.
+   On await, revoke/segment state-backed loans before releasing the physical
+   carrier; do not hold a physical mutex or JVM monitor across suspension.
+   Reject capture/return/store of the state capability and borrowed aliases
+   escaping their valid scope.
 4. Lower finite fields to a stable typed layout with explicit alignment,
    initialization and finalization; lower dynamic maps to bounded storage.
 5. ActorGroup owns allocation, ready initialization, cancellation, panic,
@@ -133,8 +136,11 @@ do not ban it at the language level. `*_blocking` call effects must come
 from trusted function signatures, not from guessing based on method names.
 In an actor, blocking on a carrier must obey scheduler isolation rules;
 strict RT admission may reject unbounded blocking/FFI. Each admitted slice
-remains logically exclusive; yielding can allow another actor continuation
-to enter, so callback-wide atomicity across `await` is NOT implied.
+remains logically exclusive. Yielding may release the physical carrier so
+**other actors** can run, but the same logical handler retains this actor's
+user lane until completion/cancellation. A different user continuation may
+queue but cannot enter actor state. State-backed loans are revoked before
+the yield and reacquired only by the same generation-fenced logical turn.
 
 `from` is a proposed contextual actor interface/trait conformance
 spelling. Existing Java parser recognizes `from` at actor declarations,
@@ -152,8 +158,10 @@ Existing legacy actor fields are temporarily allowed only for migration
 when no `state` schema is declared. New schema actors reject other fields.
 Java's synchronous FFM host map is not a source-level `handle_state`
 implementation; source `critical` methods currently fail closed pending
-scheduler tickets. LLVM has matching typed effect bitsets and narrow
-`using` parsing but intentionally rejects source `state` pending
+scheduler tickets. LLVM has matching typed effect bitsets and narrow `using` parsing. Its
+frontend now parses and bounds canonical `state { ... }` schema metadata,
+including `define isolated actor ...`, but intentionally rejects immediately
+after schema admission pending sealed `handle_state` + ledger-backed
 compiler/runtime lowering. Neither backend yet provides source-level
 suspendable `handle_state` or hard-real-time-certified reduction regions.
 
