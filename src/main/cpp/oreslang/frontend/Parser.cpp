@@ -1486,13 +1486,28 @@ private:
             if (token_.kind == Kind::End) fail("expected 'end'");
             const bool publicly_visible = accept("pub");
             if (!publicly_visible) accept("private");
-            // Formatter may insert 'mtd', but method identity and receiver
-            // erasure must remain unchanged. Never consume it as a class field.
-            const bool method_marker = accept("mtd");
+            // 'mtd', legacy 'method' and legacy 'fnc' are contextual class
+            // method introducers only when followed by a callable name and
+            // then '(' or '<'. A bare method literally named mtd() or
+            // method() must retain its own selector and receiver ABI.
+            // Probe a *copy* of the lexer so malformed/doubled markers cannot
+            // mutate parser position or bypass ordinary method admission.
+            bool method_marker = false;
+            if (token_.text == "mtd" || token_.text == "method" || token_.text == "fnc") {
+                Lexer look = lexer_;
+                const Token name = look.next();
+                const Token after = look.next();
+                if (name.kind == Kind::Identifier &&
+                    (!reserved(name.text) || name.text == "pattern") &&
+                    (after.text == "(" || after.text == "<")) {
+                    advance();
+                    method_marker = true;
+                }
+            }
             const bool method_ahead = token_.kind == Kind::Identifier && token_.text != "constructor" && (!reserved(token_.text) || token_.text == "pattern")
                 && [&] { Lexer look = lexer_; const auto next = look.next().text; return next == "(" || next == "<"; }();
             if (method_marker && !method_ahead)
-                fail("native mtd marker must precede a method signature");
+                fail("native method introducer must precede a callable signature");
             if (method_ahead) {
                 auto method = function(result.name, publicly_visible);
                 ClassMethod signature;
