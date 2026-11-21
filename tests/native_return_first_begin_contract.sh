@@ -30,7 +30,7 @@ for header in 'int <- main()' 'int• main()' 'fnc int <- main()' 'fnc int• ma
   done
 done
 # These must fail without producing even a partial LLVM IR artifact.
-for case in 1 2 3 4 5 6 7 8; do
+for case in 1 2 3 4 5 6 7 8 9 10 11 12; do
   case "$case" in
     1) printf 'int < - main() { return 42; }\n' ;;
     2) printf 'int <- main()\nbegin\nreturn 42;\nend..\n' ;;
@@ -40,6 +40,10 @@ for case in 1 2 3 4 5 6 7 8; do
     6) printf 'int <- main() :: return 42; end\n' ;;
     7) printf 'int <- main() { return 42;\n' ;;
     8) printf 'int ∙ main() { return 42; }\n' ;;
+    9) printf 'void <- main() begin return 42; end\n' ;;
+    10) printf 'void <- main() { return 42; }\n' ;;
+    11) printf 'int <- main() { 42; }\n' ;;
+    12) printf 'int <- main() begin return; end\n' ;;
   esac >"$work/negative.atto"
   if "$compiler" --target=wasm32 "$work/negative.atto" >"$work/out.ll" 2>"$work/error"; then
     printf 'malformed return-first accepted: case %s\n' "$case" >&2
