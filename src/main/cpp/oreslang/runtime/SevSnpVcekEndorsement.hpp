@@ -14,6 +14,7 @@
 #include <openssl/sha.h>
 #include <openssl/x509.h>
 #include <openssl/x509_vfy.h>
+#include <openssl/x509v3.h>
 
 namespace oreslang::runtime::vm::confidential::snp {
 
@@ -159,6 +160,7 @@ inline EndorsementStatus verify_vcek_offline(
     const bool initialized = stacked &&
         X509_STORE_CTX_init(ctx.get(), store.get(), vek.get(), chain) == 1;
     const bool chain_valid = initialized && X509_verify_cert(ctx.get()) == 1;
+    ctx.reset(); // finish references to the untrusted chain before freeing it
     sk_X509_free(chain); // certificates still owned by unique_ptrs
     if (!chain_valid) return EndorsementStatus::CertificateChainRejected;
     if (inspect_unverified_report(report, report_size, policy) != Result::UnverifiedPolicyMatch)
