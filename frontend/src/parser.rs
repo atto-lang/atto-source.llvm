@@ -256,14 +256,14 @@ fn lazy_guard_predicate(expr: Expr) -> Expr {
     }
 }
 
-fn guard_failure_exits(stmts: &[Stmt]) -> bool {
+fn guard_failure_returns(stmts: &[Stmt]) -> bool {
     match stmts.last() {
-        Some(Stmt::Return(..) | Stmt::Throw(..)) => true,
-        Some(Stmt::Block(body)) => guard_failure_exits(body),
+        Some(Stmt::Return(..)) => true,
+        Some(Stmt::Block(body)) => guard_failure_returns(body),
         Some(Stmt::If { arms, otherwise: Some(fallback), .. }) => {
             !arms.is_empty()
-                && arms.iter().all(|(_, body)| guard_failure_exits(body))
-                && guard_failure_exits(fallback)
+                && arms.iter().all(|(_, body)| guard_failure_returns(body))
+                && guard_failure_returns(fallback)
         }
         _ => false,
     }
@@ -1396,9 +1396,9 @@ impl Parser {
             return Err(Diagnostic::new(self.pos(), "E_GUARD",
                 "guard requires '{ ... }' or 'else ... end' failure block"));
         };
-        if !guard_failure_exits(&failure) {
+        if !guard_failure_returns(&failure) {
             return Err(Diagnostic::new(pos, "E_GUARD",
-                "guard failure block must exit on all reachable paths"));
+                "guard failure block must explicitly return on all reachable paths"));
         }
         Ok(Stmt::If {
             arms: vec![(
