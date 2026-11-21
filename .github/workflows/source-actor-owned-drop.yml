@@ -68,9 +68,9 @@ jobs:
             --clang clang --root . | tee "$RUNNER_TEMP/source-actor-owned-drop-release.log"
           grep -F 'PASS native source actor: source-actor-scoped-owned-i64.ores actors 1' \
             "$RUNNER_TEMP/source-actor-owned-drop-release.log"
-          grep -F 'PASS native source actor: source-actor-two-owned-heaps.ores actors 2' \
-          grep -Fx 'PASS native source actor: source-actor-two-owned-heaps.atto actors 2' \
+          grep -Fx 'PASS native source actor: source-actor-two-owned-heaps.ores actors 2' \
             "$RUNNER_TEMP/source-actor-owned-drop-release.log"
+          grep -Fx 'PASS native source actor: source-actor-two-owned-heaps.atto actors 2' \
             "$RUNNER_TEMP/source-actor-owned-drop-release.log"
           grep -F 'PASS current-source actor lowering and physical heap reclamation' \
             "$RUNNER_TEMP/source-actor-owned-drop-release.log"
@@ -88,7 +88,9 @@ jobs:
             tee "$RUNNER_TEMP/source-actor-owned-drop-sanitized.log"
           grep -F 'PASS native source actor: source-actor-scoped-owned-i64.ores actors 1' \
             "$RUNNER_TEMP/source-actor-owned-drop-sanitized.log"
-          grep -F 'PASS native source actor: source-actor-two-owned-heaps.ores actors 2' \
+          grep -Fx 'PASS native source actor: source-actor-two-owned-heaps.ores actors 2' \
+            "$RUNNER_TEMP/source-actor-owned-drop-sanitized.log"
+          grep -Fx 'PASS native source actor: source-actor-two-owned-heaps.atto actors 2' \
             "$RUNNER_TEMP/source-actor-owned-drop-sanitized.log"
           grep -F 'PASS current-source actor lowering and physical heap reclamation' \
             "$RUNNER_TEMP/source-actor-owned-drop-sanitized.log"
