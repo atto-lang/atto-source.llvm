@@ -2,6 +2,8 @@
 #include <stdint.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,6 +35,23 @@ static void *run_control_worker(void *arg) {
     return NULL;
 }
 
+typedef struct {
+    AttoControlPlaneArena32 *arena;
+    uint64_t witness;
+    atomic_int ready;
+    int invalid;
+} PairProbe;
+static void *write_pair_worker(void *raw) {
+    PairProbe *p = raw;
+    atomic_store_explicit(&p->ready, 1, memory_order_release);
+    for (uint64_t i = 0; i < 32768; ++i) {
+        if (!atto_control32_write_i128(p->arena, p->witness, i, ~i)) {
+            p->invalid = 1;
+            break;
+        }
+    }
+    return NULL;
+}
 int main(void) {
     CHECK(strcmp(ATTO_CONTROL_REF32_ABI, "control_generation12_slot20_v1") == 0);
     CHECK(ATTO_CONTROL_RECORD_BYTES == 32u);
@@ -52,6 +71,15 @@ int main(void) {
     CHECK(atto_control32_read_i64(a, parent, 0, &scalar) && scalar == INT64_C(9000000000));
     CHECK(atto_control32_write_i64(a, parent, 8, INT64_MIN));
     CHECK(atto_control32_read_i64(a, parent, 8, &scalar) && scalar == INT64_MIN);
+    /* One 32-bit locator to a coherent 128-bit value (two 64-bit limbs). */
+    uint64_t low = 0, high = 0;
+    CHECK(atto_control32_write_i128(a, parent, UINT64_C(0x0123456789abcdef), UINT64_C(0xfedcba9876543210)));
+    CHECK(atto_control32_read_i128(a, parent, &low, &high));
+    CHECK(low == UINT64_C(0x0123456789abcdef) && high == UINT64_C(0xfedcba9876543210));
+    CHECK(!atto_control32_read_i128(a, parent, &low, &low));
+    CHECK(!atto_control32_read_i128(b, parent, &low, &high));
+    CHECK(low == 0 && high == 0);
+    CHECK(!atto_control32_read_i128(a, parent, NULL, &high));
     CHECK(atto_control32_write_ref(a, parent, child));
     CHECK(atto_control32_read_ref(a, parent, &value) && value == child);
     CHECK(!atto_control32_write_i64(a, parent, 16, 1));
@@ -106,6 +134,26 @@ int main(void) {
     uint64_t denied = UINT64_MAX;
     CHECK(!atto_control32_allocate(concurrent, &denied) && denied == 0);
     atto_control32_destroy(concurrent);
+    AttoControlPlaneArena32 *pair_arena = atto_control32_new(1);
+    CHECK(pair_arena);
+    uint64_t pair_ref = 0;
+    CHECK(atto_control32_allocate(pair_arena, &pair_ref));
+    CHECK(atto_control32_write_i128(pair_arena, pair_ref, 0, UINT64_MAX));
+    PairProbe pair = {.arena = pair_arena, .witness = pair_ref, .ready = ATOMIC_VAR_INIT(0)};
+    pthread_t pair_writer;
+    CHECK(pthread_create(&pair_writer, NULL, write_pair_worker, &pair) == 0);
+    while (!atomic_load_explicit(&pair.ready, memory_order_acquire)) { }
+    for (int i = 0; i < 32768; ++i) {
+        uint64_t observed_low = 0, observed_high = 0;
+        CHECK(atto_control32_read_i128(pair_arena, pair_ref, &observed_low, &observed_high));
+        CHECK(observed_high == ~observed_low); /* no torn 128-bit pair */
+    }
+    CHECK(pthread_join(pair_writer, NULL) == 0 && pair.invalid == 0);
+    CHECK(atto_control32_drop(pair_arena, pair_ref));
+    uint64_t denied_low = UINT64_MAX, denied_high = UINT64_MAX;
+    CHECK(!atto_control32_read_i128(pair_arena, pair_ref, &denied_low, &denied_high));
+    CHECK(denied_low == 0 && denied_high == 0);
+    atto_control32_destroy(pair_arena);
     puts("PASS control-plane-ref32 llvm C11 native host 12 guarded scenarios; NO compiled Atto guest or zero-GC proof");
     return 0;
 }
