@@ -1,0 +1,33 @@
+name: Native C11 control-plane Ref32 host (not guest)
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/ControlPlaneArena32.h'
+      - 'src/main/cpp/oreslang/runtime/ControlPlaneArena32.c'
+      - 'tests/control_plane_arena32_test.c'
+      - '.github/workflows/control-plane-ref32-c11.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-host-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Strict GCC optimized host probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcc -std=c11 -O2 -Wall -Wextra -Werror -pedantic -pthread -Isrc/main/cpp/oreslang/runtime             src/main/cpp/oreslang/runtime/ControlPlaneArena32.c tests/control_plane_arena32_test.c -o /tmp/atto-control-c11
+          /tmp/atto-control-c11
+      - name: Clang ASan and UBSan host probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O1 -g -Wall -Wextra -Werror -pedantic -fsanitize=address,undefined -fno-omit-frame-pointer -pthread -Isrc/main/cpp/oreslang/runtime             src/main/cpp/oreslang/runtime/ControlPlaneArena32.c tests/control_plane_arena32_test.c -o /tmp/atto-control-san
+          ASAN_OPTIONS=detect_leaks=1 /tmp/atto-control-san
+      - name: Explicit scope
+        run: echo 'HOST-ONLY native control heap; not compiled Atto guest or full scheduler integration'
