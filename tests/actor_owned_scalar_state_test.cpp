@@ -82,13 +82,17 @@ int main() {
                                 return std::int64_t{999};
                             });
                 });
-                const auto nested = state.critical(actor, 100, checked, allowed,
-                        [&](State::Access& inner) -> State::Value {
-                    rejects([&] { (void) access.read("count"); });
-                    check(std::get<std::int64_t>(inner.read("count")) == 1);
-                    return inner.read("count");
+                // Sealed critical sections never nest, not even on the same
+                // continuation (68474643b): a nested read/read or read/write
+                // loan would re-enter state authority inside the caller's
+                // single-transaction effect proof. The rejected admission
+                // must leave the outer loan valid and unchanged.
+                rejects([&] {
+                    (void) state.critical(actor, 100, checked, allowed,
+                            [&](State::Access&) -> State::Value {
+                                return std::int64_t{999};
+                            });
                 });
-                check(std::get<std::int64_t>(nested) == 1);
                 check(std::get<std::int64_t>(access.read("count")) == 1);
             }
             return access.read("count");
