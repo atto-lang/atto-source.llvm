@@ -24,19 +24,25 @@ int main() {
     assert(!is_reserved_core_import("./atto.core/numeric"));
     assert(!is_reserved_core_import("ores.std/numeric"));
     assert(!is_reserved_core_import("./ores.core/numeric"));
+    assert(is_reserved_std_import("atto.std"));
+    assert(is_reserved_std_import("atto.std/fs"));
     assert(is_reserved_std_import("ores.std"));
     assert(is_reserved_std_import("ores.std/testing"));
     assert(is_reserved_std_import("std"));
     assert(is_reserved_std_import("std/testing"));
     assert(!is_reserved_std_import("./std/testing"));
     assert(!is_reserved_std_import("ores.core/numeric"));
+    assert(is_reserved_alloc_import("atto.alloc"));
+    assert(is_reserved_alloc_import("atto.alloc/int_buffer"));
     assert(is_reserved_alloc_import("alloc"));
     assert(is_reserved_alloc_import("alloc/int_buffer"));
     assert(is_reserved_compiler_library_import("ores.core/numeric"));
     assert(is_reserved_compiler_library_import("atto.core/numeric"));
+    assert(is_reserved_compiler_library_import("atto.alloc/int_buffer"));
     assert(is_reserved_compiler_library_import("alloc/int_buffer"));
     assert(!is_reserved_alloc_import("./alloc/int_buffer"));
     assert(!is_reserved_compiler_library_import("ores.std/testing"));
+    assert(!is_reserved_compiler_library_import("atto.std/fs"));
     assert(compiler_library_dependency_allowed(
         CompilerLibraryTier::Core, CompilerLibraryTier::Core));
     assert(!compiler_library_dependency_allowed(
@@ -61,28 +67,35 @@ int main() {
     assert(numeric->source.find("define module numeric as") != std::string_view::npos);
     assert(numeric->source.find("clamp_int") != std::string_view::npos);
 
-    const auto* buffer = find_alloc_library_source("alloc/int_buffer");
+    const auto* buffer = find_alloc_library_source("atto.alloc/int_buffer");
     assert(buffer != nullptr);
+    assert(buffer == find_alloc_library_source("atto.alloc/int_buffer.atto"));
+    assert(buffer == find_alloc_library_source("atto.alloc/int_buffer.ores"));
+    assert(buffer == find_alloc_library_source("alloc/int_buffer"));
     assert(buffer == find_alloc_library_source("alloc/int_buffer.ores"));
     assert(buffer == find_alloc_library_source("alloc/int_buffer.atto"));
     assert(buffer->tier == CompilerLibraryTier::Alloc);
     assert(buffer->module_name == "int_buffer");
-    assert(buffer->unit_id == "@alloc/int_buffer.atto");
+    assert(buffer->unit_id == "@atto.alloc/int_buffer.atto");
+    assert(buffer->canonical_import == "atto.alloc/int_buffer");
     assert(buffer->admitted_provider_bits ==
         bit(CoreProviderRequirement::Allocator));
     assert(buffer->source.find("new Array<int>()") != std::string_view::npos);
 
     const auto* bundle =
-        find_alloc_library_source("alloc/int_buffer_bundle");
+        find_alloc_library_source("atto.alloc/int_buffer_bundle");
     assert(bundle != nullptr);
+    assert(bundle == find_alloc_library_source("atto.alloc/int_buffer_bundle.atto"));
+    assert(bundle == find_alloc_library_source("atto.alloc/int_buffer_bundle.ores"));
+    assert(bundle == find_alloc_library_source("alloc/int_buffer_bundle"));
     assert(bundle == find_alloc_library_source("alloc/int_buffer_bundle.atto"));
     assert(bundle == find_alloc_library_source("alloc/int_buffer_bundle.ores"));
-    assert(bundle->unit_id == "@alloc/int_buffer_bundle.atto");
+    assert(bundle->unit_id == "@atto.alloc/int_buffer_bundle.atto");
     assert(bundle->tier == CompilerLibraryTier::Alloc);
     assert(bundle->admitted_provider_bits ==
         bit(CoreProviderRequirement::Allocator));
     assert(bundle->source.find(
-        "import module int_buffer from \"alloc/int_buffer\"") !=
+        "import module int_buffer from \"atto.alloc/int_buffer\"") !=
         std::string_view::npos);
     assert(find_core_library_source("alloc/int_buffer") == nullptr);
 
@@ -93,6 +106,11 @@ int main() {
     assert(find_core_library_source("atto.core//numeric.atto") == nullptr);
     assert(find_core_library_source("atto.core\\numeric.atto") == nullptr);
     assert(find_alloc_library_source("alloc/int_buffer.atto/../other") == nullptr);
+    assert(find_alloc_library_source("atto.alloc/int_buffer.atto/../other") == nullptr);
+    assert(find_alloc_library_source("atto.alloc/../int_buffer") == nullptr);
+    assert(find_alloc_library_source("atto.alloc/int_buffer.txt") == nullptr);
+    assert(find_alloc_library_source("atto.alloc//int_buffer") == nullptr);
+    assert(find_alloc_library_source("atto.alloc\\int_buffer") == nullptr);
     assert(find_alloc_library_source("alloc/int_buffer_bundle.atto/extra") == nullptr);
     assert(find_core_library_source("ores.core/unknown") == nullptr);
     assert(find_core_library_source("ores.core/../numeric") == nullptr);

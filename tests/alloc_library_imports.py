@@ -119,12 +119,12 @@ def main():
             "alloc alias created a second compiler-owned unit identity",
         )
 
-        # New AttoLang source and canonical .atto alloc imports must share
+        # New AttoLang source and canonical atto.alloc imports must share
         # one compiler-owned module with legacy .ores aliases. Prove this by
         # IR identity as well as by compiling and executing native code.
         modern_source = root / "modern-alloc.atto"
         modern_source.write_text(
-            'import module int_buffer as New from "alloc/int_buffer.atto"; '
+            'import module int_buffer as New from "atto.alloc/int_buffer.atto"; '
             'import module int_buffer as Old from "alloc/int_buffer.ores"; '
             "pub fnc main():int{return New.sum_pair(10,11)"
             "+Old.sum_pair(10,11);}\n",
@@ -180,7 +180,7 @@ def main():
         modern_bundle_source = root / "modern-bundle.atto"
         modern_bundle_source.write_text(
             'import module int_buffer_bundle as bundle '
-            'from "alloc/int_buffer_bundle.atto"; '
+            'from "atto.alloc/int_buffer_bundle.atto"; '
             "pub fnc main():int{return bundle.marker();}\n",
             encoding="utf-8",
         )
@@ -207,6 +207,19 @@ def main():
             executed = run([str(bundle_exe)])
             require(executed.returncode == 42,
                     "compiled .atto transitive alloc bundle did not execute to 42")
+
+        modern_unknown = root / "atto-alloc-unknown.atto"
+        modern_unknown.write_text(
+            'import module missing from "atto.alloc/missing"; '
+            "pub fnc main():int{return 0;}\n", encoding="utf-8")
+        reject(run([args.compiler, str(modern_unknown)]),
+               "unknown compiler-owned atto.alloc module")
+        modern_traversal = root / "atto-alloc-traversal.atto"
+        modern_traversal.write_text(
+            'import module int_buffer from "atto.alloc/../int_buffer"; '
+            "pub fnc main():int{return 0;}\n", encoding="utf-8")
+        reject(run([args.compiler, str(modern_traversal)]),
+               "unknown compiler-owned atto.alloc module")
 
         invalid_suffix = root / "invalid-alloc-suffix.atto"
         invalid_suffix.write_text(

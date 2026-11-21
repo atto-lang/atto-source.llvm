@@ -9,8 +9,8 @@ The LLVM binary/repository names remain Oreslang-named for compatibility.
 | Canonical AttoLang import | Compatible legacy spellings | Unique compiler-owned unit |
 | --- | --- | --- |
 | `atto.core/numeric.atto` | `atto.core/numeric`, `atto.core/numeric.ores`, `ores.core/numeric`, `ores.core/numeric.atto`, `ores.core/numeric.ores` | `@atto.core/numeric.atto` |
-| `alloc/int_buffer.atto` | `alloc/int_buffer`, `alloc/int_buffer.ores` | `@alloc/int_buffer.atto` |
-| `alloc/int_buffer_bundle.atto` | `alloc/int_buffer_bundle`, `alloc/int_buffer_bundle.ores` | `@alloc/int_buffer_bundle.atto` |
+| `atto.alloc/int_buffer.atto` | `atto.alloc/int_buffer`, `atto.alloc/int_buffer.ores`, `alloc/int_buffer`, `alloc/int_buffer.atto`, `alloc/int_buffer.ores` | `@atto.alloc/int_buffer.atto` |
+| `atto.alloc/int_buffer_bundle.atto` | `atto.alloc/int_buffer_bundle`, `atto.alloc/int_buffer_bundle.ores`, `alloc/int_buffer_bundle`, `alloc/int_buffer_bundle.atto`, `alloc/int_buffer_bundle.ores` | `@atto.alloc/int_buffer_bundle.atto` |
 
 All aliases return the **same registry source entry**; module linkage deduplicates
 by the canonical internal unit ID. An imported module must not acquire a fresh
@@ -28,7 +28,7 @@ suffix forms are rejected without emitting LLVM IR.
 - The `numeric` core module is pure, allocator-free and supported as a
   source-level compiler-owned module on LLVM's admitted native and freestanding
   ARM/Wasm target triples.
-- The `alloc/int_buffer` module requires the native allocator provider.
+- The `atto.alloc/int_buffer` module requires the native allocator provider.
   Its `int_buffer_bundle` dependency closure carries that same requirement
   even when the bundle's visible function does not allocate.
 - Freestanding ARM/Wasm targets must **reject** allocator-dependent core
@@ -61,3 +61,19 @@ receipts. Source-organization GitHub Actions has repeatedly returned
 `NOT_EXECUTED`. Do not claim LLVM guest parity until the exact immutable
 head/tree has real compiler, link, executable, sanitizer and negative-case
 receipts. Source-free canaries in other organizations are not substitutes.
+
+## Namespace boundary (additional stacked slice)
+
+The public library naming now follows `atto.core` → `atto.alloc` →
+`atto.std`, with `atto.runtime.actor` planned as a separately admitted
+runtime. `atto.std/*` is reserved and fails closed on this LLVM branch:
+no OS-backed implementation is claimed. Legacy `ores.std/*` remains rejected
+as before. `atto.alloc/*` and `alloc/*` import aliases resolve to the
+same compiler-owned source, canonical `@atto.alloc/*.atto` unit identity,
+and allocator-provider requirement. Changing an import spelling never grants
+freestanding allocation or an actor runtime.
+
+The next separate integration target is the **existing** Rust QEMU
+`tools/core-baremetal-gate` on a newer LLVM main: migrate its source fixture
+from `.ores` to canonical `.atto` and require a new exact-head, nonzero-step
+no-libc execution receipt. This stacked PR does not claim that run.
