@@ -77,3 +77,89 @@ The real `LlvmCodegen.cpp` now mints a per-module provenance ticket for each emi
 This is a **pre-optimization direct field-store** bound, not complete typed-MIR/SSA or guest ownership proof. Deferred cleanup, branch-coverage exhaustiveness, source `LoanId` and CFG `Reinitialize.write_id` correlation, optimization survival, native machine-code stores and guest execution remain unproven. Empty ledgers do not certify any source-to-IR binding. `ownership_complete=false`, `optimized_code_verified=false` and `guest_verified=false` remain mandatory.
 
 The new host-linked LLVM test has 75 assertions: 59 negative mutations (source kinds, source fields, paths, duplicates, erased stores, changing SSA destination/value, missing/bogus metadata) and 16 positive/nonpromoting controls. It is registered as focused CTest #14. Because the inherited focused shell block still had duplicated and malformed interior fragments, its entire test stage is rebuilt with an exact 14-name inventory, JUnit testcase set, zero failures/errors/skips and one explicit executed marker. The existing compiler-backed 50-case `.atto`/Clang fixture stage remains separate. Tests remain AUTHORED / NOT_EXECUTED until Actions can admit a source-organization runner.
+
+
+## Compiler-owned direct FieldWrite coverage (2026-11-07)
+
+The bounded compiler now independently scans the native Program's Function
+source AST for every direct Statement::Kind::FieldWrite, recursively visiting
+both conditional arms and nested loop/branch source statements, as well as
+the supported caught-throw source field-write cleanup list. This source
+inventory is assembled from the Program, **not** from the LLVM emitter's
+StoreInst ledger or external JSON receipts.
+
+At emission, each supported direct field write records the source Function
+address and the currently active LLVM Function as well as the earlier
+source Statement/StoreInst provenance. The compiler validates the actual
+LLVM Module and then requires an exact source-AST-to-ledger bijection:
+no omitted, forged, foreign-function, duplicate or stale direct field
+write may pass. The per-source compiler-owned emission identity is rechecked
+against the LLVM function containing the physical StoreInst.
+
+This is **direct source FieldWrite completeness only**. Other LLVM stores,
+Defer-kind field effects, all source LoanId uses, CFG Reinitialize.write_id
+pairing, full ownership CFG branch effects, optimized machine code and guest
+execution are NOT certified. A source without direct field writes is a
+vacuous inventory, not a positive source-store authority receipt. The
+source ledger maintains ownership_complete=false,
+optimized_code_verified=false and guest_verified=false.
+
+The accompanying native LLVM CTest adds 50 new authored assertions:
+42 fail-closed mutations for missing writes in straight-line, nested
+then/else, loop and caught-throw source paths, wrong source/function identity,
+forged ledger-only entries, changed values and bounded malformed inventories;
+plus eight non-promoting controls. Focused ownership CI requires exactly
+15 distinct named CTests and 15 distinct passing JUnit cases, followed by
+the separately guarded real 50-program LLVM/Clang guest matrix. Source-org
+runner-admission failures mean these remain AUTHORED, NOT_EXECUTED.
+
+
+## Independent native function provenance and reverse metadata inventory
+
+The direct-source field-write coverage verifier now requires a **separate
+compiler declaration registry** mapping every `Program.functions[]` identity
+to its actual, fully emitted LLVM function. A valid StoreInst must belong to
+the native function independently associated with its source function. This
+prevents the emitter from passing a self-consistent but wrong function pair.
+Missing/foreign/aliased declarations fail closed, including missing source
+functions with zero direct field writes.
+
+A second independent scan of the actual LLVM module inventories **every**
+StoreInst carrying `atto.ownership.field_write.source.v1`. The reverse
+tagged-store inventory must match the source ledger exactly. Unexpected
+cloned/forged/unpaired tagged stores fail closed, while ordinary untagged
+compiler housekeeping stores remain permitted. An empty source/ledger
+inventory cannot set `direct_source_writes_complete=true`.
+
+The original field-write coverage host test expands to **66 assertions**:
+54 negative mutations and 12 positive/nonpromoting controls, including
+forged native declaration maps and extra tagged stores. The exact-name
+focused CTest remains one of 15 and the 50 real compiler-backed `.atto`
+fixtures remain a separate gate. No compiler-backed guest or hosted test
+success is claimed until nonzero Actions runner steps exist. General LoanId,
+Reinitialize.write_id, optimized-code, cancellation and guest correctness
+remain unproven and all broad proof flags stay false.
+
+## Fail-closed source pointer lifetime fence (2026-11-07)
+
+A security review found that verify_source_coverage previously invoked
+the ledger's verify(module) before enumerating the current source AST.
+Since verify(module) dereferences FieldWriteSite.source, a deleted or
+replaced Program/Statement could cause a dangling source pointer read.
+The production verifier now inventories the current live AST first, then
+checks saved identities by pointer comparison only against that inventory,
+and cross-checks the independent source-to-native declaration registry.
+Only once identities are established does it inspect stored source fields
+and emitted LLVM instructions. The StoreInst membership scan similarly
+precedes use of store operands. This ordering is a lifetime safety fence,
+not a solution to ABA pointer-address reuse: the compiler must preserve
+stable, immutable AST nodes during codegen and cannot claim general NLL.
+
+The native host-LLVM regression test expands to 74 authored assertions:
+60 negative mutations and 14 positive/nonpromoting controls. New cases
+delete/replace source nodes after binding and cover multiple branch and
+caught-cleanup field stores. The focused source coverage CTest is renamed
+to end in _74. The workflow still requires exactly 15 native CTests and
+a separately checked 50-program compiler/Clang guest matrix.
+All native tests remain AUTHORED / NOT_EXECUTED until actual runner admission.
+Ownership completeness, optimized code and guest proof flags remain false.

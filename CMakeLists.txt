@@ -216,6 +216,21 @@ if(BUILD_TESTING)
         ${ORE_LLVM_LIBS})
     add_test(NAME native_ownership_source_field_store_ledger_75
         COMMAND oreslang-native-source-field-store-ledger-75-test)
+    # Independent production source-AST direct FieldWrite inventory,
+    # cross-checked against the emitted LLVM StoreInst provenance ledger.
+    # 60 negative and 14 positive host cases, including reverse-tag and
+    # source-to-native-function declaration cross-checks. No guest NLL proof.
+    add_executable(oreslang-native-source-fieldwrite-coverage-74-test
+        tests/native_source_fieldwrite_coverage_74_test.cpp)
+    target_include_directories(oreslang-native-source-fieldwrite-coverage-74-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+        "${LLVM_INCLUDE_DIRS}")
+    target_compile_options(oreslang-native-source-fieldwrite-coverage-74-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-source-fieldwrite-coverage-74-test PRIVATE
+        ${ORE_LLVM_LIBS})
+    add_test(NAME native_ownership_source_fieldwrite_coverage_74
+        COMMAND oreslang-native-source-fieldwrite-coverage-74-test)
 
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
