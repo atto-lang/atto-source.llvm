@@ -3445,10 +3445,18 @@ private:
             fail("native pointer syntax forbids unary '&' address-of and "
                  "unary '*' dereference; use checked Pointer<T> methods");
         }
-        if (token_.text == "trap" || token_.text == "trap!") {
-            // Reserved for Option-valued ordinary-error capture. Reject it
-            // before IR generation: accepting a normal value here would erase
-            // the guest failure channel and violate panic/raise precedence.
+        if (token_.text == "trap!") {
+            // Canonical trap! yields Result<T,Error>, *not* the historical
+            // Option<T> trap payload. Reject before emitting any IR with a
+            // stable diagnostic distinct from the legacy spelling.
+            throw std::runtime_error(
+                "E_TRAP_BANG_RESULT_UNVERIFIED: canonical trap! requires "
+                "checked Result<T,Error> with guest unwind and cleanup at byte "
+                + std::to_string(token_.offset));
+        }
+        if (token_.text == "trap") {
+            // Legacy trap remains an unsupported native Option-valued
+            // ordinary-error capture until its effect lowering is checked.
             fail("native trap expression unsupported: typed throw effects and cleanup lowering required");
         }
         if (token_.text == "rt") {
