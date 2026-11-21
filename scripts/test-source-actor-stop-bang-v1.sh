@@ -5,7 +5,9 @@ set -euo pipefail
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 : "${EXPECTED_HEAD:?immutable exact source commit SHA is required}"
 : "${ORESLANG_LLVMC:?native compiler executable is required}"
+: "${EXPECTED_COMPILER_SHA256:?independently pinned exact-head compiler sha256 is required}"
 [[ "$EXPECTED_HEAD" =~ ^[a-f0-9]{40}$ ]] || exit 64
+[[ "$EXPECTED_COMPILER_SHA256" =~ ^[a-f0-9]{64}$ ]] || exit 64
 for executable in git timeout grep cmp sha256sum realpath; do
   command -v "$executable" >/dev/null || exit 69
 done
@@ -29,6 +31,8 @@ for f in "${inputs[@]}"; do
 done
 compiler="$(realpath -e "$ORESLANG_LLVMC")"
 [[ -x "$compiler" ]] || exit 69
+compiler_sha256="$(sha256sum "$compiler" | cut -d " " -f1)"
+[[ "$compiler_sha256" == "$EXPECTED_COMPILER_SHA256" ]] || { echo COMPILER_BINARY_SHA_MISMATCH >&2; exit 78; }
 work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
 for opt in 0 2; do
@@ -77,4 +81,4 @@ for opt in 0 2; do
   done
 done
 [[ "$(git -C "$root" rev-parse HEAD)" == "$EXPECTED_HEAD" ]] || exit 78
-echo "STOP_BANG_EXACT_HEAD_MATRIX_EXECUTED|head=$EXPECTED_HEAD|native_runs=12|negative_rejections=12"
+echo "STOP_BANG_EXACT_HEAD_MATRIX_EXECUTED|head=$EXPECTED_HEAD|compiler_sha256=$compiler_sha256|native_runs=12|negative_rejections=12"
