@@ -6,9 +6,11 @@ run here proves *rejection*, not runnable AttoLang PubSub parity.
 """
 import argparse
 import hashlib
+import os
 import pathlib
 import subprocess
 import sys
+import tempfile
 
 FIXTURES = (
     "actor-pubsub-v1",
@@ -75,28 +77,39 @@ def verify_fixture_identity(root: pathlib.Path) -> int:
     return len(FIXTURES)
 
 
-def verify_compiler_rejections(root: pathlib.Path, compiler: str) -> int:
-    count = 0
-    # This canonical suspends-only .atto source intentionally has no legacy
-    # .ores twin. Prove compiler denial, not merely filename identity.
-    names = [stem + suffix for stem in FIXTURES
-             for suffix in (".ores", ".atto")]
-    names.append(CANONICAL_ATTO)
-    names.append(SHARE_BANG_DENIAL)
-    names.append(JAVA_TYPED_TRY_PUBLISH)
-    for name in names:
-        source = root / "contracts" / "v1" / "fixtures" / name
+
+def run_one_compiler_rejection(
+        root: pathlib.Path, compiler_argv: list[str], name: str) -> None:
+    """Execute an actual native compiler negative inside a private scratch dir.
+
+    Do not accept a typed diagnostic alone if the compiler also staged an IR
+    file, rewrote the source, or generated any other build artifact. The CLI
+    may write beside its input file or relative to cwd; both are isolated.
+    This proves only compiler rejection, never positive guest execution.
+    """
+    original = root / "contracts" / "v1" / "fixtures" / name
+    if original.is_symlink() or not original.is_file():
+        raise AssertionError(f"{name}: source must be a regular non-symlink file")
+    payload = original.read_bytes()
+    if not payload or len(payload) > 131072:
+        raise AssertionError(f"{name}: negative fixture missing or oversized")
+    with tempfile.TemporaryDirectory(prefix="atto-llvm-pubsub-negative-") as scratch:
+        workspace = pathlib.Path(scratch)
+        snapshot = workspace / name
+        snapshot.write_bytes(payload)
+        snapshot.chmod(0o400)
         run = subprocess.run(
-            [compiler, str(source)],
-            cwd=root,
+            [*compiler_argv, str(snapshot)],
+            cwd=workspace,
             text=True,
+            encoding="utf-8",
+            errors="replace",
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=20,
             check=False,
         )
-        # A zero exit, signal crash or any emitted stdout disqualifies a
-        # fail-closed compiler-negative test.
         if run.returncode <= 0:
             raise AssertionError(
                 f"{name}: unsupported source accepted or compiler crashed "
@@ -105,27 +118,99 @@ def verify_compiler_rejections(root: pathlib.Path, compiler: str) -> int:
         if run.stdout:
             raise AssertionError(
                 f"{name}: rejected guest produced stdout/IR "
-                f"({len(run.stdout)} bytes)"
+                f"({len(run.stdout)} characters)"
             )
         if DIAGNOSTIC not in run.stderr:
             raise AssertionError(
                 f"{name}: not an ActorGroup/Topic parser rejection: "
                 f"{run.stderr[:800]!r}"
             )
+        # An error code and diagnostic are not proof of clean rejection if
+        # generated artifacts remain. Snapshot fidelity is checked as well.
+        if snapshot.is_symlink() or not snapshot.is_file() \
+                or snapshot.read_bytes() != payload:
+            raise AssertionError(f"{name}: compiler modified negative source")
+        unexpected = [p.name for p in workspace.iterdir() if p != snapshot]
+        if unexpected:
+            raise AssertionError(
+                f"{name}: compiler emitted unexpected files: {unexpected}"
+            )
+
+
+def verify_compiler_rejections(root: pathlib.Path, compiler: str) -> int:
+    count = 0
+    # CTest passes $<TARGET_FILE:oreslang-llvmc> (absolute). Relative binary
+    # arguments remain relative to the fixture repository, not the sandbox.
+    compiler_path = pathlib.Path(compiler)
+    if not compiler_path.is_absolute():
+        compiler_path = root / compiler_path
+    compiler_command = [str(compiler_path.resolve())]
+    names = [stem + suffix for stem in FIXTURES
+             for suffix in (".ores", ".atto")]
+    names.extend((CANONICAL_ATTO, SHARE_BANG_DENIAL, JAVA_TYPED_TRY_PUBLISH))
+    for name in names:
+        run_one_compiler_rejection(root, compiler_command, name)
         count += 1
     return count
+
+
+def self_test_compiler_negative_boundary() -> int:
+    """Small source-free adversarial proof of the checker, NOT LLVM execution."""
+    with tempfile.TemporaryDirectory(prefix="atto-pubsub-gate-selftest-") as scratch:
+        root = pathlib.Path(scratch)
+        fixtures = root / "contracts" / "v1" / "fixtures"
+        fixtures.mkdir(parents=True)
+        (fixtures / "probe.atto").write_text(
+            "pub fnc main(): void { val result = topic.try_publish(share! x); }\n",
+            encoding="utf-8",
+        )
+        stub = root / "fake_compiler.py"
+        stub.write_text(
+            "import pathlib,sys\n"
+            "kind=sys.argv[1]\n"
+            "if kind=='emits': pathlib.Path('guest.ll').write_text('IR')\n"
+            "if kind=='mutates': pathlib.Path(sys.argv[2]).chmod(0o600);"
+            " pathlib.Path(sys.argv[2]).write_text('modified')\n"
+            "if kind=='stdout': print('fake IR')\n"
+            f"print({DIAGNOSTIC!r},file=sys.stderr)\n"
+            "sys.exit(0 if kind=='accepted' else 2)\n",
+            encoding="utf-8",
+        )
+        for kind in ("emits", "mutates", "stdout", "accepted"):
+            try:
+                run_one_compiler_rejection(
+                    root, [sys.executable, str(stub), kind], "probe.atto"
+                )
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError(
+                    f"source-free checker incorrectly accepted {kind} case"
+                )
+        run_one_compiler_rejection(
+            root, [sys.executable, str(stub), "clean"], "probe.atto"
+        )
+    return 5
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--compiler")
-    parser.add_argument("--source-root", required=True)
+    parser.add_argument("--self-test", action="store_true",
+                        help="adversarial source-free checker tests; no LLVM guest")
+    parser.add_argument("--source-root")
     parser.add_argument(
         "--verify-fixtures-only",
         action="store_true",
         help="check byte identity only (non-promoting, no compiler executed)",
     )
     args = parser.parse_args()
+    if args.self_test:
+        count = self_test_compiler_negative_boundary()
+        print(f"PASS SOURCE_ONLY LLVM negative-checker selftest: {count}/{count}")
+        return 0
+    if not args.source_root:
+        parser.error("--source-root is required unless --self-test is selected")
 
     root = pathlib.Path(args.source_root).resolve()
     paired = verify_fixture_identity(root)
