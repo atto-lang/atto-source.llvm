@@ -1,0 +1,9 @@
+define class Box as
+  pub let int value = 7;
+end
+pub fnc main(): int using suspend {
+  let Box box = new Box();
+  const first: Proxy<Box> = rt proxy box;
+  const second: Proxy<Box> = rt proxy box;
+  return 0;
+}
