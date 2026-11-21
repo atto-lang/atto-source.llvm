@@ -69,6 +69,20 @@ void negative_matrix() {
         CHECK(s.check_untrusted_claims(claims(), 1001) == Verdict::RejectedState);
     }
 }
+void os_challenge_is_kernel_generated_or_fails_closed() {
+    Session s(requirements());
+    std::array<std::uint8_t, 32> challenge{};
+#if defined(__linux__)
+    CHECK(s.issue_os_challenge(1000, 50, challenge));
+    CHECK(s.state() == State::ChallengeIssued);
+    auto c = claims();
+    c.challenge_nonce.assign(challenge.begin(), challenge.end());
+    CHECK(s.check_untrusted_claims(c, 1000) == Verdict::UnverifiedClaimsMatch);
+#else
+    CHECK(!s.issue_os_challenge(1000, 50, challenge));
+    CHECK(s.state() == State::Created);
+#endif
+}
 void invalid_requirements_and_entropy() {
     auto r = requirements();
     r.measurement_sha256.fill(0);
@@ -86,6 +100,7 @@ int main() {
     one_shot_claims_are_not_hardware_attestation();
     negative_matrix();
     invalid_requirements_and_entropy();
+    os_challenge_is_kernel_generated_or_fails_closed();
     if (failures) std::fprintf(stderr, "HOST_ONLY: %d failures\n", failures);
     else std::puts("HOST_ONLY: preflight rejection tests passed; NO hardware attestation");
     return failures ? 1 : 0;
