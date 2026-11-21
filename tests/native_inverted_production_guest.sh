@@ -104,19 +104,21 @@ PY
 
 # Immutable cross-backend source contract. Validate raw Git blobs rather
 # than comment text or the compiler's claimed source identity.
-# The same two blob IDs are pinned in Java and platform conformance.
+# These three blob IDs are pinned in Java and platform conformance.
 check_contract_fixtures() {
-    python3 - "$contracts" <<'PY'
+    python3 - "$contracts" "$fixtures" <<'PY'
 import hashlib
 from pathlib import Path
 import sys
 root = Path(sys.argv[1])
+fixture_root = Path(sys.argv[2])
 expected = {
-    "swap-reuse.atto": "8f5599a9e0b11ded2929110b4936441fceb2ef21",
-    "removed-index-trap.atto": "c3c87cfd2515707932734e183bb5768436526a96",
+    root / "swap-reuse.atto": "8f5599a9e0b11ded2929110b4936441fceb2ef21",
+    root / "removed-index-trap.atto": "c3c87cfd2515707932734e183bb5768436526a96",
+    fixture_root / "positive-immutable-column-swap.atto": "863b1f20137656a277fc7bc04415a6f001f76512",
 }
-for name, wanted in expected.items():
-    path = root / name
+for path, wanted in expected.items():
+    name = path.name
     if path.is_symlink() or not path.is_file():
         raise SystemExit(f"FAIL: missing or linked canonical DOP fixture {name}")
     data = path.read_bytes()
@@ -125,7 +127,7 @@ for name, wanted in expected.items():
     blob = hashlib.sha1(b"blob " + str(len(data)).encode("ascii") + b"\0" + data).hexdigest()
     if blob != wanted:
         raise SystemExit(f"FAIL: canonical DOP fixture changed {name}: {blob}")
-print("DOP_CANONICAL_SOURCE_BLOBS_MATCHED=2")
+print("DOP_CANONICAL_SOURCE_BLOBS_MATCHED=3")
 PY
 }
 # A shell script that exits 42 must never satisfy a native-guest success.
