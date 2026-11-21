@@ -6332,6 +6332,20 @@ private:
     // No LLVM IR may be emitted until typed field-wise copy/move, drop plans,
     // borrow exclusion and AOT layout reconstruction have been implemented.
     void reject_unlowered_with_update() const {
+        // This is a token-level native source boundary, reached both for the
+        // initial token and after every advance. Never reinterpret a raw
+        // pointer/effect spelling as a user-defined class, generic, routine
+        // or local merely because native IR lowering is incomplete.
+        // Comments, strings, and symbol literals are not identifiers.
+        if (token_.kind == Kind::Identifier &&
+            (token_.text == "unsafe" || token_.text == "Pointer" ||
+             token_.text == "NativePointer" || token_.text == "RawPointer")) {
+            throw std::runtime_error(
+                "NATIVE_POINTER_CAPABILITY_UNSUPPORTED: checked unsafe effects, "
+                "supervisor-minted regions, actor-domain proof and LLVM AOT "
+                "pointer lowering are required at byte "
+                + std::to_string(token_.offset));
+        }
         if (token_.kind == Kind::Identifier && token_.text == "with"
                 && peek_next().text == "{") {
             throw std::runtime_error(

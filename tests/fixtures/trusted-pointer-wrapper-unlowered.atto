@@ -1,0 +1,4 @@
+pub fnc main(): int {
+    val wrap: Pointer<int> = 42;
+    return 42;
+}

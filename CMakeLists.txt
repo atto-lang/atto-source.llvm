@@ -21,6 +21,48 @@ if(ATTO_ACTOR_ACCESS_HOST_ONLY)
   return()
 endif()
 
+# Standalone trusted native pointer host tests; no LLVM toolchain or
+# guest pointer support is claimed by this bootstrap profile.
+option(ATTO_NATIVE_POINTER_HOST_ONLY
+  "Build native pointer host broker/scheduler tests without LLVM" OFF)
+if(ATTO_NATIVE_POINTER_HOST_ONLY)
+  include(CTest)
+  find_package(Threads REQUIRED)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(NAME atto_native_pointer_verifier_source_free_selftest
+    COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_pointer_verifier_selftest.py"
+      "${CMAKE_CURRENT_SOURCE_DIR}/scripts/native-pointer-exact-head-verify.sh")
+  set_tests_properties(atto_native_pointer_verifier_source_free_selftest
+    PROPERTIES TIMEOUT 90)
+  foreach(name IN ITEMS trusted_pointer_window native_region_registry native_region_runtime_authority)
+    add_executable(atto_${name}_host_test tests/${name}_test.cpp)
+    target_include_directories(atto_${name}_host_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(atto_${name}_host_test PRIVATE Threads::Threads)
+    target_compile_options(atto_${name}_host_test PRIVATE
+      $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME atto_${name}_host_only COMMAND atto_${name}_host_test)
+  endforeach()
+  add_executable(atto_native_actor_supervisor_pointer_host_test
+    tests/native_actor_supervisor_pointer_integration_test.cpp
+    src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+  target_include_directories(atto_native_actor_supervisor_pointer_host_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+  target_link_libraries(atto_native_actor_supervisor_pointer_host_test PRIVATE Threads::Threads)
+  target_compile_options(atto_native_actor_supervisor_pointer_host_test PRIVATE
+    $<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>
+    $<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+  add_test(NAME atto_native_actor_supervisor_pointer_host_only
+    COMMAND atto_native_actor_supervisor_pointer_host_test)
+  set_tests_properties(atto_native_actor_supervisor_pointer_host_only PROPERTIES TIMEOUT 20)
+  if(UNIX)
+    add_test(NAME atto_native_pointer_negative_compile
+      COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_native_pointer_negative_compile.sh")
+    set_tests_properties(atto_native_pointer_negative_compile PROPERTIES TIMEOUT 30)
+  endif()
+  return()
+endif()
+
 # Host-only C++17 .oresi v1 preflight with no LLVM SDK dependency.
 # Tests metadata admission, not the compiler, guest or native linker.
 option(ORESLANG_ORESI_HOST_ONLY
@@ -551,6 +593,29 @@ if(BUILD_TESTING)
     target_compile_options(oreslang-native-region-registry-test PRIVATE
         $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
     add_test(NAME native_region_registry_host_only COMMAND oreslang-native-region-registry-test)
+    add_executable(oreslang-native-region-runtime-authority-test
+        tests/native_region_runtime_authority_test.cpp)
+    target_include_directories(oreslang-native-region-runtime-authority-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-region-runtime-authority-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-region-runtime-authority-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_region_runtime_authority_host_only
+        COMMAND oreslang-native-region-runtime-authority-test)
+    set_tests_properties(native_region_runtime_authority_host_only PROPERTIES TIMEOUT 20)
+    add_executable(oreslang-native-actor-supervisor-pointer-test
+        tests/native_actor_supervisor_pointer_integration_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-supervisor-pointer-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-actor-supervisor-pointer-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-actor-supervisor-pointer-test PRIVATE
+        $<$<COMPILE_LANG_AND_ID:C,GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>
+        $<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_actor_supervisor_pointer_scheduler_integration_host_only
+        COMMAND oreslang-native-actor-supervisor-pointer-test)
+    set_tests_properties(native_actor_supervisor_pointer_scheduler_integration_host_only
+        PROPERTIES TIMEOUT 20)
     set_tests_properties(native_region_registry_host_only PROPERTIES TIMEOUT 20)
     set_tests_properties(trusted_native_pointer_window_host_only PROPERTIES TIMEOUT 20)
     # Native host-only CoreLog diagnostics. This test does not require guest
@@ -1361,6 +1426,16 @@ if(BUILD_TESTING)
                 --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/${fixture}"
                 ${ARGN})
     endfunction()
+
+    # Actual .atto source-compiler admission: raw pointer/effect syntax MUST
+    # fail before native IR until trusted grants, effects, and AOT are complete.
+    foreach(pointer_case IN ITEMS unsafe type wrapper raw-type)
+        oreslang_contract_test(native_trusted_pointer_${pointer_case}_failclosed
+            trusted-pointer-${pointer_case}-unlowered.atto
+            --diagnostic "NATIVE_POINTER_CAPABILITY_UNSUPPORTED")
+    endforeach()
+    oreslang_contract_test(native_trusted_pointer_comment_safe
+        trusted-pointer-comment-safe.atto --ir "ret i64 42")
 
     # HTTP actor source lowering is not verified on LLVM. These compiler-
     # negative fixtures must exercise the real oreslang-llvmc, not a host model.

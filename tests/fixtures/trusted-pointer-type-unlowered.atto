@@ -1,0 +1,4 @@
+pub fnc read_native(ptr: NativePointer<int>): int {
+    return 0;
+}
+pub fnc main(): int { return 42; }
