@@ -46,3 +46,19 @@ target_include_directories(atto-checked-actor-ir PRIVATE
   "${LLVM_INCLUDE_DIRS}"
 )
 target_link_libraries(atto-checked-actor-ir PRIVATE ${ORE_LLVM_LIBS})
+
+# Host-runtime actor slab heap (Offset32 + Handle32); no LLVM dependency.
+# See docs/ACTOR_SLAB_HEAP.md. Not compiled .atto allocation evidence.
+include(CTest)
+if(BUILD_TESTING)
+  add_executable(oreslang-actor-slab-heap-test tests/actor_slab_heap_test.cpp)
+  target_include_directories(oreslang-actor-slab-heap-test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+  target_compile_options(oreslang-actor-slab-heap-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+  add_test(NAME native_actor_slab_heap_contract COMMAND oreslang-actor-slab-heap-test)
+  set_tests_properties(native_actor_slab_heap_contract PROPERTIES TIMEOUT 120)
+  add_executable(oreslang-actor-slab-heap-bench tests/actor_slab_heap_bench.cpp)
+  target_include_directories(oreslang-actor-slab-heap-bench PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+  target_compile_options(oreslang-actor-slab-heap-bench PRIVATE -O2 -Wall -Wextra -Wpedantic -Werror)
+endif()
