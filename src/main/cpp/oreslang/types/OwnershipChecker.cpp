@@ -577,6 +577,35 @@ void validate_i64_ownership(Program& program) {
             pipeline.ownership_admitted = false;
             pipeline.ownership_authority_fingerprint = 0;
         }
+    // A failed re-validation must revoke all prior source-site authority.
+    // Recursively clear branch/loop witnesses before any new ownership pass.
+    std::function<void(Statement&)> revoke_restore_sites;
+    revoke_restore_sites = [&](Statement& effect) {
+        effect.reinitialize_write_id = 0;
+        for (auto& child : effect.then_statements) revoke_restore_sites(child);
+        for (auto& child : effect.else_statements) revoke_restore_sites(child);
+    };
+    for (auto& function : program.functions) {
+        for (auto& effect : function.statements) revoke_restore_sites(effect);
+        for (auto& effect : function.caught_throw_defers)
+            revoke_restore_sites(effect);
+    }
+    // Do not leave a partially minted restoration capability on failure:
+    // another validator invocation or speculative codegen must not reuse it.
+    bool restoration_sites_admitted = false;
+    struct RestorationFailureFence {
+        Program& program;
+        std::function<void(Statement&)>& revoke;
+        bool& admitted;
+        ~RestorationFailureFence() noexcept {
+            if (admitted) return;
+            for (auto& fn : program.functions) {
+                for (auto& stmt : fn.statements) revoke(stmt);
+                for (auto& stmt : fn.caught_throw_defers) revoke(stmt);
+            }
+        }
+    } restore_failure_fence{program, revoke_restore_sites,
+                            restoration_sites_admitted};
     Functions functions;
     for (const auto& function : program.functions)
         functions.emplace(native_function_slot(function.name, function.parameters.size()), &function);
@@ -670,7 +699,8 @@ void validate_i64_ownership(Program& program) {
         if (method.result) pure(*method.result);
     }
 
-    for (const auto& function : program.functions) {
+    std::uint64_t next_restore_write_id = 1;
+    for (auto& function : program.functions) {
         Locals locals;
         // IDs are minted by this compiler frame, never supplied by source.
         // Their scope is the checked function, not globally independent
@@ -918,7 +948,7 @@ void validate_i64_ownership(Program& program) {
         std::unordered_set<std::string> root_names;
         for (const auto& item : locals) root_names.insert(item.first);
         std::unordered_map<std::string, unsigned> iteration_loans;
-        std::function<void(const Statement&, Locals&)> check_effect;
+        std::function<void(Statement&, Locals&)> check_effect;
         auto scoped_entry = [&](const LocalBinding& binding) {
             LocalOwnership entry;
             if (next_binding_id == 0)
@@ -941,12 +971,12 @@ void validate_i64_ownership(Program& program) {
             }
             return entry;
         };
-        auto scoped_effects = [&](const std::vector<Statement>& body, Locals& state) {
-            for (const auto& action : body) check_effect(action, state);
+        auto scoped_effects = [&](std::vector<Statement>& body, Locals& state) {
+            for (auto& action : body) check_effect(action, state);
             for (const auto& action : body) if (action.kind == Statement::Kind::ScopedLocal)
                 state.erase(action.branch_local->name);
         };
-        check_effect = [&](const Statement& stmt, Locals& state) {
+        check_effect = [&](Statement& stmt, Locals& state) {
             if (stmt.kind == Statement::Kind::ScalarWrite) {
                 const auto found = state.find(stmt.receiver);
                 if (found == state.end()) throw std::runtime_error("assignment requires a visible scalar slot");
@@ -1088,6 +1118,32 @@ void validate_i64_ownership(Program& program) {
                 if (recv.exclusive_loan || recv.shared_loans != 0)
                     throw std::runtime_error("ownership violation: class field write conflicts with active borrow");
                 check_value(*stmt.expression, state, functions);
+                // Restoration is narrower than an arbitrary scalar field
+                // assignment: ONLY a definitely moved field can receive the
+                // CFG Reinitialize ticket. Ordinary overwrites stay unticketed.
+                if (recv.moved_fields.count(stmt.field)) {
+                    if (!next_restore_write_id ||
+                            next_restore_write_id > 4096)
+                        throw std::runtime_error(
+                            "ownership violation: restoration write ticket bound exceeded");
+                    // Separate restoration identity domain from ordinary
+                    // lexical loan token numbers and SSA ordinal IDs.
+                    const std::uint64_t ticket =
+                        (std::uint64_t{1} << 63) | next_restore_write_id++;
+                    // Reuse the real CFG transition validator for this
+                    // precisely one-field, straight-line source site. This
+                    // does not establish whole-function SSA coverage.
+                    ownership::Graph restoration;
+                    const auto restored = stmt.receiver + "." + stmt.field;
+                    restoration.entry.emplace(restored,
+                        ownership::PlaceState{ownership::kMoved});
+                    restoration.blocks.push_back({{
+                        ownership::Operation{
+                            ownership::Operation::Kind::Reinitialize,
+                            restored, std::nullopt, ticket}}, {}});
+                    ownership::verify(restoration);
+                    stmt.reinitialize_write_id = ticket;
+                }
                 recv.moved_fields.erase(stmt.field);
             } else if (stmt.kind == Statement::Kind::Call) {
                 const Expression& call = *stmt.expression;
@@ -1111,7 +1167,7 @@ void validate_i64_ownership(Program& program) {
                 throw std::runtime_error("ownership violation: unsupported conditional arm effect");
             }
         };
-        for (const auto& stmt : function.statements) {
+        for (auto& stmt : function.statements) {
             if (stmt.kind == Statement::Kind::Defer) {
                 if (!structured_exits.empty()) throw std::runtime_error("defer after structured return requires path-specific registration");
                 deferred_effects.push_back(&stmt);
@@ -1490,6 +1546,7 @@ void validate_i64_ownership(Program& program) {
                 future_pipeline_authority_fingerprint(pipeline);
             pipeline.ownership_admitted = true;
         }
+    restoration_sites_admitted = true;
 }
 
 } // namespace oreslang

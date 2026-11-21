@@ -300,6 +300,10 @@ struct Statement {
     std::unique_ptr<Expression> condition_rhs;
     std::vector<Statement> then_statements;
     std::vector<Statement> else_statements;
+    // Set ONLY by validate_i64_ownership after definitely-moved scalar
+    // field restoration; a failed validation clears the complete tree.
+    // Appended last to preserve existing aggregate initialization order.
+    std::uint64_t reinitialize_write_id = 0;
 };
 
 // Side-effect-free equality guard with return-only taken branch.

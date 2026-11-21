@@ -229,6 +229,19 @@ if(BUILD_TESTING)
         ${ORE_LLVM_LIBS})
     add_test(NAME native_ownership_source_field_write_link_26
         COMMAND oreslang-native-source-field-write-link-26-test)
+    # Per-site checked CFG Reinitialize.write_id, limited to definitely
+    # moved scalar fields, must match an actual physical LLVM StoreInst.
+    add_executable(oreslang-native-reinitialize-store-witness-48-test
+        tests/native_reinitialize_store_witness_48_test.cpp)
+    target_include_directories(oreslang-native-reinitialize-store-witness-48-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+        "${LLVM_INCLUDE_DIRS}")
+    target_compile_options(oreslang-native-reinitialize-store-witness-48-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-reinitialize-store-witness-48-test PRIVATE
+        ${ORE_LLVM_LIBS})
+    add_test(NAME native_ownership_reinitialize_store_witness_48
+        COMMAND oreslang-native-reinitialize-store-witness-48-test)
 
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.

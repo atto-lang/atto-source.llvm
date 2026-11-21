@@ -15,10 +15,10 @@ const denied=(source,code)=>{
   assert.equal(r.guestExecutionVerified,false);
   assert.ok(r.errors.some(x=>x.startsWith(code)),JSON.stringify(r.errors));
 };
-test('01 canonical fifteen-CTest workflow has valid source-only shape',()=>{
+test('01 canonical sixteen-CTest workflow has valid source-only shape',()=>{
   const r=inspect(workflow);
   assert.equal(r.structurallyValid,true,JSON.stringify(r.errors));
-  assert.equal(r.checkedNativeCTestCount,15);
+  assert.equal(r.checkedNativeCTestCount,16);
   assert.equal(r.verified,false);
   assert.equal(r.guestExecutionVerified,false);
 });
@@ -30,9 +30,9 @@ test('03 stray command after final receipt is rejected',()=>{
   denied(workflow+' /tmp/atto-place-inventory.txt\n',
     'ORPHANED_OR_UNINDENTED_RUN_COMMAND');
 });
-test('04 stale fourteen-test count is rejected',()=>{
-  denied(workflow.replace("int(root.get('tests', '-1')) != 15",
-      "int(root.get('tests', '-1')) != 14"),'STALE_NATIVE_CTEST_CARDINALITY');
+test('04 stale fifteen-test count is rejected',()=>{
+  denied(workflow.replace("int(root.get('tests', '-1')) != 16",
+      "int(root.get('tests', '-1')) != 15"),'STALE_NATIVE_CTEST_CARDINALITY');
 });
 test('05 missing typed-MIR CTest inventory entry is rejected',()=>{
   denied(workflow.replace(
@@ -145,4 +145,28 @@ test('28 pushed reconciliation branch must be watched',()=>{
   denied(workflow.replace(
     "      - 'audit/llvm-source-physical-fieldwrite-link-*'",
     "      - 'unwatched-branch-*'"),'MISSING_EXACT_HEAD_TRIGGER');
+});
+test('29 absent restoration witness CTest inventory is rejected',()=>{
+  denied(workflow.replace(
+    "          grep -Eq 'Test +#[0-9]+: native_ownership_reinitialize_store_witness_48$' /tmp/atto-place-inventory.txt\n",
+    ''),'MISSING_OR_DUPLICATED_CTEST:reinitialize_store_witness_48');
+});
+test('30 duplicate restoration witness inventory rejected',()=>{
+  const line="          grep -Eq 'Test +#[0-9]+: native_ownership_reinitialize_store_witness_48$' /tmp/atto-place-inventory.txt\n";
+  denied(workflow.replace(line,()=>line+line),
+    'MISSING_OR_DUPLICATED_CTEST:reinitialize_store_witness_48');
+});
+test('31 missing restoration native build target denied',()=>{
+  denied(workflow.replace('oreslang-native-reinitialize-store-witness-48-test',
+    'dummy-restoration-test'),'MISSING_NATIVE_BUILD_OR_RECEIPT');
+});
+test('32 missing restoration PR trigger denied',()=>{
+  denied(workflow.replace(
+    "      - 'tests/native_reinitialize_store_witness_48_test.cpp'",
+    "      - 'inert-ownership-test.cpp'"),'MISSING_EXACT_HEAD_TRIGGER');
+});
+test('33 missing restoration source branch trigger denied',()=>{
+  denied(workflow.replace(
+    "      - 'audit/llvm-restore-witness-to-store-*'",
+    "      - 'unknown-restoration-branch-*'"),'MISSING_EXACT_HEAD_TRIGGER');
 });
