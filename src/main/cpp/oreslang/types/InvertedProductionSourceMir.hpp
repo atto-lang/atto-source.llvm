@@ -45,10 +45,14 @@ inline VerifiedInvertedSourceI64 verify_production_inverted_i64(
         throw std::invalid_argument("production inverted source capacity/operation budget exceeded");
     if (schema.capacity_bytes(source.capacity) > 16 * 1024 * 1024)
         throw std::invalid_argument("production inverted source layout exceeds capacity budget");
+    if (!source.snapshot_name.empty() &&
+            (source.snapshot_name == source.owner_name || source.snapshot_name.size() > 256))
+        throw std::invalid_argument("production inverted snapshot binding invalid");
 
     hir::LinearPlan plan(schema, source.capacity);
     I64PairIrOperands operands;
     bool returned = false;
+    bool snapshot_captured = false;
     for (std::size_t i = 0; i < source.operations.size(); ++i) {
         const auto& operation = source.operations[i];
         if (returned)
@@ -56,6 +60,11 @@ inline VerifiedInvertedSourceI64 verify_production_inverted_i64(
         if (operation.index >
                 static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max()))
             throw std::out_of_range("production inverted row index exceeds signed i64");
+        const bool snapshot_action =
+            operation.kind == InvertedSourceOperation::Kind::Snapshot ||
+            operation.kind == InvertedSourceOperation::Kind::ReturnSnapshotRead;
+        if (!snapshot_action && !operation.snapshot_binding.empty())
+            throw std::invalid_argument("foreign snapshot binding on non-snapshot operation");
         switch (operation.kind) {
             case InvertedSourceOperation::Kind::Push:
                 if (!operation.field.empty() || operation.index != 0 ||
@@ -76,7 +85,20 @@ inline VerifiedInvertedSourceI64 verify_production_inverted_i64(
                     throw std::invalid_argument("invalid inverted erase source metadata");
                 plan.erase_swap(operation.index);
                 break;
+            case InvertedSourceOperation::Kind::Snapshot:
+                if (source.snapshot_name.empty() || snapshot_captured ||
+                        operation.snapshot_binding != source.snapshot_name ||
+                        !operation.field.empty() || operation.value != 0 ||
+                        operation.values != std::array<std::int64_t, 2>{})
+                    throw std::invalid_argument("invalid or duplicate inverted snapshot source metadata");
+                // Bounds and outstanding mutable loans are checked at
+                // capture time, never re-resolved when the value is read.
+                plan.snapshot(operation.index);
+                snapshot_captured = true;
+                break;
             case InvertedSourceOperation::Kind::ReturnRead:
+                if (snapshot_captured || !source.snapshot_name.empty())
+                    throw std::logic_error("production inverted detached snapshot must be returned");
                 if (operation.value != 0 ||
                         operation.values != std::array<std::int64_t, 2>{})
                     throw std::invalid_argument("invalid inverted return source metadata");
@@ -85,6 +107,18 @@ inline VerifiedInvertedSourceI64 verify_production_inverted_i64(
                 plan.read_runtime_checked(operation.index, operation.field);
                 // The local owner dies before function return. MIR close
                 // revokes and scrubs every stack column after the read.
+                plan.close();
+                returned = true;
+                break;
+            case InvertedSourceOperation::Kind::ReturnSnapshotRead:
+                if (!snapshot_captured || source.snapshot_name.empty() ||
+                        operation.snapshot_binding != source.snapshot_name ||
+                        operation.index != 0 || operation.value != 0 ||
+                        operation.values != std::array<std::int64_t, 2>{})
+                    throw std::logic_error("production inverted detached snapshot not initialized");
+                if (i + 1 != source.operations.size())
+                    throw std::logic_error("production inverted terminal read must be last");
+                plan.read_snapshot_field(operation.field);
                 plan.close();
                 returned = true;
                 break;

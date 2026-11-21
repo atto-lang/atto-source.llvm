@@ -1,0 +1,13 @@
+// A detached immutable value cannot be written via owner field syntax.
+define inverted struct Position as
+    let x: int;
+    id: int;
+end
+
+fnc main(): int {
+    let rows = InvertedArray<Position>.with_capacity(2);
+    rows.push(7, 42);
+    let saved = rows.snapshot(0);
+    saved.x = 9;
+    return saved.x;
+}

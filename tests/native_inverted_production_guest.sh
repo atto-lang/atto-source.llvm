@@ -102,7 +102,7 @@ if result.returncode != 42:
 PY
 }
 
-for fixture in positive-column-get.atto positive-column-bounded.atto positive-production-erase-swap.atto positive-immutable-column-swap.atto; do
+for fixture in positive-column-get.atto positive-column-bounded.atto positive-production-erase-swap.atto positive-immutable-column-swap.atto positive-detached-snapshot.atto positive-detached-snapshot-second-field.atto; do
     "$compiler" "$fixtures/$fixture" > "$tmp/guest.ll"
     audit_ir "$tmp/guest.ll"
     for required in '; typed MIR, experimental local i64 pair LLVM IR' \
@@ -232,6 +232,28 @@ for item in \
     fi
 done
 
+# Detached values never alias the mutable SoA owner. A missing,
+# multiply-bound, out-of-bounds or class-typed snapshot must fail BEFORE
+# emitting native IR; an unsupported inverted class is not a value struct.
+for item in \
+    'negative-unbound-snapshot|production inverted return must read the local owner or detached snapshot' \
+    'negative-duplicate-snapshot|production inverted main admits only one detached snapshot' \
+    'negative-snapshot-oob|outside current length' \
+    'negative-snapshot-class-alias|native inverted class requires typed one-level SoA ownership' \
+    'negative-snapshot-field-mutation|production inverted operation must target the local owner' \
+    'negative-snapshot-wrong-binding|production inverted return must read the local owner or detached snapshot'; do
+    name="${item%%|*}"; diagnostic="${item#*|}"
+    if "$compiler" "$fixtures/$name.atto" > "$tmp/unsafe.ll" 2> "$tmp/error.txt"; then
+        echo "FAIL: production compiler admitted unsafe snapshot $name" >&2
+        exit 1
+    fi
+    if [ -s "$tmp/unsafe.ll" ] || ! grep -Fq "$diagnostic" "$tmp/error.txt"; then
+        echo "FAIL: snapshot rejection mismatch or emitted IR for $name" >&2
+        cat "$tmp/error.txt" >&2
+        exit 1
+    fi
+done
+
 # Unsupported runtime/target/analysis options must fail closed before any
 # LLVM IR bytes escape. Do not grant Wasm, hard-RT or allocator claims.
 for option in --profile=native-hard-rt --target=wasm32 --target=host \
@@ -247,4 +269,4 @@ for option in --profile=native-hard-rt --target=wasm32 --target=host \
         exit 1
     fi
 done
-printf 'PASS: production .atto -> typed MIR -> no-GC-screened IR, 10 native exit-42 (O0/O2), 4 bounds signals, 5 source rejects, 7 mode rejects, known-GC denied (linked/FFI audit still unproven)\n'
+printf 'PASS: production .atto -> typed MIR -> no-GC-screened IR, 14 native exit-42 (O0/O2), 4 bounds signals, 11 source rejects, 7 mode rejects, known-GC denied (linked/FFI audit still unproven)\n'
