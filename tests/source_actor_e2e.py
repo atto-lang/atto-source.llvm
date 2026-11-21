@@ -177,7 +177,7 @@ def main():
     graph_path = fixtures / "atto-actor-hybrid-memory-node-graph-reject.atto"
     graph_bytes = graph_path.read_bytes()
     git_blob = hashlib.sha1(
-        b"blob " + str(len(graph_bytes)).encode("ascii") + b"\\0" + graph_bytes
+        b"blob " + str(len(graph_bytes)).encode("ascii") + b"\0" + graph_bytes
     ).hexdigest()
     assert git_blob == "d472cccb3da24ee8f9fed44f99c1c7742d3240de", git_blob
     graph_result = run([args.compiler, str(graph_path)])
