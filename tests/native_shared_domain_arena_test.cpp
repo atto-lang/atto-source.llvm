@@ -33,6 +33,11 @@ template<typename F> void reject(F&& f) {
 }
 int main() {
     static_assert(!std::is_move_constructible_v<SharedDomainArena::Lease>);
+    static_assert(!std::is_aggregate_v<SharedDomainArena::Grant>);
+    static_assert(!std::is_default_constructible_v<SharedDomainArena::Grant>);
+    static_assert(!std::is_constructible_v<SharedDomainArena::Grant,
+                  std::uint64_t, std::uint64_t, std::size_t>);
+    static_assert(std::is_copy_constructible_v<SharedDomainArena::Grant>);
 
     // Carrier identity is a non-recycling process-lifetime token, not the
     // implementation's reusable std::thread::id. Sequential thread creation
@@ -71,7 +76,7 @@ int main() {
                 for (std::size_t i = 0; i < PerThread; ++i) {
                     SharedDomainArena domain;
                     auto grant = domain.grant(1000 + t, 1, true, false);
-                    issued[t][i] = grant.domain;
+                    issued[t][i] = grant.domain();
                     require(domain.try_retire());
                 }
             });
