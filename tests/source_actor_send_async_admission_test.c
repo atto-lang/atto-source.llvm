@@ -1204,6 +1204,29 @@ static void stored_future_cancel_wins_only_while_pending(void) {
     fprintf(stderr, "SOURCE_SEND_ASYNC_CANCEL_PASS pending_only=1\n");
 }
 
+static void post_stop_send_async_is_rejected_before_allocation(void) {
+    void* actor = oreslang_source_actor_spawn(
+        init_actor, passthrough_message, 1);
+    CHECK(actor != NULL);
+    wait_ready(actor);
+
+    oreslang_source_actor_request_stop(actor);
+
+    void* future = NULL;
+    CHECK(oreslang_source_actor_send_async_start_checked(
+        actor, 940, &future) == ORES_SOURCE_SEND_ASYNC_TERMINATED);
+    CHECK(future == NULL);
+    CHECK(oreslang_source_actor_test_pending_async_sends(actor) == 0);
+
+    CHECK(oreslang_source_actor_await_send_async_checked(actor, 941)
+        == ORES_SOURCE_SEND_ASYNC_TERMINATED);
+    CHECK(oreslang_source_actor_test_pending_async_sends(actor) == 0);
+
+    oreslang_source_actor_join_done(actor);
+    fprintf(stderr,
+        "SOURCE_SEND_ASYNC_POST_STOP_FENCE_PASS allocated=0 terminated=1\n");
+}
+
 static void stop_wakes_full_waiter_as_terminated(void) {
     reset_blocker();
     void* actor = oreslang_source_actor_spawn(
@@ -1409,6 +1432,7 @@ int main(void) {
     detached_pending_stop_skips_guest_and_joins();
     discard_started_future_consumes_pending_and_ready();
     stored_future_cancel_wins_only_while_pending();
+    post_stop_send_async_is_rejected_before_allocation();
     stop_wakes_full_waiter_as_terminated();
     rejected_ready_cancel_releases_ownership_claim();
     bounded_waiter_cohort_rejects_before_pin();
