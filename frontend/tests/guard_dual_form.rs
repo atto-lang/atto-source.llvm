@@ -54,3 +54,24 @@ fn braces_cannot_be_followed_by_a_second_guard_else() {
 fn missing_keyword_guard_end_fails_without_artifact() {
     assert!(compile("pub fnc main(): int { guard true else return 0; fi return 42; }").is_err());
 }
+
+#[test]
+fn guard_failure_must_explicitly_return_not_just_terminate() {
+    // A general terminating throw is not a lexical function return.
+    for exit in [
+        r#"throw Error("bad");"#,
+        "break;",
+        "continue;",
+    ] {
+        let braced = format!("pub fnc main(): int {{ guard false {{ {exit} }} return 42; }}");
+        let keyword = format!("pub fnc main(): int {{ guard false else {exit} end return 42; }}");
+        rejected(&braced, "E_GUARD");
+        rejected(&keyword, "E_GUARD");
+    }
+}
+
+#[test]
+fn guard_failure_return_is_checked_even_if_condition_is_const_true() {
+    rejected("pub fnc main(): int { guard true else break; end return 42; }", "E_GUARD");
+    accepted("pub fnc main(): int { guard true else return 7; end return 42; }");
+}
