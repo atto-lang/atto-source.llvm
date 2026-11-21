@@ -83,7 +83,7 @@ public:
 
 enum class OpKind {
     Allocate, Push, ReadField, WriteField, BorrowRead, BorrowWrite,
-    ReleaseRead, ReleaseWrite, EraseSwap, Snapshot, Suspend, Close
+    ReleaseRead, ReleaseWrite, EraseSwap, Snapshot, ReadSnapshotField, Suspend, Close
 };
 
 struct Operation {
@@ -98,6 +98,7 @@ class LinearPlan final {
     Layout layout_;
     std::size_t capacity_;
     std::size_t logical_length_ = 0;
+    std::size_t snapshot_count_ = 0;
     std::vector<std::size_t> readers_;
     std::vector<bool> writers_;
     std::vector<Operation> operations_;
@@ -241,11 +242,30 @@ public:
         // This sequential HIR cannot mint handles or prove stale identity.
     }
 
-    void snapshot(std::size_t index) {
-        checked_row(index);
+    // Snapshot results are detached values with a stable function-local
+    // ordinal. This is not a row handle or pointer into the live SoA owner.
+    // The runtime-checked form emits guards even for a literal row index.
+    std::size_t snapshot_runtime_checked(std::size_t index) {
+        open();
         for (bool writer : writers_)
             if (writer) throw std::logic_error("inverted snapshot conflicts with mutable loan");
+        if (snapshot_count_ == 256)
+            throw std::overflow_error("inverted snapshot value budget exceeded");
         append(OpKind::Snapshot, layout_.columns(), index);
+        return snapshot_count_++;
+    }
+
+    std::size_t snapshot(std::size_t index) {
+        checked_row(index);
+        return snapshot_runtime_checked(index);
+    }
+
+    std::size_t read_snapshot_field(std::size_t snapshot_id, std::string_view field) {
+        const auto col = checked_field(field);
+        if (snapshot_id >= snapshot_count_)
+            throw std::logic_error("invalid inverted snapshot value reference");
+        append(OpKind::ReadSnapshotField, col, snapshot_id);
+        return col;
     }
 
     void suspend() {

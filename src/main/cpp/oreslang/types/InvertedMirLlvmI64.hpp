@@ -3,6 +3,7 @@
 // owner. No escaped handles, actor lifetime or production source admission.
 // The C++17 LLVM compiler can include this without an LLVM SDK dependency.
 #include "oreslang/types/InvertedTypedMir.hpp"
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -22,6 +23,8 @@ class I64PairLlvmEmitter final {
     std::size_t pushes_ = 0;
     std::size_t writes_ = 0;
     std::string last_read_ = "0";
+    // Detached SSA scalars: two values per snapshot, never owner pointers.
+    std::vector<std::array<std::string, 2>> snapshots_;
 
     std::string temp() { return "%m" + std::to_string(++next_); }
     std::string label() { return "mblock" + std::to_string(++next_); }
@@ -78,6 +81,7 @@ public:
         pushes_ = 0;
         writes_ = 0;
         last_read_ = "0";
+        snapshots_.clear();
         if (module.layout().columns() != 2 ||
             module.layout().column(0).type != InvertedScalarKind::I64 ||
             module.layout().column(1).type != InvertedScalarKind::I64 ||
@@ -89,14 +93,8 @@ public:
         if (module.instructions().empty() ||
                 module.instructions().back().kind != OpKind::Close)
             throw std::logic_error("MIR LLVM requires terminal owner close");
-        // A detached snapshot is a value-producing operation in the native
-        // reference. This restricted i64-pair emitter has no snapshot result
-        // representation. Silently loading and discarding it would compile
-        // an incorrect guest program; reject before emitting any LLVM IR.
-        for (const auto& op : module.instructions()) {
-            if (op.kind == OpKind::Snapshot)
-                throw std::logic_error("MIR LLVM snapshot value lowering not implemented");
-        }
+        // MIR must already verify snapshot ordinal def-use ordering; actual
+        // value snapshots are copied into SSA before any owner mutation.
         code_ = "; typed MIR, experimental local i64 pair LLVM IR; no external row handles\n";
         code_ += "declare void @llvm.trap()\n";
         code_ += "define i32 @main() {\nentry:\n";
@@ -137,8 +135,17 @@ public:
                          slot_ptr(op.column ? "%col1" : "%col0", idx));
                     break;
                 }
-                case OpKind::Snapshot:
-                    throw std::logic_error("MIR LLVM snapshot value lowering not implemented");
+                case OpKind::Snapshot: {
+                    const auto idx = index_guard(op.index);
+                    snapshots_.push_back({load(slot_ptr("%col0", idx)),
+                                          load(slot_ptr("%col1", idx))});
+                    break;
+                }
+                case OpKind::ReadSnapshotField:
+                    if (op.index >= snapshots_.size() || op.column >= 2)
+                        throw std::logic_error("invalid MIR LLVM detached snapshot reference");
+                    last_read_ = snapshots_[op.index][op.column];
+                    break;
                 case OpKind::EraseSwap: {
                     const auto idx = index_guard(op.index);
                     const auto length = load("%length");
@@ -178,8 +185,9 @@ public:
         }
         if (pushes_ != args.rows.size() || writes_ != args.writes.size())
             throw std::invalid_argument("unused MIR LLVM operands");
-        // Side effects are represented in checked column stack storage; return
-        // the last field read (or zero), matching the prototype's i32 test ABI.
+        // The returned i64 scalar may originate from a checked live row OR
+        // an earlier detached snapshot SSA value. Owner close scrubs columns
+        // but cannot revoke a previously copied scalar result.
         const auto result = temp(); emit(result + " = trunc i64 " + last_read_ + " to i32");
         emit("ret i32 " + result);
         code_ += "}\n";

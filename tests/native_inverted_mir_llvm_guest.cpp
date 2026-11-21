@@ -6,7 +6,7 @@
 #include <stdexcept>
 #include <string>
 int main(int argc, char** argv) {
-  if (argc != 3) { std::cerr << "Usage: mir_llvm_guest <positive|closed|bounds|unclosed|snapshot|immutable|missing-operand> <out.ll>\n";return 2; }
+  if (argc != 3) { std::cerr << "Usage: mir_llvm_guest <positive|closed|bounds|unclosed|snapshot|snapshot-id|snapshot-bounds|invalid-snapshot|immutable|missing-operand> <out.ll>\n";return 2; }
   try {
     using namespace oreslang; using namespace oreslang::dop::hir; using namespace oreslang::dop::mir;
     InvertedStructDecl decl; decl.name = "Pair";
@@ -33,10 +33,27 @@ int main(int argc, char** argv) {
       plan.push(2); plan.read_runtime_checked(0,"x");
       operands.rows = {{{42,501}}};
     } else if (mode == "snapshot") {
-      // Legal typed MIR, but the guest emitter cannot materialize this value.
-      // Rejection must happen before opening the output IR artifact.
-      plan.push(2); plan.snapshot(0); plan.read_runtime_checked(0, "x"); plan.close();
+      // The x scalar is copied before mutation, swap-delete and owner close.
+      plan.push(2);
+      const auto saved = plan.snapshot(0);
+      plan.write_runtime_checked(0, "x"); plan.erase_swap(0);
+      plan.read_snapshot_field(saved, "x"); plan.close();
+      operands.rows = {{{42, 501}}}; operands.writes = {99};
+    } else if (mode == "snapshot-id") {
+      // Immutable member can still be copied into a detached snapshot value.
+      plan.push(2);
+      const auto saved = plan.snapshot(0);
+      plan.write_runtime_checked(0, "x");
+      plan.read_snapshot_field(saved, "id"); plan.close();
+      operands.rows = {{{11, 42}}}; operands.writes = {99};
+    } else if (mode == "snapshot-bounds") {
+      plan.push(2);
+      const auto saved = plan.snapshot_runtime_checked(1);
+      plan.read_snapshot_field(saved, "x"); plan.close();
       operands.rows = {{{42, 501}}};
+    } else if (mode == "invalid-snapshot") {
+      plan.push(2);
+      plan.read_snapshot_field(0, "x");
     } else if (mode == "immutable") {
       plan.push(2); plan.write_runtime_checked(0,"id");
     } else if (mode == "missing-operand") {

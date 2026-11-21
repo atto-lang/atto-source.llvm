@@ -108,6 +108,34 @@ int main() {
     reject([&] { closed.read_runtime_checked(0, "x"); },
            "closed inverted HIR owner");
 
+    // The native differential must return the detached value, not the
+    // mutated or swap-deleted row. No owner handle survives close.
+    LinearPlan detached(schema, 1);
+    detached.push(2);
+    const auto saved_id = detached.snapshot(0);
+    detached.write_runtime_checked(0, "x");
+    detached.erase_swap(0);
+    detached.read_snapshot_field(saved_id, "x");
+    detached.close();
+    const auto detached_result = execute_native_i64_pair(
+        Module::lower(detached), I64PairInputs{{{42, 501}}, {99}});
+    assert(detached_result.live_rows == 0);
+    assert(detached_result.snapshots.size() == 1);
+    assert(detached_result.snapshots[0] ==
+           (std::array<std::int64_t, 2>{42, 501}));
+    assert(detached_result.reads == std::vector<std::int64_t>({42}));
+
+    // A runtime out-of-range snapshot is admitted as guarded MIR and must
+    // fail on the native reference too, rather than reading capacity slots.
+    LinearPlan missing_snapshot_row(schema, 2);
+    missing_snapshot_row.push(2);
+    const auto bad_id = missing_snapshot_row.snapshot_runtime_checked(1);
+    missing_snapshot_row.read_snapshot_field(bad_id, "x");
+    missing_snapshot_row.close();
+    reject([&] { (void)execute_native_i64_pair(
+        Module::lower(missing_snapshot_row), I64PairInputs{{{4, 7}}, {}}); },
+        "outside current length");
+
     // Two independent logical readers share the lane's checked native read
     // lease. The second release must not attempt a second native release.
     LinearPlan readers(schema, 1);

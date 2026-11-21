@@ -36,6 +36,7 @@ class Module final {
 
     static bool uses_field(OpKind kind) {
         return kind == OpKind::ReadField || kind == OpKind::WriteField ||
+               kind == OpKind::ReadSnapshotField ||
                kind == OpKind::BorrowRead || kind == OpKind::BorrowWrite ||
                kind == OpKind::ReleaseRead || kind == OpKind::ReleaseWrite;
     }
@@ -57,6 +58,7 @@ class Module final {
         std::vector<std::size_t> readers(layout_.columns(), 0);
         std::vector<bool> writers(layout_.columns(), false);
         std::size_t length = 0;
+        std::size_t detached_snapshots = 0;
         bool closed = false;
         for (std::size_t i = 0; i < code_.size(); ++i) {
             const auto& op = code_[i];
@@ -126,10 +128,17 @@ class Module final {
                     --length;
                     break;
                 case OpKind::Snapshot:
-                    if (op.index >= length)
-                        throw std::logic_error("invalid inverted MIR snapshot index");
+                    // The row index is dynamically checked in emitted LLVM IR:
+                    // a bounded source literal is not proof of a live row.
                     for (bool w : writers)
                         if (w) throw std::logic_error("inverted MIR snapshot conflicts with writer");
+                    if (detached_snapshots == 256)
+                        throw std::logic_error("inverted MIR snapshot value budget exceeded");
+                    ++detached_snapshots;
+                    break;
+                case OpKind::ReadSnapshotField:
+                    if (op.index >= detached_snapshots)
+                        throw std::logic_error("invalid inverted MIR snapshot reference");
                     break;
                 case OpKind::Suspend:
                     throw std::logic_error("inverted MIR suspension lacks owner pinning");
