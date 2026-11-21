@@ -163,6 +163,22 @@ public:
     }
 
     /*
+     * CONTROL/runtime creation path for source rt proxy: establish membership
+     * from the actual scheduler claim, never from a guest-supplied ActorRef.
+     * The resolved ref remains a trusted bridge detail and is immediately
+     * converted to the same non-recycling scheduler identity as grant_member.
+     */
+    [[nodiscard]] Permit grant_current_member(
+            Arena::Control& control, bool allow_read, bool allow_write) {
+        OresNativeActorRef current{0, 0, 0};
+        if (!ores_native_actor_scheduler_current_actor_ref(
+                scheduler_, &current))
+            throw std::logic_error(
+                "shared-domain current-member grant requires scheduler actor turn");
+        return grant_member(control, current, allow_read, allow_write);
+    }
+
+    /*
      * Request is always made by the scheduler's actual current actor turn.
      * It never blocks. Acquired tickets may enter immediately; queued tickets
      * must suspend and resume only from the exact capability-wake envelope.
