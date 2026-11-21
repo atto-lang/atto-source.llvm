@@ -707,7 +707,16 @@ impl Parser {
                     }
                     m.fields.push(f.field);
                 }
-                Some("fnc" | "method" | "mtd") => {
+                Some("fnc") => {
+                    self.advance();
+                    let method = self.parse_method(public, false)?;
+                    m.methods.push(method);
+                }
+                Some("method" | "mtd")
+                    if matches!(self.peek_at(1), Tok::Ident(_))
+                        && matches!(self.peek_at(2), Tok::LParen | Tok::Lt) =>
+                {
+                    // Contextual marker: a bare mtd() or method() is a name.
                     self.advance();
                     let method = self.parse_method(public, false)?;
                     m.methods.push(method);
