@@ -27,6 +27,11 @@ struct AttoControlPlaneArena32 {
 };
 static atomic_uint_fast64_t next_issuer = ATOMIC_VAR_INIT(0);
 
+/* Volatile stores prevent dead-store removal of native control payload scrubs. */
+static void scrub(void *mem, size_t length) {
+    volatile uint8_t *bytes = (volatile uint8_t *)mem;
+    for (size_t i = 0; i < length; ++i) bytes[i] = 0;
+}
 static uint64_t witness(const AttoControlPlaneArena32 *a, uint32_t word) {
     return ((uint64_t)a->issuer << 32) | word;
 }
@@ -104,7 +109,7 @@ int atto_control32_drop(AttoControlPlaneArena32 *a, uint64_t ref) {
     pthread_mutex_lock(&a->mutex);
     uint32_t i;
     if (!validate_locked(a, ref, &i)) { pthread_mutex_unlock(&a->mutex); return 0; }
-    memset(a->records + record_offset(i, 0), 0, ATTO_CONTROL_RECORD_BYTES);
+    scrub(a->records + record_offset(i, 0), ATTO_CONTROL_RECORD_BYTES);
     a->slots[i].live = 0;
     if (a->slots[i].generation == MAX_GENERATION) a->slots[i].generation = 0;
     else {
@@ -166,8 +171,8 @@ void atto_control32_retire(AttoControlPlaneArena32 *a) {
     pthread_mutex_lock(&a->mutex);
     if (!a->closed) {
         a->closed = 1;
-        memset(a->records, 0, (size_t)a->capacity * ATTO_CONTROL_RECORD_BYTES);
-        memset(a->slots, 0, (size_t)a->capacity * sizeof(*a->slots));
+        scrub(a->records, (size_t)a->capacity * ATTO_CONTROL_RECORD_BYTES);
+        scrub(a->slots, (size_t)a->capacity * sizeof(*a->slots));
     }
     pthread_mutex_unlock(&a->mutex);
 }
