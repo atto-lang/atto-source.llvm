@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Source-free structural admission for restored Atto LLVM production CMake.
+"""Source-free static inventory for restored Atto LLVM production CMake.
 
-This is NOT a CMake configure, build, CTest or native guest execution.
+This is NOT a CMake configure, build, CTest, or native guest execution.
+Fail closed if expected production declarations or source references disappear.
 """
 from __future__ import annotations
 
@@ -12,7 +13,8 @@ import subprocess
 import sys
 
 MIN_TEST_REGISTRATIONS = 620
-MIN_LITERAL_SOURCE_REFS = 183
+MIN_DIRECT_SOURCE_REFS = 183
+MIN_PROJECT_SOURCE_REFS = 637
 EXPECTED_TARGET_MARKERS = (
     "add_executable(oreslang-llvmc",
     "add_executable(atto-checked-actor-ir",
@@ -20,11 +22,32 @@ EXPECTED_TARGET_MARKERS = (
     "add_executable(oreslang-actor-slab-heap-bench",
     "add_test(NAME native_actor_slab_heap_contract",
 )
-SOURCE_REF = re.compile(
+DIRECT_SOURCE_REF = re.compile(
     r"\$\{CMAKE_CURRENT_SOURCE_DIR\}/"
     r"([A-Za-z0-9_./-]+\.(?:cpp|hpp|cmake|json|atto|ores|py|sh|cc|h|c))"
     r"(?![A-Za-z0-9_])"
 )
+PROJECT_SOURCE_REF = re.compile(
+    r"(?<![A-Za-z0-9_.-])"
+    r"((?:(?:src|tests|ci|contracts|native|runtime|frontend|stdlib|spec|"
+    r"examples|tools|scripts|verification|library|fixtures|formal)/)"
+    r"[\w.+/@-]+(?:/[\w.+/@-]+)*\."
+    r"(?:cpp|cc|c|cxx|h|hpp|ll|py|json|sh|cmake|atto|ores))"
+    r"(?![A-Za-z0-9_.-])"
+)
+
+
+def assert_regular_local_file(root: Path, relative: str) -> None:
+    path = Path(relative)
+    if path.is_absolute() or ".." in path.parts or not path.parts:
+        raise RuntimeError(f"UNSAFE_CMAKE_SOURCE_REF:{relative}")
+    current = root
+    for component in path.parts:
+        current = current / component
+        if current.is_symlink():
+            raise RuntimeError(f"SYMLINK_CMAKE_SOURCE_REF:{relative}")
+    if not current.is_file():
+        raise RuntimeError(f"NONREGULAR_OR_MISSING_CMAKE_SOURCE_REF:{relative}")
 
 
 def main() -> int:
@@ -46,16 +69,18 @@ def main() -> int:
     for marker in EXPECTED_TARGET_MARKERS:
         if content.count(marker) != 1:
             raise RuntimeError(f"MISSING_OR_DUPLICATE_BUILD_TARGET:{marker}")
-    references = set(SOURCE_REF.findall(content))
-    if len(references) < MIN_LITERAL_SOURCE_REFS:
-        raise RuntimeError(f"TRUNCATED_SOURCE_FILE_INVENTORY:{len(references)}")
-    for relative in sorted(references):
-        path = Path(relative)
-        if path.is_absolute() or ".." in path.parts:
-            raise RuntimeError(f"UNSAFE_CMAKE_SOURCE_REF:{relative}")
-        target = root / path
-        if not target.is_file() or target.is_symlink():
-            raise RuntimeError(f"NONREGULAR_OR_MISSING_CMAKE_SOURCE_REF:{relative}")
+    direct_references = set(DIRECT_SOURCE_REF.findall(content))
+    project_references = set(PROJECT_SOURCE_REF.findall(content))
+    if len(direct_references) < MIN_DIRECT_SOURCE_REFS:
+        raise RuntimeError(
+            f"TRUNCATED_DIRECT_SOURCE_FILE_INVENTORY:{len(direct_references)}"
+        )
+    if len(project_references) < MIN_PROJECT_SOURCE_REFS:
+        raise RuntimeError(
+            f"TRUNCATED_PROJECT_SOURCE_FILE_INVENTORY:{len(project_references)}"
+        )
+    for relative in sorted(direct_references | project_references):
+        assert_regular_local_file(root, relative)
     head = subprocess.run(
         ["git", "-C", str(root), "rev-parse", "HEAD"],
         check=True, capture_output=True, text=True,
@@ -64,7 +89,9 @@ def main() -> int:
         raise RuntimeError("INVALID_SOURCE_HEAD")
     print(
         f"LLVM_CMAKE_INVENTORY_STATIC_OK|head={head}|tests={registration_count}"
-        f"|direct_source_refs={len(references)}|native_compilation=NOT_EXECUTED"
+        f"|direct_source_refs={len(direct_references)}"
+        f"|project_source_refs={len(project_references)}"
+        f"|native_compilation=NOT_EXECUTED"
     )
     return 0
 
