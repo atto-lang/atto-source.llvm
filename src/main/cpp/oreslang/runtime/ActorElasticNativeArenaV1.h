@@ -30,6 +30,11 @@ typedef struct {
  * The two pointers can be identical, in which case each charge occurs once. */
 int ores_elastic_budget_init_v1(OresElasticNativeBudgetV1* budget, size_t limit_bytes);
 size_t ores_elastic_budget_used_v1(const OresElasticNativeBudgetV1* budget);
+/* Pure reference-ABI helpers, not capabilities. 0 is null; nonzero word
+ * encodes an eight-byte-aligned logical byte offset as offset/8+1.
+ * The helpers never authenticate actor authority or expose native addresses. */
+int ores_elastic_native_ref32_encode_v1(uint64_t aligned_byte_offset, uint32_t* out_word);
+int ores_elastic_native_ref32_decode_v1(uint32_t word, uint64_t* out_byte_offset);
 OresElasticNativeArenaV1* ores_elastic_native_open_v1(
     uint64_t actor_id, uint64_t incarnation, size_t hard_limit_bytes,
     uint32_t max_slots, OresElasticNativeBudgetV1* tenant,
