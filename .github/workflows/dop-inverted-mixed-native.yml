@@ -5,6 +5,7 @@ on:
     branches:
       - hardening/dop-heterogeneous-physical-soa-v1-20261106
       - feature/dop-mixed-scalar-guest-v1-20261106
+      - reconcile/dop-mixed-two-three-scalar-20261106
       - parity/inverted-production-main-i64-20261104
       - main
     paths:
@@ -18,6 +19,8 @@ on:
       - 'src/main/cpp/oreslang/main.cpp'
       - 'tests/native_inverted*'
       - 'tests/check_dop_pair_source_blobs.py'
+      - 'scripts/verify_dop_mixed_ctest.py'
+      - 'tests/test_verify_dop_mixed_ctest.py'
       - 'tests/fixtures/inverted-mixed/**'
   workflow_dispatch:
 
@@ -81,6 +84,15 @@ jobs:
           cmake --version
           rustc --version
 
+      - name: Run 39 fail-closed source-free CTest receipt mutation groups
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B tests/test_verify_dop_mixed_ctest.py 2>&1 | tee build-evidence/mixed-ctest-unit.txt
+          grep -Eq '^Ran 39 tests in [0-9.]+s$' build-evidence/mixed-ctest-unit.txt
+          grep -Fxq 'OK' build-evidence/mixed-ctest-unit.txt
+          test -z "$(git status --porcelain=v1 --untracked-files=all -- . ':!build-evidence')"
+          echo 'ATTO_DOP_CTEST_VERIFIER_HOST_ONLY=39 NOT_GUEST_EXECUTION'
       - name: Compile production parser, verifier, native compiler and auditor
         shell: bash
         run: |
@@ -124,14 +136,36 @@ jobs:
             --output-junit "$GITHUB_WORKSPACE/build-evidence/mixed-ctest.xml" \
             -R '^(inverted_mixed_source_mir_cpp17|inverted_production_source_mir_cpp17|native_inverted_struct_schema_ast|native_inverted_mixed_source_to_native|native_inverted_production_source_to_native)$'
 
+      - name: Refuse fake, contradictory or non-executed CTest JUnit evidence
+        id: certify_junit
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B scripts/verify_dop_mixed_ctest.py build-evidence/mixed-ctest.xml | tee build-evidence/mixed-ctest-certifier.txt
+          test "$(wc -l < build-evidence/mixed-ctest-certifier.txt)" -eq 2
+          grep -Fxq 'DOP_MIXED_JUNIT_VERIFIED tests=5 guest_receipt_requires_independent_run_job_attestation=YES' build-evidence/mixed-ctest-certifier.txt
+          grep -Eq '^DOP_MIXED_JUNIT_SHA256=[0-9a-f]{64}$' build-evidence/mixed-ctest-certifier.txt
+          expected="$(sed -n 's/^DOP_MIXED_JUNIT_SHA256=//p' build-evidence/mixed-ctest-certifier.txt)"
+          test "${#expected}" -eq 64
+          test "$(sha256sum build-evidence/mixed-ctest.xml | cut -d ' ' -f1)" = "$expected"
+          printf 'junit_sha256=%s\n' "$expected" >> "$GITHUB_OUTPUT"
       - name: Qualify exact-head execution receipts
         shell: bash
+        env:
+          VERIFIED_JUNIT_SHA256: ${{ steps.certify_junit.outputs.junit_sha256 }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
           import hashlib, json, os, pathlib, subprocess, xml.etree.ElementTree as ET
           root=pathlib.Path('.')
-          tree=ET.parse(root/'build-evidence/mixed-ctest.xml').getroot()
+          xml_path=root/'build-evidence/mixed-ctest.xml'
+          validated_xml=xml_path.read_bytes()
+          verified_digest=hashlib.sha256(validated_xml).hexdigest()
+          import re
+          expected_digest=os.environ.get('VERIFIED_JUNIT_SHA256', '')
+          if not re.fullmatch(r'[0-9a-f]{64}', expected_digest) or verified_digest != expected_digest:
+              raise SystemExit('FAIL: CTest XML changed after exact-byte JUnit certification')
+          tree=ET.fromstring(validated_xml)
           cases=list(tree.iter('testcase'))
           expected={'inverted_mixed_source_mir_cpp17',
                     'inverted_production_source_mir_cpp17',
@@ -194,12 +228,23 @@ jobs:
                  'src/main/cpp/oreslang/types/InvertedProductionSourceMir.hpp',
                  '.github/workflows/dop-inverted-mixed-native.yml',
                  'tests/check_dop_pair_source_blobs.py',
+                 'scripts/verify_dop_mixed_ctest.py',
+                 'tests/test_verify_dop_mixed_ctest.py',
                  'CMakeLists.txt',
                  'build/oreslang-no-gc-ir-audit',
                  'build/oreslang-llvmc']
           paths += sorted(str(p) for p in pathlib.Path('tests/fixtures/inverted-mixed').glob('*.atto'))
           if len([p for p in paths if p.endswith('.atto')]) != 16:
               raise SystemExit('FAIL: 2/3-column fixture inventory changed')
+          if hashlib.sha256(xml_path.read_bytes()).hexdigest() != verified_digest:
+              raise SystemExit('FAIL: verified JUnit mutated while issuing the receipt')
+          certificate=(root/'build-evidence/mixed-ctest-certifier.txt').read_text()
+          expected_certificate=(
+              'DOP_MIXED_JUNIT_VERIFIED tests=5 guest_receipt_requires_independent_run_job_attestation=YES\n'
+              'DOP_MIXED_JUNIT_SHA256=' + verified_digest + '\n'
+          )
+          if certificate != expected_certificate:
+              raise SystemExit('FAIL: certifier output differs from exact GitHub step digest')
           receipt=dict(head=head,tree=source_tree,run=os.environ['GITHUB_RUN_ID'],
                        attempt=os.environ['GITHUB_RUN_ATTEMPT'],
                        evidence='COMPILER_BACKED_MIXED_ATTO_GUEST_EXECUTED',
@@ -214,8 +259,12 @@ jobs:
                          for tool in ('clang','clang++','cmake','rustc')
                        },
                        files={p:hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest() for p in paths},
-                       ctest_xml_sha256=hashlib.sha256(
-                         (root/'build-evidence/mixed-ctest.xml').read_bytes()).hexdigest(),
+                       ctest_xml_sha256=verified_digest,
+                       certificate_transcript_sha256=hashlib.sha256(
+                         (root/'build-evidence/mixed-ctest-certifier.txt').read_bytes()).hexdigest(),
+                       source_only_test_transcript_sha256=hashlib.sha256(
+                         (root/'build-evidence/mixed-ctest-unit.txt').read_bytes()).hexdigest(),
+                       independent_github_job_api_correlation_required=True,
                        inventory_sha256=hashlib.sha256(
                          (root/'build-evidence/inventory.txt').read_bytes()).hexdigest())
           out=root/'build-evidence/mixed-native-receipt.json'
@@ -234,4 +283,6 @@ jobs:
             build-evidence/identity.json
             build-evidence/inventory.txt
             build-evidence/mixed-ctest.xml
+            build-evidence/mixed-ctest-unit.txt
+            build-evidence/mixed-ctest-certifier.txt
             build-evidence/mixed-native-receipt.json
