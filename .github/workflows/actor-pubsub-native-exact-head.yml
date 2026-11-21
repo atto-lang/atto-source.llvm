@@ -69,6 +69,8 @@ jobs:
         run: |
           set -euo pipefail
           required=(
+            source_actor_pubsub_atto_fixture_identity
+            source_actor_pubsub_negative_checker_selftest
             native_actor_pubsub_admission
             native_actor_pubsub_c_abi
             source_actor_pubsub_identity_bridge
