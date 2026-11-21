@@ -974,6 +974,17 @@ if(BUILD_TESTING)
         -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_ownership_cfg_dataflow_fixed_point
         COMMAND oreslang-ownership-cfg-dataflow-test)
+    # Host-only compiler lifetime authority canary. Actual guest await and
+    # physical task/arena reclamation need separate executable proof.
+    add_executable(oreslang-native-source-suspension-authority-test
+        tests/native_source_suspension_authority_test.cpp)
+    target_include_directories(oreslang-native-source-suspension-authority-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-source-suspension-authority-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_source_suspension_lifetime_authority
+        COMMAND oreslang-native-source-suspension-authority-test)
+    set_tests_properties(native_source_suspension_lifetime_authority PROPERTIES TIMEOUT 15)
     # Field-wise native destruction verifier and concrete owner flags.
     # Separate from unsupported source-level nontrivial class drop glue.
     add_executable(oreslang-ownership-drop-plan-test

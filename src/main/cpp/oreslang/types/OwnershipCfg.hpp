@@ -85,7 +85,7 @@ struct Operation {
     enum class Kind {
         Initialize, Read, Move, Drop, DropIfOwned,
         ReadObject, MoveObject, BorrowShared, BorrowExclusive,
-        ReleaseShared, ReleaseExclusive
+        ReleaseShared, ReleaseExclusive, Suspend
     };
     Kind kind;
     std::string place;
@@ -150,7 +150,33 @@ inline void validate_disjoint_place_layout(const State& state) {
 }
 
 inline void validate_region_loan_state(const State& state) {
+    // This validator is called not only from verify(Graph), but directly
+    // from apply/join helpers. Do not let malformed abstract state bypass
+    // the entry-only checks or claim a duplicated loan on another place.
+    std::set<std::uint64_t> live_identity;
     for (const auto& [name, value] : state) {
+        if (!value.possible ||
+                (value.possible & static_cast<ValueMask>(
+                    ~(kOwned | kMoved | kUninitialized | kDropped))))
+            violation(name, "invalid abstract ownership state");
+        if (value.shared_loans > 65535)
+            violation(name, "shared loan count exceeds bound");
+        for (const auto loan_id : value.shared_loan_ids)
+            if (!live_identity.insert(loan_id).second)
+                violation(name, "duplicate live loan provenance across places");
+        if (value.exclusive_loan_id &&
+                !live_identity.insert(*value.exclusive_loan_id).second)
+            violation(name, "duplicate live loan provenance across places");
+        // No direct verifier or join caller may present an inconsistent loan
+        // count/identity or a borrow whose owner is no longer definitely live.
+        // verify(Graph) normalizes legacy anonymous entry loans beforehand.
+        if (value.shared_loans != value.shared_loan_ids.size() ||
+                value.exclusive_loan != value.exclusive_loan_id.has_value() ||
+                (value.shared_loans && value.exclusive_loan))
+            violation(name, "inconsistent live loan identities");
+        if ((value.shared_loans || value.exclusive_loan) &&
+                value.possible != kOwned)
+            violation(name, "borrow with owner not definitely alive");
         for (const auto& [loan_id, requirement] : value.shared_region_requirements) {
             if (!loan_id || !value.shared_loan_ids.count(loan_id) ||
                     !valid_region_loan_requirement(requirement))
@@ -167,6 +193,19 @@ inline void validate_region_loan_state(const State& state) {
 }
 
 
+// Direct apply() callers must not be allowed to mint a loan token already
+// live on another place. Entry validation catches pre-existing collisions,
+// but borrow admission also needs a pre-mutation check of the new token.
+inline void require_unused_loan_identity(const State& state,
+                                         const std::string& place_key,
+                                         std::uint64_t token) {
+    if (!token) violation(place_key, "reserved entry loan identity");
+    for (const auto& [name, value] : state)
+        if (value.shared_loan_ids.count(token) ||
+                (value.exclusive_loan_id && *value.exclusive_loan_id == token))
+            violation(place_key, "duplicate live loan identity on place " + name);
+}
+
 inline void require_owned(const std::string& key, const PlaceState& value) {
     if (value.possible != kOwned)
         violation(key, "not definitely initialized on every CFG predecessor");
@@ -176,6 +215,17 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
     // Keep direct helper callers as safe as verify(Graph), not just the CFG path.
     validate_disjoint_place_layout(state);
     validate_region_loan_state(state);
+    if (op.kind == Operation::Kind::Suspend) {
+        // Source await/select/channel suspension has no implicit lifetime
+        // extension. A future pinned-frame lowering needs a distinct,
+        // compiler-issued proof, not a flag supplied to this operation.
+        if (!op.place.empty() || op.loan_id || op.region_requirement)
+            violation(op.place, "invalid suspension boundary provenance");
+        for (const auto& [name, value] : state)
+            if (value.shared_loans || value.exclusive_loan)
+                violation(name, "live borrow crosses unproven suspension");
+        return;
+    }
     if (op.kind == Operation::Kind::ReadObject ||
             op.kind == Operation::Kind::MoveObject) {
         // A non-Copy object requires *all* its fields. A moved field does
@@ -243,6 +293,7 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
             if (value.exclusive_loan) violation(op.place, "shared borrow overlaps mutable loan");
             if (value.shared_loans == 65535) violation(op.place, "shared loan count exceeds bound");
             const auto token = op.loan_id.value_or(site_id);
+            require_unused_loan_identity(state, op.place, token);
             if (!value.shared_loan_ids.insert(token).second)
                 violation(op.place, "shared loan identity already live");
             if (op.region_requirement)
@@ -260,6 +311,8 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
             require_owned(op.place, value);
             if (value.exclusive_loan || value.shared_loans)
                 violation(op.place, "overlapping exclusive loans");
+            require_unused_loan_identity(state, op.place,
+                                         op.loan_id.value_or(site_id));
             value.exclusive_loan = true;
             value.exclusive_loan_id = op.loan_id.value_or(site_id);
             value.exclusive_region_requirement = op.region_requirement;
@@ -301,12 +354,17 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
             return;
         case Operation::Kind::ReadObject:
         case Operation::Kind::MoveObject:
+        case Operation::Kind::Suspend:
             break;
     }
     violation(op.place, "invalid CFG operation");
 }
 
 inline bool join_into(State& target, const State& incoming) {
+    // A caller bypassing verify(Graph) must not join a whole-object place
+    // and an overlapping projection into a purportedly sound state.
+    validate_disjoint_place_layout(target);
+    validate_disjoint_place_layout(incoming);
     validate_region_loan_state(target);
     validate_region_loan_state(incoming);
     if (target.size() != incoming.size())

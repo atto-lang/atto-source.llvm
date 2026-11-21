@@ -298,6 +298,83 @@ int main() {
     right_region.at("x").shared_region_requirements.at(600) = orders;
     assert(rejected([&] { join_into(left_region, right_region); }));
 
+    // Suspend is a compiler IR event for await/select/readch, not a new
+    // user-visible keyword. Without a proven pinned continuation, both
+    // lexical and region-backed loans must be retired before the boundary.
+    Graph suspended;
+    suspended.entry = {{"x", cell(kOwned)}, {"y", cell(kMoved)}};
+    suspended.blocks = {{{
+        {Kind::Suspend, ""},
+        {Kind::Read, "x"}
+    }, {}}};
+    verify(suspended); // No live loans; moved, unborrowed neighbors are safe.
+
+    suspended.blocks[0].operations = {
+        {Kind::BorrowShared, "x", 801},
+        {Kind::Suspend, ""},
+        {Kind::ReleaseShared, "x", 801}
+    };
+    assert(rejected([&] { verify(suspended); }));
+    suspended.blocks[0].operations = {
+        {Kind::BorrowExclusive, "x", 802},
+        {Kind::Suspend, ""},
+        {Kind::ReleaseExclusive, "x", 802}
+    };
+    assert(rejected([&] { verify(suspended); }));
+
+    // The same rule applies to task/actor-bound region loans. A symbolic
+    // region requirement never substitutes for an actual pin/frame proof.
+    suspended.blocks[0].operations = {
+        {Kind::BorrowShared, "x", 803, inventory},
+        {Kind::Suspend, ""},
+        {Kind::ReleaseShared, "x", 803, inventory}
+    };
+    assert(rejected([&] { verify(suspended); }));
+    suspended.blocks[0].operations = {
+        {Kind::BorrowExclusive, "x", 804, inventory},
+        {Kind::Suspend, ""},
+        {Kind::ReleaseExclusive, "x", 804, inventory}
+    };
+    assert(rejected([&] { verify(suspended); }));
+
+    suspended.blocks[0].operations = {
+        {Kind::BorrowShared, "x", 805, inventory},
+        {Kind::ReleaseShared, "x", 805, inventory},
+        {Kind::Suspend, ""},
+        {Kind::Move, "x"}
+    };
+    verify(suspended); // Proven release before await is admissible.
+    suspended.blocks[0].operations = {
+        {Kind::BorrowExclusive, "x", 806, inventory},
+        {Kind::ReleaseExclusive, "x", 806, inventory},
+        {Kind::Suspend, ""},
+        {Kind::Move, "x"}
+    };
+    verify(suspended);
+
+    // A suspension event cannot take a fabricated place or task/region
+    // requirement as an escape hatch for an otherwise live loan.
+    suspended.blocks[0].operations = {{Kind::Suspend, "x"}};
+    assert(rejected([&] { verify(suspended); }));
+    suspended.blocks[0].operations = {
+        {Kind::Suspend, "", std::nullopt, inventory}
+    };
+    assert(rejected([&] { verify(suspended); }));
+
+    // Branches that independently retire the same underlying loan are
+    // admitted; a leaked predecessor loan remains rejected at join/exit.
+    Graph branch_suspend;
+    branch_suspend.entry = {{"x", cell(kOwned)}};
+    branch_suspend.blocks = {
+        {{{Kind::BorrowShared, "x", 810}}, {1, 2}},
+        {{{Kind::ReleaseShared, "x", 810}}, {3}},
+        {{{Kind::ReleaseShared, "x", 810}}, {3}},
+        {{{Kind::Suspend, ""}, {Kind::Move, "x"}}, {}}
+    };
+    verify(branch_suspend);
+    branch_suspend.blocks[2].operations.clear();
+    assert(rejected([&] { verify(branch_suspend); }));
+
     // Token zero is the unique legacy entry-loan identity, not a value
     // that an independently executed branch may mint.
     Graph forged_entry;
@@ -396,6 +473,89 @@ int main() {
     State malformed_exclusive = {{"x", cell(kOwned)}};
     malformed_exclusive.at("x").exclusive_region_requirement = inventory;
     assert(rejected([&] { apply(op(Kind::Read, "x"), malformed_exclusive); }));
+
+    // Direct helper and join callers must not bypass the count/token or
+    // owner-live invariants that verify(Graph) normally checks at entry.
+    State inconsistent_count = {{"x", cell(kOwned)}};
+    inconsistent_count.at("x").shared_loans = 1;
+    assert(rejected([&] { apply(op(Kind::Read, "x"), inconsistent_count); }));
+    State stray_token = {{"x", cell(kOwned)}};
+    stray_token.at("x").shared_loan_ids.insert(811);
+    assert(rejected([&] { apply(op(Kind::Suspend, ""), stray_token); }));
+    State invalid_owner = {{"x", cell(kMoved)}};
+    invalid_owner.at("x").shared_loans = 1;
+    invalid_owner.at("x").shared_loan_ids.insert(812);
+    assert(rejected([&] { apply(op(Kind::Suspend, ""), invalid_owner); }));
+    State contradictory = {{"x", cell(kOwned)}};
+    contradictory.at("x").exclusive_loan_id = 813;
+    assert(rejected([&] { join_into(contradictory, contradictory); }));
+
+    // Direct apply/join callers may not bypass the entry verifier by
+    // constructing malformed value masks or duplicating loan IDs on
+    // distinct places. These used to be validated only in verify(Graph).
+    State invalid_mask = {{"x", cell(static_cast<ValueMask>(0x80))}};
+    assert(rejected([&] { apply(op(Kind::Suspend, ""), invalid_mask); }));
+    assert(rejected([&] { join_into(invalid_mask, invalid_mask); }));
+    State over_limit = {{"x", cell(kOwned)}};
+    over_limit.at("x").shared_loans = 65536;
+    assert(rejected([&] { apply(op(Kind::Read, "x"), over_limit); }));
+
+    State two_places_same_loan = {
+        {"x", cell(kOwned)}, {"y", cell(kOwned)}
+    };
+    for (const auto* name : {"x", "y"}) {
+        auto& owner = two_places_same_loan.at(name);
+        owner.shared_loans = 1;
+        owner.shared_loan_ids.insert(987);
+    }
+    assert(rejected([&] { apply(op(Kind::Read, "x"), two_places_same_loan); }));
+    assert(rejected([&] {
+        join_into(two_places_same_loan, two_places_same_loan);
+    }));
+    two_places_same_loan.at("y").shared_loan_ids = {988};
+    apply(op(Kind::Read, "x"), two_places_same_loan);
+    State independent = two_places_same_loan;
+    assert(!join_into(independent, two_places_same_loan));
+
+    // Before this hardening, direct apply(Borrow*) only validated the
+    // preexisting state. A new loan could reuse another live place's token,
+    // and the call would succeed until some *later* operation validated it.
+    // Both shared/exclusive admission must reject BEFORE mutation.
+    State reusable_identity = {{"a", cell(kOwned)}, {"b", cell(kOwned)}};
+    apply(Operation{Kind::BorrowShared, "a", 1001}, reusable_identity);
+    const State preserved = reusable_identity;
+    assert(rejected([&] {
+        apply(Operation{Kind::BorrowShared, "b", 1001}, reusable_identity);
+    }));
+    assert(reusable_identity == preserved);
+    assert(rejected([&] {
+        apply(Operation{Kind::BorrowExclusive, "b", 1001}, reusable_identity);
+    }));
+    assert(reusable_identity == preserved);
+    // The same provenance cannot be reused on the very same place either.
+    assert(rejected([&] {
+        apply(Operation{Kind::BorrowShared, "a", 1001}, reusable_identity);
+    }));
+    assert(reusable_identity == preserved);
+    // A freshly issued token is legal and becomes reusable only AFTER
+    // its actual owning loan is released.
+    apply(Operation{Kind::BorrowShared, "b", 1002}, reusable_identity);
+    apply(Operation{Kind::ReleaseShared, "b", 1002}, reusable_identity);
+    apply(Operation{Kind::ReleaseShared, "a", 1001}, reusable_identity);
+    apply(Operation{Kind::BorrowExclusive, "b", 1001}, reusable_identity);
+    apply(Operation{Kind::ReleaseExclusive, "b", 1001}, reusable_identity);
+
+    // Direct joins must check alias-layout integrity as rigorously as the
+    // full graph verifier, even when both input states are identical.
+    State overlapping_layout = {{"obj", cell(kOwned)},
+                                {"obj.field", cell(kOwned)}};
+    assert(rejected([&] {
+        join_into(overlapping_layout, overlapping_layout);
+    }));
+    State clean_layout = {{"obj.first", cell(kOwned)},
+                          {"obj.second", cell(kOwned)}};
+    State clean_layout_copy = clean_layout;
+    assert(!join_into(clean_layout, clean_layout_copy));
 
     // Drop with unknown ownership is an error unless the compiler emits
     // a runtime flag; the abstract flag-gated transfer remains explicit.
