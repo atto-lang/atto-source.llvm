@@ -1018,8 +1018,12 @@ def verify_source_pr(source_pr, source_commit):
             or head.get("sha") != source_commit
             or not isinstance(head.get("repo"), dict)
             or head["repo"].get("full_name") != SOURCE_REPO
+            or head["repo"].get("id") != SOURCE_REPO_ID
             or not isinstance(base, dict)
-            or base.get("ref") != SOURCE_BRANCH):
+            or base.get("ref") != SOURCE_BRANCH
+            or not isinstance(base.get("repo"), dict)
+            or base["repo"].get("full_name") != SOURCE_REPO
+            or base["repo"].get("id") != SOURCE_REPO_ID):
         raise Denied("source commit is not exact open PR head against main")
     return SOURCE_REPO_ID
 
