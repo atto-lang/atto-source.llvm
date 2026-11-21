@@ -48,6 +48,27 @@ typedef struct {
 } OresNativePubSubPublishReceiptV2;
 
 /*
+ * Typed RELIABLE-only admission boundary for future compiler-generated
+ * Topic<T>.try_publish(share! event). Never append to V1 or V2 receipts.
+ * Caller MUST inspect the OresNativePubSubStatus first. A non-OK status is a
+ * hard authority/validation/runtime refusal, not Err(Full) and not a guest
+ * result. Only OK + tag=FULL is a recoverable typed PublishError.Full.
+ *
+ * Result values are initialized on entry so stale receipt bytes cannot be
+ * mistaken for a successful admission after validation fails.
+ */
+typedef enum {
+    ORES_NATIVE_PUBSUB_TRY_OK = 0,
+    ORES_NATIVE_PUBSUB_TRY_FULL = 1,
+    ORES_NATIVE_PUBSUB_TRY_INVALID = 2
+} OresNativePubSubTryResultTag;
+
+typedef struct {
+    int tag;
+    OresNativePubSubPublishReceiptV2 receipt;
+} OresNativePubSubTryPublishResultV1;
+
+/*
  * Trusted native runtime control ABI. These handles/functions are targets for
  * compiler-generated lowering and host/runtime tests; they are not reflection
  * or a guest FFI surface. Every function catches C++ exceptions internally.
@@ -124,6 +145,15 @@ OresNativePubSubStatus ores_native_actor_pubsub_publish_i64_v2(
     int64_t value,
     OresNativePubSubPublishReceiptV2* out_receipt);
 
+/* Authenticated, RELIABLE-only i64 source publication admission. */
+OresNativePubSubStatus ores_native_actor_pubsub_try_publish_i64_result_v1(
+    OresNativeActorPubSubRuntime* runtime,
+    uint64_t group_id,
+    const char* topic_name,
+    OresSourceActorIdentity publisher,
+    int64_t value,
+    OresNativePubSubTryPublishResultV1* out_result);
+
 OresNativePubSubStatus ores_native_actor_pubsub_try_read_i64(
     OresNativeActorPubSubRuntime* runtime,
     uint64_t group_id,
@@ -175,6 +205,18 @@ OresNativePubSubStatus ores_native_actor_pubsub_publish_utf8_v2(
     const char* payload,
     size_t payload_length,
     OresNativePubSubPublishReceiptV2* out_receipt);
+
+/* Authenticated, RELIABLE-only UTF-8 source publication admission.
+ * The compiler must supply already-verified share! payload and actor turn.
+ * The runtime revalidates the actor's live generation/membership at commit. */
+OresNativePubSubStatus ores_native_actor_pubsub_try_publish_utf8_result_v1(
+    OresNativeActorPubSubRuntime* runtime,
+    uint64_t group_id,
+    const char* topic_name,
+    OresSourceActorIdentity publisher,
+    const char* payload,
+    size_t payload_length,
+    OresNativePubSubTryPublishResultV1* out_result);
 
 OresNativePubSubStatus ores_native_actor_pubsub_try_read_utf8(
     OresNativeActorPubSubRuntime* runtime,

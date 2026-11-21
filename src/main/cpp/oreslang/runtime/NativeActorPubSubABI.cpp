@@ -449,6 +449,35 @@ extern "C" OresNativePubSubStatus ores_native_actor_pubsub_publish_i64_v2(
 }
 
 extern "C" OresNativePubSubStatus
+ores_native_actor_pubsub_try_publish_i64_result_v1(
+        OresNativeActorPubSubRuntime* runtime,
+        std::uint64_t group_id,
+        const char* topic_name,
+        OresSourceActorIdentity publisher,
+        std::int64_t value,
+        OresNativePubSubTryPublishResultV1* out_result) {
+    if (!out_result) return ORES_NATIVE_PUBSUB_INVALID;
+    // Reset even on authentication/validation errors: never leak an old
+    // successful receipt on a denied publish attempt.
+    *out_result = OresNativePubSubTryPublishResultV1{};
+    out_result->tag = ORES_NATIVE_PUBSUB_TRY_INVALID;
+    if (!valid_runtime_and_actor(runtime, publisher) || group_id == 0
+            || !valid_topic_name(topic_name))
+        return ORES_NATIVE_PUBSUB_INVALID;
+    return guarded([&] {
+        const auto accepted = runtime->i64_bus.try_publish_reliable(
+            group_id, topic_name, publisher.logical_id,
+            publisher.scheduler_generation, value);
+        if (!accepted) {
+            out_result->tag = ORES_NATIVE_PUBSUB_TRY_FULL;
+            return;
+        }
+        out_result->receipt = output_receipt_v2(*accepted);
+        out_result->tag = ORES_NATIVE_PUBSUB_TRY_OK;
+    });
+}
+
+extern "C" OresNativePubSubStatus
 ores_native_actor_pubsub_try_read_i64(
         OresNativeActorPubSubRuntime* runtime,
         std::uint64_t group_id,
@@ -581,6 +610,39 @@ extern "C" OresNativePubSubStatus ores_native_actor_pubsub_publish_utf8_v2(
             group_id, topic_name, publisher.logical_id,
             publisher.scheduler_generation, frozen);
         *out_receipt = output_receipt_v2(receipt);
+    });
+}
+
+extern "C" OresNativePubSubStatus
+ores_native_actor_pubsub_try_publish_utf8_result_v1(
+        OresNativeActorPubSubRuntime* runtime,
+        std::uint64_t group_id,
+        const char* topic_name,
+        OresSourceActorIdentity publisher,
+        const char* payload,
+        std::size_t payload_length,
+        OresNativePubSubTryPublishResultV1* out_result) {
+    if (!out_result) return ORES_NATIVE_PUBSUB_INVALID;
+    *out_result = OresNativePubSubTryPublishResultV1{};
+    out_result->tag = ORES_NATIVE_PUBSUB_TRY_INVALID;
+    if (!valid_runtime_and_actor(runtime, publisher) || group_id == 0
+            || !valid_topic_name(topic_name)
+            || payload_length > NativeActorPubSubAdmission<std::string>::DEFAULT_EDGE_BYTES
+            || !valid_utf8_bytes(payload, payload_length))
+        return ORES_NATIVE_PUBSUB_INVALID;
+    return guarded([&] {
+        // Freeze before admission; the registry authenticates and revalidates
+        // the live actor generation and RELIABLE policy while holding locks.
+        const std::string frozen(payload ? payload : "", payload_length);
+        const auto accepted = runtime->utf8_bus.try_publish_reliable(
+            group_id, topic_name, publisher.logical_id,
+            publisher.scheduler_generation, frozen);
+        if (!accepted) {
+            out_result->tag = ORES_NATIVE_PUBSUB_TRY_FULL;
+            return;
+        }
+        out_result->receipt = output_receipt_v2(*accepted);
+        out_result->tag = ORES_NATIVE_PUBSUB_TRY_OK;
     });
 }
 
