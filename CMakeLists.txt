@@ -822,6 +822,16 @@ if(BUILD_TESTING)
                 --node "${ORE_NODE}"
                 --fixtures "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
         set_tests_properties(wasm32_source_actor_guest_lifecycle PROPERTIES TIMEOUT 120)
+        # M2: compile canonical .atto actor into a real private Wasm linear
+        # frame, then execute guest code under both O0 and Oz. A passing
+        # host-only model or static IR scan is NOT a substitute for this test.
+        add_test(NAME wasm32_atto_actor_owned_scalar_frame_guest
+            COMMAND "${ORE_NODE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm32_actor_guest_frames.mjs"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/wasm32-actor-owned-scalar-frame.atto")
+        set_tests_properties(wasm32_atto_actor_owned_scalar_frame_guest PROPERTIES TIMEOUT 240)
     endif()
     # First real compiler-emitted AOT while continuation. The host owns the
     # frame and schedules finite reductions; actor/mailbox integration is not

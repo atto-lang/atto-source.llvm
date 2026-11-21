@@ -2903,6 +2903,25 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         auto* lifecycle = new llvm::GlobalVariable(module, i64, false,
             llvm::GlobalValue::InternalLinkage, zero, "oreslang.wasm.actor.lifecycle");
         std::vector<llvm::GlobalVariable*> globals;
+        // Actor M2 (restricted synchronous slice): a bounded compiler-owned
+        // scalar spill frame lives in this actor INSTANCE's private Wasm
+        // linear memory, NOT on an OS Worker/global host frame stack.
+        // Fixed capacity: one i64 message plus up to 16 i64 field snapshots.
+        // A single import-free handler is admitted per physical turn; no
+        // recursive/suspended actor frames are allowed by this ABI yet.
+        const std::size_t frame_cells = 1 + actor.fields.size();
+        auto* frame_type = llvm::ArrayType::get(i64, frame_cells);
+        auto* actor_frame = new llvm::GlobalVariable(
+            module, frame_type, false, llvm::GlobalValue::InternalLinkage,
+            llvm::ConstantAggregateZero::get(frame_type),
+            "atto.wasm.actor.scalar.frame.v1");
+        auto frame_cell = [&](llvm::IRBuilder<>& builder, std::size_t index) -> llvm::Value* {
+            if (index >= frame_cells)
+                throw std::runtime_error("wasm32 scalar actor frame slot out of bounds");
+            return builder.CreateInBoundsGEP(frame_type, actor_frame,
+                {builder.getInt32(0), builder.getInt32(static_cast<unsigned>(index))},
+                "atto.actor.frame.cell");
+        };
         for (const auto& field : actor.fields) {
             globals.push_back(new llvm::GlobalVariable(module, i64, false,
                 llvm::GlobalValue::InternalLinkage, zero,
@@ -2945,12 +2964,15 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         llvm::IRBuilder<> b(llvm::BasicBlock::Create(context, "entry", handler));
         guard(b, handler, one);
         std::unordered_map<std::string, llvm::Value*> values, emptyFields;
-        auto* paramSlot = b.CreateAlloca(i64, nullptr, "message.slot");
-        b.CreateStore(&*handler->arg_begin(), paramSlot);
+        // Explicit, instance-owned Wasm linear-memory frame. Volatile
+        // stores pin the private spill slots even under LLVM -Oz so this
+        // cannot silently fall back to ephemeral engine-stack allocas.
+        auto* paramSlot = frame_cell(b, 0);
+        b.CreateStore(&*handler->arg_begin(), paramSlot)->setVolatile(true);
         values.emplace(actor.on_message.parameters[0].name, paramSlot);
         for (std::size_t i = 0; i < actor.fields.size(); ++i) {
-            auto* slot = b.CreateAlloca(i64, nullptr, actor.fields[i].name + ".slot");
-            b.CreateStore(b.CreateLoad(i64, globals[i]), slot);
+            auto* slot = frame_cell(b, i + 1);
+            b.CreateStore(b.CreateLoad(i64, globals[i]), slot)->setVolatile(true);
             values.emplace(actor.fields[i].name, slot);
         }
         for (const auto& write : actor.on_message.actor_field_writes) {
@@ -2967,6 +2989,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         // host callback or suspension may interleave during this transition.
         for (std::size_t i = 0; i < actor.fields.size(); ++i)
             b.CreateStore(b.CreateLoad(i64, values.at(actor.fields[i].name)), globals[i]);
+        // All scalar field state has committed. Erase the entire actor-owned
+        // spill frame before responding to the host. Retain the result SSA
+        // value in registers. Trap paths are terminal for this guest Worker,
+        // not recoverable async continuations.
+        for (std::size_t i = 0; i < frame_cells; ++i)
+            b.CreateStore(zero, frame_cell(b, i))->setVolatile(true);
         b.CreateRet(value);
 
         auto* teardown = llvm::Function::Create(
