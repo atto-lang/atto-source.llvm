@@ -1,0 +1,25 @@
+// Source-generated actor heaps must not alias after stop/spawn interleaving.
+// Requires actual oreslang-llvmc -> LLVM IR -> Clang -> native scheduler execution.
+define actor Counter as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+pub fnc main(): int {
+  const a = spawn Counter();
+  const b = spawn Counter();
+  a.send(9);
+  b.send(10);
+  stop a;
+  const c = spawn Counter();
+  c.send(1);
+  b.send(20);
+  stop c;
+  const d = spawn Counter();
+  d.send(7);
+  stop b;
+  stop d;
+  return 43;
+}

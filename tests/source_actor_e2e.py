@@ -37,6 +37,7 @@ def main():
         ("source-actor-fifo-ten.ores", 1, 10, 2853116705),
         ("source-actor-interleaved-stop.ores", 2, None, None),
         ("source-actor-heap-turnover.ores", 3, None, None),
+        ("source-actor-retire-replacement.ores", 4, None, None),
         ("source-actor-send-moved-value.ores", 1, 2, 3),
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
     ]
@@ -97,6 +98,24 @@ def main():
                 "source-actor-spawn-stop.ores",
             }:
                 assert "oreslang_source_actor_send" in guest.stdout, name
+            if name == "source-actor-retire-replacement.ores":
+                # The source program's precise actor effect trace must survive
+                # lowering. Grouping spawns/sends before stop breaks the
+                # lifetime boundary and can mask recycled-heap aliasing.
+                import re
+                operations = [
+                    match.group(1)
+                    for line in guest.stdout.splitlines()
+                    if (match := re.search(
+                        r"\bcall\b.*@oreslang_source_actor_(spawn|send|stop)\(",
+                        line
+                    ))
+                ]
+                assert operations == [
+                    "spawn", "spawn", "send", "send", "stop",
+                    "spawn", "send", "send", "stop",
+                    "spawn", "send", "stop", "stop",
+                ], (name, "source effect order changed", operations)
             if name == "source-actor-interleaved-stop.ores":
                 # IR call ordering must reflect lexical source ordering.
                 # Previous lowering grouped every send before every stop.
@@ -146,6 +165,12 @@ def main():
                     # initialize independently; neither B nor C can inherit A's
                     # native actor-owned state.
                     expected = [(2, 10), (2, 102), (1, 5)][i]
+                    assert f"processed={expected[0]}" in line, line
+                    assert f"last={expected[1]}" in line, line
+                elif name == "source-actor-retire-replacement.ores":
+                    # A's state has been reclaimed before C is born. C's stop
+                    # must not corrupt still-live B, and D begins with zero.
+                    expected = [(1, 9), (1, 1), (2, 30), (1, 7)][i]
                     assert f"processed={expected[0]}" in line, line
                     assert f"last={expected[1]}" in line, line
                 else:
