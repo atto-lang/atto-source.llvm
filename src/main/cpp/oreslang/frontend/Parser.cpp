@@ -5798,7 +5798,16 @@ void reject_native_actor_pubsub_source(std::string_view source) {
             previous.kind == Kind::Identifier && previous.text == "topic" &&
             before_previous.text == ".";
 
-        if (named_group || typed_handle || typed_topic_call) {
+        // A local/imported topic handle may be named without repeating
+        // actor.group or Topic<T> at the call site. Until typed lowering
+        // exists, reject this reserved member before emitting native IR.
+        // The standalone identifier try_publish remains ordinary source.
+        const bool try_publish_member =
+            current.kind == Kind::Identifier &&
+            current.text == "try_publish" && previous.text == ".";
+
+        if (named_group || typed_handle || typed_topic_call ||
+            try_publish_member) {
             const std::size_t offset =
                 named_group ? before_previous.offset : previous.offset;
             throw std::runtime_error(

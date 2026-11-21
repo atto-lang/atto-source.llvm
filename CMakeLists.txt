@@ -1464,16 +1464,17 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_guest_actor_group_create source-actor-group-create-unsupported.ores --diagnostic "native ActorGroup source lowering unsupported")
     oreslang_contract_test(reject_guest_actor_group_join source-actor-group-join-unsupported.ores --diagnostic "native ActorGroup source lowering unsupported")
     oreslang_contract_test(reject_guest_actor_group_shadow source-actor-group-declaration-unsupported.ores --diagnostic "native ActorGroup source lowering unsupported")
-    # Source-only identity gate: verifies all seven .atto/.ores pairs use
-    # byte-identical corpus without claiming compiled guest execution.
+    # Source-only identity gate: verifies all seven .atto/.ores pairs and
+    # pins canonical suspends-only .atto Git blob (not guest execution).
     add_test(NAME source_actor_pubsub_atto_fixture_identity
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_pubsub_source_gate.py"
             --source-root "${CMAKE_CURRENT_SOURCE_DIR}"
             --verify-fixtures-only)
     set_tests_properties(source_actor_pubsub_atto_fixture_identity PROPERTIES TIMEOUT 15)
-    # Compiler-negative gate: BOTH file extensions must be rejected for the
-    # actual unlowered ActorGroup/Topic surface. This is not native parity.
+    # Compiler-negative gate: both legacy extensions and the canonical
+    # suspends-only .atto and canonical share! try_publish negative must fail closed.
+    # Successful rejection is not native source pub-sub execution.
     add_test(NAME reject_shared_actor_pubsub_source_corpus
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_pubsub_source_gate.py"

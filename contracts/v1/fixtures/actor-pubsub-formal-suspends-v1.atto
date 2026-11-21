@@ -1,0 +1,35 @@
+// Candidate compiler-backed guest fixture; no backend has executed this program.
+// Uses `suspends` rather than retired `async` syntax. A compiler must admit it
+// before any source-to-runtime refinement can be claimed.
+define actor Subscriber as
+  suspends receive(ActorMail<String> mail): void {
+    val group = actor.group("formal-payments");
+    val topic = group.topic<String>("payment.completed");
+    val subscription = topic.subscribe();
+    self.send("subscribed");
+    val value = await subscription.next();
+    self.send(value);
+    subscription.close();
+    self.end();
+    return;
+  }
+end
+
+pub suspends fnc main(): void {
+  val group = actor.group("formal-payments");
+  val topic = group.topic<String>("payment.completed", "reliable", 1);
+  val subscriber = spawn Subscriber();
+  await subscriber.get_ready();
+  group.join(subscriber);
+  subscriber.send("start");
+  val ready = (await subscriber.outputs.next()).value.unwrap();
+  stdio.stdout.write(ready.value);
+  stdio.stdout.write("|");
+  await topic.publish("p-1");
+  val received = (await subscriber.outputs.next()).value.unwrap();
+  stdio.stdout.write(received.value);
+  await subscriber.get_done();
+  group.leave(subscriber);
+  group.close();
+  return;
+}
