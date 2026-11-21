@@ -62,6 +62,21 @@ if(OpenSSL_FOUND)
     add_test(NAME tenant_vm_sev_snp_report_verification_test
         COMMAND tenant_vm_sev_snp_report_verification_test)
     set_tests_properties(tenant_vm_sev_snp_report_verification_test PROPERTIES TIMEOUT 30)
+
+    # Negative-only offline VCEK endorsement checks: synthetic/absent AMD roots
+    # must never turn into a hardware attestation claim.
+    add_executable(tenant_vm_sev_snp_vcek_endorsement_test
+        sev_snp_vcek_endorsement_test.cpp)
+    target_link_libraries(tenant_vm_sev_snp_vcek_endorsement_test PRIVATE OpenSSL::Crypto)
+    if(TENANT_VM_SANITIZE)
+        target_compile_options(tenant_vm_sev_snp_vcek_endorsement_test PRIVATE
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(tenant_vm_sev_snp_vcek_endorsement_test PRIVATE
+            -fsanitize=address,undefined)
+    endif()
+    add_test(NAME tenant_vm_sev_snp_vcek_endorsement_test
+        COMMAND tenant_vm_sev_snp_vcek_endorsement_test)
+    set_tests_properties(tenant_vm_sev_snp_vcek_endorsement_test PROPERTIES TIMEOUT 30)
 else()
     message(STATUS "SNP OpenSSL signature primitive NOT_EXECUTED: OpenSSL::Crypto unavailable")
 endif()
