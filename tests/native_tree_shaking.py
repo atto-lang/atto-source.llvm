@@ -170,9 +170,12 @@ def main():
     require(overload_control.returncode==0 and overload_shaken.returncode==0,
             "public overload compile failed")
     for symbol in (b"@api$arity1", b"@api$arity2"):
-        require(symbol in overload_control.stdout,
+        # LLVM versions may quote identifiers containing '$'. Compare exact
+        # callable names in either spelling, not a prefix of another overload.
+        spellings = (symbol+b"(", b'@"'+symbol[1:]+b'"(')
+        require(any(name in overload_control.stdout for name in spellings),
                 "control IR missing overload ABI symbol "+repr(symbol))
-        require(symbol in overload_shaken.stdout,
+        require(any(name in overload_shaken.stdout for name in spellings),
                 "conservative tree shaking changed public overload ABI "+repr(symbol))
 
     class_control=compile_ir(args.compiler,CLASS_SURFACE,False)

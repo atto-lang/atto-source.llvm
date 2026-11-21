@@ -47,7 +47,30 @@ struct OresActorI64Heap {
     ActorSlot slots[];
 };
 
+/* Domain IDs are 64-bit on every host. 32-bit targets must provide lock-free
+ * 64-bit atomics (i686 cmpxchg8b, ARMv7 ldrexd); a libatomic lock here would
+ * put a hidden mutex on actor heap admission. */
+_Static_assert(ATOMIC_LLONG_LOCK_FREE == 2,
+               "actor heap domains require lock-free 64-bit atomics");
 static _Atomic(uint64_t) next_domain = 1;
+
+/* CAS reservation, never fetch_add: fetch_add keeps advancing past the
+ * terminal value, wraps through 0 and re-issues domain 1, so stale slots and
+ * loans from the first heap would validate against a new one. */
+static uint64_t reserve_domain(void) {
+    uint64_t current = atomic_load_explicit(&next_domain, memory_order_relaxed);
+    while (current != 0 && current != UINT64_MAX) {
+        if (atomic_compare_exchange_weak_explicit(&next_domain, &current, current + 1,
+                memory_order_relaxed, memory_order_relaxed))
+            return current;
+    }
+    return 0;
+}
+/* One admitted actor heap per physical carrier, not just per logical epoch.
+ * Carrier migration is permitted only after a completed leave. A stolen
+ * OresActorTurn token may not authorize access on an unrelated thread. */
+static _Thread_local OresActorI64Heap* carrier_heap;
+static _Thread_local uint64_t carrier_epoch;
 
 static void rejected(void) { abort(); }
 
@@ -136,7 +159,8 @@ int ores_actor_i64_heap_trace_snapshot(
 
 static void require_turn(OresActorI64Heap* heap, OresActorTurn turn) {
     if (heap->retiring || !heap->turn_active
-        || heap->domain != turn.domain || heap->turn_epoch != turn.epoch) {
+        || heap->domain != turn.domain || heap->turn_epoch != turn.epoch
+        || carrier_heap != heap || carrier_epoch != turn.epoch) {
         rejected();
     }
 }
@@ -158,7 +182,7 @@ OresActorI64Heap* ores_actor_i64_heap_open(uint64_t actor_id,
     OresActorI64Heap* heap = (OresActorI64Heap*) calloc(1, bytes);
     if (!heap) rejected();
     atomic_flag_clear(&heap->mutex);
-    const uint64_t id = atomic_fetch_add_explicit(&next_domain, 1, memory_order_relaxed);
+    const uint64_t id = reserve_domain();
     if (id == 0 || id == UINT64_MAX) rejected();
     heap->domain = id;
     heap->owner = actor_id;
@@ -172,6 +196,9 @@ OresActorI64Heap* ores_actor_i64_heap_open(uint64_t actor_id,
 OresActorTurn ores_actor_i64_heap_enter(OresActorI64Heap* heap,
                                           uint64_t actor_id,
                                           uint64_t incarnation) {
+    /* Reentrant actor turns on one native carrier are not admitted: a later
+     * callback must suspend/leave the first turn before running another. */
+    if (carrier_heap != NULL) rejected();
     lock_heap(heap);
     if (heap->retiring || heap->turn_active
         || actor_id != heap->owner || incarnation != heap->incarnation
@@ -179,6 +206,8 @@ OresActorTurn ores_actor_i64_heap_enter(OresActorI64Heap* heap,
     heap->turn_active = 1;
     ++heap->turn_epoch;
     OresActorTurn token = {heap->domain, heap->turn_epoch};
+    carrier_heap = heap;
+    carrier_epoch = token.epoch;
     unlock_heap(heap);
     return token;
 }
@@ -186,8 +215,11 @@ OresActorTurn ores_actor_i64_heap_enter(OresActorI64Heap* heap,
 void ores_actor_i64_heap_leave(OresActorI64Heap* heap, OresActorTurn turn) {
     lock_heap(heap);
     if (!heap->turn_active || turn.domain != heap->domain
-            || turn.epoch != heap->turn_epoch) rejected();
+            || turn.epoch != heap->turn_epoch || carrier_heap != heap
+            || carrier_epoch != turn.epoch) rejected();
     heap->turn_active = 0;
+    carrier_heap = NULL;
+    carrier_epoch = 0;
     unlock_heap(heap);
 }
 OresActorSlot ores_actor_i64_heap_new(OresActorI64Heap* heap,
@@ -245,6 +277,26 @@ void ores_actor_i64_heap_drop(OresActorI64Heap* heap,
     record_access(heap, turn, slot.index, slot.generation, ORES_ACTOR_HEAP_ACCESS_DROP);
     ++s->generation;
     unlock_heap(heap);
+}
+
+void ores_actor_i64_heap_scoped_new(OresActorI64Heap* heap,
+        uint64_t domain, uint64_t epoch, int64_t value, uint64_t token[3]) {
+    if (!token) rejected();
+    OresActorTurn turn = {domain, epoch};
+    OresActorSlot slot = ores_actor_i64_heap_new(heap, turn, value);
+    token[0] = slot.domain;
+    token[1] = slot.index;
+    token[2] = slot.generation;
+}
+void ores_actor_i64_heap_scoped_drop(OresActorI64Heap* heap,
+        uint64_t domain, uint64_t epoch, uint64_t token[3]) {
+    if (!token) rejected();
+    OresActorSlot slot = {token[0], token[1], token[2]};
+    OresActorTurn turn = {domain, epoch};
+    ores_actor_i64_heap_drop(heap, turn, slot);
+    token[0] = 0;
+    token[1] = 0;
+    token[2] = 0;
 }
 
 OresActorLoan ores_actor_i64_heap_borrow(OresActorI64Heap* heap,
@@ -378,7 +430,10 @@ int ores_actor_i64_heap_try_destroy(OresActorI64Heap* heap) {
     /* Release lock before teardown; the supervisor must have fenced all
      * transport, scheduler, timer and callback handles to this heap. */
     unlock_heap(heap);
-    memset(heap, 0, bytes);
+    /* Never rely on a dead memset before free: O2/LTO may remove it.
+     * Preserve deterministic erasure of actor fields, loan metadata,
+     * incarnation authority and the allocation header on physical release. */
+    zeroize_bytes(heap, bytes);
     free(heap);
     return 1;
 }

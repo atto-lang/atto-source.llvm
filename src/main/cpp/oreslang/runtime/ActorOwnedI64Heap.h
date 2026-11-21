@@ -6,8 +6,13 @@ extern "C" {
 
 /* Native actor heap experimental ABI. Actor IDs and enter tokens MUST remain
  * private to the scheduler, not exposed as forgeable guest-language values.
- * One actor turn runs at a time. This does not require stable carrier threads
- * and it does not use a tracing garbage collector. */
+ * One actor turn runs at a time. Each admitted OresActorTurn is bound to its
+ * physical carrier for the duration of that turn, even when the domain/epoch
+ * fields of the token are known to another thread. An actor may migrate to a
+ * different carrier only after leave and a fresh enter. Cross-turn loans
+ * may be released without re-entering a turn, preserving async quiescence.
+ * This native scalar heap does not use a tracing garbage collector; neither
+ * the guest compiler nor transitive process closure is certified by that fact. */
 typedef struct OresActorI64Heap OresActorI64Heap;
 typedef struct { uint64_t domain, epoch; } OresActorTurn;
 typedef struct { uint64_t domain, index, generation; } OresActorSlot;
@@ -70,6 +75,13 @@ void ores_actor_i64_heap_write(OresActorI64Heap* heap,
                                  OresActorSlot slot, int64_t value);
 void ores_actor_i64_heap_drop(OresActorI64Heap* heap,
                                 OresActorTurn turn, OresActorSlot slot);
+/* Compiler-owned actor-handler temporary ABI: the compiler allocates a
+ * three-word token on the native stack and drops it before handler exit.
+ * Tokens may not escape across await, FFI, or an actor turn boundary. */
+void ores_actor_i64_heap_scoped_new(OresActorI64Heap* heap,
+    uint64_t domain, uint64_t epoch, int64_t value, uint64_t token[3]);
+void ores_actor_i64_heap_scoped_drop(OresActorI64Heap* heap,
+    uint64_t domain, uint64_t epoch, uint64_t token[3]);
 /* Shared read loans survive turns/await. They forbid slot writes and drops,
  * plus physical heap release, until the last loan is released. A loan cannot
  * itself dereference memory outside an admitted turn. Exclusive mutable

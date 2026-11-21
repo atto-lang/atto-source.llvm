@@ -1,0 +1,135 @@
+name: Tensor2D native host and compiled guest admission
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/Tensor2DAdmission.hpp'
+      - 'tests/native_tensor2d_admission_test.cpp'
+      - 'tests/fixtures/tensor2d-scalar-native.ores'
+      - 'CMakeLists.txt'
+      - '.github/workflows/tensor2d-native-guest.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  tensor2d-guest-and-host:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact private source commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+      - name: Verify revision identity and guest fixture digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          git rev-parse HEAD^{tree}
+          git hash-object tests/fixtures/tensor2d-scalar-native.ores
+      - name: Native host C++ geometry proof GCC and Clang
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/tensor2d-evidence
+          g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -Isrc/main/cpp tests/native_tensor2d_admission_test.cpp \
+            -o build/tensor2d-evidence/tensor2d-gcc
+          clang++ -std=c++17 -O1 -g -fsanitize=address,undefined \
+            -fno-omit-frame-pointer -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -Isrc/main/cpp tests/native_tensor2d_admission_test.cpp \
+            -o build/tensor2d-evidence/tensor2d-clang-asan
+          build/tensor2d-evidence/tensor2d-gcc
+          ASAN_OPTIONS=detect_leaks=1 build/tensor2d-evidence/tensor2d-clang-asan
+      - name: Install LLVM compiler toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends llvm-dev clang cmake ninja-build
+      - name: Build real LLVM Oreslang source compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build/tensor2d-native -G Ninja \
+            -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=Release \
+            -DLLVM_DIR="$(llvm-config --cmakedir)"
+          cmake --build build/tensor2d-native --target oreslang-llvmc -j 2
+      - name: Compile IR then execute tensor2d .ores guest
+        shell: bash
+        run: |
+          set -euo pipefail
+          build/tensor2d-native/oreslang-llvmc \
+            tests/fixtures/tensor2d-scalar-native.ores \
+            > build/tensor2d-evidence/guest.ll \
+            2> build/tensor2d-evidence/compile.stderr
+          test ! -s build/tensor2d-evidence/compile.stderr
+          grep -Fq 'define i32 @main()' build/tensor2d-evidence/guest.ll
+          clang -x ir build/tensor2d-evidence/guest.ll \
+            -o build/tensor2d-evidence/tensor2d-guest
+          set +e
+          build/tensor2d-evidence/tensor2d-guest
+          guest_status=$?
+          set -e
+          test "$guest_status" -eq 42
+          printf '%s\n' 'LLVM-GUEST-TENSOR2D-OK exit=42' \
+            | tee build/tensor2d-evidence/guest-result.txt
+      - name: Negative compiler mutation must fail closed
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s\n' 'pub fnc main(): int { return gpu; }' \
+            > build/tensor2d-evidence/unsupported-domain.ores
+          if build/tensor2d-native/oreslang-llvmc \
+            build/tensor2d-evidence/unsupported-domain.ores \
+            > build/tensor2d-evidence/unsupported.ll \
+            2> build/tensor2d-evidence/unsupported.stderr; then
+              echo 'unsupported GPU source incorrectly accepted' >&2
+              exit 1
+          fi
+          test ! -s build/tensor2d-evidence/unsupported.ll
+          test -s build/tensor2d-evidence/unsupported.stderr
+      - name: Reject raw int division until typed semantics exist
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s\n' 'pub fnc main(): int { return 4 / 2; }' \
+            > build/tensor2d-evidence/unsupported-int-division.ores
+          if build/tensor2d-native/oreslang-llvmc \
+            build/tensor2d-evidence/unsupported-int-division.ores \
+            > build/tensor2d-evidence/division.ll \
+            2> build/tensor2d-evidence/division.stderr; then
+            echo 'untyped int/int division unexpectedly accepted' >&2
+            exit 1
+          fi
+          test ! -s build/tensor2d-evidence/division.ll
+          grep -q 'floating division unsupported' \
+            build/tensor2d-evidence/division.stderr
+      - name: Record source and compiler provenance
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/tensor2d-evidence
+          git rev-parse HEAD > build/tensor2d-evidence/commit.txt
+          git rev-parse HEAD^{tree} > build/tensor2d-evidence/tree.txt
+          git hash-object tests/fixtures/tensor2d-scalar-native.ores \
+            > build/tensor2d-evidence/fixture-blob.txt
+          if test -f build/tensor2d-native/oreslang-llvmc; then
+            sha256sum build/tensor2d-native/oreslang-llvmc \
+              > build/tensor2d-evidence/compiler-sha256.txt
+          fi
+          if test -f build/tensor2d-evidence/tensor2d-guest; then
+            sha256sum build/tensor2d-evidence/tensor2d-guest \
+              > build/tensor2d-evidence/guest-sha256.txt
+          fi
+          clang --version > build/tensor2d-evidence/clang-version.txt
+      - name: Upload genuine evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: tensor2d-native-guest-evidence
+          path: build/tensor2d-evidence/
+          if-no-files-found: warn
+          retention-days: 14

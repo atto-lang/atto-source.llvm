@@ -341,6 +341,37 @@ int main(void) {
     check(ores_native_execution_context_store_release(executions, pending_origin));
     check(ores_native_execution_context_store_release(executions, pending_child));
 
+/* Releasing a child may reach a still-CLAIMED parent. The child drop
+ * succeeds exactly once; the physical frame remains pinned until finish. */
+pending_origin_context.id.execution = 160;
+pending_child_context.id.execution = 161;
+check(ores_native_execution_context_store_insert(
+    executions, &pending_origin_context, &pending_origin));
+check(ores_native_execution_context_store_insert(
+    executions, &pending_child_context, &pending_child));
+check(ores_native_continuation_store_publish(
+    continuations, pending_origin, (OresNativeContinuationHandle){0, 0},
+    ORES_CONTINUATION_BOUNDARY_AWAIT, 9, 1601, &pending_parent));
+check(ores_native_continuation_store_try_claim_resume(
+    continuations, pending_parent, NULL));
+check(ores_native_continuation_store_publish(
+    continuations, pending_child, pending_parent,
+    ORES_CONTINUATION_BOUNDARY_AWAIT, 9, 1602, &invalid_child));
+check(ores_native_continuation_store_release(continuations, pending_parent));
+check(ores_native_continuation_store_cancel(continuations, invalid_child));
+check(ores_native_continuation_store_release(continuations, invalid_child));
+check(!ores_native_continuation_store_release(continuations, invalid_child));
+check(ores_native_continuation_store_get(
+    continuations, pending_parent, &stale_continuation));
+check(stale_continuation.state == ORES_CONTINUATION_CLAIMED);
+check(!ores_native_continuation_store_release(continuations, pending_parent));
+check(ores_native_continuation_store_finish_resume(continuations, pending_parent));
+check(ores_native_continuation_store_release(continuations, pending_parent));
+check(ores_native_execution_context_store_release(executions, pending_origin));
+check(ores_native_execution_context_store_release(executions, pending_child));
+check(ores_native_continuation_store_live(continuations) == 0);
+check(ores_native_execution_context_store_live(executions) == 0);
+
     /* Cross an AoSoA block boundary and prove all nine lanes remain addressable. */
     OresNativeExecutionHandle lanes[9];
     for (uint64_t i = 0; i < 9; ++i) {

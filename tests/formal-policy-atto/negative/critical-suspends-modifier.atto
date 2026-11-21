@@ -1,0 +1,4 @@
+// A critical function must never carry a suspending modifier.
+critical suspends fnc main(): int {
+  return 0;
+}

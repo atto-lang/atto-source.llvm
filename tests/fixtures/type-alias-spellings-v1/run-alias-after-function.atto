@@ -1,0 +1,3 @@
+fnc one(): int { return 1; }
+type Count = int;
+pub fnc main(): int { val Count c = 41; return c + one(); }
