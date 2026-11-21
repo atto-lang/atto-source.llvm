@@ -136,7 +136,7 @@ constructor with independent bounded mailboxes and implements:
 - `write_one_async(source, payload)` — single-edge-only default forward;
   rejects ambiguous branching;
 - `write_round_robin_async(source, payload)` — source-local strict RR;
-- `write_to_async(source, target, payload)` — authorized connected edge;
+- `write_to_async(source, target, payload)` — topology-connected edge only;
 - `write_by_key_async(source, key, payload)` — stable FNV-1a edge selection;
   rejects malformed/overlong UTF-8, surrogates and oversize keys. Unicode
   normalization (NFC), if required, belongs to the typed key codec upstream.
@@ -144,6 +144,16 @@ constructor with independent bounded mailboxes and implements:
 These APIs are **host-only** and currently use `std::string` payloads;
 they are not a substitute for checked `ActorMail<T>` serialization,
 isolate memory ownership, or guest compiler lowering.
+
+**Authorization gap / release blocker:** The native transport validates
+topology but accepts caller-provided `source` names. A guessed source string
+can select another actor's existing host edge if the caller is not trusted.
+It is therefore **not** a guest-safe routing capability. Until the compiler
+and scheduler derive the exact source instance and generation from an
+authenticated actor execution context, the transport must remain reachable
+only from trusted supervisor/embedding code. No Java, LLVM or other backend
+may lower guest `self.forward*` directly to these string-based APIs. Tests
+of host topology restrictions are not evidence of caller authentication.
 
 ### Native aggregate payload accounting (2026-10-15 hardening)
 

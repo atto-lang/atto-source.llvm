@@ -1,15 +1,50 @@
 #!/usr/bin/env python3
 """Shared Oreslang actor DAG and routing vectors; host contract only."""
 import json
+import math
+import os
 import pathlib
+import stat
 import sys
 
 # Contract JSON is a cross-backend trust boundary. Python's default decoder
 # silently keeps the final duplicate key and also accepts NaN/Infinity. Other
 # JSON implementations may reject or interpret those bytes differently.
-def load_contract(source: pathlib.Path) -> dict:
-    if source.stat().st_size > 256 * 1024:
+MAX_CONTRACT_BYTES = 256 * 1024
+
+
+def read_bounded_contract(source: pathlib.Path) -> bytes:
+    """Reject symlink/FIFO/device/hardlink substitution before bounded reads."""
+    def identity(a, b):
+        return all(getattr(a, name) == getattr(b, name) for name in (
+            "st_dev", "st_ino", "st_mode", "st_size", "st_nlink",
+            "st_mtime_ns", "st_ctime_ns"
+        ))
+
+    before = source.lstat()
+    if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+        raise ValueError("actor routing contract must be a unique regular file")
+    if not 0 < before.st_size <= MAX_CONTRACT_BYTES:
         raise ValueError("actor routing contract exceeds 256 KiB budget")
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(source, flags)
+    with os.fdopen(fd, "rb") as stream:
+        opened = os.fstat(stream.fileno())
+        if not stat.S_ISREG(opened.st_mode) or not identity(before, opened):
+            raise ValueError("actor routing contract changed before read")
+        raw = stream.read(MAX_CONTRACT_BYTES + 1)
+        after = os.fstat(stream.fileno())
+        if not identity(opened, after):
+            raise ValueError("actor routing contract changed during read")
+    if not identity(after, source.lstat()):
+        raise ValueError("actor routing contract path changed during read")
+    if not 0 < len(raw) <= MAX_CONTRACT_BYTES:
+        raise ValueError("actor routing contract exceeds 256 KiB budget")
+    return raw
+
+
+def load_contract(source: pathlib.Path) -> dict:
+    raw = read_bounded_contract(source)
 
     def unique_members(items):
         decoded = {}
@@ -22,9 +57,19 @@ def load_contract(source: pathlib.Path) -> dict:
     def reject_nonfinite(value):
         raise ValueError(f"non-finite actor routing JSON number: {value}")
 
-    result = json.loads(source.read_text(encoding="utf-8"),
+    def finite_float(value):
+        # json.loads allows a syntactically valid exponent such as 1e999
+        # to overflow Python float into infinity. parse_constant is never
+        # called for that spelling, so reject overflow during decoding.
+        number = float(value)
+        if not math.isfinite(number):
+            raise ValueError("non-finite actor routing JSON float")
+        return number
+
+    result = json.loads(raw.decode("utf-8", errors="strict"),
                         object_pairs_hook=unique_members,
-                        parse_constant=reject_nonfinite)
+                        parse_constant=reject_nonfinite,
+                        parse_float=finite_float)
     if not isinstance(result, dict):
         raise ValueError("actor routing JSON root must be an object")
     return result
@@ -32,6 +77,49 @@ def load_contract(source: pathlib.Path) -> dict:
 def main() -> int:
     source = pathlib.Path(sys.argv[1])
     data = load_contract(source)
+    # This fixed v1 policy corpus is an authority boundary, not an
+    # extensible user-defined description of routing capabilities. Deny
+    # unrecognized fields and forged guest-lowering/control claims.
+    def exact_fields(obj, expected, location):
+        if type(obj) is not dict or set(obj) != set(expected):
+            raise AssertionError("unexpected routing v1 fields at " + location)
+
+    exact_fields(data, ("schema", "scope", "graph", "operations",
+                        "rejected", "notes"), "root")
+    exact_fields(data["graph"], ("stages", "connections"), "graph")
+    exact_fields(data["operations"],
+                 ("forward", "forward_all", "forward_round_robin",
+                  "forward_to", "invalid_target", "by_key"), "operations")
+    exact_fields(data["operations"]["forward"], ("error",), "forward")
+    exact_fields(data["operations"]["forward_to"],
+                 ("target", "expected"), "forward_to")
+    exact_fields(data["operations"]["invalid_target"],
+                 ("target", "error"), "invalid_target")
+    for stage in data["graph"]["stages"]:
+        exact_fields(stage, ("id", "actor_type", "role",
+                             "inbound", "outbound"), "stage")
+    for edge in data["graph"]["connections"]:
+        exact_fields(edge, ("source", "target", "payload"), "edge")
+    for record in data["operations"]["by_key"]:
+        exact_fields(record, ("key", "fnv1a64_hex", "target"), "by_key")
+
+    if data["scope"] != "host-selector-only; source actor lowering is a separate release gate":
+        raise AssertionError("guest actor routing authority is not admitted")
+    if data["rejected"] != [
+            "duplicate-instance-id", "duplicate-edge", "unknown-target",
+            "self-edge", "payload-mismatch", "cyclic-graph", "invalid-utf8",
+            "overlong-component", "post-retirement-route"]:
+        raise AssertionError("routing v1 denial policy changed")
+    if data["notes"] != [
+            "sender identity authenticated by runtime before real mailbox admission",
+            "fan-out is nontransactional",
+            "receipt only indicates admission",
+            "RR attempt consumes turn even when mailbox rejects",
+            "no shared mutable actor heap alias",
+            "no borrowed actor state crossing suspension"]:
+        raise AssertionError("routing v1 actor authority policy changed")
+    if data["operations"]["invalid_target"]["error"] != "not connected":
+        raise AssertionError("disconnected target error policy changed")
     if data["schema"] != "oreslang.actor-pipeline-routing.v1":
         raise AssertionError("wrong routing fixture schema")
     if data["operations"]["forward_all"] != ["worker-a", "worker-b", "worker-c"]:
