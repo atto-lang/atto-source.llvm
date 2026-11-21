@@ -179,6 +179,22 @@ static int64_t instance(const OresVmHostApi* h, void* inst, uint8_t* cage, uint6
 
 /* KIND_RESTARTABLE: as a lowering that proves confinement would behave. Keeps a counter in the cage, which
  * a restart clears, and commits it to stored state, which a restart keeps. Input: op, a. */
+/* Exactly n frames of about 1 KiB, then back: a turn that needs a known amount of stack. */
+static int recurse_n(int n) {
+    volatile char frame[1024];
+    frame[0] = (char)n;
+    if (n <= 0) return 0;
+    /* The read depends on the call's result, so the frame is live across it and the call cannot
+     * become a loop. */
+    const int deeper = recurse_n(n - 1);
+    return deeper + frame[(unsigned)deeper & 1023];
+}
+static int recurse_with_alloc(const OresVmHostApi* h, int n) {
+    volatile char frame[64];
+    frame[0] = (char)n;
+    (void)h->alloc(16, 16);
+    return recurse_with_alloc(h, n + 1) + frame[0];
+}
 static int64_t restartable(const OresVmHostApi* h, void* inst, uint8_t* cage, uint64_t self, uint32_t state, uint32_t in,
                            uint32_t in_len, uint32_t out, uint32_t cap) {
     (void)self; (void)cap; (void)in_len;
@@ -210,6 +226,8 @@ static int64_t restartable(const OresVmHostApi* h, void* inst, uint8_t* cage, ui
             break;
         case RESTART_SPAWN_THEN_TRAP: (void)h->spawn(KIND_COUNTER); h->trap(); break;
         case RESTART_STOP_THEN_TRAP: (void)h->stop((uint64_t)a); h->trap(); break;
+        case RESTART_RECURSE_N: WRITE_I64(cage, out, recurse_n((int)a)); return 8;
+        case RESTART_STACK_IN_HOST_CALLS: return recurse_with_alloc(h, 0);
         case RESTART_READ_HEAP_OK: { /* a restart must give back the heap */
             const uint32_t block = h->alloc(4096, 16);
             WRITE_I64(cage, out, block != 0);

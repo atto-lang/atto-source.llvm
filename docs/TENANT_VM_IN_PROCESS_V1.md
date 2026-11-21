@@ -38,6 +38,59 @@ Outside guest mode the same fault is a host bug, and stays fatal. So every byte 
 reads or writes on a guest's behalf must be checked first: that is how the first version could be
 crashed by any tenant (see [Audit](#audit-findings)).
 
+**Stack quota.** `actor_stack_bytes` limits how much stack each turn of a VM's actors may use, host
+calls included. Every turn starts at the same depth on every carrier, so a second guard placed that far
+below the start gives every carrier the same limit, and an actor overflows at the same depth wherever it
+runs. The guard moves only when the next turn's quota differs from the last one's on that carrier, so
+VMs that share a quota cost no system call per turn. Running past the quota is an ordinary
+`StackOverflow`. With no quota (`0`, the default) a turn has the carrier's whole stack. A quota must be
+at least 320 KiB, and must fit within the carrier's stack together with its guard. If guard placement cannot be completed, the turn is **rejected before guest execution** as a stack
+quota failure; `stack_quota_misses` counts rejected turns, not unbounded execution. On a quota
+switch, old-only pages may be restored, but pages shared by the old and new guards remain protected.
+If restoring old-only pages fails, the failed turn is rejected before guest execution.
+The affected carrier is retired immediately after finishing its turn accounting: it never
+accepts another actor. The watchdog joins that thread, unmaps both its stack and alternate
+signal stack, and starts a new carrier in the same stable pool slot. The new pthread_t is
+published before its start gate opens. Guard-installation failure alone rejects the turn
+without retiring the carrier.
+
+A replacement may fail (for example, because the OS refuses a fresh stack mapping).
+The watchdog retries at 10 ms and 100 ms, for at most three attempts, while reporting
+`unavailable_carriers`, `carrier_replacements`, and `carrier_replacement_failures`.
+A permanently unavailable slot reduces capacity explicitly; if every slot is permanently
+unavailable, the host fails all live VMs, resolves pending calls, and rejects new VM opens
+with `HostClosed`. It never runs guest code on an uncertain stack mapping.
+OOM recovery and host destruction do not allocate a temporary vector of the live VM
+registry. VM failure settles each already-admitted mailbox promise in place instead of
+growing a temporary deque: the failure path must remain viable when ordinary allocation
+has become unreliable.
+Before accepting guest turns, each worker queries its current alternate signal
+stack. GCC AddressSanitizer, for example, can have already registered its own active
+32 KiB stack on the worker. The host **must reuse that stack without replacing or
+unmapping it**. Only when no stack is active does AttoLang register its own 64 KiB
+stack. If the query or registration fails, or a borrowed stack is missing a
+pointer or smaller than 16 KiB, that carrier retires through the bounded watchdog
+recovery path; no process-wide `abort()` is permitted. A test-only injected
+startup failure is checked even if a pre-existing sanitizer stack is usable.
+
+**Signal ownership.** A carrier's `sigsetjmp` records its complete pre-guest signal mask
+on Linux and Darwin; `siglongjmp` restores that exact mask after a guest trap, rather
+than unblocking every fault-related signal and overriding another runtime's choices.
+The host refuses VM admission with `SignalHandlerLost` if any required fault handler
+*or the `SIGURG` watchdog interrupt handler* has been replaced. The Linux native
+regression blocks `SIGTRAP` before starting the worker, overflows an actor stack,
+and confirms that the inherited block is still present after guest recovery.
+
+**ASan signal-stack regression:** repeated GCC AddressSanitizer host
+creation/destruction exposed an intermittent SIGSEGV without any guest turn.
+Diagnostic variants with signal-stack registration skipped passed 120/120
+lifecycle trials; a variant overwriting an existing registered stack crashed
+in repeated trials. Inspecting the carrier confirmed an enabled 32 KiB stack
+preinstalled by ASan. The runtime now preserves it, and an explicit native
+regression verifies this reuse on GCC+ASan. Repeated tests must run with
+ASan's normal SIGSEGV handler enabled; runs that disable it are diagnostics,
+not an acceptable replacement for default-ASan verification.
+
 Host calls run on the guest's stack, and a guest chooses how deep that is, so each host call checks for
 256 KiB of remaining stack before leaving guest mode. A shortage counts as out of carrier stack, like any other overflow. Carrier stacks must
 therefore be at least 512 KiB.
