@@ -24,6 +24,10 @@ CANONICAL_ATTO = "actor-pubsub-formal-suspends-v1.atto"
 CANONICAL_GIT_BLOB = "fe10d9e5018a3f030a10bc31586e851198aaa4a3"
 SHARE_BANG_DENIAL = "actor-pubsub-reject-unlowered-share-bang-try-publish.atto"
 SHARE_BANG_GIT_BLOB = "c562ad380bb283da9ffa26160653c1186ab63462"
+# Exact positive .atto guest fixture from Java compiler PR #1458. LLVM still
+# must reject it until real Topic<T>/Result lowering exists.
+JAVA_TYPED_TRY_PUBLISH = "actor-pubsub-try-publish-v1.atto"
+JAVA_TYPED_TRY_GIT_BLOB = "41fda4efc19823807b56545a31230b6182de0ee1"
 
 
 def verify_canonical_source(root: pathlib.Path) -> None:
@@ -57,6 +61,17 @@ def verify_fixture_identity(root: pathlib.Path) -> int:
                           + b"\0" + data).hexdigest()
     if digest != SHARE_BANG_GIT_BLOB:
         raise AssertionError("share! .atto denial fixture differs from pinned Git blob")
+    # Java's typed-positive guest fixture must be byte-identical before
+    # the LLVM compiler-negative check. This never certifies native lowering.
+    java_source = fixtures / JAVA_TYPED_TRY_PUBLISH
+    java_data = java_source.read_bytes()
+    if not java_data or len(java_data) > 131072:
+        raise AssertionError("Java typed try_publish fixture missing/oversized")
+    java_blob = hashlib.sha1(
+        b"blob " + str(len(java_data)).encode("ascii") + b"\0" + java_data
+    ).hexdigest()
+    if java_blob != JAVA_TYPED_TRY_GIT_BLOB:
+        raise AssertionError("Java typed try_publish fixture Git blob differs")
     return len(FIXTURES)
 
 
@@ -68,6 +83,7 @@ def verify_compiler_rejections(root: pathlib.Path, compiler: str) -> int:
              for suffix in (".ores", ".atto")]
     names.append(CANONICAL_ATTO)
     names.append(SHARE_BANG_DENIAL)
+    names.append(JAVA_TYPED_TRY_PUBLISH)
     for name in names:
         source = root / "contracts" / "v1" / "fixtures" / name
         run = subprocess.run(
