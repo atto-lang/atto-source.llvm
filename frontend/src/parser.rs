@@ -256,6 +256,25 @@ fn lazy_guard_predicate(expr: Expr) -> Expr {
     }
 }
 
+/// Conservative guard preflight: no path may escape through an explicit
+/// throw, break, or continue before the required function return. The typed
+/// checker still validates return types and exceptional effects separately.
+fn guard_has_nonreturn_control_exit(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(|stmt| match stmt {
+        Stmt::Throw(..) | Stmt::Break(..) | Stmt::Continue(..) => true,
+        Stmt::Block(body) => guard_has_nonreturn_control_exit(body),
+        Stmt::If { arms, otherwise, .. } =>
+            arms.iter().any(|(_, body)| guard_has_nonreturn_control_exit(body))
+                || otherwise.as_ref().is_some_and(|body| guard_has_nonreturn_control_exit(body)),
+        Stmt::Match { arms, .. } =>
+            arms.iter().any(|arm| guard_has_nonreturn_control_exit(&arm.body)),
+        Stmt::While { body, .. } | Stmt::Loop { body, .. }
+        | Stmt::For { body, .. } | Stmt::ForIn { body, .. } =>
+            guard_has_nonreturn_control_exit(body),
+        _ => false,
+    })
+}
+
 fn guard_failure_returns(stmts: &[Stmt]) -> bool {
     match stmts.last() {
         Some(Stmt::Return(..)) => true,
@@ -1396,7 +1415,7 @@ impl Parser {
             return Err(Diagnostic::new(self.pos(), "E_GUARD",
                 "guard requires '{ ... }' or 'else ... end' failure block"));
         };
-        if !guard_failure_returns(&failure) {
+        if guard_has_nonreturn_control_exit(&failure) || !guard_failure_returns(&failure) {
             return Err(Diagnostic::new(pos, "E_GUARD",
                 "guard failure block must explicitly return on all reachable paths"));
         }
