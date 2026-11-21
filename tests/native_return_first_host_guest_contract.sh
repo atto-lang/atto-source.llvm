@@ -5,7 +5,9 @@ set -eu
 compiler=${1:?expected production oreslang-llvmc}
 clang=${2:?expected Clang driver}
 test -f "$compiler" && test -x "$compiler" && test ! -L "$compiler"
-test -f "$clang" && test -x "$clang" && test ! -L "$clang"
+# CMake's find_program commonly finds a symlink (e.g. clang -> clang-17).
+# Reject missing/nonexecutable toolchains, not legitimate version symlinks.
+test -f "$clang" && test -x "$clang"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 guests=0
