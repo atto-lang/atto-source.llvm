@@ -4,6 +4,27 @@
 #include <stdint.h>
 #include <pthread.h>
 #define KiB 1024u
+
+static void test_ref32_abi_boundaries(void) {
+    uint32_t word=0;
+    uint64_t offset=0;
+    const uint32_t candidates[]={1u,2u,UINT32_C(0x7fffffff),
+        UINT32_C(0x80000000),UINT32_C(0xfffffffe),UINT32_MAX};
+    assert(!ores_elastic_native_ref32_decode_v1(0,&offset)); /* null */
+    assert(!ores_elastic_native_ref32_encode_v1(0,NULL));
+    assert(!ores_elastic_native_ref32_decode_v1(1,NULL));
+    assert(ores_elastic_native_ref32_encode_v1(0,&word) && word==1u);
+    for(size_t i=0;i<sizeof(candidates)/sizeof(candidates[0]);++i) {
+        assert(ores_elastic_native_ref32_decode_v1(candidates[i],&offset));
+        assert(ores_elastic_native_ref32_encode_v1(offset,&word));
+        assert(word==candidates[i]);
+    }
+    assert(offset==UINT64_C(34359738352));
+    assert(!ores_elastic_native_ref32_encode_v1(UINT64_C(34359738360),&word));
+    assert(!ores_elastic_native_ref32_encode_v1(UINT64_C(34359738351),&word));
+    assert(!ores_elastic_native_ref32_encode_v1(UINT64_MAX,&word));
+}
+
 static void test_peak_quota_and_actor_survival(void) {
     OresElasticNativeBudgetV1 tenant,process;
     assert(ores_elastic_budget_init_v1(&tenant,16*KiB));
@@ -231,6 +252,7 @@ static void test_forged_ref32_stride_cannot_wrap_32bit_host_size_t(void) {
     assert(ores_elastic_budget_used_v1(&budget)==0);
 }
 int main(void){
+    test_ref32_abi_boundaries();
     test_forged_ref32_stride_cannot_wrap_32bit_host_size_t();
     test_peak_quota_and_actor_survival();
     test_relocation_and_injected_failure();
