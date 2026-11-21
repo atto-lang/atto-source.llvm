@@ -1,13 +1,17 @@
 #pragma once
 
 #include "oreslang/runtime/OresIsolateAbi.h"
+#include "oreslang/runtime/DurableLockQueues.hpp"
+#include "oreslang/runtime/ActorArena.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -26,6 +30,10 @@ struct IsolateConfig {
     // Includes queued and currently executing trusted guest invocations.
     // Bounded independently of actor admission; it is not a CPU-time limit.
     std::size_t max_inflight_guest_calls = 64;
+    DurableLockQueues::Limits durable_queues{};
+    // Each registered actor receives its own physical native/off-GC allocation.
+    // This is a trusted in-process arena, not an OS address-space boundary.
+    std::uint32_t actor_arena_bytes = 4096;
 };
 
 // OresVM host-level reservation and queue budgets. The heap budget charges
@@ -34,6 +42,7 @@ struct OresVmLimits {
     std::uint32_t max_tenants = 1024;
     std::uint64_t max_admitted_heap_bytes = std::uint64_t{1} << 32;
     std::size_t max_inflight_guest_calls = 4096;
+    std::uint64_t max_admitted_actor_arena_bytes = std::uint64_t{1} << 32;
 };
 
 struct IsolateSnapshot {
@@ -51,7 +60,7 @@ struct IsolateSnapshot {
 class IsolateVM final {
     friend class OresVM;
     explicit IsolateVM(IsolateConfig value, std::uint64_t epoch)
-        : config(std::move(value)), generation(epoch) {}
+        : config(std::move(value)), generation(epoch), durable_queues(epoch, config.durable_queues) {}
     IsolateVM(const IsolateVM&) = delete;
     IsolateVM& operator=(const IsolateVM&) = delete;
     IsolateVM(IsolateVM&&) = delete;
@@ -62,12 +71,23 @@ class IsolateVM final {
     IsolatePhase phase = IsolatePhase::Created;
     std::vector<std::uint8_t> heap; // logical bounded tenant region
     std::unordered_map<std::uint64_t, std::uint64_t> actors;
+    // Each actor incarnation owns a physically independent native buffer.
+    // Compiled scalar guest ABI slots occupy the reserved prefix of that buffer.
+    // Full source-level actor ownership/effects and hostile OS isolation remain separate work.
+    static_assert(ActorArena::kScalarSlots == ORES_ISOLATE_I64_SLOTS,
+                  "native actor arena slot count must match compiler ABI");
+    std::unordered_map<std::uint64_t, std::unique_ptr<ActorArena>> actor_arenas;
+    // A distinct actor execution mutex permits parallel scalar guest turns
+    // for independent actors without releasing same-actor nonreentrancy.
+    std::unordered_map<std::uint64_t, std::shared_ptr<std::mutex>> actor_turn_mutexes;
     std::uint64_t next_actor_generation = 1;
     std::size_t active_guest_calls = 0;
     // Temporary serialized entry for trusted synchronous scalar guests.
     // This is not a production actor scheduler or per-actor concurrency gate.
     std::mutex guest_turn_mutex;
     std::array<std::int64_t, ORES_ISOLATE_I64_SLOTS> guest_globals{};
+    DurableLockQueues durable_queues;
+    std::unordered_set<std::uint64_t> active_durable_dispatches; // host-only physical pin
 };
 
 } // namespace oreslang::runtime

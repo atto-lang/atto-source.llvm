@@ -4552,6 +4552,17 @@ if(BUILD_TESTING)
             target_link_libraries(oreslang-native-oresvm-source-guest-test PRIVATE Threads::Threads)
             target_compile_options(oreslang-native-oresvm-source-guest-test PRIVATE
                 $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+            add_executable(oreslang-native-oresvm-source-durable-dispatch-test
+                tests/native_oresvm_source_durable_dispatch_test.cpp "${ORES_ISOLATE_SOURCE_OBJ}")
+            target_include_directories(oreslang-native-oresvm-source-durable-dispatch-test PRIVATE
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+            target_compile_features(oreslang-native-oresvm-source-durable-dispatch-test PRIVATE cxx_std_17)
+            target_link_libraries(oreslang-native-oresvm-source-durable-dispatch-test PRIVATE Threads::Threads)
+            target_compile_options(oreslang-native-oresvm-source-durable-dispatch-test PRIVATE
+                $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+            add_test(NAME native_oresvm_compiled_ores_durable_dispatch
+                COMMAND oreslang-native-oresvm-source-durable-dispatch-test)
+            set_tests_properties(native_oresvm_compiled_ores_durable_dispatch PROPERTIES TIMEOUT 40)
             add_test(NAME native_oresvm_source_llvm_aot_context
                 COMMAND oreslang-native-oresvm-source-guest-test)
             set_tests_properties(native_oresvm_source_llvm_aot_context PROPERTIES TIMEOUT 30)
@@ -4571,6 +4582,28 @@ if(BUILD_TESTING)
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/RejectIsolateSource.cmake")
         set_tests_properties(native_oresvm_isolate_reject_${ores_isolate_bad_case}
             PROPERTIES TIMEOUT 30)
+    endforeach()
+endif()
+
+# Native Durable Objects queue and physical actor-owned arena contracts.
+# The compiler-generated .ores source fixture is registered above; these run
+# with or without source compiler lowering and require no separate test carrier.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    foreach(ores_native_fixture IN ITEMS
+            native_actor_arena_test
+            native_durable_lock_queues_test
+            native_oresvm_durable_queues_test)
+        add_executable("oreslang-${ores_native_fixture}"
+            "tests/${ores_native_fixture}.cpp")
+        target_include_directories("oreslang-${ores_native_fixture}" PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_features("oreslang-${ores_native_fixture}" PRIVATE cxx_std_17)
+        target_link_libraries("oreslang-${ores_native_fixture}" PRIVATE Threads::Threads)
+        target_compile_options("oreslang-${ores_native_fixture}" PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+        add_test(NAME "${ores_native_fixture}" COMMAND "oreslang-${ores_native_fixture}")
+        set_tests_properties("${ores_native_fixture}" PROPERTIES TIMEOUT 30)
     endforeach()
 endif()
 

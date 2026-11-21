@@ -9,6 +9,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -66,9 +67,30 @@ public:
         ActorTicket() = default;
     };
 
+    class ActorAllocation final {
+        friend class OresVM;
+        std::weak_ptr<IsolateVM> state_;
+        std::uint64_t isolate_generation_ = 0;
+        std::uint64_t actor_id_ = 0;
+        std::uint64_t actor_generation_ = 0;
+        std::uint32_t offset_ = 0;
+        std::uint32_t size_ = 0;
+        ActorAllocation(const std::shared_ptr<IsolateVM>& state,
+                        DurableLockQueues::ActorKey actor,
+                        std::uint32_t offset, std::uint32_t size)
+            : state_(state), isolate_generation_(state->generation),
+              actor_id_(actor.id), actor_generation_(actor.generation),
+              offset_(offset), size_(size) {}
+    public:
+        ActorAllocation() = default;
+        std::uint32_t offset() const noexcept { return offset_; }
+        std::uint32_t size() const noexcept { return size_; }
+    };
+
     explicit OresVM(OresVmLimits limits = {}) : limits_(limits) {
         if (limits_.max_tenants == 0 || limits_.max_admitted_heap_bytes == 0 ||
-            limits_.max_inflight_guest_calls == 0)
+            limits_.max_inflight_guest_calls == 0 ||
+            limits_.max_admitted_actor_arena_bytes == 0)
             throw std::invalid_argument("OresVM requires positive aggregate quotas");
     }
     OresVM(const OresVM&) = delete;
@@ -93,7 +115,9 @@ public:
                            c == '_' || c == '.' || c == '-';
                 });
         if (unsafe_tenant_id || config.heap_limit_bytes == 0 ||
-            config.max_actors == 0 || config.max_inflight_guest_calls == 0)
+            config.max_actors == 0 || config.max_inflight_guest_calls == 0 ||
+            config.actor_arena_bytes < ActorArena::kScalarPrefix ||
+            config.actor_arena_bytes > ActorArena::kMaxCapacity)
             throw std::invalid_argument("isolate requires a bounded ID and positive quotas");
         if (config.mode != IsolateMode::TrustedInProcess)
             throw std::logic_error("sandboxed-process isolation is not implemented");
@@ -102,6 +126,13 @@ public:
             throw std::logic_error("tenant already has an isolate");
         if (isolates_.size() >= limits_.max_tenants)
             throw std::logic_error("OresVM tenant quota exhausted");
+        // Reserve the full sum of physical actor arenas on tenant admission,
+        // independent of their lazily allocated native buffers.
+        const auto actor_reservation = std::uint64_t{config.max_actors} *
+                                       config.actor_arena_bytes;
+        if (actor_reservation > limits_.max_admitted_actor_arena_bytes -
+                                    admitted_actor_arena_bytes_)
+            throw std::bad_alloc();
         // Charge the entire declared logical heap limit at admission, not
         // only current committed vector bytes. Prevent tenant overcommit.
         if (config.heap_limit_bytes >
@@ -112,6 +143,7 @@ public:
         auto state = std::shared_ptr<IsolateVM>(new IsolateVM(std::move(config), next_generation_++));
         isolates_.emplace(state->config.tenant_id, state);
         admitted_heap_bytes_ += state->config.heap_limit_bytes;
+        admitted_actor_arena_bytes_ += actor_reservation;
         return IsolateHandle(state);
     }
 
@@ -178,9 +210,63 @@ public:
             throw std::logic_error("actor quota exhausted");
         if (state->next_actor_generation == std::numeric_limits<std::uint64_t>::max())
             throw std::overflow_error("actor generations exhausted");
-        const auto incarnation = state->next_actor_generation++;
+        const auto incarnation = state->next_actor_generation;
         state->actors.emplace(actor_id, incarnation);
+        try {
+            state->actor_arenas.emplace(actor_id,
+                std::make_unique<ActorArena>(incarnation, state->config.actor_arena_bytes));
+            state->actor_turn_mutexes.emplace(actor_id, std::make_shared<std::mutex>());
+        } catch (...) {
+            state->actor_turn_mutexes.erase(actor_id);
+            state->actor_arenas.erase(actor_id);
+            state->actors.erase(actor_id);
+            throw;
+        }
+        ++state->next_actor_generation;
         return ActorTicket(state, actor_id, incarnation);
+    }
+
+    ActorAllocation allocate_actor(const IsolateHandle& handle,
+            const ActorTicket& actor, std::uint32_t bytes,
+            std::uint32_t alignment = 1) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto state = checked(handle);
+        if (state->phase != IsolatePhase::Running)
+            throw std::logic_error("actor arena allocation closed");
+        const auto key = checked_actor_ticket(state, actor);
+        auto arena = state->actor_arenas.find(key.id);
+        if (arena == state->actor_arenas.end() ||
+            arena->second->generation() != key.generation)
+            throw std::logic_error("missing actor-owned native arena");
+        return ActorAllocation(state, key, arena->second->allocate(bytes, alignment), bytes);
+    }
+
+    void write_actor_byte(const IsolateHandle& handle, const ActorTicket& actor,
+            const ActorAllocation& allocation, std::uint32_t index,
+            std::uint8_t value) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto state = checked(handle);
+        if (state->phase != IsolatePhase::Running &&
+            state->phase != IsolatePhase::Quiescing)
+            throw std::logic_error("actor arena access closed");
+        const auto key = checked_actor_ticket(state, actor);
+        check_actor_allocation(state, key, allocation);
+        state->actor_arenas.at(key.id)->write_byte(
+            allocation.offset_, allocation.size_, index, value);
+    }
+
+    std::uint8_t read_actor_byte(const IsolateHandle& handle,
+            const ActorTicket& actor, const ActorAllocation& allocation,
+            std::uint32_t index) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto state = checked(handle);
+        if (state->phase != IsolatePhase::Running &&
+            state->phase != IsolatePhase::Quiescing)
+            throw std::logic_error("actor arena access closed");
+        const auto key = checked_actor_ticket(state, actor);
+        check_actor_allocation(state, key, allocation);
+        return state->actor_arenas.at(key.id)->read_byte(
+            allocation.offset_, allocation.size_, index);
     }
 
     void retire_actor(const IsolateHandle& handle, const ActorTicket& actor) {
@@ -194,6 +280,15 @@ public:
             actor.state_.lock() != state || it == state->actors.end() ||
             it->second != actor.actor_generation_)
             throw std::logic_error("stale or foreign actor ticket");
+        if (state->durable_queues.has_actor({actor.id_, actor.actor_generation_}))
+            throw std::logic_error("cannot retire actor with outstanding durable work");
+        auto arena = state->actor_arenas.find(actor.id_);
+        if (arena == state->actor_arenas.end() ||
+            arena->second->generation() != actor.actor_generation_)
+            throw std::logic_error("actor arena incarnation mismatch");
+        // Erasure destroys and scrubs a dedicated native allocation.
+        state->actor_arenas.erase(arena);
+        state->actor_turn_mutexes.erase(actor.id_);
         state->actors.erase(it);
     }
 
@@ -205,13 +300,195 @@ public:
         std::int64_t value = 0;
     };
 
+    // Backwards-compatible direct scalar entrypoint: tenant-global slots.
     GuestOutcome invoke_guest_result(const IsolateHandle& handle, OresGuestEntry guest,
                                     std::int64_t input) {
+        return invoke_guest_result_impl(handle, guest, input, std::nullopt);
+    }
+
+    std::int64_t invoke_guest(const IsolateHandle& handle, OresGuestEntry guest,
+                              std::int64_t input) {
+        const auto outcome = invoke_guest_result(handle, guest, input);
+        if (outcome.status != ORES_GUEST_OK)
+            throw std::runtime_error("guest failed (status=" +
+                std::to_string(outcome.status) + ")");
+        return outcome.value;
+    }
+
+    // Host-only admission: actor identity is verified against this isolate's
+    // live actor registry before binding to a queue ticket. No guest ABI.
+    DurableLockQueues::Admission enqueue_durable(const IsolateHandle& handle,
+            const ActorTicket& actor, std::uint64_t lock_id,
+            std::uint64_t operation_id, std::size_t bytes) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto state = checked(handle);
+        if (state->phase != IsolatePhase::Running)
+            throw std::logic_error("isolate does not admit durable work");
+        auto key = checked_actor_ticket(state, actor);
+        return state->durable_queues.enqueue(key, lock_id, operation_id, bytes);
+    }
+
+    bool claim_durable(const IsolateHandle& handle, DurableLockQueues::Ticket ticket) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto state = checked(handle);
+        if (state->phase != IsolatePhase::Running)
+            throw std::logic_error("cannot start a durable turn in quiescence");
+        return state->durable_queues.claim(ticket);
+    }
+
+    std::optional<DurableLockQueues::Ticket> finish_durable(
+            const IsolateHandle& handle, DurableLockQueues::Ticket ticket) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto state = checked(handle);
+        if (state->phase != IsolatePhase::Running &&
+            state->phase != IsolatePhase::Quiescing)
+            throw std::logic_error("cannot finish a durable turn in this phase");
+        if (state->active_durable_dispatches.count(ticket.sequence))
+            throw std::logic_error("cannot finish physically executing durable guest");
+        return state->durable_queues.finish(ticket);
+    }
+
+    struct DurableGuestReceipt {
+        GuestOutcome outcome;
+        std::optional<DurableLockQueues::Ticket> next_head;
+    };
+
+    // Experimental synchronous bridge: the source compiler generates the
+    // versioned ores_guest_entry from a pure .ores tenant_step function.
+    // Claims a host-issued actor ticket, executes that native guest to physical
+    // completion, then releases the lock. This is NOT actor source lowering,
+    // continuation scheduling, persistent data, or independent guest heaps.
+    std::optional<DurableGuestReceipt> try_invoke_durable_guest_result(
+            const IsolateHandle& handle, DurableLockQueues::Ticket ticket,
+            OresGuestEntry guest, std::int64_t input) {
+        if (!guest) throw std::invalid_argument("guest entry is null");
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            auto state = checked(handle);
+            if (state->phase != IsolatePhase::Running)
+                throw std::logic_error("durable execution admission closed");
+            if (!state->durable_queues.claim(ticket)) return std::nullopt;
+            try {
+                // This pin is not a scheduler-owned async lifetime.
+                state->active_durable_dispatches.insert(ticket.sequence);
+            } catch (...) {
+                state->durable_queues.finish(ticket); // no guest code started
+                throw;
+            }
+        }
+        // invoke_guest_result is synchronous and pins physical native execution
+        // until return/exception. Preserve the original guest failure where
+        // possible; the host cannot assert a release while still executing.
+        auto retire = [&]() {
+            std::lock_guard<std::mutex> lock(mutex_);
+            auto state = checked(handle);
+            state->active_durable_dispatches.erase(ticket.sequence);
+            return state->durable_queues.finish(ticket);
+        };
+        try {
+            const auto outcome = invoke_guest_result_impl(handle, guest, input, ticket.actor);
+            return DurableGuestReceipt{outcome, retire()};
+        } catch (...) {
+            retire(); // synchronous execution has exited via exception
+            throw;
+        }
+    }
+
+    std::optional<DurableLockQueues::Ticket> cancel_durable_unstarted_head(
+            const IsolateHandle& handle, DurableLockQueues::Ticket ticket) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto state = checked(handle);
+        if (state->phase != IsolatePhase::Running &&
+            state->phase != IsolatePhase::Quiescing)
+            throw std::logic_error("durable admission is not draining");
+        return state->durable_queues.cancel_unstarted_head(ticket);
+    }
+
+    void cancel_durable_waiter(const IsolateHandle& handle,
+            DurableLockQueues::Ticket ticket) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto state = checked(handle);
+        if (state->phase != IsolatePhase::Running &&
+            state->phase != IsolatePhase::Quiescing)
+            throw std::logic_error("durable admission is not draining");
+        state->durable_queues.cancel_waiter(ticket);
+    }
+
+    std::vector<DurableLockQueues::Ticket> durable_ready_heads(
+            const IsolateHandle& handle) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto state = checked(handle);
+        if (state->phase != IsolatePhase::Running) return {};
+        return state->durable_queues.ready_heads();
+    }
+
+    DurableLockQueues::Snapshot durable_snapshot(const IsolateHandle& handle) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return checked(handle)->durable_queues.snapshot();
+    }
+
+    void begin_shutdown(const IsolateHandle& handle) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto state = checked(handle);
+        if (state->phase != IsolatePhase::Running &&
+            state->phase != IsolatePhase::Created)
+            throw std::logic_error("shutdown already started");
+        state->durable_queues.quiesce();
+        state->phase = IsolatePhase::Quiescing;
+    }
+
+    void complete_shutdown(const IsolateHandle& handle) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto state = checked(handle);
+        if (state->phase != IsolatePhase::Quiescing || !state->actors.empty() ||
+            state->active_guest_calls != 0 || !state->durable_queues.drained())
+            throw std::logic_error("actor or guest invocation still active");
+        state->phase = IsolatePhase::Stopped;
+    }
+
+    void destroy(const IsolateHandle& handle) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto state = checked(handle);
+        if (state->phase != IsolatePhase::Stopped)
+            throw std::logic_error("isolate must stop before destruction");
+        // Best-effort zeroing, not a guarantee of secure secret erasure.
+        std::fill(state->heap.begin(), state->heap.end(), 0);
+        state->guest_globals.fill(0);
+        isolates_.erase(state->config.tenant_id);
+        admitted_heap_bytes_ -= state->config.heap_limit_bytes;
+        admitted_actor_arena_bytes_ -=
+            std::uint64_t{state->config.max_actors} * state->config.actor_arena_bytes;
+    }
+
+    IsolateSnapshot snapshot(const IsolateHandle& handle) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto state = checked(handle);
+        return {state->config.tenant_id, state->generation, state->phase,
+                static_cast<std::uint32_t>(state->heap.size()),
+                state->actors.size(), state->active_guest_calls};
+    }
+
+private:
+    GuestOutcome invoke_guest_result_impl(const IsolateHandle& handle,
+                                    OresGuestEntry guest, std::int64_t input,
+                                    std::optional<DurableLockQueues::ActorKey> actor) {
         if (!guest) throw std::invalid_argument("guest entry is null");
         std::shared_ptr<IsolateVM> state;
+        std::shared_ptr<std::mutex> actor_turn;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             state = checked(handle);
+            if (actor) {
+                // The checked durable ticket already claimed this actor;
+                // verify the live registry and capture the incarnation mutex.
+                const auto current = state->actors.find(actor->id);
+                const auto turn = state->actor_turn_mutexes.find(actor->id);
+                if (current == state->actors.end() ||
+                    current->second != actor->generation ||
+                    turn == state->actor_turn_mutexes.end())
+                    throw std::logic_error("invalid actor turn incarnation");
+                actor_turn = turn->second;
+            }
             if (state->phase != IsolatePhase::Running)
                 throw std::logic_error("guest admission is closed");
             // Includes invocations waiting on guest_turn_mutex. Bound both
@@ -235,7 +512,10 @@ public:
         // A shutdown closes admission even for already-waiting calls.
         static thread_local bool guest_active = false;
         if (guest_active) throw std::logic_error("nested guest entry forbidden");
-        std::unique_lock<std::mutex> tenant_turn(state->guest_turn_mutex);
+        // Distinct actors can execute their compiled scalar callbacks
+        // concurrently. Direct legacy guest calls retain tenant-wide locking.
+        std::unique_lock<std::mutex> tenant_turn(
+            actor_turn ? *actor_turn : state->guest_turn_mutex);
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (state->phase != IsolatePhase::Running)
@@ -246,7 +526,7 @@ public:
             bool& active;
             ~GuestThreadGuard() noexcept { active = false; }
         } thread_guard{guest_active};
-        GuestCall call{this, state, state->generation};
+        GuestCall call{this, state, state->generation, actor};
         OresIsolateContext ctx{ORES_ISOLATE_ABI_VERSION, ORES_ISOLATE_I64_SLOTS,
                               state->generation, &call, &guest_load_i64, &guest_store_i64};
         std::int64_t value = 0;
@@ -254,76 +534,54 @@ public:
         try {
             status = guest(&ctx, input, &value);
         } catch (...) {
-            // A native guest exception may occur AFTER a partial write to
-            // tenant-owned globals. Never reuse this incarnation: quarantine
-            // it, retain existing resource pins, and let the host explicitly
-            // drain/retire the tenant. This is only trusted-in-process safety,
-            // NOT containment against arbitrary native memory corruption.
+            // A thrown native guest may have partially changed isolate globals.
+            // Quarantine the tenant, preserve execution pins, and prevent future
+            // durable claims. Trusted-only; not a memory safety sandbox.
             {
                 std::lock_guard<std::mutex> lock(mutex_);
+                state->durable_queues.quiesce();
                 if (state->phase == IsolatePhase::Running)
                     state->phase = IsolatePhase::Quiescing;
             }
             throw;
         }
-        // A returned status is a typed guest result (e.g. checked overflow),
-        // not a C++ trap. Preserve such outcomes without retiring the tenant.
+        // Typed guest failures (e.g. overflow) are not native exceptions.
         if (status != ORES_GUEST_OK) return {status, 0};
         return {ORES_GUEST_OK, value};
     }
 
-    std::int64_t invoke_guest(const IsolateHandle& handle, OresGuestEntry guest,
-                              std::int64_t input) {
-        const auto outcome = invoke_guest_result(handle, guest, input);
-        if (outcome.status != ORES_GUEST_OK)
-            throw std::runtime_error("guest failed (status=" +
-                std::to_string(outcome.status) + ")");
-        return outcome.value;
+    static DurableLockQueues::ActorKey checked_actor_ticket(
+            const std::shared_ptr<IsolateVM>& state, const ActorTicket& actor) {
+        auto it = state->actors.find(actor.id_);
+        if (actor.generation_ != state->generation ||
+            actor.state_.lock() != state || it == state->actors.end() ||
+            it->second != actor.actor_generation_)
+            throw std::logic_error("stale or foreign actor ticket");
+        return {actor.id_, actor.actor_generation_};
     }
 
-    void begin_shutdown(const IsolateHandle& handle) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto state = checked(handle);
-        if (state->phase != IsolatePhase::Running &&
-            state->phase != IsolatePhase::Created)
-            throw std::logic_error("shutdown already started");
-        state->phase = IsolatePhase::Quiescing;
+    static void check_actor_allocation(
+            const std::shared_ptr<IsolateVM>& state,
+            DurableLockQueues::ActorKey actor, const ActorAllocation& ref) {
+        if (ref.state_.lock() != state ||
+            ref.isolate_generation_ != state->generation ||
+            ref.actor_id_ != actor.id || ref.actor_generation_ != actor.generation ||
+            ref.size_ == 0)
+            throw std::logic_error("stale or foreign actor arena allocation");
+        auto arena = state->actor_arenas.find(actor.id);
+        if (arena == state->actor_arenas.end() ||
+            arena->second->generation() != actor.generation ||
+            ref.offset_ < ActorArena::kScalarPrefix ||
+            ref.offset_ > arena->second->used_bytes() ||
+            ref.size_ > arena->second->used_bytes() - ref.offset_)
+            throw std::logic_error("actor arena allocation out of range");
     }
 
-    void complete_shutdown(const IsolateHandle& handle) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto state = checked(handle);
-        if (state->phase != IsolatePhase::Quiescing || !state->actors.empty() ||
-            state->active_guest_calls != 0)
-            throw std::logic_error("actor or guest invocation still active");
-        state->phase = IsolatePhase::Stopped;
-    }
-
-    void destroy(const IsolateHandle& handle) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto state = checked(handle);
-        if (state->phase != IsolatePhase::Stopped)
-            throw std::logic_error("isolate must stop before destruction");
-        // Best-effort zeroing, not a guarantee of secure secret erasure.
-        std::fill(state->heap.begin(), state->heap.end(), 0);
-        state->guest_globals.fill(0);
-        isolates_.erase(state->config.tenant_id);
-        admitted_heap_bytes_ -= state->config.heap_limit_bytes;
-    }
-
-    IsolateSnapshot snapshot(const IsolateHandle& handle) const {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto state = checked(handle);
-        return {state->config.tenant_id, state->generation, state->phase,
-                static_cast<std::uint32_t>(state->heap.size()),
-                state->actors.size(), state->active_guest_calls};
-    }
-
-private:
     struct GuestCall final {
         OresVM* vm;
         std::shared_ptr<IsolateVM> state;
         std::uint64_t generation;
+        std::optional<DurableLockQueues::ActorKey> actor;
     };
 
     static int guest_load_i64(void* raw, std::uint32_t slot, std::int64_t* out) noexcept {
@@ -335,7 +593,18 @@ private:
             (state->phase != IsolatePhase::Running &&
              state->phase != IsolatePhase::Quiescing) ||
             state->active_guest_calls == 0) return 0;
-        *out = state->guest_globals[slot];
+        if (call->actor) {
+            const auto actor = *call->actor;
+            const auto current = state->actors.find(actor.id);
+            const auto arena = state->actor_arenas.find(actor.id);
+            if (current == state->actors.end() ||
+                current->second != actor.generation ||
+                arena == state->actor_arenas.end() ||
+                arena->second->generation() != actor.generation) return 0;
+            *out = arena->second->load_scalar(slot);
+        } else {
+            *out = state->guest_globals[slot];
+        }
         return 1;
     }
 
@@ -348,7 +617,18 @@ private:
             (state->phase != IsolatePhase::Running &&
              state->phase != IsolatePhase::Quiescing) ||
             state->active_guest_calls == 0) return 0;
-        state->guest_globals[slot] = value;
+        if (call->actor) {
+            const auto actor = *call->actor;
+            const auto current = state->actors.find(actor.id);
+            const auto arena = state->actor_arenas.find(actor.id);
+            if (current == state->actors.end() ||
+                current->second != actor.generation ||
+                arena == state->actor_arenas.end() ||
+                arena->second->generation() != actor.generation) return 0;
+            arena->second->store_scalar(slot, value);
+        } else {
+            state->guest_globals[slot] = value;
+        }
         return 1;
     }
 
@@ -372,6 +652,7 @@ private:
     mutable std::mutex mutex_;
     const OresVmLimits limits_;
     std::uint64_t admitted_heap_bytes_ = 0;
+    std::uint64_t admitted_actor_arena_bytes_ = 0;
     std::size_t pinned_guest_calls_ = 0;
     std::unordered_map<std::string, std::shared_ptr<IsolateVM>> isolates_;
     std::uint64_t next_generation_ = 1;
