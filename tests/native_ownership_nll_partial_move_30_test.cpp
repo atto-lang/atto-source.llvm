@@ -12,8 +12,9 @@ using K = Operation::Kind;
 
 namespace {
 Operation op(K kind, const char* place = "x",
-             std::optional<std::uint64_t> id = std::nullopt) {
-    return {kind, place, id};
+             std::optional<std::uint64_t> id = std::nullopt,
+             std::optional<std::uint64_t> write = std::nullopt) {
+    return {kind, place, id, write};
 }
 Graph single(std::vector<Operation> operations) {
     Graph g;
@@ -48,32 +49,32 @@ int main() {
   try {
     // 1..10: exactly-one field reinitialization cannot resurrect an aggregate
     // when another field remains moved, or a join has MaybeMoved state.
-    needs((verify(single({op(K::Move),op(K::Reinitialize),op(K::Read)})),true),
+    needs((verify(single({op(K::Move),op(K::Reinitialize,"x",std::nullopt,101),op(K::Read)})),true),
         "moved scalar explicitly reinitialized",count);
-    needs(rejects([]{ verify(single({op(K::Reinitialize)})); }),
+    needs(rejects([]{ verify(single({op(K::Reinitialize,"x",std::nullopt,102)})); }),
         "no reinit of live owner",count);
-    needs(rejects([]{ verify(single({op(K::Move),op(K::Reinitialize),
-                                    op(K::Reinitialize)})); }),
+    needs(rejects([]{ verify(single({op(K::Move),op(K::Reinitialize,"x",std::nullopt,103),
+                                    op(K::Reinitialize,"x",std::nullopt,104)})); }),
         "double reinitialization denied",count);
     needs(rejects([]{ verify(single({op(K::Move),op(K::Read)})); }),
         "moved owner remains unreadable",count);
-    needs((verify(fields({op(K::Move,"p.a"),op(K::Reinitialize,"p.a"),
+    needs((verify(fields({op(K::Move,"p.a"),op(K::Reinitialize,"p.a",std::nullopt,105),
                           op(K::ReadObject,"p")})),true),
         "repaired field restores whole-object read",count);
     needs(rejects([]{ verify(fields({op(K::Move,"p.a"),op(K::ReadObject,"p")})); }),
         "partially moved object cannot be read",count);
     needs((verify(fields({op(K::Move,"p.a"),op(K::Read,"p.b")})),true),
         "independent field remains readable",count);
-    needs(rejects([]{ verify(fields({op(K::Reinitialize,"p.b")})); }),
+    needs(rejects([]{ verify(fields({op(K::Reinitialize,"p.b",std::nullopt,106)})); }),
         "cannot overwrite live sibling",count);
     needs(rejects([]{
         Graph g = single({});
         g.blocks = {{{},{1,2}},{{op(K::Move)},{3}},{{},{3}},
-                    {{op(K::Reinitialize)},{}}};
+                    {{op(K::Reinitialize,"x",std::nullopt,107)},{}}};
         verify(g);
     }),"maybe-moved join cannot reinitialize",count);
     needs(rejects([]{ verify(single({
-        op(K::BorrowShared,"x",11),op(K::Move),op(K::Reinitialize),
+        op(K::BorrowShared,"x",11),op(K::Move),op(K::Reinitialize,"x",std::nullopt,108),
         op(K::ReleaseShared,"x",11)})); }),
         "active loan blocks field move/reinit",count);
 
@@ -115,9 +116,9 @@ int main() {
         "last shared use inserts exactly one release",count);
     needs((lower_explicit_last_use_evidence_v1(single({
         op(K::BorrowExclusive,"x",12),op(K::UseExclusiveLoan,"x",12),
-        op(K::Read)}),{{12,"x",K::BorrowExclusive,0,1}})
+        op(K::Move)}),{{12,"x",K::BorrowExclusive,0,1}})
         .blocks[0].operations.size() == 4),
-        "exclusive last use inserts release before owner read",count);
+        "exclusive last use inserts release before owned move",count);
     needs(rejects([&]{ lower_explicit_last_use_evidence_v1(
         single(sharedOps),{}); }), "missing complete borrow proof denied",count);
     needs(rejects([&]{ lower_explicit_last_use_evidence_v1(
@@ -156,9 +157,9 @@ int main() {
         "hidden post-last-use before suspension denied",count);
     needs((lower_explicit_last_use_evidence_v1(single({
         op(K::BorrowShared,"x",11),op(K::UseSharedLoan,"x",11),
-        op(K::Suspend),op(K::Read)}),
+        op(K::Suspend),op(K::Move)}),
         {{11,"x",K::BorrowShared,0,1}}).blocks[0].operations.size() == 5),
-        "proven release precedes safe suspension",count);
+        "proven release precedes suspension and owner move",count);
     if (count != 30) return 50;
     std::cout << "PASS 30/30 moved-field and explicit-loan-use CFG contracts "
                  "(HOST_CPP17_ONLY; NLL LOWERING NOT INTEGRATED)\n";

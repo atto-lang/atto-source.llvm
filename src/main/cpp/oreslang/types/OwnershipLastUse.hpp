@@ -80,11 +80,21 @@ inline Graph lower_explicit_last_use_evidence_v1(
                 violation(proof.place, "loan used after claimed last use");
         }
     }
-    // Reject explicit unproven loan uses or implicit read/call escape
-    // assumptions. Every use marker must bind a claimed loan, with a
-    // real borrow strictly earlier in the same block.
+    // A syntactic owner read after an annotated borrow might actually be
+    // an access through the borrowed view. Until typed SSA classifies every
+    // read/call argument by LoanId, fail closed on ANY unclassified read
+    // occurring after a tracked borrow. This intentionally also rejects
+    // safe independent/owner reads: precision needs a future compiler proof.
+    // Move/Drop are separately validated against active loans by verify().
+    std::size_t earliest_borrow = operations.size();
+    for (const auto& item : expected)
+        if (item.second.borrow_site < earliest_borrow)
+            earliest_borrow = item.second.borrow_site;
     for (std::size_t i = 0; i < operations.size(); ++i) {
         const auto& op = operations[i];
+        if (i > earliest_borrow && (op.kind == Operation::Kind::Read ||
+                op.kind == Operation::Kind::ReadObject))
+            violation(op.place, "unclassified read after borrow requires typed SSA use proof");
         if (op.kind != Operation::Kind::UseSharedLoan &&
                 op.kind != Operation::Kind::UseExclusiveLoan) continue;
         if (!op.loan_id || !expected.count(*op.loan_id) ||
@@ -111,6 +121,57 @@ inline Graph lower_explicit_last_use_evidence_v1(
     // powerset/loan verifier on every emitted operation and CFG exit.
     verify(lowered);
     return lowered;
+}
+
+// Derive (do not accept) final-use offsets from a fully annotated,
+// straight-line compiler operation stream. Every borrowed read must be an
+// explicit Use*Loan operation with a typed lexical loan ID; opaque Read
+// operations are already rejected by the underlying adapter. The compiler
+// still has to prove its source-to-IR operation stream is complete, so this
+// helper is NOT integrated into guest lowering or an SSA soundness claim.
+inline Graph lower_closed_world_loan_tokens_v1(const Graph& graph) {
+    if (graph.blocks.size() != 1 || !graph.blocks[0].successors.empty())
+        throw std::runtime_error(
+            "ownership violation: closed-world loan stream requires one straight-line block");
+    const auto& operations = graph.blocks[0].operations;
+    if (operations.size() > 4096)
+        throw std::runtime_error(
+            "ownership violation: closed-world loan stream exceeds site bound");
+
+    std::map<std::uint64_t, ProvenLastUse> loans;
+    std::set<std::uint64_t> used;
+    for (std::size_t index = 0; index < operations.size(); ++index) {
+        const auto& op = operations[index];
+        if (op.kind == Operation::Kind::BorrowShared ||
+                op.kind == Operation::Kind::BorrowExclusive) {
+            if (!op.loan_id || !*op.loan_id ||
+                    !loans.emplace(*op.loan_id, ProvenLastUse{
+                        *op.loan_id, op.place, op.kind, index, index}).second)
+                violation(op.place, "duplicate or unminted closed-world loan identity");
+        } else if (op.kind == Operation::Kind::UseSharedLoan ||
+                   op.kind == Operation::Kind::UseExclusiveLoan) {
+            if (!op.loan_id || !*op.loan_id)
+                violation(op.place, "anonymous closed-world loan use");
+            auto found = loans.find(*op.loan_id);
+            if (found == loans.end() || found->second.place != op.place ||
+                    found->second.borrow_site >= index ||
+                    ((found->second.borrow_kind == Operation::Kind::BorrowShared) !=
+                     (op.kind == Operation::Kind::UseSharedLoan)))
+                violation(op.place, "unmatched closed-world loan use");
+            found->second.final_use_site = index;
+            used.insert(*op.loan_id);
+        } else if (op.kind == Operation::Kind::ReleaseShared ||
+                   op.kind == Operation::Kind::ReleaseExclusive) {
+            violation(op.place, "closed-world loan stream cannot mix manual releases");
+        }
+    }
+    std::vector<ProvenLastUse> proofs;
+    for (const auto& item : loans) {
+        if (!used.count(item.first))
+            violation(item.second.place, "closed-world loan has no annotated use");
+        proofs.push_back(item.second);
+    }
+    return lower_explicit_last_use_evidence_v1(graph, proofs);
 }
 
 } // namespace oreslang::ownership
