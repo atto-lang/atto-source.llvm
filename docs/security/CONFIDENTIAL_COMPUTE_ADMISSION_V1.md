@@ -46,6 +46,20 @@ No attestation verifier, hardware driver, or secret-release service is
 implemented in this change. See `docs/TENANT_VM_NAMING_V1.md` for the
 separate, still-unverified shared-process native TenantVM target.
 
+## Portable preflight and scope
+
+The staged `ConfidentialAttestationPreflight.hpp` rejects stale/replayed/
+mismatched metadata and has no vendor quote verifier or key-release API.
+Linux trusted hosts may mint 32-byte challenges through `getrandom`; on
+other platforms the OS challenge helper fails closed. The preflight's
+`UnverifiedClaimsMatch` result **does not authorize** a protected workload.
+
+The source-free vectors are staged at
+[atto-platform-conformance #543](https://github.com/atto-lang/atto-platform-conformance/pull/543);
+the normative contract at
+[atto-spec #193](https://github.com/atto-lang/atto-spec/pull/193); target
+constraints at [atto-target-profiles #25](https://github.com/atto-lang/atto-target-profiles/pull/25).
+
 ## Regression
 
 ```sh
