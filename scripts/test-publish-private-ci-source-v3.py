@@ -77,6 +77,8 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         self.assertEqual(v3.SOURCE_REPO, "atto-lang/atto-source.llvm")
         self.assertEqual(v3.SOURCE_REPO_ID, 1448700962)
         with (
+            patch.object(v3, "require_atomic_ref_rollback",
+                         side_effect=REAL_PRODUCTION_ROLLBACK_GUARD),
             patch.object(v3, "gh_api") as github_api,
             patch.object(v3, "run_bounded_gh") as command,
         ):
@@ -89,6 +91,28 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 )
             github_api.assert_not_called()
             command.assert_not_called()
+
+    def test_migrated_source_pr_requires_exact_atto_head_repo(self):
+        sha = "e" * 40
+        base = {
+            "number": 834,
+            "state": "open",
+            "head": {"sha": sha, "repo": {"full_name": v3.SOURCE_REPO}},
+            "base": {"ref": "main"},
+        }
+        route = f"repos/{v3.SOURCE_REPO}/pulls/834"
+        with patch.object(v3, "gh_api", return_value=base) as github_api:
+            self.assertEqual(v3.verify_source_pr(834, sha), 1448700962)
+            github_api.assert_called_once_with(route)
+        forged = dict(base)
+        forged["head"] = {
+            "sha": sha,
+            "repo": {"full_name": "ores-truffle-oreslang/oreslang-source.llvm"},
+        }
+        with patch.object(v3, "gh_api", return_value=forged) as github_api:
+            with self.assertRaisesRegex(v3.Denied, "not exact open PR head"):
+                v3.verify_source_pr(834, sha)
+            github_api.assert_called_once_with(route)
 
     def test_2048_blob_capacity_acceptance_and_2049_pre_fetch_denial(self):
         # Entirely synthetic, source-free tree metadata and identical test
