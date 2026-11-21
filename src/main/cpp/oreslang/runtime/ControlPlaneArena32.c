@@ -27,6 +27,29 @@ struct AttoControlPlaneArena32 {
 };
 static atomic_uint_fast64_t next_issuer = ATOMIC_VAR_INIT(0);
 
+/* An issuer is globally unique for this process. Reserve monotonically
+ * within UINT32_MAX; never wrap the 64-bit reservation counter back to an
+ * earlier 32-bit owner ID, even after permanently exhausting this domain. */
+static int claim_issuer(atomic_uint_fast64_t *counter, uint32_t *out) {
+    if (!counter || !out) return 0;
+    uint_fast64_t seen = atomic_load_explicit(counter, memory_order_relaxed);
+    for (;;) {
+        if (seen >= UINT32_MAX) { *out = 0; return 0; }
+        if (atomic_compare_exchange_weak_explicit(counter, &seen, seen + 1u,
+                                                  memory_order_relaxed, memory_order_relaxed)) {
+            *out = (uint32_t)(seen + 1u);
+            return 1;
+        }
+    }
+}
+#ifdef ATTO_CONTROL32_TESTING
+/* Test a synthetic counter, not the real process-wide issuer sequence. */
+int atto_control32_test_claim_issuer(uint_fast64_t initial, uint32_t *out) {
+    atomic_uint_fast64_t sample = ATOMIC_VAR_INIT(initial);
+    return claim_issuer(&sample, out);
+}
+#endif
+
 /* Volatile stores prevent dead-store removal of native control payload scrubs. */
 static void scrub(void *mem, size_t length) {
     volatile uint8_t *bytes = (volatile uint8_t *)mem;
@@ -66,11 +89,11 @@ static uint32_t get_u32_le(const uint8_t *src) {
 }
 AttoControlPlaneArena32 *atto_control32_new(uint32_t capacity) {
     if (!capacity || capacity > SLOT_MASK) return NULL;
-    uint_fast64_t id = atomic_fetch_add_explicit(&next_issuer, 1, memory_order_relaxed) + 1;
-    if (id > UINT32_MAX || id == 0) return NULL;
+    uint32_t id = 0;
+    if (!claim_issuer(&next_issuer, &id)) return NULL;
     AttoControlPlaneArena32 *a = calloc(1, sizeof(*a));
     if (!a) return NULL;
-    a->issuer = (uint32_t)id;
+    a->issuer = id;
     a->capacity = capacity;
     if (pthread_mutex_init(&a->mutex, NULL)) { free(a); return NULL; }
     a->records = calloc((size_t)capacity, ATTO_CONTROL_RECORD_BYTES);
