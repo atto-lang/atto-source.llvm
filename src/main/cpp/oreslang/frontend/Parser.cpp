@@ -2898,9 +2898,15 @@ private:
                         // payload. This historical closed int throw/catch CFG
                         // cannot be reused without checked Error identity and
                         // unwind semantics; reject before native IR emission.
-                        fail("E_THROW_BANG_ERROR_TYPE_UNVERIFIED: throw! requires "
-                             "Error-subclass payload and verified guest unwind; "
-                             "legacy scalar throw/catch is not equivalent");
+                        // fail(...) substitutes a generic exceptional-control
+                        // diagnostic when token_ == "throw!". Preserve this
+                        // typed-boundary failure code for compiler-backed
+                        // negative admission tests and frontend parity.
+                        throw std::runtime_error(
+                            "E_THROW_BANG_ERROR_TYPE_UNVERIFIED: throw! requires "
+                            "Error-subclass payload and verified guest unwind; "
+                            "legacy scalar throw/catch is not equivalent at byte "
+                            + std::to_string(token_.offset));
                     }
                     require("throw");
                     value.caught_throw_value = expression();
