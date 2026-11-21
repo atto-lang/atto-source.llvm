@@ -5,7 +5,7 @@
 #include <string.h>
 #define CHECK(condition) do { if (!(condition)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #condition); exit(1); } } while (0)
 int main(void) {
-    CHECK(strcmp(ATTO_CONTROL_REF32_ABI, "control_generation20_slot12_v1") == 0);
+    CHECK(strcmp(ATTO_CONTROL_REF32_ABI, "control_generation12_slot20_v1") == 0);
     CHECK(ATTO_CONTROL_RECORD_BYTES == 32u);
     AttoControlPlaneArena32 *a = atto_control32_new(2), *b = atto_control32_new(2);
     CHECK(a && b);
