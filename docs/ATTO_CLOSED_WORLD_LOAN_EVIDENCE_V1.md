@@ -34,3 +34,26 @@ OwnershipMirEvidence.hpp adds an opt-in, one-block, caller-supplied typed-MIR in
 Every Reinitialize.write_id must separately match exactly one typed-MIR field-write claim and one native-store claim with identical place and stored SSA value; phi-only, missing, duplicated and misdirected store claims fail closed. The adapter calls the real CFG verifier, but two matching caller-supplied streams can still omit real uses or fabricate emission. Therefore it **always returns verified=false and compiler_backed=false** and is not invoked by guest lowering.
 
 30 additional native C++ cases are authored, registered as the eleventh focused CTest, and require an exact-head CTest execution with no failures or skips. The workflow also repairs an inherited malformed grep inventory command. All 30 tests are AUTHORED, NOT EXECUTED until actual source-org runner steps occur. Neither this bridge nor a store-shaped record proves emitted LLVM IR or native AttoLang guest behavior.
+
+
+## 2026-11-07 opaque-effect typed-MIR audit hardening
+
+The stage-zero typed-MIR checker previously accepted unclassified Read,
+ReadObject and Suspend effects after a borrow, allowing both caller-supplied
+inventories to agree while jointly omitting an actual borrowed use. It now
+rejects such effects after any lexical or live entry loan, including after
+explicit release, until SSA provenance and continuation ownership are proven.
+Reads and suspensions before any loan remain unverified source candidates.
+One-block PhiEdge uses are rejected because no predecessor edge is tracked.
+Entry map size is bounded at 4096 and place names at 256 characters for
+the CFG and all use/write/store candidate inventories.
+
+Eighteen additional positive/negative cases are authored, including entry
+loan evasion and bounded metadata. An existing phi-positive case becomes a
+negative case. The exact-head source-owned workflow registers 12 focused
+native CTests and requires the exact 12-name JUnit set without failures,
+errors, skips or duplicate test names.
+
+All new cases are AUTHORING EVIDENCE ONLY / NOT_EXECUTED until a real
+source-organization runner executes nonzero steps. The adapter remains
+verified=false and compiler_backed=false; no guest lowering is enabled.

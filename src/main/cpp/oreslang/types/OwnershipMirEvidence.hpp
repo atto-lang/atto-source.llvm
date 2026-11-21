@@ -63,10 +63,13 @@ inline bool bounded_mir_class(MirUseClass kind) {
         case MirUseClass::Load:
         case MirUseClass::CallArgument:
         case MirUseClass::ClosureCapture:
-        case MirUseClass::PhiEdge:
         case MirUseClass::ReturnValue:
         case MirUseClass::SendValue:
             return true;
+        case MirUseClass::PhiEdge:
+            // One straight-line CFG block cannot prove a predecessor
+            // incoming-value use. Requires a future multi-block SSA pass.
+            return false;
         case MirUseClass::ExceptionUnwind:
         case MirUseClass::Cancellation:
         case MirUseClass::Suspension:
@@ -89,6 +92,46 @@ inline MirReceiptCandidate inspect_typed_mir_receipt_candidate_v1(
             lowered_loan_edges.size() > 4096 || mir_writes.size() > 4096 ||
             emitted_store_claims.size() > 4096)
         throw std::runtime_error("ownership violation: typed-MIR receipt exceeds bound");
+
+    // A caller can omit a syntactic read from BOTH supplied inventories.
+    // This is the same conservative closed-world rule as OwnershipLastUse:
+    // after any lexical borrow, ordinary reads, whole-object reads and
+    // suspension are opaque until the compiler proves their SSA origins.
+    // This intentionally rejects some safe independent reads.
+    if (graph.entry.size() > 4096)
+        throw std::runtime_error("ownership violation: typed-MIR entry exceeds bound");
+    for (const auto& item : graph.entry)
+        if (item.first.size() > 256)
+            violation(item.first, "typed-MIR entry place exceeds bound");
+    // Entry loans represent existing borrows even when there is no
+    // BorrowShared/BorrowExclusive operation in this local block.
+    bool seen_borrow = false;
+    for (const auto& item : graph.entry)
+        if (item.second.shared_loans || item.second.exclusive_loan)
+            seen_borrow = true;
+    for (const auto& op : ops) {
+        if (op.place.size() > 256)
+            violation(op.place, "typed-MIR operation place exceeds bound");
+        if (op.kind == Operation::Kind::BorrowShared ||
+                op.kind == Operation::Kind::BorrowExclusive)
+            seen_borrow = true;
+        if (seen_borrow && (op.kind == Operation::Kind::Read ||
+                op.kind == Operation::Kind::ReadObject ||
+                op.kind == Operation::Kind::Suspend))
+            violation(op.place, "opaque effect after borrow requires authenticated SSA coverage");
+    }
+    for (const auto& use : ssa_use_inventory)
+        if (use.place.size() > 256)
+            violation(use.place, "typed-MIR SSA use place exceeds bound");
+    for (const auto& edge : lowered_loan_edges)
+        if (edge.place.size() > 256)
+            violation(edge.place, "typed-MIR lowered edge place exceeds bound");
+    for (const auto& write : mir_writes)
+        if (write.place.size() > 256)
+            violation(write.place, "typed-MIR field-write place exceeds bound");
+    for (const auto& store : emitted_store_claims)
+        if (store.place.size() > 256)
+            violation(store.place, "typed-MIR store place exceeds bound");
 
     // Real CFG ownership checks are necessary but not sufficient for SSA proof.
     verify(graph);

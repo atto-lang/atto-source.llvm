@@ -70,8 +70,9 @@ int main() {
                   .classified_uses == 1,"call argument use",n);
         check(inspect(loan,{u(UC::ClosureCapture)},{u(UC::ClosureCapture)})
                   .classified_uses == 1,"captured use",n);
-        check(inspect(loan,{u(UC::PhiEdge)},{u(UC::PhiEdge)})
-                  .classified_uses == 1,"phi use",n);
+        check(denied([&] {
+            inspect(loan,{u(UC::PhiEdge)},{u(UC::PhiEdge)});
+        }),"single-block phi edge cannot claim SSA provenance",n);
         check(inspect(write,{}, {},{w()},{s()}).matched_field_stores == 1,
               "store candidate nonpromoting",n);
         check(denied([&] {inspect(loan);}),"missing SSA use",n);
