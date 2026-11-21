@@ -50,19 +50,6 @@ struct FunctionEffects {
         return valid() && inferred.valid() &&
                (bits & inferred.bits) == inferred.bits;
     }
-    // A read-only sealed actor-state loan forbids state writes. Any live
-    // state loan forbids suspension, blocking and unverified foreign effects.
-    // This predicate checks an effect upper bound, NOT actor-state authority;
-    // the caller must independently prove an authenticated live loan.
-    constexpr bool admissible_with_state_loan(bool read_only) const noexcept {
-        const auto forbidden =
-            static_cast<std::uint32_t>(FunctionEffect::Suspend) |
-            static_cast<std::uint32_t>(FunctionEffect::Block) |
-            static_cast<std::uint32_t>(FunctionEffect::Ffi) |
-            (read_only ? static_cast<std::uint32_t>(FunctionEffect::StateWrite) : 0u);
-        return valid() && (bits & forbidden) == 0;
-    }
-
     constexpr FunctionEffects united(FunctionEffects rhs) const {
         return {bits | rhs.bits};
     }

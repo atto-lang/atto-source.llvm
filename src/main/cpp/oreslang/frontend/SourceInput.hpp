@@ -202,8 +202,6 @@ inline void require_valid_source_utf8(std::string_view source) {
     for (std::size_t i = 0; i < source.size();) {
         const auto lead = static_cast<unsigned char>(source[i]);
         if (lead == 0) throw std::runtime_error("native source contains NUL byte");
-        if (lead == 0x1b || lead == 0x7f)
-            throw std::runtime_error("native source contains terminal control byte");
         if (lead <= 0x7f) { ++i; continue; }
 
         std::size_t continuation_count = 0;
@@ -232,19 +230,6 @@ inline void require_valid_source_utf8(std::string_view source) {
                 throw std::runtime_error("native source is not valid UTF-8");
             }
         }
-        // Trojan Source: reject bidi marks/overrides/isolates even in comments.
-        // The UTF-8 sequence is already validated above.
-        if ((lead == 0xd8 && static_cast<unsigned char>(source[i + 1]) == 0x9c) ||
-            (lead == 0xe2 &&
-              ((static_cast<unsigned char>(source[i + 1]) == 0x80 &&
-                 (static_cast<unsigned char>(source[i + 2]) == 0x8e ||
-                  static_cast<unsigned char>(source[i + 2]) == 0x8f ||
-                  (static_cast<unsigned char>(source[i + 2]) >= 0xaa &&
-                   static_cast<unsigned char>(source[i + 2]) <= 0xae))) ||
-               (static_cast<unsigned char>(source[i + 1]) == 0x81 &&
-                static_cast<unsigned char>(source[i + 2]) >= 0xa6 &&
-                static_cast<unsigned char>(source[i + 2]) <= 0xa9))))
-            throw std::runtime_error("source contains bidirectional Unicode control");
         i += continuation_count + 1;
     }
 }

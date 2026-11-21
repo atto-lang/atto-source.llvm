@@ -1,0 +1,67 @@
+name: LLVM real compiled else-free guard positive and reject-before-IR E2E
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/frontend/Parser.hpp'
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
+      - 'ci/verify-guard-overlay.py'
+      - 'tests/guard_native_e2e.py'
+      - 'tests/guard_artifact_evidence.py'
+      - 'tests/test_guard_artifact_evidence.py'
+      - '.github/workflows/guard-native-e2e.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compiled-guard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      ATTO_GUARD_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      LLVM_DIR: /usr/lib/llvm-18/lib/cmake/llvm
+    steps:
+      - name: Checkout exact review HEAD with original ancestor; no credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Prove negative-compiler artifact gate fails closed (host-only)
+        run: python3 tests/test_guard_artifact_evidence.py -v
+      - name: Verify 50 original Git blobs and seven reviewed compiler/runtime overlays
+        run: python3 ci/verify-guard-overlay.py
+      - name: Install native LLVM18/Clang18 toolchain
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq llvm-18-dev clang-18 lld-18 libzstd-dev wabt cmake file
+          # Preserve the parent LLVM tenant harness' explicit wasm32 tools.
+          sudo ln -sf /usr/bin/clang-18 /usr/local/bin/clang
+          sudo ln -sf /usr/bin/clang++-18 /usr/local/bin/clang++
+          sudo ln -sf /usr/bin/wasm-ld-18 /usr/local/bin/wasm-ld
+          command -v clang clang++ wasm-ld wasm2c wat2wasm
+          clang-18 --version
+          test -d "$LLVM_DIR"
+      - name: Build native LLVM compiler from exact reviewed source
+        run: |
+          set -euo pipefail
+          cmake -S . -B build/guard-native -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$LLVM_DIR"
+          cmake --build build/guard-native --target oreslang-llvmc -j2
+          test -x build/guard-native/oreslang-llvmc
+          file build/guard-native/oreslang-llvmc
+          sha256sum build/guard-native/oreslang-llvmc
+      - name: Execute real source-compiled native guest and negative cases
+        run: |
+          set -euo pipefail
+          python3 tests/guard_native_e2e.py --compiler build/guard-native/oreslang-llvmc --clang /usr/bin/clang-18
+      - name: Reexecute original compiler-backed Wasm32 tenant actor guests and admission negatives
+        env:
+          ATTO_E2E_EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          ATTO_BUILD_JOBS: '2'
+        run: bash tools/tenant-vm/verify-atto-e2e.sh
+      - name: Explicit evidence boundary
+        run: |
+          echo 'ATTO_GUARD_GUEST_SCOPE=RESTRICTED_LLVM_SCALAR_GUARD_AND_EXISTING_TENANT_WASM32_REGRESSIONS'
+          echo 'ATTO_GUARD_AOT_CERTIFICATION=false'
+          echo 'ATTO_GUARD_GRAAL_DOTNET_WASM_FORGE_PARITY=NOT_EXECUTED'
