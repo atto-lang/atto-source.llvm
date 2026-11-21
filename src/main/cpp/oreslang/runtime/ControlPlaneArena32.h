@@ -22,4 +22,7 @@ int atto_control32_read_ref(AttoControlPlaneArena32 *arena, uint64_t owner, uint
 void atto_control32_retire(AttoControlPlaneArena32 *arena);
 /* Destruction requires external quiescence: no outstanding callers or pins. */
 void atto_control32_destroy(AttoControlPlaneArena32 *arena);
+#ifdef ATTO_CONTROL32_TESTING
+int atto_control32_test_claim_issuer(uint_fast64_t initial, uint32_t *out);
+#endif
 #endif
