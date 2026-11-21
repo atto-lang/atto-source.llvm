@@ -574,6 +574,23 @@ if(BUILD_TESTING)
         PROPERTIES TIMEOUT 30)
     find_package(OpenSSL QUIET COMPONENTS Crypto)
     if(OpenSSL_FOUND)
+        # Native half of the trusted LLVM ↔ pooled-WASM DATA wire gate.
+        # This executable uses the existing native MessagePackWireV2 encoder
+        # and runs independently of the Node guest host. No source actor
+        # interop or supervisor CONTROL authority is claimed here.
+        add_executable(oreslang-native-wasm-i64-wire-peer
+            tests/native_wasm_i64_wire_peer.cpp)
+        target_include_directories(oreslang-native-wasm-i64-wire-peer PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-native-wasm-i64-wire-peer PRIVATE OpenSSL::Crypto)
+        target_compile_features(oreslang-native-wasm-i64-wire-peer PRIVATE cxx_std_17)
+        target_compile_options(oreslang-native-wasm-i64-wire-peer PRIVATE
+            -Wall -Wextra -Wpedantic -Werror)
+        add_test(NAME native_wasm_i64_wire_v2_peer
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_wasm_i64_wire_peer_test.py"
+                --binary "$<TARGET_FILE:oreslang-native-wasm-i64-wire-peer>")
+        set_tests_properties(native_wasm_i64_wire_v2_peer PROPERTIES TIMEOUT 30)
         add_executable(oreslang-messagepack-wire-v2-test
             tests/messagepack_wire_v2_test.cpp)
         target_include_directories(oreslang-messagepack-wire-v2-test PRIVATE
