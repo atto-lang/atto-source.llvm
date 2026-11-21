@@ -1,5 +1,7 @@
 #pragma once
 
+#include "oreslang/runtime/ActorMailboxCompletion.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -31,10 +33,12 @@ class BoundedActorPort final {
         std::uint64_t id;
         std::size_t bytes;
         std::unique_ptr<T> payload;
+        std::uint64_t sequence;
     };
     struct State {
-        explicit State(std::size_t frames, std::size_t bytes)
-            : max_frames(frames), max_bytes(bytes) {
+        explicit State(std::size_t frames, std::size_t bytes,
+                       std::shared_ptr<ActorMailboxCompletion> ledger)
+            : max_frames(frames), max_bytes(bytes), ledger(std::move(ledger)) {
             if (!frames || !bytes) throw std::invalid_argument("positive port limits required");
         }
         std::mutex mutex;
@@ -45,6 +49,7 @@ class BoundedActorPort final {
         // Close may seal new work but must not reclaim a preparing message.
         std::size_t pending_prepares = 0;
         std::uint64_t next_id = 1;
+        std::shared_ptr<ActorMailboxCompletion> ledger;
         bool closed = false;
     };
 
@@ -66,6 +71,7 @@ public:
             return *payload_;
         }
         std::uint64_t id() const noexcept { return id_; }
+        std::uint64_t sequence() const noexcept { return sequence_; }
         std::size_t charged_bytes() const noexcept { return bytes_; }
 
         /** Release credit ONLY after all downstream processing and device
@@ -92,16 +98,19 @@ public:
         friend class BoundedActorPort<T>;
         Delivery(std::shared_ptr<State> state, Envelope envelope)
             : state_(std::move(state)), id_(envelope.id),
-              bytes_(envelope.bytes), payload_(std::move(envelope.payload)) {}
+              bytes_(envelope.bytes), payload_(std::move(envelope.payload)),
+              sequence_(envelope.sequence) {}
         std::shared_ptr<State> state_;
         std::uint64_t id_;
         std::size_t bytes_;
         std::unique_ptr<T> payload_;
         bool acknowledged_ = false;
+        std::uint64_t sequence_ = 0;
     };
 
-    BoundedActorPort(std::size_t max_frames, std::size_t max_bytes)
-        : state_(std::make_shared<State>(max_frames, max_bytes)) {}
+    BoundedActorPort(std::size_t max_frames, std::size_t max_bytes,
+                     std::shared_ptr<ActorMailboxCompletion> ledger = {})
+        : state_(std::make_shared<State>(max_frames, max_bytes, std::move(ledger))) {}
 
     BoundedActorPort(const BoundedActorPort&) = delete;
     BoundedActorPort& operator=(const BoundedActorPort&) = delete;
@@ -121,6 +130,10 @@ public:
             if (state->used_frames >= state->max_frames ||
                 bytes > state->max_bytes - state->used_bytes)
                 return false;
+            // Hold the same window credit through preparation, publication,
+            // queued delivery, and physical ACK. This rejects admission before
+            // moving the caller's T when an earlier receipt stalls the window.
+            if (state->ledger && !state->ledger->reserve_prepare()) return false;
             ++state->used_frames;
             state->used_bytes += bytes;
             ++state->pending_prepares;
@@ -141,11 +154,12 @@ public:
                 --state->pending_prepares;
                 --state->used_frames;
                 state->used_bytes -= bytes;
+                if (state->ledger) state->ledger->cancel_prepare();
             }
         } reservation{state, bytes};
 
         auto owned = std::make_unique<T>(std::move(payload));
-        Envelope frame{0, bytes, std::move(owned)};
+        Envelope frame{0, bytes, std::move(owned), 0};
         {
             std::lock_guard<std::mutex> guard(state->mutex);
             // A concurrently running close() can seal new admissions while
@@ -156,12 +170,77 @@ public:
             frame.id = state->next_id;
             // No user payload destruction can occur under the mutex on
             // allocation failure: the local frame outlives this guard.
-            state->queue.push_back(std::move(frame));
+            if (state->ledger) {
+                state->ledger->publish([&](std::uint64_t sequence) {
+                    frame.sequence = sequence;
+                    state->queue.push_back(std::move(frame));
+                });
+            } else {
+                frame.sequence = frame.id;
+                state->queue.push_back(std::move(frame));
+            }
             ++state->next_id;
             --state->pending_prepares;
             reservation.committed = true;
         }
         return true;
+    }
+
+    /**
+     * Exception-safe exclusive capability admission. A sender holding a
+     * unique_ptr<T> retains it on rejected admission OR queue allocation
+     * failure. Unlike offer(T&&), no T move constructor runs and nothing
+     * owns the underlying kernel/arena capability until after the queue
+     * successfully publishes its preallocated empty envelope.
+     *
+     * This transport helper is NOT proof that the pointer's target is
+     * shareable; caller must validate actor generation/handle rights first.
+     */
+    bool offer_owned(std::unique_ptr<T>& payload, std::size_t bytes) {
+        if (!payload) throw std::invalid_argument("null owned actor payload");
+        if (!bytes) throw std::invalid_argument("actor port frame charge must be positive");
+        const auto state = state_;
+        std::lock_guard<std::mutex> guard(state->mutex);
+        if (state->closed) throw std::logic_error("actor port closed");
+        if (state->next_id == 0 ||
+            state->pending_prepares >
+                std::numeric_limits<std::uint64_t>::max() - state->next_id)
+            throw std::overflow_error("actor frame identity exhausted");
+        if (state->used_frames >= state->max_frames ||
+            bytes > state->max_bytes - state->used_bytes)
+            return false;
+        if (state->ledger && !state->ledger->reserve_prepare()) return false;
+        ++state->used_frames;
+        state->used_bytes += bytes;
+        ++state->pending_prepares;
+
+        try {
+            Envelope frame{state->next_id, bytes, nullptr, 0};
+            if (state->ledger) {
+                state->ledger->publish([&](std::uint64_t sequence) {
+                    frame.sequence = sequence;
+                    state->queue.push_back(std::move(frame));
+                });
+            } else {
+                frame.sequence = frame.id;
+                state->queue.push_back(std::move(frame));
+            }
+            // Non-throwing transfer AFTER queue publication; a receiver
+            // cannot observe the envelope until the port mutex is released.
+            state->queue.back().payload = std::move(payload);
+            ++state->next_id;
+            --state->pending_prepares;
+            return true;
+        } catch (...) {
+            // No T ownership moved on a throwing publication. The empty
+            // envelope is not retained by the strong deque insertion
+            // guarantee for noexcept-movable Envelope.
+            --state->pending_prepares;
+            --state->used_frames;
+            state->used_bytes -= bytes;
+            if (state->ledger) state->ledger->cancel_prepare();
+            throw;
+        }
     }
 
     std::optional<Delivery> try_receive() {
@@ -179,6 +258,15 @@ public:
     std::size_t used_bytes() const {
         std::lock_guard<std::mutex> guard(state_->mutex);
         return state_->used_bytes;
+    }
+
+    // Terminal retirement must not claim it drained this inbox while a
+    // previously admitted producer is still preparing a publish. In
+    // particular, close() seals admission but does NOT cancel in-flight
+    // preparation or prevent the reserved envelope from being committed.
+    std::size_t pending_prepares() const {
+        std::lock_guard<std::mutex> guard(state_->mutex);
+        return state_->pending_prepares;
     }
 
     void close() {
