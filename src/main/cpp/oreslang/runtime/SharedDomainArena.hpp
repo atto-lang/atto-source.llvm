@@ -40,7 +40,18 @@ public:
     static constexpr std::size_t Slots = 16;
     static constexpr std::size_t SlotBytes = 64;
     static constexpr std::size_t Members = 16;
-    struct Grant { std::uint64_t domain, generation; std::size_t member; };
+    class Grant final {
+        friend class SharedDomainArena;
+        std::uint64_t domain_, generation_;
+        std::size_t member_;
+        Grant(std::uint64_t d, std::uint64_t g, std::size_t m)
+            : domain_(d), generation_(g), member_(m) {}
+    public:
+        Grant() = delete;
+        Grant(const Grant&) = default;
+        Grant& operator=(const Grant&) = default;
+        std::uint64_t domain() const noexcept { return domain_; }
+    };
     struct Handle { std::uint64_t domain, generation; std::size_t slot; };
 
     class Lease final {
@@ -168,7 +179,7 @@ public:
         std::unique_lock lock(mutex_, std::try_to_lock);
         if (!lock.owns_lock()) return false;
         validate_grant(grant, 0, 0, false);
-        auto& m = members_[grant.member];
+        auto& m = members_[grant.member_];
         m.active = false;
         m.actor = 0;
         m.incarnation = 0;
@@ -238,10 +249,10 @@ private:
     }
     void validate_grant(Grant grant, std::uint64_t actor, std::uint64_t incarnation, bool writer) const {
         if (closing_.load(std::memory_order_acquire) ||
-            grant.domain != identity_ || grant.member >= Members)
+            grant.domain_ != identity_ || grant.member_ >= Members)
             throw std::logic_error("foreign or retired shared region grant");
-        const auto& m = members_[grant.member];
-        if (!m.active || m.generation != grant.generation || !m.actor ||
+        const auto& m = members_[grant.member_];
+        if (!m.active || m.generation != grant.generation_ || !m.actor ||
             !m.read || (actor != 0 && (m.actor != actor || m.incarnation != incarnation)) || (writer && !m.write))
             throw std::logic_error("stale or insufficient shared region grant");
     }
