@@ -348,21 +348,52 @@ llvm::Value* lower(const Expression& expr,
                 builder.CreateStore(llvm::ConstantInt::get(i64, 0), copied);
                 auto* presence = builder.CreateCall(moves->array_try_get_copy,
                     {selected_region, handle, args[0], copied}, "array.copy.present");
+                // The C ABI only returns 0 (None) or 1 (Some). An invalid
+                // status is corruption/ABI skew, never implicit Some. Check
+                // the tag before using the output or allocating a sum record.
+                auto* function = builder.GetInsertBlock()->getParent();
+                auto* valid_status = llvm::BasicBlock::Create(
+                    builder.getContext(), "array.copy.tag.valid", function);
+                auto* invalid_status = llvm::BasicBlock::Create(
+                    builder.getContext(), "array.copy.tag.invalid", function);
+                builder.CreateCondBr(builder.CreateICmpULE(presence,
+                    llvm::ConstantInt::get(presence->getType(), 1)),
+                    valid_status, invalid_status);
+                builder.SetInsertPoint(invalid_status);
+                builder.CreateCall(llvm::Intrinsic::getDeclaration(
+                    function->getParent(), llvm::Intrinsic::trap));
+                builder.CreateUnreachable();
+                builder.SetInsertPoint(valid_status);
                 // The trusted C ABI leaves copied untouched on None. It was
                 // explicitly initialized, so no uninitialized LLVM load.
                 auto* value = builder.CreateLoad(i64, copied, "array.copy.owned");
                 auto* tag = builder.CreateZExt(
-                    builder.CreateICmpNE(presence,
-                        llvm::ConstantInt::get(presence->getType(), 0)), i64);
+                    builder.CreateICmpEQ(presence,
+                        llvm::ConstantInt::get(presence->getType(), 1)), i64);
                 auto* fields = entry_alloca(builder, i64,
                     llvm::ConstantInt::get(i64, 2), "array.copy.option.fields");
                 builder.CreateStore(tag, fields);
                 builder.CreateStore(value, builder.CreateGEP(i64, fields,
                     llvm::ConstantInt::get(i64, 1)));
-                return builder.CreateCall(moves->record_new,
+                auto* option = builder.CreateCall(moves->record_new,
                     {llvm::ConstantInt::get(i64, moves->record_schemas->at(expr.sum_type)),
                      llvm::ConstantInt::get(i64, 2), fields},
                     "array.copy.option");
+                // NativeRecordRegion rejects allocation on exhaustion and
+                // returns the zero handle. Do not publish that as Option.
+                auto* valid_option = llvm::BasicBlock::Create(
+                    builder.getContext(), "array.copy.option.valid", function);
+                auto* invalid_option = llvm::BasicBlock::Create(
+                    builder.getContext(), "array.copy.option.invalid", function);
+                builder.CreateCondBr(builder.CreateICmpNE(option,
+                    llvm::ConstantInt::get(i64, 0)),
+                    valid_option, invalid_option);
+                builder.SetInsertPoint(invalid_option);
+                builder.CreateCall(llvm::Intrinsic::getDeclaration(
+                    function->getParent(), llvm::Intrinsic::trap));
+                builder.CreateUnreachable();
+                builder.SetInsertPoint(valid_option);
+                return option;
             }
             if (expr.name == "add" && args.size() == 1) {
                 llvm::Value* status = builder.CreateCall(moves->array_add,
