@@ -1,0 +1,9 @@
+define isolated actor Counter as
+    state { count: int = 0; }
+    pub on_message(int count): int {
+        return self.handle_state(critical[write] |s| -> {
+            s.count = s.count + count;
+            return s.count;
+        });
+    }
+end

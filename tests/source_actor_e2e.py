@@ -37,6 +37,17 @@ def expected_prefix_last(name, actor_index, processed):
         "source-isolated-actor-sealed-write-bracket.ores",
     }:
         return sum(range(1, processed + 1))
+    if name == "source-isolated-actor-sealed-write-return-message.ores":
+        return processed
+    if name == "source-isolated-actor-sealed-write-return-constant.ores":
+        return 17
+    if name == "source-isolated-actor-sealed-write-subtract.ores":
+        return 10 - sum(range(1, processed + 1))
+    if name == "source-isolated-actor-sealed-write-multiply.ores":
+        value = 2
+        for n in range(1, processed + 1):
+            value *= n
+        return value
     if name in {
         "source-isolated-actor-sealed-read.ores",
         "source-isolated-actor-sealed-read-bracket.ores",
@@ -97,6 +108,10 @@ def main():
         ("source-isolated-actor-sealed-read.ores", 1, 2, 9),
         ("source-isolated-actor-sealed-write-bracket.ores", 1, 2, 3),
         ("source-isolated-actor-sealed-read-bracket.ores", 1, 2, 9),
+        ("source-isolated-actor-sealed-write-return-message.ores", 1, 2, 2),
+        ("source-isolated-actor-sealed-write-return-constant.ores", 1, 2, 17),
+        ("source-isolated-actor-sealed-write-subtract.ores", 1, 2, 7),
+        ("source-isolated-actor-sealed-write-multiply.ores", 1, 2, 4),
         ("source-actor-send.ores", 1, 2, 3),
         ("source-actor-typed-ref.ores", 1, 2, 3),
         ("source-actor-await-ready.ores", 1, 2, 3),
@@ -123,13 +138,27 @@ def main():
         "source-isolated-actor-sealed-bool-gate-reject.ores":
             "native sealed-state guest v1 supports only int fields",
         "source-isolated-actor-sealed-suspend-reject.ores":
-            "native sealed state callback suspend requires generation-fenced continuation lowering",
+            "native async/channel/select boundary unsupported: suspension-aware borrow checking and cancellation/actor lowering required",
         "source-isolated-actor-sealed-split-critical-reject.ores":
             "sealed handle_state requires contiguous critical-read/write modifier",
         "source-isolated-actor-sealed-bracket-spacing-reject.ores":
             "sealed handle_state requires contiguous critical[read/write] modifier",
         "source-isolated-actor-sealed-bracket-inner-spacing-reject.ores":
             "sealed handle_state requires contiguous critical[read/write] modifier",
+        "source-isolated-actor-sealed-bracket-trailing-spacing-reject.ores":
+            "sealed handle_state requires contiguous critical[read/write] modifier",
+        "source-isolated-actor-sealed-message-shadow-reject.ores":
+            "sealed actor message parameter shadows state field",
+        "source-isolated-actor-sealed-binding-shadow-message-reject.ores":
+            "native sealed state callback binding shadows message or state",
+        "source-isolated-actor-sealed-bracket-read-mutation-reject.ores":
+            "critical-read callback cannot mutate sealed actor state",
+        "source-isolated-actor-sealed-binding-shadow-state-reject.ores":
+            "native sealed state callback binding shadows message or state",
+        "source-isolated-actor-sealed-bracket-unknown-mode-reject.ores":
+            "native sealed handle_state requires read or write mode",
+        "source-isolated-actor-sealed-bracket-uppercase-mode-reject.ores":
+            "native sealed handle_state requires read or write mode",
         "source-isolated-actor-sealed-multi-write-reject.ores":
             "native sealed callback v1 allows one write until atomic multi-field commit lowering",
         "source-isolated-actor-sealed-postcommit-overflow-reject.ores":
@@ -217,13 +246,23 @@ def main():
                 assert "ores_actor_i64_heap_field_read" in guest.stdout, name
                 writes = [line for line in guest.stdout.splitlines()
                           if "call void @ores_actor_i64_heap_field_write(" in line]
-                is_write = name in {
-                    "source-isolated-actor-sealed-write.ores",
-                    "source-isolated-actor-sealed-write-bracket.ores",
+                write_overflow_intrinsics = {
+                    "source-isolated-actor-sealed-write.ores":
+                        "llvm.sadd.with.overflow.i64",
+                    "source-isolated-actor-sealed-write-bracket.ores":
+                        "llvm.sadd.with.overflow.i64",
+                    "source-isolated-actor-sealed-write-return-message.ores":
+                        "llvm.sadd.with.overflow.i64",
+                    "source-isolated-actor-sealed-write-return-constant.ores":
+                        "llvm.sadd.with.overflow.i64",
+                    "source-isolated-actor-sealed-write-subtract.ores":
+                        "llvm.ssub.with.overflow.i64",
+                    "source-isolated-actor-sealed-write-multiply.ores":
+                        "llvm.smul.with.overflow.i64",
                 }
-                if is_write:
+                if name in write_overflow_intrinsics:
                     assert len(writes) == 1, (name, writes)
-                    assert "llvm.sadd.with.overflow.i64" in guest.stdout, name
+                    assert write_overflow_intrinsics[name] in guest.stdout, name
                 else:
                     assert not writes, (name, writes)
             if name not in {

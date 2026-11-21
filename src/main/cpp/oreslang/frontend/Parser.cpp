@@ -258,7 +258,11 @@ public:
         // Admit '@' as a TOKEN only so existing parameter-local @Default guards
         // can issue their specific fail-closed diagnostic instead of a generic
         // unsupported-token error. No annotation execution is enabled.
-        if (std::string_view("(){},:;+-*/%=.<>@?!").find(ch) != std::string_view::npos) {
+        // A single pipe is the lexical delimiter for compiler-owned
+        // sealed-state callbacks (|state|). Keep || as the earlier
+        // two-character logical-or token above; admitting | here does not
+        // enable a guest bitwise/operator surface.
+        if (std::string_view("(){},:;+-*/%=.<>@?!|").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -1337,7 +1341,9 @@ private:
             const std::size_t critical_offset = token_.offset;
             require("critical");
             std::string access;
-            if (token_.text == "-" && token_.offset == critical_offset + 8) {
+            if (token_.text == "-") {
+                if (token_.offset != critical_offset + 8)
+                    fail("sealed handle_state requires contiguous critical-read/write modifier");
                 require("-");
                 if (token_.offset != critical_offset + 9)
                     fail("sealed handle_state requires contiguous critical-read/write modifier");
