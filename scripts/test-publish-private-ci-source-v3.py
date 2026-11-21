@@ -97,8 +97,12 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
         base = {
             "number": 834,
             "state": "open",
-            "head": {"sha": sha, "repo": {"full_name": v3.SOURCE_REPO}},
-            "base": {"ref": "main"},
+            "head": {"sha": sha, "repo": {
+                "full_name": v3.SOURCE_REPO, "id": v3.SOURCE_REPO_ID,
+            }},
+            "base": {"ref": "main", "repo": {
+                "full_name": v3.SOURCE_REPO, "id": v3.SOURCE_REPO_ID,
+            }},
         }
         route = f"repos/{v3.SOURCE_REPO}/pulls/834"
         with patch.object(v3, "gh_api", return_value=base) as github_api:
@@ -113,6 +117,43 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
             with self.assertRaisesRegex(v3.Denied, "not exact open PR head"):
                 v3.verify_source_pr(834, sha)
             github_api.assert_called_once_with(route)
+
+    def test_migrated_source_pr_rejects_repo_id_and_base_origin_tampering(self):
+        sha = "e" * 40
+        correct = {
+            "number": 834, "state": "open",
+            "head": {"sha": sha, "repo": {
+                "full_name": v3.SOURCE_REPO, "id": v3.SOURCE_REPO_ID,
+            }},
+            "base": {"ref": v3.SOURCE_BRANCH, "repo": {
+                "full_name": v3.SOURCE_REPO, "id": v3.SOURCE_REPO_ID,
+            }},
+        }
+        for kind, modify in (
+            ("head id", lambda p: p["head"]["repo"].update(id=1410897874)),
+            ("head id missing", lambda p: p["head"]["repo"].pop("id")),
+            ("head id string", lambda p: p["head"]["repo"].update(id=str(v3.SOURCE_REPO_ID))),
+            ("base id", lambda p: p["base"]["repo"].update(id=1410897874)),
+            ("base id missing", lambda p: p["base"]["repo"].pop("id")),
+            ("base name", lambda p: p["base"]["repo"].update(
+                full_name="ores-truffle-oreslang/oreslang-source.llvm"
+            )),
+            ("base repo missing", lambda p: p["base"].pop("repo")),
+            ("base ref", lambda p: p["base"].update(ref="not-main")),
+        ):
+            with self.subTest(kind=kind):
+                # New shallow nested dictionaries for every independent case.
+                import copy
+                adversarial = copy.deepcopy(correct)
+                modify(adversarial)
+                with patch.object(v3, "gh_api", return_value=adversarial) as api:
+                    with self.assertRaisesRegex(
+                        v3.Denied, "not exact open PR head"
+                    ):
+                        v3.verify_source_pr(834, sha)
+                    api.assert_called_once_with(
+                        f"repos/{v3.SOURCE_REPO}/pulls/834"
+                    )
 
     def test_2048_blob_capacity_acceptance_and_2049_pre_fetch_denial(self):
         # Entirely synthetic, source-free tree metadata and identical test
