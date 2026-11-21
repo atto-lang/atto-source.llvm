@@ -82,6 +82,13 @@ public:
         if (census.source_module != &module || sites_.size() > 4096)
             throw std::runtime_error(
                 "ownership violation: field write link refers to foreign IR module");
+        // The previous store-only walk missed same-cardinality changes to a
+        // load, call operand, PHI incoming edge, branch target or metadata.
+        // Reject any changed live LLVM IR before authenticating even one
+        // source restoration ticket against a physical StoreInst.
+        if (!census.matches_current_module())
+            throw std::runtime_error(
+                "ownership violation: mutated LLVM SSA/CFG invalidates field-write receipt");
         // One bounded module readback, not one full module scan per source
         // write. A naive per-site scan could require 4096 * 2,000,000
         // instruction visits (resource-exhaustion attack surface).

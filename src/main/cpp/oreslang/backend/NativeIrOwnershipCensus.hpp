@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "llvm/IR/Argument.h"
@@ -10,8 +12,38 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/raw_ostream.h"
 
 namespace oreslang::native_ir {
+
+// Bounded, exact IR text readback. No caller-supplied hashes, no checksum
+// collision and no dereference of an erased Instruction*. The LLVM module
+// must not be concurrently mutated. This compares *current* IR bytes only,
+// not the unobservable historical event of a pass that changed then reverted
+// the IR. A real optimizer generation fence still needs pass instrumentation.
+class BoundedNativeIrText final : public llvm::raw_ostream {
+    static constexpr std::size_t kMaxTextBytes = 64 * 1024 * 1024;
+    std::string text_;
+
+    void write_impl(const char* data, std::size_t size) override {
+        if (size > kMaxTextBytes - text_.size())
+            throw std::runtime_error(
+                "ownership violation: native LLVM text snapshot exceeds 64MiB bound");
+        text_.append(data, size);
+    }
+    std::uint64_t current_pos() const override { return text_.size(); }
+
+public:
+    BoundedNativeIrText() { SetUnbuffered(); }
+    const std::string& str() const noexcept { return text_; }
+};
+
+inline std::string snapshot_native_ir_text(const llvm::Module& module) {
+    BoundedNativeIrText output;
+    module.print(output, nullptr);
+    output.flush();
+    return output.str();
+}
 
 // Evidence is collected from instructions IN an LLVM module, not from a
 // caller-authored JSON/CFG manifest. It is still not a proof that every
@@ -34,6 +66,11 @@ struct NativeIrUseStoreCensus {
     std::size_t ssa_operand_uses = 0;
     std::size_t reciprocal_ssa_uses = 0;
     std::vector<ActualStore> stores;
+    // Exact LLVM Module textual state, including non-store loads/calls,
+    // branch successors, PHI predecessor operands, attrs and metadata.
+    // Captured from a live LLVM Module after scanning its instructions.
+    // Bound to 64MiB; never promote it to a typed SSA loan-origin proof.
+    std::string module_ir_text;
     // Borrowed module owner. This census must not outlive its Module, and
     // callers must not mutate the Module concurrently with readback.
     const llvm::Module* source_module = nullptr;
@@ -44,6 +81,16 @@ struct NativeIrUseStoreCensus {
     bool ownership_complete = false;
     bool guest_verified = false;
 
+    bool matches_current_module() const noexcept {
+        if (!source_module || module_ir_text.empty()) return false;
+        try {
+            return snapshot_native_ir_text(*source_module) == module_ir_text;
+        } catch (...) {
+            // Over-quota and all failures revoke the old receipt.
+            return false;
+        }
+    }
+
     // Never dereference an instruction supplied by the caller: a pass may
     // have erased it, leaving the cached StoreInst* dangling. Instead walk
     // only LIVE instructions still owned by the original Module. Reject
@@ -53,7 +100,8 @@ struct NativeIrUseStoreCensus {
     bool contains_store(const llvm::StoreInst* identity,
             const llvm::Value* destination,
             const llvm::Value* stored) const noexcept {
-        if (!source_module || !identity || !destination || !stored)
+        if (!source_module || !identity || !destination || !stored ||
+                !matches_current_module())
             return false;
         std::uint64_t ordinal = 0;
         std::size_t store_index = 0;
@@ -151,6 +199,7 @@ inline NativeIrUseStoreCensus collect_native_ir_ssa_census(
     if (result.ssa_operand_uses != result.reciprocal_ssa_uses)
         throw std::runtime_error(
             "ownership violation: emitted native LLVM SSA use-def census mismatch");
+    result.module_ir_text = snapshot_native_ir_text(module);
     return result;
 }
 

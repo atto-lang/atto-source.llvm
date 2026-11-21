@@ -15,10 +15,10 @@ const denied=(source,code)=>{
   assert.equal(r.guestExecutionVerified,false);
   assert.ok(r.errors.some(x=>x.startsWith(code)),JSON.stringify(r.errors));
 };
-test('01 canonical seventeen-CTest workflow has valid source-only shape',()=>{
+test('01 canonical eighteen-CTest workflow has valid source-only shape',()=>{
   const r=inspect(workflow);
   assert.equal(r.structurallyValid,true,JSON.stringify(r.errors));
-  assert.equal(r.checkedNativeCTestCount,17);
+  assert.equal(r.checkedNativeCTestCount,18);
   assert.equal(r.verified,false);
   assert.equal(r.guestExecutionVerified,false);
 });
@@ -30,9 +30,9 @@ test('03 stray command after final receipt is rejected',()=>{
   denied(workflow+' /tmp/atto-place-inventory.txt\n',
     'ORPHANED_OR_UNINDENTED_RUN_COMMAND');
 });
-test('04 stale sixteen-test count is rejected',()=>{
-  denied(workflow.replace("int(root.get('tests', '-1')) != 17",
-      "int(root.get('tests', '-1')) != 16"),'STALE_NATIVE_CTEST_CARDINALITY');
+test('04 stale seventeen-test count is rejected',()=>{
+  denied(workflow.replace("int(root.get('tests', '-1')) != 18",
+      "int(root.get('tests', '-1')) != 17"),'STALE_NATIVE_CTEST_CARDINALITY');
 });
 test('05 missing typed-MIR CTest inventory entry is rejected',()=>{
   denied(workflow.replace(
@@ -274,4 +274,28 @@ test('53 source oracle file must retain exact-head PR path trigger',()=>{
     "      - 'tests/ownership_source_cfg_node_oracles_50.test.mjs'",
     "      - 'inert-source-oracle.mjs'"),
     'MISSING_EXACT_HEAD_TRIGGER');
+});
+test('54 missing whole-module exact IR CTest must be rejected',()=>{
+  denied(workflow.replace(
+    "          grep -Eq 'Test +#[0-9]+: native_ownership_whole_module_ir_snapshot_58$' /tmp/atto-place-inventory.txt\n",
+    ()=>''),'MISSING_OR_DUPLICATED_CTEST:whole_module_ir_snapshot_58');
+});
+test('55 duplicate exact IR CTest inventory is rejected',()=>{
+  const line="          grep -Eq 'Test +#[0-9]+: native_ownership_whole_module_ir_snapshot_58$' /tmp/atto-place-inventory.txt\n";
+  denied(workflow.replace(line,()=>line+line),
+    'MISSING_OR_DUPLICATED_CTEST:whole_module_ir_snapshot_58');
+});
+test('56 missing real LLVM native exact IR build target is rejected',()=>{
+  denied(workflow.replace('oreslang-native-whole-module-ir-snapshot-58-test',
+      'irrelevant-fake-target'),'MISSING_NATIVE_BUILD_OR_RECEIPT');
+});
+test('57 missing exact IR C++ source head trigger is rejected',()=>{
+  denied(workflow.replace(
+      "      - 'tests/native_whole_module_ir_snapshot_58_test.cpp'",
+      "      - 'inactive-snapshot-test.cpp'"),'MISSING_EXACT_HEAD_TRIGGER');
+});
+test('58 missing exact IR proof branch trigger is rejected',()=>{
+  denied(workflow.replace(
+      "      - 'audit/llvm-exact-ir-snapshot-readback-*'",
+      "      - 'inactive-snapshot-branch-*'"),'MISSING_EXACT_HEAD_TRIGGER');
 });
