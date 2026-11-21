@@ -142,6 +142,35 @@ int atto_control32_read_i64(AttoControlPlaneArena32 *a, uint64_t ref, unsigned f
     pthread_mutex_unlock(&a->mutex);
     return ok;
 }
+int atto_control32_write_i128(AttoControlPlaneArena32 *a, uint64_t ref, uint64_t low, uint64_t high) {
+    if (!a) return 0;
+    pthread_mutex_lock(&a->mutex);
+    uint32_t slot;
+    int ok = validate_locked(a, ref, &slot);
+    if (ok) {
+        uint8_t *dst = a->records + record_offset(slot, 0);
+        put_u64_le(dst, low);
+        put_u64_le(dst + 8, high);
+    }
+    pthread_mutex_unlock(&a->mutex);
+    return ok;
+}
+int atto_control32_read_i128(AttoControlPlaneArena32 *a, uint64_t ref,
+                            uint64_t *out_low, uint64_t *out_high) {
+    if (out_low) *out_low = 0;
+    if (out_high) *out_high = 0;
+    if (!a || !out_low || !out_high || out_low == out_high) return 0;
+    pthread_mutex_lock(&a->mutex);
+    uint32_t slot;
+    int ok = validate_locked(a, ref, &slot);
+    if (ok) {
+        const uint8_t *src = a->records + record_offset(slot, 0);
+        *out_low = get_u64_le(src);
+        *out_high = get_u64_le(src + 8);
+    }
+    pthread_mutex_unlock(&a->mutex);
+    return ok;
+}
 int atto_control32_write_ref(AttoControlPlaneArena32 *a, uint64_t owner, uint64_t child) {
     if (!a) return 0;
     pthread_mutex_lock(&a->mutex);
