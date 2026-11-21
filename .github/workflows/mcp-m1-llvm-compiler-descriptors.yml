@@ -1,0 +1,110 @@
+name: Atto MCP M1 LLVM compile-time descriptors (not runtime MCP)
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/main.cpp'
+      - 'src/main/cpp/oreslang/backend/LlvmCodegen.*'
+      - 'src/main/cpp/oreslang/runtime/McpCompilerDescriptorsV1.hpp'
+      - 'tests/native_mcp_compiler_descriptor_m1_test.cpp'
+      - 'tests/test_mcp_m1_compiler_cli.py'
+      - 'tests/test_mcp_m1_native_aot_embed.py'
+      - 'tests/mcp_m1_verify_native_receipt.py'
+      - 'tests/test_mcp_m1_verify_native_receipt.py'
+      - 'tests/test_mcp_m1_llvm_used_linker.py'
+      - 'tests/fixtures/mcp-descriptor-*'
+      - 'CMakeLists.txt'
+      - '.github/workflows/mcp-m1-llvm-compiler-descriptors.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  metadata-host:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [g++, clang++]
+        variant: [optimized, sanitized]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact head and tree
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          echo "SOURCE_SHA=$EXPECTED"
+          echo "SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Source-free native receipt mutation tests (NOT guest proof)
+        run: python3 -m unittest discover -s tests -p 'test_mcp_m1_verify_native_receipt.py' -v
+      - name: Source-free ELF retention canary (NOT compiler/guest parity)
+        run: python3 tests/test_mcp_m1_llvm_used_linker.py
+      - name: Compile and execute deterministic metadata host checks
+        env:
+          CXX: ${{ matrix.compiler }}
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          set -euo pipefail
+          flags=(-O2 -DNDEBUG)
+          if [[ "$VARIANT" == sanitized ]]; then
+            flags=(-O1 -g -DNDEBUG -fsanitize=address,undefined -fno-omit-frame-pointer)
+          fi
+          "$CXX" -std=c++17 -Wall -Wextra -Wpedantic -Werror \
+             "${flags[@]}" -pthread -I src/main/cpp \
+             tests/native_mcp_compiler_descriptor_m1_test.cpp -o "$RUNNER_TEMP/m1-metadata-host"
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
+             "$RUNNER_TEMP/m1-metadata-host"
+          echo 'EVIDENCE_SCOPE=HOST_AST_METADATA_HELPER_ONLY'
+  llvm-compiler:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact compiler source identity
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          echo "SOURCE_SHA=$EXPECTED"
+          echo "SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Build real LLVM compiler
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y clang llvm-dev cmake build-essential binutils
+          cmake -S . -B build-mcp-m1 -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+          cmake --build build-mcp-m1 --target oreslang-llvmc --parallel 2
+      - name: Validate native compiler test syntax before runtime claims
+        run: python3 -m py_compile tests/test_mcp_m1_compiler_cli.py tests/test_mcp_m1_native_aot_embed.py tests/test_mcp_m1_llvm_used_linker.py
+      - name: Execute .atto and .ores native compiler descriptor mode
+        run: python3 tests/test_mcp_m1_compiler_cli.py --compiler build-mcp-m1/oreslang-llvmc
+      - name: Link and execute native AttoLang guest with retained descriptor
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          python3 tests/test_mcp_m1_native_aot_embed.py \
+            --compiler build-mcp-m1/oreslang-llvmc --clang clang --objcopy objcopy \
+            --report build-mcp-m1/mcp-m1-aot-receipt.json
+          python3 -m json.tool build-mcp-m1/mcp-m1-aot-receipt.json > /dev/null
+          python3 tests/mcp_m1_verify_native_receipt.py \
+            --receipt build-mcp-m1/mcp-m1-aot-receipt.json \
+            --expected-head "$EXPECTED_HEAD" \
+            --expected-tree "$(git rev-parse 'HEAD^{tree}')"
+      - name: Upload compiler-backed guest evidence only after actual execution
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: atto-mcp-m1-guest-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build-mcp-m1/mcp-m1-aot-receipt.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Distinguish metadata from guest runtime evidence
+        run: echo 'AOT_GUEST_EXECUTION_WITH_READ_ONLY_DESCRIPTOR_NO_MCP_SERVER'

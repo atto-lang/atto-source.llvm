@@ -1,0 +1,4 @@
+// M1 compiler-emitted descriptor fixture: only two exported scalar functions.
+pub fnc main(): int { return add(40, 2); }
+fnc hidden(): int { return 77; }
+pub fnc add(int lhs, int rhs): int { return lhs + rhs; }

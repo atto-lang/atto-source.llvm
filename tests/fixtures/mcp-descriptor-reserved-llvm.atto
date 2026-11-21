@@ -1,0 +1,3 @@
+// Source parses as ordinary scalar AttoLang but cannot be lowered:
+// abort is a compiler-owned reserved native symbol.
+pub fnc abort(): int { return 1; }

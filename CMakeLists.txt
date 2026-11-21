@@ -60,6 +60,18 @@ if(BUILD_TESTING)
     set_tests_properties(native_mcp_m0_read_only_host_policy_not_guest
         PROPERTIES TIMEOUT 20)
 
+    # Opt-in M1 compiler metadata helper, host-only until real driver evidence.
+    add_executable(oreslang-native-mcp-m1-descriptor-test
+        tests/native_mcp_compiler_descriptor_m1_test.cpp)
+    target_include_directories(oreslang-native-mcp-m1-descriptor-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-mcp-m1-descriptor-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_mcp_m1_metadata_helper_not_guest
+        COMMAND oreslang-native-mcp-m1-descriptor-test)
+    set_tests_properties(native_mcp_m1_metadata_helper_not_guest
+        PROPERTIES TIMEOUT 15)
+
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
