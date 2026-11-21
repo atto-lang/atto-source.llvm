@@ -72,3 +72,14 @@ if(BUILD_TESTING)
     COMMAND oreslang-actor-slab-heap-golden-test
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/actor_slab_heap_golden_v1.txt")
 endif()
+if(BUILD_TESTING)
+  # v2: failure paths (budget, invalid size/alignment, forged/ABA frees, stale
+  # handles, quarantine) with canonical status codes shared by every backend.
+  add_executable(oreslang-actor-slab-heap-golden-v2-test tests/actor_slab_heap_golden_v2_test.cpp)
+  target_include_directories(oreslang-actor-slab-heap-golden-v2-test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+  target_compile_options(oreslang-actor-slab-heap-golden-v2-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+  add_test(NAME native_actor_slab_heap_golden_v2
+    COMMAND oreslang-actor-slab-heap-golden-v2-test
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/actor_slab_heap_golden_v2.txt")
+endif()
