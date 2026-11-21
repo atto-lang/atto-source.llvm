@@ -258,7 +258,7 @@ public:
         // Admit '@' as a TOKEN only so existing parameter-local @Default guards
         // can issue their specific fail-closed diagnostic instead of a generic
         // unsupported-token error. No annotation execution is enabled.
-        if (std::string_view("(){},:;+-*/%=.<>@?!").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){},:;+-*/%=.<>@?![]|").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -1246,6 +1246,148 @@ private:
         return result;
     }
 
+    /**
+     * Parse a bounded, typed sealed-state schema without admitting codegen.
+     * This is intentionally not the legacy actor scalar-field path. Runtime
+     * tickets and execution handles cannot be supplied in Oreslang syntax.
+     */
+    SealedStateSchemaDecl sealed_state_schema() {
+        SealedStateSchemaDecl schema;
+        schema.offset = token_.offset;
+        require("state");
+        require("{");
+        std::unordered_set<std::string> seen;
+        while (token_.text != "}") {
+            if (token_.kind == Kind::End)
+                fail("unterminated sealed actor state schema");
+            if (schema.fields.size() >= 16)
+                fail("native sealed actor state field limit exceeded (16)");
+            SealedStateFieldDecl field;
+            field.offset = token_.offset;
+            field.name = identifier();
+            if (!seen.insert(field.name).second)
+                fail("duplicate sealed actor state field '" + field.name + "'");
+            require(":");
+            if (!accept("int"))
+                fail("native sealed actor state schema currently recognizes int fields only");
+            field.type = ScalarType::I64;
+            require("=");
+            field.initial_i64 = signed_integer_literal();
+            require(";");
+            schema.fields.push_back(std::move(field));
+        }
+        require("}");
+        if (schema.fields.empty())
+            fail("empty sealed actor state schema is unsupported");
+        return schema;
+    }
+
+    /**
+     * Stage typed callback modes from actual source tokens, but never admit
+     * execution. Full ownership HIR, task tickets and unwind cleanup remain
+     * mandatory before the sealed actor can reach LLVM IR.
+     *
+     * This deliberately checks a bounded lexical callback subset rather than
+     * treating arbitrary nested guest expressions as trusted LLVM operations.
+     */
+    void sealed_actor_callback_syntax(ActorDecl& actor) {
+        if (!accept("receive")) return; // schema-only negative fixtures
+        require("(");
+        require("ActorMail");
+        require("<");
+        require("String");
+        require(">");
+        const std::string mail_parameter = identifier();
+        require(")");
+        require(":");
+        require("void");
+        require("{");
+        std::size_t callback_count = 0;
+        while (token_.text != "}") {
+            if (token_.kind == Kind::End)
+                fail("unterminated native sealed actor receive body");
+            if (accept("return")) {
+                require(";");
+                continue;
+            }
+            const std::size_t call_offset = token_.offset;
+            require("self");
+            require(".");
+            if (accept("end")) {
+                require("(");
+                require(")");
+                require(";");
+                continue;
+            }
+            require("handle_state");
+            if (++callback_count > 32)
+                fail("native sealed actor critical callback limit exceeded (32)");
+            CriticalStateAccessDecl access;
+            access.offset = call_offset;
+            require("(");
+            require("critical");
+            require("[");
+            if (accept("read")) access.mode = CriticalStateAccessDecl::Mode::Read;
+            else if (accept("write")) access.mode = CriticalStateAccessDecl::Mode::Write;
+            else fail("native sealed actor critical mode must be read or write");
+            require("]");
+            require("|");
+            access.state_parameter = identifier();
+            if (access.state_parameter == "self" ||
+                    access.state_parameter == mail_parameter)
+                fail("native sealed state callback parameter shadows actor authority");
+            require("|");
+            require("->");
+            require("{");
+            std::size_t nesting = 1;
+            std::size_t tokens = 0;
+            while (nesting != 0) {
+                if (token_.kind == Kind::End)
+                    fail("unterminated native sealed actor critical callback");
+                if (++tokens > 1024)
+                    fail("native sealed actor critical callback exceeds token limit (1024)");
+                if (token_.text == "handle_state")
+                    fail("nested native sealed actor critical loans require reentrancy analysis");
+                if (token_.text == "await" || token_.text == "suspend" ||
+                        token_.text == "spawn" || token_.text == "return" ||
+                        exceptional_control(token_.text))
+                    fail("native sealed actor critical callback forbids suspension, escape and exceptional control");
+                if (token_.text == access.state_parameter) {
+                    if (peek_next().text != ".")
+                        fail("native sealed actor state borrow cannot escape callback");
+                    advance();
+                    require(".");
+                    const std::string field = identifier();
+                    const auto& fields = actor.sealed_state->fields;
+                    if (!std::any_of(fields.begin(), fields.end(),
+                                     [&](const SealedStateFieldDecl& declared) {
+                                         return declared.name == field;
+                                     }))
+                        fail("unknown native sealed actor state field '" + field + "'");
+                    if (token_.text == "=") {
+                        if (access.mode == CriticalStateAccessDecl::Mode::Read)
+                            fail("native sealed actor critical read callback cannot mutate state");
+                        access.written_fields.push_back(field);
+                    } else {
+                        access.read_fields.push_back(field);
+                    }
+                    continue;
+                }
+                if (token_.text == "{") {
+                    if (++nesting > 16)
+                        fail("native sealed actor critical block nesting limit exceeded (16)");
+                } else if (token_.text == "}") {
+                    --nesting;
+                }
+                advance();
+            }
+            require(")");
+            require(";");
+            actor.critical_state_uses.push_back(std::move(access));
+        }
+        require("}");
+    }
+
     ActorDecl actor_declaration() {
         ActorDecl actor;
         actor.offset = token_.offset;
@@ -1257,6 +1399,10 @@ private:
         require("as");
         const bool braced = accept("{");
         if (token_.text == "state") {
+            // Preserve a typed AST boundary and validate the schema, but
+            // never silently lower it using legacy scalar actor fields.
+            actor.sealed_state = sealed_state_schema();
+            sealed_actor_callback_syntax(actor);
             fail("native actor state { ... } requires sealed handle_state lowering; legacy scalar actor fields are not this contract");
         }
         std::unordered_set<std::string> names;

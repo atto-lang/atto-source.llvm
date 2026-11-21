@@ -1115,6 +1115,61 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_using_unknown_effect using-unknown-effect.ores --diagnostic "unknown function effect")
     oreslang_contract_test(native_using_duplicate_effect using-duplicate-effect.ores --diagnostic "duplicate function effect")
     oreslang_contract_test(native_critical_actor_state_not_lowered critical-handle-state-using.ores --diagnostic "native actor state { ... } requires sealed handle_state lowering")
+    # Exact guest `critical[read]`/`critical[write]` syntax from Java is currently
+    # NOT native source-lowered. Native task-bound region CTest success must
+    # not silently turn into a fictitious guest-language parity PASS.
+    # Once full frontend/HIR/IR lowering exists, replace these explicit
+    # expected-failure tests with real source -> LLVM IR -> process tests.
+    oreslang_contract_test(native_source_critical_rw_guest_not_lowered
+        source-critical-rw-guest-unlowered.ores
+        --diagnostic "native actor state { ... } requires sealed handle_state lowering")
+    oreslang_contract_test(native_source_critical_nested_guest_rejected
+        source-critical-nested-guest-unlowered.ores
+        --diagnostic "nested native sealed actor critical loans require reentrancy analysis")
+    oreslang_contract_test(native_source_critical_read_local_still_unlowered
+        sealed-state-critical-read-local-unlowered.ores
+        --diagnostic "native actor state { ... } requires sealed handle_state lowering")
+    oreslang_contract_test(native_source_critical_read_mutation_rejected
+        sealed-state-critical-read-mutation.ores
+        --diagnostic "native sealed actor critical read callback cannot mutate state")
+    oreslang_contract_test(native_source_critical_unknown_field_rejected
+        sealed-state-critical-unknown-field.ores
+        --diagnostic "unknown native sealed actor state field")
+    oreslang_contract_test(native_source_critical_suspension_rejected
+        sealed-state-critical-await.ores
+        --diagnostic "native sealed actor critical callback forbids suspension")
+    oreslang_contract_test(native_source_critical_mode_rejected
+        sealed-state-critical-invalid-mode.ores
+        --diagnostic "native sealed actor critical mode must be read or write")
+    oreslang_contract_test(native_source_critical_escape_rejected
+        sealed-state-critical-borrow-escape.ores
+        --diagnostic "native sealed actor state borrow cannot escape callback")
+    # Typed schema parsing is now distinct from the legacy actor scalar path.
+    # Even a *valid* schema still fails closed until critical loan HIR/codegen.
+    oreslang_contract_test(native_sealed_schema_valid_signed_min_not_lowered
+        sealed-state-schema-min-int-unlowered.ores
+        --diagnostic "native actor state { ... } requires sealed handle_state lowering")
+    oreslang_contract_test(native_sealed_schema_valid_signed_max_not_lowered
+        sealed-state-schema-max-int-unlowered.ores
+        --diagnostic "native actor state { ... } requires sealed handle_state lowering")
+    oreslang_contract_test(native_sealed_schema_negative_overflow_rejected
+        sealed-state-schema-negative-overflow.ores
+        --diagnostic "integer literal overflows signed 64-bit result")
+    oreslang_contract_test(native_sealed_schema_duplicate_rejected
+        sealed-state-schema-duplicate.ores
+        --diagnostic "duplicate sealed actor state field")
+    oreslang_contract_test(native_sealed_schema_empty_rejected
+        sealed-state-schema-empty.ores
+        --diagnostic "empty sealed actor state schema")
+    oreslang_contract_test(native_sealed_schema_type_rejected
+        sealed-state-schema-type-unlowered.ores
+        --diagnostic "native sealed actor state schema currently recognizes int fields only")
+    oreslang_contract_test(native_sealed_schema_overflow_rejected
+        sealed-state-schema-overflow.ores
+        --diagnostic "integer literal overflows signed 64-bit result")
+    oreslang_contract_test(native_sealed_schema_capacity_rejected
+        sealed-state-schema-too-many.ores
+        --diagnostic "native sealed actor state field limit exceeded (16)")
     oreslang_contract_test(native_requires_rejects_unverified_wcet requires-unverified.ores --diagnostic "native requires clause awaits verified")
     oreslang_contract_test(native_actor_state_sealed_until_lowering state-sealed-unsupported.ores --diagnostic "native actor state")
 
@@ -2092,6 +2147,17 @@ if(BUILD_TESTING)
     target_include_directories(oreslang-critical-state-effects-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-critical-state-effects-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME native_critical_handle_state_using_contract COMMAND oreslang-critical-state-effects-test)
+    # A real C++20 executable checks that the newly typed sealed state AST
+    # cannot collapse into the older unguarded scalar actor-field lane.
+    add_executable(oreslang-sealed-state-typed-ast-test
+        tests/sealed_state_ast_contract_test.cpp)
+    target_include_directories(oreslang-sealed-state-typed-ast-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-sealed-state-typed-ast-test PRIVATE cxx_std_20)
+    target_compile_options(oreslang-sealed-state-typed-ast-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_sealed_state_typed_ast_contract
+        COMMAND oreslang-sealed-state-typed-ast-test)
     add_executable(oreslang-critical-state-loan-bridge-test tests/critical_state_loan_bridge_test.cpp)
     target_include_directories(oreslang-critical-state-loan-bridge-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_options(oreslang-critical-state-loan-bridge-test PRIVATE -Wall -Wextra -Wpedantic -Werror)

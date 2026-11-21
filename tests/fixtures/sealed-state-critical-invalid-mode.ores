@@ -1,0 +1,7 @@
+define actor Counter as
+  state { revision: int = 0; }
+  receive(ActorMail<String> mail): void {
+    self.handle_state(critical[upgrade] |s| -> { s.revision = 1; });
+    return;
+  }
+end

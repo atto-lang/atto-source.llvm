@@ -1,0 +1,21 @@
+define actor Counter as
+  state { revision: int = 0; }
+  receive(ActorMail<String> mail): void {
+    self.handle_state(critical[write] |s| -> {
+      s.revision = 1;
+    });
+    self.handle_state(critical[read] |s| -> {
+      if s.revision == 1; do
+        self.end();
+      fi
+    });
+    return;
+  }
+end
+pub async routine main(): void {
+  val worker = spawn Counter();
+  await worker.get_ready();
+  worker.send("tick");
+  await worker.get_done();
+  return;
+}

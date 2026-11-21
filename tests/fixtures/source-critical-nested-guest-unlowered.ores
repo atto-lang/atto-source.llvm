@@ -1,0 +1,12 @@
+define actor Counter as
+  state { revision: int = 0; }
+  receive(ActorMail<String> mail): void {
+    self.handle_state(critical[write] |outer| -> {
+      self.handle_state(critical[read] |inner| -> {
+        let int revision = inner.revision;
+      });
+    });
+    self.end();
+    return;
+  }
+end
