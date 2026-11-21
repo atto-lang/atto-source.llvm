@@ -228,6 +228,21 @@ fn unsupported(pos: Pos, what: &str) -> Diagnostic {
     Diagnostic::new(pos, "E_UNSUPPORTED", format!("{what} is not supported by the browser compiler yet"))
 }
 
+/// Both guard spellings need a statically terminal failure continuation.
+/// Deliberately reject loops, non-exhaustive ifs and unproven match coverage.
+fn guard_failure_exits(stmts: &[Stmt]) -> bool {
+    match stmts.last() {
+        Some(Stmt::Return(..) | Stmt::Throw(..)) => true,
+        Some(Stmt::Block(body)) => guard_failure_exits(body),
+        Some(Stmt::If { arms, otherwise: Some(fallback), .. }) => {
+            !arms.is_empty()
+                && arms.iter().all(|(_, body)| guard_failure_exits(body))
+                && guard_failure_exits(fallback)
+        }
+        _ => false,
+    }
+}
+
 impl Parser {
     pub fn new(toks: Vec<Token>) -> Self {
         Parser {
@@ -1161,6 +1176,7 @@ impl Parser {
                 self.terminator()?;
                 Ok(Stmt::Throw(error, pos))
             }
+            Some("guard") => self.parse_guard(),
             Some("if") => self.parse_if(),
             Some("while") => {
                 self.advance();
@@ -1330,6 +1346,42 @@ impl Parser {
         self.advance();
         let init = self.parse_expr()?;
         Ok(Stmt::Bind { kind, name, ty, init, pos })
+    }
+
+    /// AttoLang dual-form early-exit guard. Both surface spellings lower
+    /// through the same checked negated If statement. Unsupported payload
+    /// narrowing remains checked elsewhere and must never be invented.
+    fn parse_guard(&mut self) -> R<Stmt> {
+        let pos = self.pos();
+        self.expect_word("guard")?;
+        let predicate = self.parse_cond_head()?;
+        let failure = if *self.peek() == Tok::LBrace {
+            let block = self.parse_block()?;
+            if self.is_word("else") {
+                return Err(Diagnostic::new(self.pos(), "E_GUARD",
+                    "braced guard cannot have an additional else branch"));
+            }
+            block
+        } else if self.eat_word("else") {
+            let block = self.parse_stmts_until(&["end"])?;
+            self.expect_word("end")?;
+            block
+        } else {
+            return Err(Diagnostic::new(self.pos(), "E_GUARD",
+                "guard requires '{ ... }' or 'else ... end' failure block"));
+        };
+        if !guard_failure_exits(&failure) {
+            return Err(Diagnostic::new(pos, "E_GUARD",
+                "guard failure block must exit on all reachable paths"));
+        }
+        Ok(Stmt::If {
+            arms: vec![(
+                Expr { kind: ExprKind::Unary(UnOp::Not, Box::new(predicate)), pos },
+                failure,
+            )],
+            otherwise: None,
+            pos,
+        })
     }
 
     fn parse_if(&mut self) -> R<Stmt> {
