@@ -1,0 +1,14 @@
+// Observes real f64 payload after mutable write and all-lane swap deletion.
+define inverted struct Particle as
+    let x: int;
+    alive: bool;
+    let energy: f64;
+end
+fnc main(): int {
+    let rows = InvertedArray<Particle>.with_capacity(3);
+    rows.push(7, true, 1.5);
+    rows.push(19, false, 2.25);
+    rows.set(1, energy, 3.75);
+    rows.erase_swap(0);
+    return rows.get(0, energy) == 3.75 ? 42 : 7;
+}

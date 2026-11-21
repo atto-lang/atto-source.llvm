@@ -945,13 +945,34 @@ private:
                 op.index = inverted_source_index();
                 require(",");
                 op.field = identifier();
+                InvertedScalarKind read_type = InvertedScalarKind::I64;
                 if (mixed) {
                     const auto it = std::find_if(decl.fields.begin(), decl.fields.end(),
                         [&](const InvertedStructField& field) { return field.name == op.field; });
-                    if (it == decl.fields.end() || it->type != InvertedScalarKind::I64)
-                        fail("mixed inverted int main must return an i64 field");
+                    if (it == decl.fields.end())
+                        fail("mixed inverted return references unknown column");
+                    read_type = it->type;
+                    if (read_type == InvertedScalarKind::Bool)
+                        fail("mixed inverted int main cannot return bool field");
                 }
-                require(")"); require(";");
+                require(")");
+                if (mixed && read_type == InvertedScalarKind::F64) {
+                    if (token_.text != "==")
+                        fail("mixed inverted int main requires explicit f64 equality and int branches");
+                    // A deliberately narrow ordinary AttoLang expression:
+                    // compare a *runtime-loaded* f64 and select two int
+                    // literals. No f64->int conversion or hidden host read.
+                    require("==");
+                    op.mixed_value = inverted_scalar_literal(InvertedScalarKind::F64);
+                    require("?");
+                    op.equal_result = signed_integer_literal();
+                    require(":");
+                    op.unequal_result = signed_integer_literal();
+                    op.kind = InvertedSourceOperation::Kind::ReturnCompareF64;
+                } else if (token_.text == "==") {
+                    fail("mixed inverted equality return requires an f64 field");
+                }
+                require(";");
                 result.operations.push_back(std::move(op));
                 require("}");
                 lexer_.allow_mixed_reals(false);

@@ -1,0 +1,11 @@
+// No implicit i64 -> f64 coercion for comparison.
+define inverted struct Particle as
+    let x: int;
+    alive: bool;
+    let energy: f64;
+end
+fnc main(): int {
+    let rows = InvertedArray<Particle>.with_capacity(2);
+    rows.push(7, true, 3.75);
+    return rows.get(0, energy) == 3 ? 42 : 7;
+}

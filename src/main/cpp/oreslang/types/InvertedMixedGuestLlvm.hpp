@@ -12,6 +12,7 @@
 #include <cstring>
 #include <iomanip>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -20,9 +21,16 @@
 
 namespace oreslang::dop::mir {
 
+struct F64EqSelect {
+    InvertedSourceLiteral expected;
+    std::int64_t if_equal = 0;
+    std::int64_t if_unequal = 0;
+};
 struct MixedIrOperands {
     std::vector<std::array<InvertedSourceLiteral, 3>> rows;
     std::vector<InvertedSourceLiteral> writes;
+    // Present only for the terminal runtime-observed f64 comparison.
+    std::optional<F64EqSelect> terminal_f64_compare;
 };
 struct VerifiedMixedSource {
     Module mir;
@@ -115,6 +123,9 @@ inline VerifiedMixedSource verify_production_inverted_mixed(const Program& progr
         if (operation.values != std::array<std::int64_t, 2>{} ||
                 operation.value != 0)
             throw std::logic_error("mixed inverted command has legacy scalar metadata");
+        if (operation.kind != InvertedSourceOperation::Kind::ReturnCompareF64 &&
+                (operation.equal_result != 0 || operation.unequal_result != 0))
+            throw std::logic_error("mixed inverted nonterminal operation has comparison metadata");
         switch (operation.kind) {
             case InvertedSourceOperation::Kind::Push: {
                 if (operation.index != 0 || !operation.field.empty() ||
@@ -155,6 +166,24 @@ inline VerifiedMixedSource verify_production_inverted_mixed(const Program& progr
                     throw std::invalid_argument("mixed inverted main must return i64");
                 plan.read_runtime_checked(operation.index, operation.field);
                 plan.close(); // revoke and scrub every stack column
+                returned = true;
+                break;
+            case InvertedSourceOperation::Kind::ReturnCompareF64:
+                if (!unused_mixed_values(operation.mixed_values))
+                    throw std::invalid_argument("invalid mixed inverted f64 comparison metadata");
+                if (n + 1 != source.operations.size())
+                    throw std::logic_error("mixed inverted f64 comparison must be terminal");
+                if (layout.column(layout.field_index(operation.field)).type !=
+                        InvertedScalarKind::F64)
+                    throw std::invalid_argument("mixed inverted f64 compare must read f64 column");
+                check_mixed_literal(operation.mixed_value, InvertedScalarKind::F64);
+                plan.read_runtime_checked(operation.index, operation.field);
+                plan.close();
+                operands.terminal_f64_compare = F64EqSelect{
+                    operation.mixed_value,
+                    operation.equal_result,
+                    operation.unequal_result
+                };
                 returned = true;
                 break;
             default:
@@ -283,10 +312,17 @@ public:
         const auto& operations = verified.instructions();
         if (operations.size() < 3 ||
                 operations.back().kind != OpKind::Close ||
-                operations[operations.size() - 2].kind != OpKind::ReadField ||
-                layout_->column(operations[operations.size() - 2].column).type !=
-                    InvertedScalarKind::I64)
-            throw std::logic_error("mixed LLVM requires terminal i64 read before close");
+                operations[operations.size() - 2].kind != OpKind::ReadField)
+            throw std::logic_error("mixed LLVM requires terminal checked field read before close");
+        const auto terminal_type =
+            layout_->column(operations[operations.size() - 2].column).type;
+        const bool compare_f64 = inputs.terminal_f64_compare.has_value();
+        if ((compare_f64 && terminal_type != InvertedScalarKind::F64) ||
+                (!compare_f64 && terminal_type != InvertedScalarKind::I64))
+            throw std::logic_error("mixed LLVM terminal return type mismatches comparison provenance");
+        if (compare_f64)
+            check_mixed_literal(inputs.terminal_f64_compare->expected,
+                                InvertedScalarKind::F64);
         for (const auto& op : operations)
             if (op.kind == OpKind::Snapshot || op.kind == OpKind::Suspend ||
                     op.kind == OpKind::BorrowRead || op.kind == OpKind::BorrowWrite ||
@@ -341,9 +377,28 @@ public:
                 }
                 case OpKind::ReadField: {
                     const auto index = checked_index(op.index);
-                    if (layout_->column(op.column).type != InvertedScalarKind::I64)
-                        throw std::logic_error("mixed LLVM main read must be i64");
-                    last_read_ = load("i64", field_ptr(op.column, index));
+                    if (compare_f64) {
+                        if (layout_->column(op.column).type != InvertedScalarKind::F64)
+                            throw std::logic_error("mixed LLVM f64 comparison reads wrong column");
+                        const auto observed = load("double", field_ptr(op.column, index));
+                        const auto predicate = temp();
+                        // Ordered IEEE equality: NaN is rejected by the
+                        // source and verifier, and +0.0 equals -0.0 as a
+                        // numeric comparison. Bit-level identity is tested
+                        // separately and is not silently substituted here.
+                        emit(predicate + " = fcmp oeq double " + observed + ", " +
+                             value_ir(inputs.terminal_f64_compare->expected));
+                        const auto selected = temp();
+                        emit(selected + " = select i1 " + predicate + ", i64 " +
+                             std::to_string(inputs.terminal_f64_compare->if_equal) +
+                             ", i64 " +
+                             std::to_string(inputs.terminal_f64_compare->if_unequal));
+                        last_read_ = selected;
+                    } else {
+                        if (layout_->column(op.column).type != InvertedScalarKind::I64)
+                            throw std::logic_error("mixed LLVM main read must be i64");
+                        last_read_ = load("i64", field_ptr(op.column, index));
+                    }
                     break;
                 }
                 case OpKind::EraseSwap: {

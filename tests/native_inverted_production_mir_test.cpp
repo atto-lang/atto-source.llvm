@@ -302,5 +302,17 @@ int main() {
         reject([&]{ (void)verify_production_inverted_i64(forged); },
                "contains mixed operands");
     }
+    {
+        auto forged = make_source();
+        forged.inverted_main->operations[4].equal_result = 42;
+        reject([&]{ (void)verify_production_inverted_i64(forged); },
+               "f64 comparison result metadata");
+    }
+    {
+        auto forged = make_source();
+        forged.inverted_main->operations[0].unequal_result = 7;
+        reject([&]{ (void)verify_production_inverted_i64(forged); },
+               "f64 comparison result metadata");
+    }
     return 0;
 }

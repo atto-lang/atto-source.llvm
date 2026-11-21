@@ -41,6 +41,9 @@ inline VerifiedInvertedSourceI64 verify_production_inverted_i64(
     if (source.three_scalar)
         throw std::invalid_argument("production two-i64 slice rejects mixed source tag");
     for (const auto& operation : source.operations) {
+        if (operation.equal_result != 0 || operation.unequal_result != 0)
+            throw std::invalid_argument(
+                "legacy two-i64 operation contains f64 comparison result metadata");
         const auto clean = [](const InvertedSourceLiteral& value) {
             // A forged mixed field must be byte-canonical even when unused.
             // Negative zero compares equal to zero but has a nonzero sign bit.

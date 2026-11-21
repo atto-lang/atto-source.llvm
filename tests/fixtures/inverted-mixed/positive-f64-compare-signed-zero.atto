@@ -1,0 +1,11 @@
+// IEEE numeric equality: negative zero compares equal to positive zero.
+define inverted struct Particle as
+    let x: int;
+    alive: bool;
+    let energy: f64;
+end
+fnc main(): int {
+    let rows = InvertedArray<Particle>.with_capacity(2);
+    rows.push(7, true, -0.0);
+    return rows.get(0, energy) == 0.0 ? 42 : 7;
+}
