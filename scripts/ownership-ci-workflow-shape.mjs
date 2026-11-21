@@ -5,7 +5,7 @@ const STEPS = [
   'Install Clang/LLVM developer toolchain',
   'Build production LLVM compiler (not a mock)',
   'Execute production ownership CFG join metadata gate',
-  'Execute sixteen source-owned place, identity and NLL integrity CTests',
+  'Execute seventeen source-owned place, identity and NLL integrity CTests',
   'Prove twenty scoped compiler CTest cases are registered',
   'Require compiler diagnostics and Clang-linked native guest',
   'Execute 50 real compiler fixtures and fail-closed matrix mutations',
@@ -17,7 +17,8 @@ const NAMES = [
   'nll_closed_world_16','derived_last_use_12','opaque_loan_metadata_10',
   'loan_write_domain_6','mir_receipts_30','mir_opaque_effects_18',
   'ir_ssa_store_census_30','ir_store_live_readback_14',
-  'source_field_write_link_26','reinitialize_store_witness_48'
+  'source_field_write_link_26','reinitialize_store_witness_48',
+  'source_field_cfg_96'
 ];
 const fail = code => ({
   structurallyValid:false, verified:false, guestExecutionVerified:false,
@@ -38,6 +39,9 @@ export function inspectOwnershipWorkflowShape(source) {
      !source.includes("      - 'audit/llvm-typed-mir-receipt-fence-*'") ||
      !once(source,"\n      - 'audit/llvm-source-physical-fieldwrite-link-*'") ||
      !once(source,"\n      - 'audit/llvm-restore-witness-to-store-*'") ||
+     !once(source,"\n      - 'audit/llvm-source-restoration-cfg-dom-v1-*'") ||
+     !once(source,"\n      - 'tests/native_source_field_cfg_96_test.cpp'") ||
+     !once(source,"\n      - 'src/main/cpp/oreslang/types/OwnershipSourceFieldFlow.hpp'") ||
      !once(source,"\n      - 'tests/native_reinitialize_store_witness_48_test.cpp'") ||
      !once(source,"\n      - 'src/main/cpp/oreslang/backend/NativeSourceFieldWriteLinks.hpp'"))
     return fail('MISSING_EXACT_HEAD_TRIGGER');
@@ -62,8 +66,8 @@ export function inspectOwnershipWorkflowShape(source) {
      !once(source,finalMarker) ||
      !once(source,'      - name: Reverify checkout head and clean tracked source'))
     return fail('TRAILING_OR_DUPLICATE_FINAL_RECEIPT');
-  if(!once(source,"int(root.get('tests', '-1')) != 16") ||
-     source.includes("!= 15 or") || source.includes("!= 14 or") || source.includes("!= 13 or") ||
+  if(!once(source,"int(root.get('tests', '-1')) != 17") ||
+     source.includes("!= 16 or") || source.includes("!= 15 or") || source.includes("!= 14 or") || source.includes("!= 13 or") ||
      source.includes("!= 12 or") ||
      source.includes("!= 11 or") || source.includes("!= 9 or"))
     return fail('STALE_NATIVE_CTEST_CARDINALITY');
@@ -80,6 +84,7 @@ export function inspectOwnershipWorkflowShape(source) {
      !source.includes('oreslang-native-ir-store-live-readback-14-test') ||
      !source.includes('oreslang-native-source-field-write-link-26-test') ||
      !source.includes('oreslang-native-reinitialize-store-witness-48-test') ||
+     !source.includes('oreslang-native-source-field-cfg-96-test') ||
      !source.includes('--output-junit /tmp/atto-ownership-place.xml'))
     return fail('MISSING_NATIVE_BUILD_OR_RECEIPT');
   if(!source.includes('ATTO_OWNERSHIP_REAL_COMPILER_FIXTURES=50/50_EXECUTED') ||

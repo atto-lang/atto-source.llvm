@@ -15,10 +15,10 @@ const denied=(source,code)=>{
   assert.equal(r.guestExecutionVerified,false);
   assert.ok(r.errors.some(x=>x.startsWith(code)),JSON.stringify(r.errors));
 };
-test('01 canonical sixteen-CTest workflow has valid source-only shape',()=>{
+test('01 canonical seventeen-CTest workflow has valid source-only shape',()=>{
   const r=inspect(workflow);
   assert.equal(r.structurallyValid,true,JSON.stringify(r.errors));
-  assert.equal(r.checkedNativeCTestCount,16);
+  assert.equal(r.checkedNativeCTestCount,17);
   assert.equal(r.verified,false);
   assert.equal(r.guestExecutionVerified,false);
 });
@@ -30,9 +30,9 @@ test('03 stray command after final receipt is rejected',()=>{
   denied(workflow+' /tmp/atto-place-inventory.txt\n',
     'ORPHANED_OR_UNINDENTED_RUN_COMMAND');
 });
-test('04 stale fifteen-test count is rejected',()=>{
-  denied(workflow.replace("int(root.get('tests', '-1')) != 16",
-      "int(root.get('tests', '-1')) != 15"),'STALE_NATIVE_CTEST_CARDINALITY');
+test('04 stale sixteen-test count is rejected',()=>{
+  denied(workflow.replace("int(root.get('tests', '-1')) != 17",
+      "int(root.get('tests', '-1')) != 16"),'STALE_NATIVE_CTEST_CARDINALITY');
 });
 test('05 missing typed-MIR CTest inventory entry is rejected',()=>{
   denied(workflow.replace(
@@ -169,4 +169,28 @@ test('33 missing restoration source branch trigger denied',()=>{
   denied(workflow.replace(
     "      - 'audit/llvm-restore-witness-to-store-*'",
     "      - 'unknown-restoration-branch-*'"),'MISSING_EXACT_HEAD_TRIGGER');
+});
+test('34 source field CFG CTest inventory is mandatory',()=>{
+  denied(workflow.replace(
+    "          grep -Eq 'Test +#[0-9]+: native_ownership_source_field_cfg_96$' /tmp/atto-place-inventory.txt\n",
+    ''),'MISSING_OR_DUPLICATED_CTEST:source_field_cfg_96');
+});
+test('35 duplicated source CFG inventory assertion is denied',()=>{
+  const line="          grep -Eq 'Test +#[0-9]+: native_ownership_source_field_cfg_96$' /tmp/atto-place-inventory.txt\n";
+  denied(workflow.replace(line,()=>line+line),
+    'MISSING_OR_DUPLICATED_CTEST:source_field_cfg_96');
+});
+test('36 missing native CFG build target is denied',()=>{
+  denied(workflow.replace('oreslang-native-source-field-cfg-96-test',
+    'fake-cfg-checker'),'MISSING_NATIVE_BUILD_OR_RECEIPT');
+});
+test('37 missing source CFG header PR trigger is denied',()=>{
+  denied(workflow.replace(
+    "      - 'src/main/cpp/oreslang/types/OwnershipSourceFieldFlow.hpp'",
+    "      - 'unused-cfg.hpp'"),'MISSING_EXACT_HEAD_TRIGGER');
+});
+test('38 restoration CFG branch trigger must be present',()=>{
+  denied(workflow.replace(
+    "      - 'audit/llvm-source-restoration-cfg-dom-v1-*'",
+    "      - 'unused-cfg-branch-*'"),'MISSING_EXACT_HEAD_TRIGGER');
 });

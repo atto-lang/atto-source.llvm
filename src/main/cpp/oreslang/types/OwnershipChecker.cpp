@@ -4,9 +4,11 @@
 #include "oreslang/types/NativeClassLayout.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/types/OwnershipCfg.hpp"
+#include "oreslang/types/OwnershipSourceFieldFlow.hpp"
 
 #include <algorithm>
 #include <functional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -936,6 +938,10 @@ void validate_i64_ownership(Program& program) {
             }
             locals.emplace(binding.name, std::move(entry));
         }
+        // Snapshot the exact compiler-owned state BEFORE source statements.
+        // The later cfg_entry records state AFTER execution and cannot be
+        // used to justify a pre-statement restoration path.
+        const Locals source_flow_entry = locals;
         std::vector<const Statement*> deferred_effects;
         // Provenance for an array field is tracked as a single compile-time
         // shadow handle in this first native slice. Branch-specific moves
@@ -1515,6 +1521,56 @@ void validate_i64_ownership(Program& program) {
                     if (entry.second.heap_owned)
                         block.operations.push_back({OpKind::DropIfOwned, entry.first});
         ownership::verify(cfg);
+
+        // The old guarded-return CFG above remains responsible for its
+        // existing ownership contract. For any checked moved-field
+        // restoration, additionally prove path coverage across the actual
+        // source statement/conditional/loop/return structure, never via
+        // the old optimistic one-site witness alone.
+        std::function<bool(const Statement&)> has_restore;
+        has_restore = [&](const Statement& stmt) {
+            if (stmt.reinitialize_write_id) return true;
+            for (const auto& child : stmt.then_statements)
+                if (has_restore(child)) return true;
+            for (const auto& child : stmt.else_statements)
+                if (has_restore(child)) return true;
+            return false;
+        };
+        const bool has_source_restoration = std::any_of(
+            function.statements.begin(), function.statements.end(),
+            [&](const Statement& stmt) { return has_restore(stmt); });
+        if (has_source_restoration) {
+            ownership::State source_fields;
+            std::set<std::string> class_roots;
+            for (const auto& [name, owner] : source_flow_entry) {
+                if (owner.class_name.empty()) continue;
+                if (owner.mode != Mode::Value ||
+                        owner.shared_loans || owner.exclusive_loan)
+                    throw std::runtime_error(
+                        "ownership violation: source restoration CFG cannot authenticate pre-existing borrowed class aliases");
+                class_roots.insert(name);
+                for (const auto& field : owner.class_fields) {
+                    if (owner.subobjects.count(field)) continue;
+                    const bool moved = owner.moved ||
+                        owner.moved_fields.count(field) != 0;
+                    source_fields.emplace(name + "." + field,
+                        ownership::PlaceState{
+                            moved ? ownership::kMoved : ownership::kOwned});
+                }
+            }
+            const auto verified_source_flow =
+                ownership::verify_source_field_flow(
+                    function, std::move(source_fields),
+                    std::move(class_roots));
+            // This proves *only* source field-state predecessor safety;
+            // typed SSA loan exhaustiveness / LLVM dominators / guest NLL
+            // remain unauthenticated and cannot be promoted by this check.
+            if (verified_source_flow.source_loan_use_complete ||
+                    verified_source_flow.optimized_llvm_dominance_verified ||
+                    verified_source_flow.guest_verified)
+                throw std::runtime_error(
+                    "ownership violation: premature source field flow authority");
+        }
 
     }
 
