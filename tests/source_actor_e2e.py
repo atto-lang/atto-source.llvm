@@ -32,9 +32,15 @@ def expected_prefix_last(name, actor_index, processed):
         for n in range(start, start + processed):
             value = 2 * (value + n)
         return value
-    if name == "source-isolated-actor-sealed-write.ores":
+    if name in {
+        "source-isolated-actor-sealed-write.ores",
+        "source-isolated-actor-sealed-write-bracket.ores",
+    }:
         return sum(range(1, processed + 1))
-    if name == "source-isolated-actor-sealed-read.ores":
+    if name in {
+        "source-isolated-actor-sealed-read.ores",
+        "source-isolated-actor-sealed-read-bracket.ores",
+    }:
         return 7 + processed
     if name == "source-actor-interleaved-stop.ores":
         sequences = ([1], [3, 4])
@@ -89,6 +95,8 @@ def main():
         ("source-actor-bare-method.ores", 1, 2, 3),
         ("source-isolated-actor-sealed-write.ores", 1, 2, 3),
         ("source-isolated-actor-sealed-read.ores", 1, 2, 9),
+        ("source-isolated-actor-sealed-write-bracket.ores", 1, 2, 3),
+        ("source-isolated-actor-sealed-read-bracket.ores", 1, 2, 9),
         ("source-actor-send.ores", 1, 2, 3),
         ("source-actor-typed-ref.ores", 1, 2, 3),
         ("source-actor-await-ready.ores", 1, 2, 3),
@@ -118,6 +126,10 @@ def main():
             "native async/channel/select boundary unsupported: suspension-aware borrow checking and cancellation/actor lowering required",
         "source-isolated-actor-sealed-split-critical-reject.ores":
             "sealed handle_state requires contiguous critical-read/write modifier",
+        "source-isolated-actor-sealed-bracket-spacing-reject.ores":
+            "sealed handle_state requires contiguous critical[read/write] modifier",
+        "source-isolated-actor-sealed-bracket-inner-spacing-reject.ores":
+            "sealed handle_state requires contiguous critical[read/write] modifier",
         "source-isolated-actor-sealed-multi-write-reject.ores":
             "native sealed callback v1 allows one write until atomic multi-field commit lowering",
         "source-isolated-actor-sealed-postcommit-overflow-reject.ores":
@@ -205,7 +217,11 @@ def main():
                 assert "ores_actor_i64_heap_field_read" in guest.stdout, name
                 writes = [line for line in guest.stdout.splitlines()
                           if "call void @ores_actor_i64_heap_field_write(" in line]
-                if name.endswith("-write.ores"):
+                is_write = name in {
+                    "source-isolated-actor-sealed-write.ores",
+                    "source-isolated-actor-sealed-write-bracket.ores",
+                }
+                if is_write:
                     assert len(writes) == 1, (name, writes)
                     assert "llvm.sadd.with.overflow.i64" in guest.stdout, name
                 else:

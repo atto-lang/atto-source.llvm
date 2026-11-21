@@ -1599,6 +1599,18 @@ if(BUILD_TESTING)
         COMMAND oreslang-source-actor-await-trace-runtime-test)
     set_tests_properties(source_actor_await_trace_runtime PROPERTIES TIMEOUT 30)
 
+    # Parser/codegen smoke for Java/Graal critical[mode] aliases on the
+    # current executable sealed-state slice. These prove compiler admission,
+    # not independent lifecycle/async parity.
+    add_test(NAME native_sealed_state_bracket_read_compiler
+        COMMAND "$<TARGET_FILE:oreslang-llvmc>"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/source-isolated-actor-sealed-read-bracket.ores")
+    add_test(NAME native_sealed_state_bracket_write_compiler
+        COMMAND "$<TARGET_FILE:oreslang-llvmc>"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/source-isolated-actor-sealed-write-bracket.ores")
+    set_tests_properties(native_sealed_state_bracket_read_compiler
+        native_sealed_state_bracket_write_compiler PROPERTIES TIMEOUT 30)
+
     if(ORE_CLANG)
         # Real compiled Oreslang guest + native scheduler and heap turns.
         # The test runner uses standard-library Rust (no new Python harness).

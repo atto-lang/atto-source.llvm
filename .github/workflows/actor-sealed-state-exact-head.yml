@@ -147,6 +147,10 @@ jobs:
             src/main/cpp/oreslang/runtime/NativeLogicalTrace.c \
             tests/fixtures/source-isolated-actor-sealed-write.ores \
             tests/fixtures/source-isolated-actor-sealed-read.ores \
+            tests/fixtures/source-isolated-actor-sealed-write-bracket.ores \
+            tests/fixtures/source-isolated-actor-sealed-read-bracket.ores \
+            tests/fixtures/source-isolated-actor-sealed-bracket-spacing-reject.ores \
+            tests/fixtures/source-isolated-actor-sealed-bracket-inner-spacing-reject.ores \
             tests/fixtures/source-isolated-actor-sealed-write-actor-only.ores \
             tests/fixtures/source-isolated-actor-sealed-read-actor-only.ores \
             tests/fixtures/source-isolated-actor-sealed-read-mutation-reject.ores \

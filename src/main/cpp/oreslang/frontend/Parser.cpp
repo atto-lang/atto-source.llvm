@@ -1335,18 +1335,35 @@ private:
             require(".");
             require("handle_state");
             require("(");
-            // Canonical hyphenated critical-read/write is one lexical modifier.
-            // Do not reinterpret guest arithmetic as an access capability.
+            // Canonical hyphenated critical-read/write remains one lexical
+            // modifier. Java/Graal critical[read/write] is an exact parser
+            // alias for the same compiler-owned mode, never a guest string.
             const std::size_t critical_offset = token_.offset;
             require("critical");
-            if (token_.offset != critical_offset + 8 || token_.text != "-")
-                fail("sealed handle_state requires contiguous critical-read/write modifier");
-            require("-");
-            if (token_.offset != critical_offset + 9)
-                fail("sealed handle_state requires contiguous critical-read/write modifier");
-            const std::string access = identifier();
+            std::string access;
+            if (token_.text == "-" && token_.offset == critical_offset + 8) {
+                require("-");
+                if (token_.offset != critical_offset + 9)
+                    fail("sealed handle_state requires contiguous critical-read/write modifier");
+                access = identifier();
+            } else if (token_.text == "[") {
+                if (token_.offset != critical_offset + 8)
+                    fail("sealed handle_state requires contiguous critical[read/write] modifier");
+                const std::size_t bracket_offset = token_.offset;
+                require("[");
+                if (token_.offset != bracket_offset + 1)
+                    fail("sealed handle_state requires contiguous critical[read/write] modifier");
+                const std::size_t access_offset = token_.offset;
+                access = identifier();
+                if (token_.text != "]" ||
+                        token_.offset != access_offset + access.size())
+                    fail("sealed handle_state requires contiguous critical[read/write] modifier");
+                require("]");
+            } else {
+                fail("native sealed handle_state requires critical-read/write or critical[read/write]");
+            }
             if (access != "read" && access != "write")
-                fail("native sealed handle_state requires critical-read or critical-write");
+                fail("native sealed handle_state requires read or write mode");
             require("|");
             const std::string binding = identifier();
             if (binding == method.parameters.front().name || state_names.count(binding))
