@@ -126,6 +126,19 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
                 s.push(chars[i]);
                 bump!();
             }
+            // Exception-control bangs are contiguous contextual spellings.
+            // Keep !eq and != intact; do not consume whitespace or alter
+            // unrelated ownership-bang / boolean-not syntax.
+            if matches!(s.as_str(), "trap" | "throw" | "raise" | "panic")
+                && chars.get(i) == Some(&'!')
+                && chars.get(i + 1) != Some(&'=')
+                && !(chars.get(i + 1) == Some(&'e')
+                    && chars.get(i + 2) == Some(&'q')
+                    && chars.get(i + 3).map_or(true, |c| !c.is_alphanumeric() && *c != '_'))
+            {
+                s.push('!');
+                bump!();
+            }
             // Generator delegation is a single contiguous lexical spelling.
             // Do not consume a separated star: `yield *value` is not `yield*`.
             let tok = if s == "yield" && chars.get(i) == Some(&'*') {
@@ -344,4 +357,66 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
         pos: Pos { line, col },
     });
     Ok(out)
+}
+
+#[cfg(test)]
+mod bang_exception_keyword_tests {
+    use super::*;
+
+    #[test]
+    fn all_eighteen_canonical_exception_bang_lexical_boundaries() {
+        // Mirrors atto-spec PR #146; this checks lexer identity, never
+        // compiled Error/Result guest execution or actor supervision.
+        let cases: &[(&str, &str)] = &[
+            ("trap! parse_id(\"42\")", "trap!"),
+            ("trap!parse_id(\"42\")", "trap!"),
+            ("throw! Error(\"bad\")", "throw!"),
+            ("raise! Error(\"bad\")", "raise!"),
+            ("panic! Error(\"bad\")", "panic!"),
+            ("throw!Error(\"bad\")", "throw!"),
+            ("trap parse_id(\"42\")", ""),
+            ("throw Error(\"bad\")", ""),
+            ("raise Error(\"bad\")", ""),
+            ("panic Error(\"bad\")", ""),
+            ("trap !ready", ""),
+            ("trap!=next", ""),
+            ("trap!eq next", ""),
+            ("trapped! parse_id()", ""),
+            ("copy! owned", ""),
+            ("\"trap! throw! raise! panic!\"", ""),
+            ("// trap! throw! raise! panic!\n42", ""),
+            ("/* trap! throw! raise! panic! */ 42", ""),
+        ];
+        assert_eq!(cases.len(), 18);
+        for (source, expected) in cases {
+            let tokens = lex(source).unwrap();
+            let got: Vec<&str> = tokens.iter().filter_map(|t| match &t.tok {
+                Tok::Ident(s) if matches!(s.as_str(), "trap!" | "throw!" | "raise!" | "panic!") =>
+                    Some(s.as_str()),
+                _ => None,
+            }).collect();
+            let want: Vec<&str> = if expected.is_empty() { vec![] } else { vec![expected] };
+            assert_eq!(got, want, "lexical exception-bang mismatch in {source:?}");
+        }
+    }
+
+    #[test]
+    fn contiguous_keywords_are_single_tokens_without_comparison_collisions() {
+        let tokens = lex("trap! f(); throw! err; raise! err; panic! err").unwrap();
+        let names: Vec<&str> = tokens.iter().filter_map(|t| match &t.tok {
+            Tok::Ident(s) => Some(s.as_str()), _ => None,
+        }).collect();
+        assert_eq!(names, vec!["trap!", "f", "throw!", "err", "raise!", "err", "panic!", "err"]);
+
+        let separate = lex("trap !f; trap!eq throw!= other_trap!").unwrap();
+        assert!(matches!(&separate[0].tok, Tok::Ident(s) if s == "trap"));
+        assert_eq!(separate[1].tok, Tok::Bang);
+        assert!(matches!(&separate[4].tok, Tok::Ident(s) if s == "trap"));
+        assert_eq!(separate[5].tok, Tok::Bang);
+        assert!(matches!(&separate[6].tok, Tok::Ident(s) if s == "eq"));
+        assert!(matches!(&separate[7].tok, Tok::Ident(s) if s == "throw"));
+        assert_eq!(separate[8].tok, Tok::NotEq);
+        assert!(matches!(&separate[9].tok, Tok::Ident(s) if s == "other_trap"));
+        assert_eq!(separate[10].tok, Tok::Bang);
+    }
 }

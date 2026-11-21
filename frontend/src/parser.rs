@@ -1153,7 +1153,7 @@ impl Parser {
                 self.terminator()?;
                 Ok(Stmt::Return(value, pos))
             }
-            Some("throw") => {
+            Some("throw" | "throw!") => {
                 self.advance();
                 // Only the typed Error constructor is admitted by the
                 // checker. A raw string is never silently throwable.
@@ -1161,6 +1161,7 @@ impl Parser {
                 self.terminator()?;
                 Ok(Stmt::Throw(error, pos))
             }
+            Some("raise!" | "panic!") => Err(unsupported(pos, "typed exceptional effect / supervisor CONTROL lowering")),
             Some("if") => self.parse_if(),
             Some("while") => {
                 self.advance();
@@ -1197,7 +1198,7 @@ impl Parser {
             Some("do") if matches!(self.word_at(1), Some("switch" | "select" | "nb")) => {
                 Err(unsupported(pos, &format!("'do {}'", self.word_at(1).unwrap())))
             }
-            Some("trap") => {
+            Some("trap" | "trap!") => {
                 // Caller-side trap also works in expression-statement position.
                 let e = self.parse_expr()?;
                 self.terminator()?;
@@ -1896,6 +1897,14 @@ impl Parser {
                 ))
             }
             Tok::Ident(s) if s == "await" => return Err(unsupported(pos, "'await'")),
+            Tok::Ident(s) if s == "trap!" => {
+                // Canonical trap! is a typed Result<T,E> boundary. Existing
+                // legacy trap returns Option<T> on ordinary throw; routing
+                // canonical source through it would silently erase Error
+                // identity and violate the language's Result contract.
+                return Err(Diagnostic::new(pos, "E_TRAP_BANG_RESULT_UNVERIFIED",
+                    "trap! requires checked Result<T,Error> and guest unwind; legacy trap Option<T> is not equivalent"));
+            }
             Tok::Ident(s) if s == "trap" => {
                 self.advance();
                 let inner = self.parse_unary()?;
@@ -2211,5 +2220,34 @@ fn describe(t: &Tok) -> String {
             };
             format!("'{s}'")
         }
+    }
+}
+
+#[cfg(test)]
+mod canonical_trap_bang_result_guard_tests {
+    use super::*;
+    use crate::lexer::lex;
+
+    #[test]
+    fn canonical_trap_bang_never_reuses_legacy_option_ast() {
+        // Source-level parser admission only: this deliberately blocks
+        // unchecked Result semantics before guest Wasm/LLVM emission.
+        for source in [
+            "trap! 7",
+            "trap! Some(7)",
+            "trap! parse_id(\"42\")",
+        ] {
+            let tokens = lex(source).expect("canonical lexer must admit trap! spelling");
+            let mut parser = Parser::new(tokens);
+            let err = parser.parse_unary().expect_err("Result trap! must fail closed");
+            assert_eq!(err.code, "E_TRAP_BANG_RESULT_UNVERIFIED", "{err}");
+        }
+    }
+
+    #[test]
+    fn bare_trap_retains_separate_legacy_option_lowering() {
+        let tokens = lex("trap 7").expect("legacy lexical spelling");
+        let expression = Parser::new(tokens).parse_unary().expect("legacy unary trap");
+        assert!(matches!(expression.kind, ExprKind::Trap(_)));
     }
 }

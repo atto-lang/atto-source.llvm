@@ -32,9 +32,10 @@ struct Token {
 };
 
 bool exceptional_control(std::string_view word) {
-    return word == "throw" || word == "raise" || word == "panic" ||
+    return word == "throw" || word == "throw!" || word == "raise" || word == "raise!" ||
+           word == "panic" || word == "panic!" ||
            word == "recover" || word == "defer" || word == "try" ||
-           word == "catch" || word == "finally" || word == "trap";
+           word == "catch" || word == "finally" || word == "trap" || word == "trap!";
 }
 
 bool digit(char ch) { return ch >= '0' && ch <= '9'; }
@@ -224,6 +225,14 @@ public:
                         (source_[end] != '-' && !identifier_part(source_[end]))) {
                     at_ = end;
                 }
+            }
+            // Lex canonical bang effects atomically; keep != and !eq intact.
+            if ((first == "trap" || first == "throw" || first == "raise" || first == "panic")
+                    && at_ < source_.size() && source_[at_] == '!'
+                    && source_.substr(at_, 2) != "!="
+                    && !(source_.substr(at_, 3) == "!eq"
+                         && (at_ + 3 == source_.size() || !identifier_part(source_[at_ + 3])))) {
+                ++at_;
             }
             return {Kind::Identifier, source_.substr(start, at_ - start), start};
         }
@@ -2860,7 +2869,7 @@ private:
                 terminal_try_finally = true;
                 require("try");
                 require("{");
-                if (token_.text == "defer" || token_.text == "throw") {
+                if (token_.text == "defer" || token_.text == "throw" || token_.text == "throw!") {
                     // First typed-i64 exceptional CFG: one unconditional throw,
                     // LIFO scoped field cleanups, and a local catch. No await,
                     // exception-producing calls or nested try are admitted.
@@ -2892,6 +2901,21 @@ private:
                             fail("native caught throw defer requires nonthrowing scalar/field expression");
                         require(";");
                         value.caught_throw_defers.push_back(std::move(deferred));
+                    }
+                    if (token_.text == "throw!") {
+                        // Canonical throw! requires a nominal Error-subclass
+                        // payload. This historical closed int throw/catch CFG
+                        // cannot be reused without checked Error identity and
+                        // unwind semantics; reject before native IR emission.
+                        // fail(...) substitutes a generic exceptional-control
+                        // diagnostic when token_ == "throw!". Preserve this
+                        // typed-boundary failure code for compiler-backed
+                        // negative admission tests and frontend parity.
+                        throw std::runtime_error(
+                            "E_THROW_BANG_ERROR_TYPE_UNVERIFIED: throw! requires "
+                            "Error-subclass payload and verified guest unwind; "
+                            "legacy scalar throw/catch is not equivalent at byte "
+                            + std::to_string(token_.offset));
                     }
                     require("throw");
                     value.caught_throw_value = expression();
@@ -3469,10 +3493,18 @@ private:
             fail("native pointer syntax forbids unary '&' address-of and "
                  "unary '*' dereference; use checked Pointer<T> methods");
         }
+        if (token_.text == "trap!") {
+            // Canonical trap! yields Result<T,Error>, *not* the historical
+            // Option<T> trap payload. Reject before emitting any IR with a
+            // stable diagnostic distinct from the legacy spelling.
+            throw std::runtime_error(
+                "E_TRAP_BANG_RESULT_UNVERIFIED: canonical trap! requires "
+                "checked Result<T,Error> with guest unwind and cleanup at byte "
+                + std::to_string(token_.offset));
+        }
         if (token_.text == "trap") {
-            // Reserved for Option-valued ordinary-error capture. Reject it
-            // before IR generation: accepting a normal value here would erase
-            // the guest failure channel and violate panic/raise precedence.
+            // Legacy trap remains an unsupported native Option-valued
+            // ordinary-error capture until its effect lowering is checked.
             fail("native trap expression unsupported: typed throw effects and cleanup lowering required");
         }
         if (token_.text == "rt") {
@@ -5932,8 +5964,10 @@ private:
                     "silently execute on the host; no implicit CPU fallback at byte "
                     + std::to_string(token_.offset));
         }
-        if (token_.text == "throw" || token_.text == "raise" ||
-            token_.text == "panic" || token_.text == "recover") {
+        if (token_.text == "throw" || token_.text == "throw!" ||
+            token_.text == "raise" || token_.text == "raise!" ||
+            token_.text == "panic" || token_.text == "panic!" ||
+            token_.text == "recover") {
             throw std::runtime_error(
                 "native exceptional-control boundary unsupported: "
                 "typed unwind, defer/finally, recover and supervisor lowering required"
