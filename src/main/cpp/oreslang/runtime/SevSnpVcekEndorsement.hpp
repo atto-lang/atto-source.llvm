@@ -147,6 +147,16 @@ inline EndorsementStatus verify_vcek_offline(
     auto vek = parse_certificate(endorsements.vcek_der);
     if (!root || !ask || !vek || X509_check_ca(root.get()) <= 0 ||
         X509_check_ca(ask.get()) <= 0) return EndorsementStatus::InvalidCertificates;
+    // OpenSSL treats roots as trusted anchors; pinning alone does not check
+    // their expiration or self-signature, so validate those explicitly.
+    KeyPtr root_key(X509_get_pubkey(root.get()));
+    if (!root_key ||
+        X509_NAME_cmp(X509_get_subject_name(root.get()),
+                      X509_get_issuer_name(root.get())) != 0 ||
+        X509_verify(root.get(), root_key.get()) != 1 ||
+        X509_cmp_current_time(X509_get0_notBefore(root.get())) >= 0 ||
+        X509_cmp_current_time(X509_get0_notAfter(root.get())) <= 0)
+        return EndorsementStatus::InvalidCertificates;
     auto crl = parse_crl(endorsements.issuer_crl_der);
     auto root_crl = parse_crl(endorsements.root_issuer_crl_der);
     if (!crl || !root_crl) return EndorsementStatus::MissingRevocationEvidence;
