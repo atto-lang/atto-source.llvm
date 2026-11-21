@@ -18,6 +18,8 @@ def expected_prefix_last(name, actor_index, processed):
         return 0
     if name == "actor-logical-frame-aot-two-actors.atto":
         return [1, 42][actor_index] if processed else 0
+    if name == "actor-a-frame-quota-b-42.atto":
+        return [0, 42][actor_index] if processed else 0
     if name == "source-actor-fifo-ten.ores":
         value = 0
         for n in range(1, processed + 1):
@@ -63,6 +65,9 @@ def parse_actor_receipt(line):
         fields[key] = int(value)
     assert set(fields) == expected, ("missing actor receipt fields", fields)
     assert fields["released"] == 1, ("native actor release not verified", fields)
+    assert fields["processed"] == fields["successful"] + fields["failed"], fields
+    assert fields["failed"] == 0 or fields["failure_code"] != 0, fields
+    assert fields["failure_code"] == 0 or fields["failed"] > 0, fields
     assert fields["constructor_on_worker"] in (0, 1), fields
     assert fields["ready"] in (0, 1), ("invalid readiness receipt", fields)
     # Immediate stop can win before initialization begins. It must never
@@ -99,11 +104,14 @@ def main():
         ("source-actor-scoped-owned-i64.ores", 1, 8, 1004),
         ("source-actor-two-owned-heaps.ores", 2, 4, None),
         ("actor-logical-frame-aot-two-actors.atto", 2, 1, None),
+        ("actor-a-frame-quota-b-42.atto", 2, 1, None),
         ("source-actor-interleaved-stop.ores", 2, None, None),
         ("source-actor-send-moved-value.ores", 1, 2, 3),
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
     ]
     negatives = {
+        "actor-frame-budget-over-limit-reject.atto":
+            "@ActorFrameBudget exceeds native actor frame limit (16)",
         "source-actor-pipe-unlowered-reject.ores":
             "NATIVE_ACTOR_PIPE_UNSUPPORTED: typed actor pipe requires guest port, mailbox and supervisor lowering",
         "source-actor-transform-pipe-unlowered-reject.ores":
@@ -253,7 +261,10 @@ def main():
             linked = run(command)
             assert linked.returncode == 0, (name, linked.stderr)
             executed = run([str(exe)])
-            expected_exit = 42 if name == "actor-logical-frame-aot-two-actors.atto" else 43
+            expected_exit = 42 if name in {
+                "actor-logical-frame-aot-two-actors.atto",
+                "actor-a-frame-quota-b-42.atto",
+            } else 43
             assert executed.returncode == expected_exit, (name, executed.returncode, executed.stderr)
             vm_lines = [line for line in executed.stderr.splitlines()
                         if "SOURCE_ACTOR_VM_ROUTING_VERIFIED" in line]
@@ -293,6 +304,15 @@ def main():
                 assert observed_last == expected_prefix_last(
                     name, i, processed), (
                     name, i, processed, observed_last)
+            if name == "actor-a-frame-quota-b-42.atto":
+                assert receipts[0]["processed"] == 1, (name, receipts)
+                assert receipts[0]["successful"] == 0, (name, receipts)
+                assert receipts[0]["failed"] == 1, (name, receipts)
+                assert receipts[0]["failure_code"] == 0xA7700001, (name, receipts)
+                assert receipts[1]["processed"] == 1, (name, receipts)
+                assert receipts[1]["successful"] == 1, (name, receipts)
+                assert receipts[1]["failed"] == 0, (name, receipts)
+                assert receipts[1]["last"] == 42, (name, receipts)
             if name == "source-actor-two-owned-heaps.ores":
                 assert [r["last"] for r in receipts] == [
                     expected_prefix_last(name, i, r["processed"])

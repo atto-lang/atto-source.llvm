@@ -1230,12 +1230,36 @@ public:
                     program.functions.push_back(std::move(fn));
                     continue;
                 }
-                const MaxActorThreads cap = actor_max_threads_attribute();
-                require("define");
-                require("actor");
-                auto actor = actor_declaration();
-                actor.max_actor_threads = cap;
-                program.actors.push_back(std::move(actor));
+                if (accept("ActorFrameBudget")) {
+                    // A resource-budget attribute, not a test-only guest hook.
+                    // Zero is a valid deny-all setting and must cause a
+                    // recoverable actor-local frame admission failure.
+                    require("(");
+                    if (token_.kind != Kind::Integer)
+                        fail("@ActorFrameBudget requires a literal 0..16");
+                    const std::string budget_literal(token_.text);
+                    if (budget_literal.size() > 2 ||
+                        !std::all_of(budget_literal.begin(), budget_literal.end(),
+                                     [](char c) { return c >= '0' && c <= '9'; }))
+                        fail("@ActorFrameBudget requires a literal 0..16");
+                    const unsigned budget = static_cast<unsigned>(std::stoul(budget_literal));
+                    if (budget > 16)
+                        fail("@ActorFrameBudget exceeds native actor frame limit (16)");
+                    advance();
+                    require(")");
+                    require("define");
+                    require("actor");
+                    auto actor = actor_declaration();
+                    actor.frame_budget = budget;
+                    program.actors.push_back(std::move(actor));
+                } else {
+                    const MaxActorThreads cap = actor_max_threads_attribute();
+                    require("define");
+                    require("actor");
+                    auto actor = actor_declaration();
+                    actor.max_actor_threads = cap;
+                    program.actors.push_back(std::move(actor));
+                }
             } else if (accept("define")) {
                 if (accept("pub")) {
                     if (public_class) fail("duplicate pub modifier");
@@ -4615,6 +4639,23 @@ private:
                 continue;
             }
             auto action = primary();
+            if (action->kind == Expression::Kind::Field
+                    && action->name == "flush_blocking" && accept("(")) {
+                // In the native AOT scalar-main profile this barrier waits
+                // for physically completed callbacks, including failed ones.
+                // No carrier turn may invoke a host-blocking barrier.
+                if (!action->left || action->left->kind != Expression::Kind::Variable)
+                    fail("native actor flush_blocking requires direct ActorRef receiver");
+                if (!value.done_await_actor.empty() || !value.ready_await_actor.empty())
+                    fail("native actor flush_blocking with lifecycle await requires a continuation");
+                const std::string reference = action->left->name;
+                require(")");
+                require(";");
+                value.actor_flushes.push_back(reference);
+                value.actor_actions.push_back({ActorAction::Kind::FlushBlocking,
+                                               value.actor_flushes.size() - 1});
+                continue;
+            }
             if (action->kind == Expression::Kind::Field && action->name == "send"
                     && accept("(")) {
                 if (!value.done_await_actor.empty())
@@ -5916,8 +5957,10 @@ private:
             const bool named_class_receiver = field->left
                 && field->left->kind == Expression::Kind::Variable
                 && class_receivers_.count(field->left->name);
-            const bool actor_send = field->name == "send" && !named_class_receiver;
-            if (!actor_send && accept("(")) {
+            const bool actor_action =
+                (field->name == "send" || field->name == "flush_blocking")
+                && !named_class_receiver;
+            if (!actor_action && accept("(")) {
                 field->kind = Expression::Kind::ArrayCall;
                 // Member syntax is also used by extension-call lowering. Do not
                 // let it bypass the duplicate/ordering rules of direct calls.
@@ -7373,6 +7416,12 @@ private:
                     if (!live_actors.count(send.reference))
                         throw std::runtime_error("actor message sent after stop '" + send.reference + "'");
                     validate_expression(*send.payload, params, functions);
+                } else if (action.kind == ActorAction::Kind::FlushBlocking) {
+                    const auto& ref = fn.actor_flushes.at(action.index);
+                    if (!references.count(ref))
+                        throw std::runtime_error("unknown actor flush_blocking receiver '" + ref + "'");
+                    if (!live_actors.count(ref))
+                        throw std::runtime_error("actor flush_blocking after stop '" + ref + "'");
                 } else {
                     const auto& stop = fn.actor_stops.at(action.index);
                     if (!live_actors.erase(stop))

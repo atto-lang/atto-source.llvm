@@ -290,7 +290,7 @@ struct ActorSend {
 // Preserve the sequence of source-visible actor effects. Separating sends
 // from stops changes program behavior and can hide use-after-stop errors.
 struct ActorAction {
-    enum class Kind { Send, Stop };
+    enum class Kind { Send, FlushBlocking, Stop };
     Kind kind;
     std::size_t index = 0;
 };
@@ -383,6 +383,7 @@ struct Function {
     std::string ready_future_actor;
     std::vector<ActorSend> actor_sends;
     std::vector<std::string> actor_stops;
+    std::vector<std::string> actor_flushes; // trusted-main mailbox callback barrier
     std::vector<ActorAction> actor_actions; // source order of send/stop
     std::vector<ActorFieldWrite> actor_field_writes;
     bool returns_void = false;
@@ -415,6 +416,9 @@ struct ActorDecl {
     Function on_message; // exactly one synchronous pub on_message(int): int
     std::size_t offset = 0;
     MaxActorThreads max_actor_threads = MaxActorThreads::LOW;
+    // Maximum simultaneously owned logical frames per scalar receiver turn.
+    // Zero deliberately refuses frame admission without process abort.
+    std::uint32_t frame_budget = 16;
 };
 
 // Compiler-only structural contract evidence for the native i64 subset.

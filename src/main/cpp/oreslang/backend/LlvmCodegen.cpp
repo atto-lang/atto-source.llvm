@@ -1482,7 +1482,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     // No actor imports appear in ordinary scalar/class compilation.
     llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
     llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop, sourceRequestStop,
-        sourceAwaitReady, sourceAwaitDone;
+        sourceFlushBlocking, sourceAwaitReady, sourceAwaitDone;
     llvm::FunctionCallee actorScopedNew, actorScopedDrop;
     llvm::FunctionCallee actorFramePush, actorFrameStore, actorFrameLoad, actorFramePop;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
@@ -1514,12 +1514,15 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             llvm::FunctionType::get(i32, {native_ptr}, false));
         actorFramePop = module.getOrInsertFunction("oreslang_source_actor_frame_pop",
             llvm::FunctionType::get(i32, {}, false));
-        sourceSpawn = module.getOrInsertFunction("oreslang_source_actor_spawn",
-            llvm::FunctionType::get(native_ptr, {native_ptr, native_ptr, i64}, false));
+        sourceSpawn = module.getOrInsertFunction("oreslang_source_actor_spawn_budgeted",
+            llvm::FunctionType::get(native_ptr, {native_ptr, native_ptr, i64, i64}, false));
         sourceSend = module.getOrInsertFunction("oreslang_source_actor_send",
             llvm::FunctionType::get(voidTy, {native_ptr, i64}, false));
         sourceStop = module.getOrInsertFunction("oreslang_source_actor_stop",
             llvm::FunctionType::get(voidTy, {native_ptr}, false));
+        sourceFlushBlocking = module.getOrInsertFunction(
+            "oreslang_source_actor_flush_blocking",
+            llvm::FunctionType::get(i32, {native_ptr}, false));
         sourceRequestStop = module.getOrInsertFunction(
             "oreslang_source_actor_request_stop",
             llvm::FunctionType::get(voidTy, {native_ptr}, false));
@@ -1771,7 +1774,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 [&](const ActorDecl& a) { return a.name == spawn.actor_type; });
             llvm::Value* ref = builder.CreateCall(sourceSpawn, {ctor, handler,
                 llvm::ConstantInt::get(i64,
-                    actor->fields.size() + actor->on_message.locals.size())},
+                    actor->fields.size() + actor->on_message.locals.size()),
+                llvm::ConstantInt::get(i64, actor->frame_budget)},
                 spawn.name + ".actor.ref");
             actorRefs.emplace(spawn.name, ref);
         }
@@ -2714,6 +2718,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             lower_effect(stmt);
         }
 
+        if (!fn.actor_flushes.empty()
+                && (!fn.ready_await_actor.empty() || !fn.done_await_actor.empty()))
+            throw std::runtime_error("flush_blocking requires independent lifecycle continuation lowering");
+
         /*
          * A lifecycle await splits trusted-main execution at one verified point.
          * get_ready resumes before stop; get_done requests stop first and resumes
@@ -2868,6 +2876,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                     builder.CreateCall(
                         sourceSend,
                         {actorRefs.at(send.reference), payload});
+                } else if (action.kind == ActorAction::Kind::FlushBlocking) {
+                    // Trusted main waits for accepted DATA callbacks to reach
+                    // a physical outcome, even if the actor fails locally.
+                    // No actor carrier can execute this blocking bridge.
+                    builder.CreateCall(
+                        sourceFlushBlocking,
+                        {actorRefs.at(fn.actor_flushes.at(action.index))});
                 } else {
                     builder.CreateCall(
                         sourceStop,

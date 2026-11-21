@@ -1,0 +1,29 @@
+// Real native AOT guest: static actor policy bounds logical frames.
+// Actor A permits zero receiver frames: its first handler frame admission
+// fails locally and must produce supervisor PANIC, not an i64 success=0.
+// Actor B has the default budget and must independently return 42.
+@ActorFrameBudget(0) define actor QuotaActor as {
+  let count: int = 0;
+  pub fnc on_message(int n): int {
+    count = count + n;
+    return count;
+  }
+}
+define actor HealthyActor as {
+  let count: int = 0;
+  pub fnc on_message(int n): int {
+    count = count + n;
+    return count;
+  }
+}
+pub fnc main(): int {
+  const a: ActorRef<QuotaActor> = spawn QuotaActor();
+  const b: ActorRef<HealthyActor> = spawn HealthyActor();
+  a.send(7);
+  a.flush_blocking();  // Physical A failure is settled before B runs.
+  b.send(42);
+  b.flush_blocking();  // B's successful receipt is durable before STOP.
+  stop a;
+  stop b;
+  return 42;
+}

@@ -26,6 +26,13 @@ typedef struct {
     uint64_t id;
     OresActorI64Heap* heap;
     OresNativeActorLogicalFramesV1* logical_frames;
+    uint32_t frame_budget;
+    /* Accepted guest DATA snapshot and waiters are guarded by group.mutex.
+     * Physical callbacks signal this preinitialized condition after their
+     * success/failure receipts become observable. No per-message allocation. */
+    uint64_t admitted_sends;
+    uint32_t flush_waiters;
+    pthread_cond_t callback_completed;
     atomic_int logical_frame_failed;
     OresNativeActorRef ref;
     OresSourceActorInit constructor;
@@ -80,6 +87,7 @@ typedef struct {
     size_t live;
     size_t peak;
     atomic_uint_fast64_t terminal_notices;
+    atomic_uint_fast64_t terminal_published;
     atomic_uint_fast64_t terminal_panic_notices;
     atomic_uint_fast64_t terminal_stopped_notices;
     atomic_uint_fast64_t last_panic_code;
@@ -119,7 +127,8 @@ static int reject_compiled_frame(void) {
  * Ref32/ActorRef never carry the private frame store or physical turn token.
  */
 int oreslang_source_actor_frame_push(void) {
-    if (!frame_actor || frame_faulted || frame_active) return reject_compiled_frame();
+    if (!frame_actor || frame_faulted || frame_active ||
+        frame_actor->frame_budget == 0) return reject_compiled_frame();
     if (!ores_logical_frames_v1_push(frame_actor->logical_frames,
                                     frame_turn, &frame_handle))
         return reject_compiled_frame();
@@ -648,6 +657,11 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
         }
         group_unlock();
     }
+    /* An explicit trusted-main flush_blocking barrier observes physical
+     * callback completion, regardless of whether the guest succeeded. */
+    group_lock();
+    ensure(pthread_cond_broadcast(&instance->callback_completed) == 0);
+    group_unlock();
 }
 
 /* Typed priority CONTROL belongs to the root supervisor's actor lane.
@@ -674,6 +688,15 @@ static void source_supervisor_notice(
             &group.terminal_stopped_notices, 1, memory_order_release);
     }
     atomic_fetch_add_explicit(&group.terminal_notices, 1, memory_order_release);
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+    fprintf(stderr,
+        "SOURCE_ACTOR_TERMINAL_CONTROL_VERIFIED kind=%s slot=%llu generation=%llu code=%llu correlation=%llu\n",
+        failure.kind == ORES_NATIVE_CONTROL_PANIC ? "PANIC" : "STOPPED",
+        (unsigned long long)failure.child.actor_slot,
+        (unsigned long long)failure.child.generation,
+        (unsigned long long)failure.failure_code,
+        (unsigned long long)failure.correlation);
+#endif
 }
 
 static void open_group_locked(void) {
@@ -681,6 +704,7 @@ static void open_group_locked(void) {
     ensure(group.live == 0 && group.next_slot == 0 && group.peak == 0);
     ensure(group.pending_ready == NULL && group.pending_done == NULL);
     atomic_store_explicit(&group.terminal_notices, 0, memory_order_release);
+    atomic_store_explicit(&group.terminal_published, 0, memory_order_release);
     atomic_store_explicit(&group.terminal_panic_notices, 0, memory_order_release);
     atomic_store_explicit(&group.terminal_stopped_notices, 0, memory_order_release);
     atomic_store_explicit(&group.last_panic_code, 0, memory_order_release);
@@ -735,11 +759,13 @@ static void open_group_locked(void) {
 #endif
 }
 
-void* oreslang_source_actor_spawn(
+void* oreslang_source_actor_spawn_budgeted(
         OresSourceActorInit constructor,
         OresSourceActorMessage on_message,
-        uint64_t fields) {
-    ensure(constructor != NULL && fields >= 1 && fields <= 4096);
+        uint64_t fields,
+        uint64_t max_frames) {
+    ensure(constructor != NULL && fields >= 1 && fields <= 4096
+        && max_frames <= 16);
     group_lock();
     if (!group.vm) open_group_locked();
 
@@ -753,6 +779,10 @@ void* oreslang_source_actor_spawn(
     ensure(instance->id != 0 && instance->id != UINT64_MAX);
     instance->constructor = constructor;
     instance->on_message = on_message;
+    instance->frame_budget = (uint32_t)max_frames;
+    instance->admitted_sends = 0;
+    instance->flush_waiters = 0;
+    ensure(pthread_cond_init(&instance->callback_completed, NULL) == 0);
 
     /*
      * SourceActor is dynamically allocated. Initialize every C11 atomic
@@ -775,7 +805,8 @@ void* oreslang_source_actor_spawn(
     instance->heap = ores_actor_i64_heap_open(instance->id, 1, fields);
     /* Current native i64 heap is serial. One preallocated turn lane, with
      * reserved depth for future compiler-generated nested synchronous calls. */
-    instance->logical_frames = ores_logical_frames_v1_open(instance->id, 1, 1, 16, 64);
+    instance->logical_frames = ores_logical_frames_v1_open(
+        instance->id, 1, 1, max_frames == 0 ? 1 : max_frames, 64);
     ensure(instance->logical_frames != NULL);
     group.actors[slot] = instance;
     /* Every compiler-generated source actor has a registered root supervisor.
@@ -796,15 +827,59 @@ void* oreslang_source_actor_spawn(
 
 int oreslang_source_actor_try_send(void* opaque, int64_t payload) {
     SourceActor* instance = (SourceActor*)opaque;
-    if (!instance || instance->magic != SOURCE_ACTOR_MAGIC
-        || !instance->on_message
-        || atomic_load_explicit(&instance->logical_frame_failed, memory_order_acquire)
-        || atomic_load_explicit(&instance->stop_requested, memory_order_acquire))
-        return 0;
-    return ores_native_vm_try_send(
-        group.vm, ORES_NATIVE_VM_MAIN, instance->ref, (uint64_t)payload)
-        == ORES_NATIVE_SEND_ACCEPTED;
+    if (!instance) return 0;
+    group_lock();
+    int admitted = 0;
+    if (group.vm && instance->magic == SOURCE_ACTOR_MAGIC
+        && instance->on_message
+        && !atomic_load_explicit(&instance->logical_frame_failed, memory_order_acquire)
+        && !atomic_load_explicit(&instance->stop_requested, memory_order_acquire)) {
+        admitted = ores_native_vm_try_send(
+            group.vm, ORES_NATIVE_VM_MAIN, instance->ref, (uint64_t)payload)
+            == ORES_NATIVE_SEND_ACCEPTED;
+        if (admitted) instance->admitted_sends++;
+    }
+    group_unlock();
+    return admitted;
 }
+
+/* This API only blocks trusted outer-main execution. The captured count
+ * linearizes with try_send under group.mutex, so a concurrent send cannot
+ * sneak into an earlier flush snapshot. The carrier signals after recording
+ * either a successful or failed physical callback. No DATA is sealed here. */
+int oreslang_source_actor_flush_blocking(void* opaque) {
+    SourceActor* instance = (SourceActor*)opaque;
+    if (!instance) return 0;
+    group_lock();
+    if (!group.vm || instance->magic != SOURCE_ACTOR_MAGIC
+        || !instance->on_message) {
+        group_unlock();
+        return 0;
+    }
+    OresNativeExecutionContext current = {0};
+    ensure(!ores_native_vm_current_execution_context(
+        group.vm, ORES_NATIVE_VM_MAIN, &current));
+    const uint64_t target = instance->admitted_sends;
+    instance->flush_waiters++;
+    while (atomic_load_explicit(&instance->processed, memory_order_acquire) < target
+           && !atomic_load_explicit(&instance->stop_requested, memory_order_acquire))
+        ensure(pthread_cond_wait(&instance->callback_completed, &group.mutex) == 0);
+    const int completed = atomic_load_explicit(
+        &instance->processed, memory_order_acquire) >= target;
+    ensure(instance->flush_waiters > 0);
+    instance->flush_waiters--;
+    ensure(pthread_cond_broadcast(&instance->callback_completed) == 0);
+    group_unlock();
+    return completed;
+}
+void* oreslang_source_actor_spawn(
+        OresSourceActorInit constructor,
+        OresSourceActorMessage on_message,
+        uint64_t fields) {
+    return oreslang_source_actor_spawn_budgeted(
+        constructor, on_message, fields, 16);
+}
+
 void oreslang_source_actor_send(void* opaque, int64_t payload) {
     ensure(oreslang_source_actor_try_send(opaque, payload));
 }
@@ -1057,6 +1132,7 @@ void oreslang_source_actor_request_stop(void* opaque) {
     if (first_request)
         ensure(ores_native_vm_stop_sealed(
             group.vm, ORES_NATIVE_VM_MAIN, instance->ref));
+    ensure(pthread_cond_broadcast(&instance->callback_completed) == 0);
     group_unlock();
 }
 
@@ -1148,6 +1224,8 @@ void oreslang_source_actor_join_done(void* opaque) {
     while (!ores_native_vm_publish_supervised_failure(
             group.vm, ORES_NATIVE_VM_MAIN, notice))
         sched_yield();
+    atomic_fetch_add_explicit(
+        &group.terminal_published, 1, memory_order_release);
     group_lock();
     ensure(group.vm && slot < group.next_slot
         && group.actors[slot] == instance);
@@ -1166,6 +1244,12 @@ void oreslang_source_actor_join_done(void* opaque) {
         (unsigned long long)failed,
         (unsigned long long)failure_code);
 #endif
+    /* Quiesce trusted external flush waiters before dropping their condition
+     * and the actor pointer. This wait releases group.mutex until the final
+     * reader exits, preventing a use-after-free during STOP/join. */
+    while (instance->flush_waiters > 0)
+        ensure(pthread_cond_wait(&instance->callback_completed, &group.mutex) == 0);
+    ensure(pthread_cond_destroy(&instance->callback_completed) == 0);
     group.actors[slot] = NULL;
     instance->magic = 0;
     free(instance);
@@ -1173,6 +1257,18 @@ void oreslang_source_actor_join_done(void* opaque) {
     group.live--;
 
     if (group.live == 0) {
+        /* Publication is not delivery. Ensure all authenticated priority
+         * CONTROL callbacks have actually executed before destroying the
+         * supervisor pool and dropping the audit receipt. */
+        uint64_t published = atomic_load_explicit(
+            &group.terminal_published, memory_order_acquire);
+        unsigned spins = 0;
+        while (atomic_load_explicit(
+                   &group.terminal_notices, memory_order_acquire) < published
+               && spins++ < 1000000)
+            sched_yield();
+        ensure(atomic_load_explicit(
+            &group.terminal_notices, memory_order_acquire) == published);
         ensure(group.pending_ready == NULL && group.pending_done == NULL);
         ensure(ores_native_execution_context_store_live(group.executions) == 0);
         ensure(ores_native_continuation_store_live(group.continuations) == 0);
