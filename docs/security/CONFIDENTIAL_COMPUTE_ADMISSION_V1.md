@@ -109,6 +109,46 @@ not a hardware-backed confidential-computing certification.
  --output-on-failure
 ```
 
+## Offline VCEK certificate validation (M2 staging)
+
+`SevSnpVcekEndorsement.hpp` adds a separate offline OpenSSL verifier.
+It requires a trusted host-provisioned **pinned AMD ARK DER SHA-256
+fingerprint**, ARK → ASK → VCEK X.509 chain, DER issuer CRLs covering
+**both VCEK and ASK**, and matching Family-19h `structVersion=0`
+TCB extensions (BL, TEE, SNP, microcode) and 64-byte report `CHIP_ID`.
+It then verifies the report signature using the validated VCEK key.
+
+The trust anchor PIN MUST be sourced independently from approved AMD
+product certificate material. Computing the expected pin from evidence
+received in the same request is a trust-on-first-use bypass. Missing,
+expired or invalid CRLs fail closed. This staging verifier explicitly
+does not implement cloud VLEK or Turin/family-1Ah certificate parsing.
+
+**Status remains HOST_ONLY / NOT_EXECUTED_EXACT_HEAD**. This is not yet
+an independently audited endorsement verifier, a live report collector,
+a TLS key-provisioning service or real-hardware attestation. It cannot
+enable `TenantVmHost::open` or release any credential. Isolated
+sanitizer smoke exercised missing/forged-root refusal; the exact
+repository CMake target is staged but has no qualifying executed CI.
+
+```sh
+cmake -S tests/tenant-vm -B build/tenant-vm -DTENANT_VM_SANITIZE=ON
+cmake --build build/tenant-vm --target tenant_vm_sev_snp_vcek_endorsement_test
+ctest --test-dir build/tenant-vm -R '^tenant_vm_sev_snp_vcek_endorsement_test
+```sh
+cmake -S tests/tenant-vm -B build/tenant-vm
+cmake --build build/tenant-vm --target tenant_vm_test
+ctest --test-dir build/tenant-vm -R tenant_vm_test --output-on-failure
+```
+
+The named case
+`confidential_compute_request_never_falls_back_to_plain_vm`
+checks the new denial status, zero registered tenants or allocated heap,
+and unchanged explicitly trusted admission. This is a host-unit test,
+not a hardware-backed confidential-computing certification.
+ --output-on-failure
+```
+
 ## Regression
 
 ```sh
