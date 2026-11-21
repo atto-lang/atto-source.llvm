@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "llvm/Config/llvm-config.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
@@ -35,12 +36,15 @@ inline std::string emit_actor_region_v1_guest_ir(const Program& program) {
     if (!program.imports.empty() || !program.actors.empty() ||
         !program.generators.empty() || !program.cooperative_loops.empty() ||
         !program.sum_types.empty() || !program.type_only_declarations.empty() ||
+        !program.type_constraint_descriptors.empty() ||
         !program.contracts.empty() || !program.conforms.empty() ||
         program.classes.size() != 1 || program.functions.size() != 1)
         reject("non-closed declarations or additional roots");
 
     const ClassDecl& cls = program.classes.front();
-    if (cls.explicit_constructor || !cls.constructor_parameters.empty() ||
+    if (cls.explicit_constructor || cls.constructor_exported ||
+        !cls.constructor_parameters.empty() ||
+        !cls.constructor_parameter_types.empty() ||
         !cls.methods.empty() || cls.fields.empty() || cls.fields.size() > 16)
         reject("constructors, methods or unsupported class layout");
     for (const auto& field : cls.fields) {
@@ -48,15 +52,22 @@ inline std::string emit_actor_region_v1_guest_ir(const Program& program) {
             !field.final_field || field.mutable_referent ||
             field.int_array || !field.class_name.empty() ||
             field.constructor_argument || !field.sum_type.empty() ||
+            !field.array_record_class.empty() ||
             !field.initializer_expression ||
             field.initializer_expression->kind != Expression::Kind::Integer)
             reject("nonliteral, nonpublic or mutable class field");
         // The first version accepts a single integer leaf, not an expression
         // graph which could hide calls, effects, ownership, or runtime work.
         const Expression& expr = *field.initializer_expression;
-        if (expr.left || expr.right || expr.condition || expr.when_true ||
-            expr.when_false || !expr.arguments.empty())
+        if (expr.left || expr.right || expr.condition || expr.condition_lhs ||
+            expr.condition_rhs || expr.when_true || expr.when_false ||
+            !expr.arguments.empty() || !expr.argument_names.empty() ||
+            !expr.type_arguments.empty() || expr.type_arguments_present ||
+            !expr.sum_type.empty() || !expr.resolved_class.empty() ||
+            !expr.name.empty() || expr.integer != field.initial)
             reject("unmodeled class initializer expression");
+        // Prevent a future AST field, generic annotation, or literal-cache
+        // mismatch from silently conferring a native allocation authority.
     }
 
     const Function& main_fn = program.functions.front();
@@ -67,7 +78,13 @@ inline std::string emit_actor_region_v1_guest_ir(const Program& program) {
         !main_fn.actor_sends.empty() || !main_fn.actor_field_writes.empty() ||
         !main_fn.source_tasks.empty() || !main_fn.future_pipelines.empty() ||
         main_fn.scalar_while || main_fn.caught_throw_value ||
-        !main_fn.caught_throw_defers.empty() ||
+        !main_fn.caught_throw_defers.empty() || !main_fn.catch_binding.empty() ||
+        !main_fn.ready_await_actor.empty() || !main_fn.done_await_actor.empty() ||
+        main_fn.ready_await_form != NativeAwaitForm::None ||
+        !main_fn.ready_future_name.empty() ||
+        !main_fn.ready_future_actor.empty() || !main_fn.method_owner.empty() ||
+        main_fn.native_internal || !main_fn.c_export_u32_symbol.empty() ||
+        main_fn.has_declared_effects || !main_fn.pending_return_type_alias.empty() ||
         main_fn.async_source_i64 || main_fn.returns_void ||
         main_fn.return_type != ScalarType::I64 || !main_fn.return_class.empty() ||
         !main_fn.return_sum.empty() || !main_fn.generic_parameters.empty())
@@ -78,7 +95,10 @@ inline std::string emit_actor_region_v1_guest_ir(const Program& program) {
         owner.record_view || owner.move_class || owner.heap_owned ||
         owner.int_array || owner.owner_mutable || owner.field_mutable ||
         owner.assignable || !owner.constructor_arguments.empty() ||
-        owner.initializer || owner.name.empty())
+        owner.initializer || owner.name.empty() ||
+        !owner.move_source.empty() || !owner.sum_type.empty() ||
+        !owner.array_record_class.empty() || !owner.pending_type_alias.empty() ||
+        !owner.task_await_name.empty() || !owner.future_await_name.empty())
         reject("non-fresh, mutable or escaping class owner");
     if (!main_fn.result ||
         main_fn.result->kind != Expression::Kind::Field ||
@@ -86,7 +106,27 @@ inline std::string emit_actor_region_v1_guest_ir(const Program& program) {
         main_fn.result->left->kind != Expression::Kind::Variable ||
         main_fn.result->left->name != owner.name ||
         main_fn.result->right || main_fn.result->condition ||
-        !main_fn.result->arguments.empty())
+        main_fn.result->condition_lhs || main_fn.result->condition_rhs ||
+        main_fn.result->when_true || main_fn.result->when_false ||
+        !main_fn.result->arguments.empty() ||
+        !main_fn.result->argument_names.empty() ||
+        !main_fn.result->type_arguments.empty() ||
+        main_fn.result->type_arguments_present ||
+        !main_fn.result->sum_type.empty() ||
+        !main_fn.result->resolved_class.empty() ||
+        main_fn.result->left->left || main_fn.result->left->right ||
+        main_fn.result->left->condition ||
+        main_fn.result->left->condition_lhs ||
+        main_fn.result->left->condition_rhs ||
+        main_fn.result->left->when_true ||
+        main_fn.result->left->when_false ||
+        !main_fn.result->left->arguments.empty() ||
+        !main_fn.result->left->argument_names.empty() ||
+        !main_fn.result->left->type_arguments.empty() ||
+        main_fn.result->left->type_arguments_present ||
+        !main_fn.result->left->sum_type.empty() ||
+        (!main_fn.result->left->resolved_class.empty() &&
+         main_fn.result->left->resolved_class != cls.name))
         reject("return outside the original class owner's scalar field");
 
     const auto field_it = std::find_if(cls.fields.begin(), cls.fields.end(),
@@ -104,7 +144,13 @@ inline std::string emit_actor_region_v1_guest_ir(const Program& program) {
     auto* i8 = llvm::Type::getInt8Ty(context);
     auto* i32 = llvm::Type::getInt32Ty(context);
     auto* i64 = llvm::Type::getInt64Ty(context);
+    // LLVM 18+ removed Type::getInt8PtrTy. Match the native backend's
+    // target-neutral opaque-pointer contract without corrupting sidecar ABI.
+#if LLVM_VERSION_MAJOR >= 18
+    auto* ptr = llvm::PointerType::get(context, 0);
+#else
     auto* ptr = llvm::Type::getInt8PtrTy(context);
+#endif
     auto* void_type = llvm::Type::getVoidTy(context);
     const auto native = [&](const char* symbol, llvm::Type* output,
                             std::vector<llvm::Type*> arguments) {

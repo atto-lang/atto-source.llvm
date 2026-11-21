@@ -57,3 +57,41 @@ source admissions. Each positive links *exact* `ActorArena.c` +
   passing native guest tests. Reviewer approval remains mandatory.
 
 No existing compiler, actor-memory or runtime code has been deleted.
+
+## Companion hardening review (stacked draft)
+
+The compiler admission path must reject all concealed AST edges even when a
+node's top-level `kind` looks like an integer literal or field projection:
+conditional equality compatibility operands, named/generic arguments, sum
+metadata and nonleaf receiver subtrees are not ignorable. Constructor metadata,
+declared effects, actor awaits, hidden C exports and owner aliases also
+remain forbidden. This gate is limited to the original class source and
+normal return; it must **not** be widened by a future parser feature.
+
+LLVM 18 and later use opaque pointers; do not call the removed
+`Type::getInt8PtrTy` there. The native region reference/turn sidecars
+must still retain their C ABI alignment and size assertions. Run the same
+compiler-backed tests on each supported LLVM major version to prove this,
+rather than treating successful C syntax checks as proof.
+
+The native guest regression verifies **executed LLVM call instructions**
+for precisely one allocation, read and destruction. Merely finding symbol
+names in `declare` instructions is not enough. Positive runs record hashes
+of the source, compiler binary, generated IR and linked executable. Valid
+negative source cases demand a specific `actor-region-v1 guest AOT rejects`
+diagnostic instead of accepting unrelated frontend errors.
+
+**Still not a production untrusted-guest boundary.** Compiler-created
+stack slots are controlled by an admitted typed source *only within this
+restricted profile*, but a hostile native process can corrupt its own stack.
+Do not present native sidecar storage as an OS hardware security boundary.
+The fixed synthetic actor identity (1,1) is a testing root, not scheduler
+issuance or tenant isolation. Do not run untrusted native guest binaries
+inside the AttoLang OS process; use an appropriately isolated worker and
+authenticated IPC, quotas and supervisor crash recovery before deployment.
+The strict sealed-AOT native runtime linker allowlist remains unchanged.
+
+The current branch is source/test design until a trusted exact-head workflow
+records nonzero steps, tested Git-tree identity, both Clang optimization modes
+and native process outputs; a source-free checker cannot establish guest
+execution or sanitizer cleanliness.
