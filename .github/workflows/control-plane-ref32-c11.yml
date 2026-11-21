@@ -30,14 +30,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gcc -std=c11 -O2 -Wall -Wextra -Werror -pedantic -pthread -Isrc/main/cpp/oreslang/runtime             src/main/cpp/oreslang/runtime/ControlPlaneArena32.c tests/control_plane_arena32_test.c -o /tmp/atto-control-c11
+          gcc -std=c11 -O2 -DATTO_CONTROL32_TESTING=1 -Wall -Wextra -Werror -pedantic -pthread -Isrc/main/cpp/oreslang/runtime             src/main/cpp/oreslang/runtime/ControlPlaneArena32.c tests/control_plane_arena32_test.c -o /tmp/atto-control-c11
           /tmp/atto-control-c11 | tee "$RUNNER_TEMP/control-gcc.log"
           grep -Fx 'PASS llvm control i128 coherent concurrent host (NOT compiled Atto)' "$RUNNER_TEMP/control-gcc.log"
       - name: Clang ASan and UBSan host probe
         shell: bash
         run: |
           set -euo pipefail
-          clang -std=c11 -O1 -g -Wall -Wextra -Werror -pedantic -fsanitize=address,undefined -fno-omit-frame-pointer -pthread -Isrc/main/cpp/oreslang/runtime             src/main/cpp/oreslang/runtime/ControlPlaneArena32.c tests/control_plane_arena32_test.c -o /tmp/atto-control-san
+          clang -std=c11 -O1 -g -DATTO_CONTROL32_TESTING=1 -Wall -Wextra -Werror -pedantic -fsanitize=address,undefined -fno-omit-frame-pointer -pthread -Isrc/main/cpp/oreslang/runtime             src/main/cpp/oreslang/runtime/ControlPlaneArena32.c tests/control_plane_arena32_test.c -o /tmp/atto-control-san
           ASAN_OPTIONS=detect_leaks=1 /tmp/atto-control-san | tee "$RUNNER_TEMP/control-san.log"
           grep -Fx 'PASS llvm control i128 coherent concurrent host (NOT compiled Atto)' "$RUNNER_TEMP/control-san.log"
       - name: Explicit scope
