@@ -1392,10 +1392,10 @@ private:
             fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
         }
         if (accept("static")) {
-            if (accept("method")) fail("static method is invalid; use static fnc");
+            if (accept("method") || accept("mtd")) fail("static method is invalid; use static fnc");
             fail("native actor static fnc requires separate member lowering");
         }
-        if (!accept("fnc")) accept("method"); // optional method marker
+        if (!accept("fnc") && !accept("method")) accept("mtd"); // contextual method marker
         if (at_unsupported_critical_mode()) {
             fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
         }
