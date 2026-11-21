@@ -2893,8 +2893,16 @@ private:
                         require(";");
                         value.caught_throw_defers.push_back(std::move(deferred));
                     }
-                    if (token_.text == "throw!") advance();
-                    else require("throw");
+                    if (token_.text == "throw!") {
+                        // Canonical throw! requires a nominal Error-subclass
+                        // payload. This historical closed int throw/catch CFG
+                        // cannot be reused without checked Error identity and
+                        // unwind semantics; reject before native IR emission.
+                        fail("E_THROW_BANG_ERROR_TYPE_UNVERIFIED: throw! requires "
+                             "Error-subclass payload and verified guest unwind; "
+                             "legacy scalar throw/catch is not equivalent");
+                    }
+                    require("throw");
                     value.caught_throw_value = expression();
                     if (!native_pure_scalar_tree(*value.caught_throw_value))
                         fail("native caught throw requires nonthrowing int payload");
