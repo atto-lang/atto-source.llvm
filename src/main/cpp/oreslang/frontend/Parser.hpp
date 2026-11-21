@@ -377,14 +377,19 @@ struct Function {
 enum class MaxActorThreads : std::uint8_t { LOW = 1, MEDIUM = 2, HIGH = 3 };
 
 /**
- * Parsed actor-state schema metadata. This is deliberately not an ordinary
- * actor field: until sealed handle_state + ledger-backed lowering lands,
- * source state declarations are validated and then fail closed before codegen.
+ * Parsed actor-state schema metadata. This is not a source-visible ordinary
+ * actor field. A bounded synchronous, isolated actor can lower one lexical
+ * critical-read/write handle_state callback into the actor-owned i64 heap.
+ * Suspension, other state types, multiple callbacks and arbitrary methods
+ * still fail closed pending ledger-backed continuation lowering.
  */
 struct ActorStateField {
     std::string name;
     ScalarType type = ScalarType::I64;
     std::size_t offset = 0;
+    // Exact signed i64 / bool literal defaults. This is schema metadata,
+    // never a public ordinary actor field or a guest-mintable capability.
+    std::int64_t initial_i64 = 0;
 };
 
 struct ActorDecl {
@@ -396,6 +401,10 @@ struct ActorDecl {
     MaxActorThreads max_actor_threads = MaxActorThreads::LOW;
     bool isolated = false;
     bool has_state_schema = false;
+    // Compiler-owned proof: the parser admitted exactly one synchronous
+    // nonescaping critical-read/write callback. A schema alone is insufficient.
+    bool sealed_state_synchronous_v1 = false;
+    bool sealed_state_write_v1 = false; // trusted lexical callback access mode
 };
 
 // Compiler-only structural contract evidence for the native i64 subset.

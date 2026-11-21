@@ -423,6 +423,29 @@ int main(int argc, char** argv) {
         source_module = ast.module;
         source_namespace = ast.namespace_name;
 
+        // A synchronous source slice is not proof of bounded worst-case
+        // execution, actor teardown, or hard-real-time preemption. Fail
+        // closed even for report/check modes; do not accidentally certify
+        // the new sealed-state ABI through ordinary scalar analysis.
+        const bool has_native_sealed_state = std::any_of(
+            ast.actors.begin(), ast.actors.end(),
+            [](const oreslang::ActorDecl& a) { return a.has_state_schema; });
+        if (has_native_sealed_state &&
+                (native_hard_rt_profile || rt_check_only || rt_report_seen))
+            throw std::runtime_error(
+                "native sealed actor-state guest v1 lacks hard-RT execution and cancellation certification");
+
+        // The synchronous sealed actor-state implementation is backed by
+        // the host OresVM execution lease and actor-owned heap. A Wasm Worker
+        // or freestanding Cortex-M bootstrap cannot silently inherit those
+        // credentials by parsing an otherwise valid native state schema.
+        if ((wasm32_target || cortex_m_target) &&
+            std::any_of(ast.actors.begin(), ast.actors.end(),
+                [](const oreslang::ActorDecl& a) { return a.has_state_schema; })) {
+            throw std::runtime_error(
+                "native sealed actor-state guest v1 requires host scheduler; wasm32/cortex-m target lowering is unverified");
+        }
+
         if (constraint_descriptors_only) {
             for (const auto& descriptor : ast.type_constraint_descriptors) {
                 std::cout << "descriptor\t"
@@ -542,6 +565,9 @@ int main(int argc, char** argv) {
                         start.actor_sends.size() + start.actor_stops.size())
                     throw std::runtime_error("cortex-m actor action plan inconsistent");
                 for (const auto& actor : ast.actors) {
+                    if (actor.has_state_schema)
+                        throw std::runtime_error(
+                            "native sealed actor-state guest v1 requires host scheduler; wasm32/cortex-m target lowering is unverified");
                     if (actor.fields.empty() || actor.fields.size() > 8 ||
                         actor.on_message.actor_field_writes.size() > 16 ||
                         !actor.on_message.result)

@@ -657,6 +657,32 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         if (actor.max_actor_threads != MaxActorThreads::LOW) {
             throw std::runtime_error("parallel actor LLVM lowering requires compiler-proven per-turn actor state isolation");
         }
+        if (actor.has_state_schema) {
+            if (wasm32_target || cortex_m_target)
+                throw std::runtime_error(
+                    "native sealed actor-state guest v1 requires host scheduler; wasm32/cortex-m target lowering is unverified");
+            // Never treat state schema metadata as a lowering credential.
+            // Only the parser-verified, sync, lexical handle_state callback
+            // may use the existing native actor-owned i64 heap backend.
+            if (!actor.isolated || !actor.sealed_state_synchronous_v1 ||
+                actor.state_schema.empty() ||
+                actor.state_schema.size() != actor.fields.size() ||
+                actor.on_message.parameters.size() != 1 ||
+                !actor.on_message.result)
+                throw std::runtime_error("native sealed state requires verified synchronous handle_state admission");
+            for (std::size_t index = 0; index < actor.state_schema.size(); ++index) {
+                const auto& field = actor.state_schema[index];
+                const auto& slot = actor.fields[index];
+                if (field.type != ScalarType::I64 || field.name != slot.name ||
+                    slot.field_mutable != actor.sealed_state_write_v1 ||
+                    !slot.initializer ||
+                    slot.initializer->kind != Expression::Kind::Integer ||
+                    slot.initializer->integer != field.initial_i64)
+                    throw std::runtime_error("native sealed state layout does not match verified schema");
+            }
+        } else if (actor.sealed_state_synchronous_v1) {
+            throw std::runtime_error("native sealed state proof without schema");
+        }
     }
     if (wasm32_target && cortex_m_target) throw std::runtime_error("conflicting LLVM target selectors");
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
