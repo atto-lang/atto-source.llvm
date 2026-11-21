@@ -59,17 +59,28 @@ pub fn compile(source: &str) -> Result<Vec<u8>, Diagnostic> {
             _ => {}
         }
     }
-    if target {
-        let headers = target_syntax::parse_target_declarations(&toks)?;
-        // Type the declared method signatures without handing unlinked actor
-        // declarations to the executable check / Wasm backend.
-        let typed = target_typed::lower_target_signatures(&headers)?;
-        let actor_ast = target_typed::build_actor_program(&headers, &typed);
-        check::check_target_actor_interface(&actor_ast)?;
-        return Err(Diagnostic::new(toks[0].pos, "E_UNSUPPORTED",
-            "namespace-scoped actor declarations and mtd methods are syntax-only, not browser-lowered"));
-    }
-    let program = parser::Parser::new(toks).parse_program()?;
+    let program = if target {
+        // A user callable named mtd(), including an unbraced end-body call,
+        // may look like a receiver-form declaration to a token-only scanner.
+        // Prefer the real executable grammar if it accepts the *entire* file.
+        // True external receiver/declared-actor programs cannot pass it and
+        // remain syntax-only, with their normal fail-closed target diagnostics.
+        match parser::Parser::new(toks.clone()).parse_program() {
+            Ok(program) => program,
+            Err(_) => {
+                let headers = target_syntax::parse_target_declarations(&toks)?;
+                // Type declared signatures without handing unlinked actor
+                // declarations to the executable checker/Wasm emitter.
+                let typed = target_typed::lower_target_signatures(&headers)?;
+                let actor_ast = target_typed::build_actor_program(&headers, &typed);
+                check::check_target_actor_interface(&actor_ast)?;
+                return Err(Diagnostic::new(toks[0].pos, "E_UNSUPPORTED",
+                    "namespace-scoped actor declarations and mtd methods are syntax-only, not browser-lowered"));
+            }
+        }
+    } else {
+        parser::Parser::new(toks).parse_program()?
+    };
     let typed = check::check(&program)?;
     let bytes = wasm::emit(&typed);
     if bytes.len() > wasm::MAX_OUTPUT {
