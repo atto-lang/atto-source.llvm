@@ -270,7 +270,15 @@ void validate_native_scalar_types(const Program& program) {
         std::function<void(const std::vector<Statement>&, Locals&)> statements;
         statements = [&](const std::vector<Statement>& items, Locals& scope) {
             for (const auto& item : items) {
-                if (item.kind == Statement::Kind::ForIndex) {
+                if (item.kind == Statement::Kind::UsingTelemetrySpan) {
+                    // Compiler-owned AOT tracing token is not a scalar,
+                    // class, field receiver or guest-visible local. Recurse
+                    // through its lexical body under a child type scope
+                    // without inventing a type for the opaque alias. Other
+                    // admission passes enforce nonescape and affine safety.
+                    Locals body = scope;
+                    statements(item.then_statements, body);
+                } else if (item.kind == Statement::Kind::ForIndex) {
                     require(expression(*item.branch_local->initializer, scope), scalar(false), item.offset, "index initializer requires int");
                     Locals body = scope; body.emplace(item.branch_local->name, scalar(false));
                     require(expression(*item.condition, body), scalar(true), item.offset, "index condition requires bool");
