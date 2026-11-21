@@ -60,6 +60,55 @@ the normative contract at
 [atto-spec #193](https://github.com/atto-lang/atto-spec/pull/193); target
 constraints at [atto-target-profiles #25](https://github.com/atto-lang/atto-target-profiles/pull/25).
 
+## AMD SEV-SNP ABI and cryptographic primitive (M1 staging)
+
+`SevSnpReportVerification.hpp` parses the 1,184-byte raw SNP report,
+compares the **48-byte SHA-384** launch measurement and **64-byte
+`REPORT_DATA`**, enforces signature algorithm, VMPL, debug policy,
+signer kind and component-wise TCB floor, and rejects malformed report sizes.
+
+It also verifies an ECDSA P-384 / SHA-384 signature across the signed
+672-byte prefix **given an already trusted endorsement public key**.
+It does **NOT** authenticate that key against AMD's ARK -> ASK/ASVK ->
+VCEK/VLEK chain, inspect the certificate TCB extensions or chip ID,
+or check AMD CRLs. A synthetically signed report can pass this primitive:
+it is `HOST_ONLY` cryptographic test evidence, never `HARDWARE_ATTESTED`.
+
+`compute_bound_report_data` computes a domain-separated SHA-512 transcript
+of the verifier nonce (32 bytes), independently approved deployment identity
+(32 bytes), big-endian SPKI DER length, and ephemeral TLS public-key DER.
+Its 64-byte output must exactly match signed SNP `REPORT_DATA`.
+This alone does not authenticate the channel or prove possession of the
+matching TLS private key.
+
+**Do not enable admission using either helper.** The full AMD product-root,
+endorsement-chain/revocation/TCB verifier, fresh report collection, secure
+key-release broker and actual SNP hardware tests remain unimplemented.
+
+Local isolated smoke tests were run with GCC 14 + ASan/UBSan and Clang, and
+the same source was built in an isolated CMake/CTest target. That does
+NOT substitute for exact-PR-head GitHub Actions, actual vendor evidence or
+compiled Atto guest execution.
+
+New optional CMake test (requires OpenSSL::Crypto):
+```sh
+cmake -S tests/tenant-vm -B build/tenant-vm
+cmake --build build/tenant-vm --target tenant_vm_sev_snp_report_verification_test
+ctest --test-dir build/tenant-vm -R '^tenant_vm_sev_snp_report_verification_test
+```sh
+cmake -S tests/tenant-vm -B build/tenant-vm
+cmake --build build/tenant-vm --target tenant_vm_test
+ctest --test-dir build/tenant-vm -R tenant_vm_test --output-on-failure
+```
+
+The named case
+`confidential_compute_request_never_falls_back_to_plain_vm`
+checks the new denial status, zero registered tenants or allocated heap,
+and unchanged explicitly trusted admission. This is a host-unit test,
+not a hardware-backed confidential-computing certification.
+ --output-on-failure
+```
+
 ## Regression
 
 ```sh
