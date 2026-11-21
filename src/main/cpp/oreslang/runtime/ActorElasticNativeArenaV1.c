@@ -20,6 +20,21 @@ struct OresElasticNativeArenaV1 {
 #endif
 };
 static _Atomic(uint64_t) next_domain = 1;
+/* Internal Ref32 storage ABI: offset8+1, not a pointer or a capability.
+ * Keep the full UINT32_MAX high-bit range unsigned on 32-bit hosts too. */
+int ores_elastic_native_ref32_encode_v1(uint64_t aligned_byte_offset, uint32_t* out_word) {
+    const uint64_t max_start=((uint64_t)UINT32_MAX-1u)*UINT64_C(8);
+    if(!out_word || aligned_byte_offset>max_start ||
+       (aligned_byte_offset & UINT64_C(7)))return 0;
+    *out_word=(uint32_t)(aligned_byte_offset/UINT64_C(8)+UINT64_C(1));
+    return 1;
+}
+int ores_elastic_native_ref32_decode_v1(uint32_t word, uint64_t* out_byte_offset) {
+    if(!out_byte_offset || word==0)return 0;
+    *out_byte_offset=((uint64_t)word-1u)*UINT64_C(8);
+    return 1;
+}
+
 static void scrub(void* ptr, size_t size) {
     volatile uint8_t* bytes = (volatile uint8_t*)ptr;
     for (size_t i=0; i<size; ++i) bytes[i]=0;
@@ -122,8 +137,9 @@ static ElasticSlotV1* checked(OresElasticNativeArenaV1* a,OresElasticNativeHandl
     /* A forged u32 word can overflow size_t on 32-bit hosts before an
      * otherwise valid slot/generation check. Decode with a 64-bit witness
      * and bound it to this actor's private allocation domain first. */
-    const uint64_t decoded=((uint64_t)h.word-1u)*UINT64_C(8);
-    if(decoded>a->hard_limit || decoded>SIZE_MAX)return NULL;
+    uint64_t decoded=0;
+    if(!ores_elastic_native_ref32_decode_v1(h.word,&decoded) ||
+       decoded>a->hard_limit || decoded>SIZE_MAX)return NULL;
     const size_t offset=(size_t)decoded;
     if(!slot->live || slot->offset!=offset || slot->generation!=h.generation)
         return NULL;
@@ -161,6 +177,10 @@ int ores_elastic_native_allocate_v1(OresElasticNativeArenaV1* a,size_t bytes,
     if(!reuse && (offset>a->hard_limit || bytes>a->hard_limit-offset))return 0;
     const size_t place=reuse?a->slots[free_slot].offset:offset;
     const size_t end=place+bytes;
+    uint32_t ref_word=0;
+    /* Reject any unrepresentable logical object start *before* native
+     * allocation or accounting changes. Never truncate a uint64 offset. */
+    if(!ores_elastic_native_ref32_encode_v1((uint64_t)place,&ref_word))return 0;
     if(!reuse && !grow(a,end))return 0;
     ElasticSlotV1* slot=&a->slots[free_slot];
     scrub(a->native_bytes+place,bytes);
@@ -170,7 +190,7 @@ int ores_elastic_native_allocate_v1(OresElasticNativeArenaV1* a,size_t bytes,
     if(!reuse)a->cursor=end;
     ++a->live;
     *out=(OresElasticNativeHandleV1){a->domain,a->incarnation,
-                                    (uint32_t)(place/8+1),free_slot,slot->generation};
+                                    ref_word,free_slot,slot->generation};
     return 1;
 }
 int ores_elastic_native_write_i64_v1(OresElasticNativeArenaV1* a,
