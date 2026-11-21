@@ -1,0 +1,23 @@
+name: GPU runner-admission source-free canary
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/gpu-runner-admission-canary.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  runner-admission-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Prove runner allocation without checkout or external actions
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "evidence_class=RUNNER_ADMISSION_ONLY"
+          echo "runner_admitted=true"
+          echo "workflow_run=${{ github.run_id }}"
+          echo "workflow_attempt=${{ github.run_attempt }}"
+          echo "gpu_compiler_executed=false"
+          echo "physical_gpu_executed=false"

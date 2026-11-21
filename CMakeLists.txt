@@ -280,6 +280,15 @@ if(BUILD_TESTING)
             PROPERTIES TIMEOUT 90)
     endif()
 
+    # Offline OpenCL C -> SPIR64 LLVM IR proof. This is not native
+    # oreslang-llvmc compilation, a device binary, or a physical GPU run.
+    if(UNIX)
+        add_test(NAME native_atto_gpu_opencl_spir64_source_only
+            COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/verify-gpu-opencl-offline.sh")
+        set_tests_properties(native_atto_gpu_opencl_spir64_source_only
+            PROPERTIES TIMEOUT 120)
+    endif()
+
     # Compiler-checked restricted SAXPY source-body HIR, not GPU execution.
     add_executable(oreslang-native-gpu-kernel-body-hir-test
         tests/gpu_kernel_body_hir_test.cpp)
