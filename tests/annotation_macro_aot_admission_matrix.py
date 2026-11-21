@@ -68,6 +68,9 @@ TARGET_ANNOTATION_CASES = {
     "lambda_target": "pub fnc main(): int { const f = @pure |int x| -> x; return 42; }\n",
     "macro_target": "@derive_macro\nmacro_rules! make { () => { 42 }; }\n" + BASE,
     "import_target": "@cfg(feature=network)\nimport module network;\n" + BASE,
+    "doc_class_unlowered": '@Doc("description")\ndefine class Item as end\n' + BASE,
+    "doc_actor_unlowered": '@Doc("worker")\ndefine actor Worker as end\n' + BASE,
+    "doc_method_unlowered": 'define class Item as @Doc("read") read(): int { return 1; } end\n' + BASE,
 }
 
 
@@ -125,6 +128,28 @@ def invoke(compiler, directory, case, source, target=None):
                      for item in workdir.rglob("*")
                      if item.is_file() and item != path)
     return result, emitted
+
+
+def rejected_compiler_outcome(result, emitted, label):
+    """Require compiler rejection, never crash, partial IR, or sidecar output."""
+    errors = []
+    # Subprocess return codes below zero mean signal death; 128+ commonly
+    # encode signals/aborts and must never count as a successful rejection.
+    if result.returncode <= 0 or result.returncode >= 128:
+        errors.append(label + ": invalid compiler reject exit " + str(result.returncode))
+    if result.stdout.strip():
+        errors.append(label + ": rejected source emitted stdout/IR")
+    if emitted:
+        errors.append(label + ": rejected source emitted artifacts: " + ", ".join(emitted))
+    if not result.stderr.strip():
+        errors.append(label + ": missing compiler rejection diagnostic")
+    if re.search(
+        r"segmentation fault|internal compiler error|assertion failed|"
+        r"stack backtrace|panicked at|traceback|fatal signal|"
+        r"bus error", result.stderr, re.IGNORECASE
+    ):
+        errors.append(label + ": compiler crash is not a semantic rejection")
+    return errors
 
 
 def execute_host_ir(clang, directory, case, ir):
@@ -205,9 +230,8 @@ def main():
                                          "parity_" + label + "_" + target,
                                          source, target)
                 if expectation == "reject":
-                    if result.returncode == 0 or result.stdout.strip() or emitted or not result.stderr.strip():
-                        failures.append("annotation parity reject failed: " + label
-                                        + "/" + target + " stderr=" + result.stderr[:250])
+                    failures.extend(rejected_compiler_outcome(
+                        result, emitted, "annotation parity/" + label + "/" + target))
                 else:
                     if result.returncode or any(sig not in result.stdout for sig in main_signatures) or emitted:
                         failures.append("annotation parity positive failed: " + label
@@ -217,29 +241,12 @@ def main():
             for label, source in TARGET_ANNOTATION_CASES.items():
                 result, emitted = invoke(args.compiler, directory,
                                          "v2_" + label + "_" + target, source, target)
-                if result.returncode == 0:
-                    failures.append("v2/" + label + "/" + target
-                                    + " accepted an unimplemented annotation")
-                if result.stdout.strip():
-                    failures.append("v2/" + label + "/" + target
-                                    + " emitted partial IR on rejected annotation")
-                if emitted:
-                    failures.append("v2/" + label + "/" + target
-                                    + " wrote rejected sidecar artifacts: " + ", ".join(emitted))
-                if not result.stderr.strip():
-                    failures.append("v2/" + label + "/" + target
-                                    + " has no compiler diagnostic")
+                failures.extend(rejected_compiler_outcome(
+                    result, emitted, "v2/" + label + "/" + target))
             for label, source in NEGATIVE_CASES.items():
                 result, emitted = invoke(args.compiler, directory, label + "_" + target, source, target)
-                if result.returncode == 0:
-                    failures.append(label + "/" + target + " accepted unsupported syntax")
-                if result.stdout.strip():
-                    failures.append(label + "/" + target + " emitted IR on rejected source")
-                if emitted:
-                    failures.append(label + "/" + target
-                                    + " wrote artifacts on rejected source: " + ", ".join(emitted))
-                if not result.stderr.strip():
-                    failures.append(label + "/" + target + " gave no rejection diagnostic")
+                failures.extend(rejected_compiler_outcome(
+                    result, emitted, label + "/" + target))
     if failures:
         for failure in failures:
             print("FAIL:", failure, file=sys.stderr)
