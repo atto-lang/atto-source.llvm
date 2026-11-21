@@ -1990,3 +1990,18 @@ if(BUILD_TESTING)
       "$<TARGET_FILE:oreslang-llvmc>")
   set_tests_properties(value_boundary_admission PROPERTIES TIMEOUT 60)
 endif()
+
+if(BUILD_TESTING)
+    # Host-only persistent immutable actor map + non-capturing reducer proof.
+    # This does NOT enable source-language PersistentMap or claim native HAMT parity.
+    add_executable(oreslang-native-persistent-actor-map-test
+        tests/native_persistent_actor_map_test.cpp)
+    target_include_directories(oreslang-native-persistent-actor-map-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-persistent-actor-map-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_persistent_actor_map_host_prototype
+        COMMAND oreslang-native-persistent-actor-map-test)
+    set_tests_properties(native_persistent_actor_map_host_prototype
+        PROPERTIES TIMEOUT 20)
+endif()
