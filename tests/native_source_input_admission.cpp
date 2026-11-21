@@ -18,6 +18,16 @@ template<class F> void rejects(F&& operation, const char* reason) {
     try { operation(); } catch (const std::runtime_error&) { rejected = true; }
     check(rejected, reason);
 }
+void rejects_source_at(std::string_view source, std::string_view expected) {
+    try {
+        require_valid_source_utf8(source);
+    } catch (const std::runtime_error& failure) {
+        check(std::string_view(failure.what()) == expected,
+              "UTF-8 source rejection offset or category mismatched");
+        return;
+    }
+    throw std::runtime_error("malformed UTF-8 source was admitted");
+}
 int main() {
     try {
         const fs::path dir = fs::temp_directory_path() /
@@ -98,6 +108,33 @@ int main() {
 #endif
         check(!ores_source_stat_stable(before, altered), "mtime change accepted");
         require_valid_source_utf8("valid ASCII");
+        // Shared 19-case corpus boundary extensions; compiler-host checks only.
+        require_valid_source_utf8(std::string("\xF4\x8F\xBF\xBF", 4));
+        require_valid_source_utf8(std::string("e\xCC\x81", 3));
+        rejects_source_at(std::string("\0", 1),
+                          "native source contains NUL byte at byte offset 0");
+        rejects_source_at(std::string("\"a\0\"", 4),
+                          "native source contains NUL byte at byte offset 2");
+        rejects_source_at(std::string("/* café */\0", 12),
+                          "native source contains NUL byte at byte offset 11");
+        rejects_source_at(std::string("\xE0\x80\x80", 3),
+                          "native source is not valid UTF-8 at byte offset 1");
+        rejects_source_at(std::string("a\x80", 2),
+                          "native source is not valid UTF-8 at byte offset 1");
+        rejects_source_at(std::string("x\xF0\x90\x80", 4),
+                          "native source is not valid UTF-8 at byte offset 1");
+
+        rejects_source_at(std::string("ab\\0cd", 5),
+                          "native source contains NUL byte at byte offset 2");
+        rejects_source_at(std::string("\\xC0\\xAF", 2),
+                          "native source is not valid UTF-8 at byte offset 0");
+        rejects_source_at(std::string("ok\\xE2\\x82", 4),
+                          "native source is not valid UTF-8 at byte offset 2");
+        rejects_source_at(std::string("x\\xE2\\x28\\xA1", 4),
+                          "native source is not valid UTF-8 at byte offset 2");
+        rejects_source_at(std::string("\\xED\\xA0\\x80", 3),
+                          "native source is not valid UTF-8 at byte offset 1");
+
         rejects([&] { require_valid_source_utf8(std::string("\xC0\xAF", 2)); },
                 "overlong UTF-8 admitted");
         rejects([&] { require_valid_source_utf8(std::string("ab\0cd", 5)); },
