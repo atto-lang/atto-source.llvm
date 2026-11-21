@@ -3,7 +3,7 @@
 #include <stdint.h>
 
 /* HOST-only bounded control plane, never an Atto actor reference or wire ABI. */
-#define ATTO_CONTROL_REF32_ABI "control_generation20_slot12_v1"
+#define ATTO_CONTROL_REF32_ABI "control_generation12_slot20_v1"
 #define ATTO_CONTROL_RECORD_BYTES 32u
 typedef struct AttoControlPlaneArena32 AttoControlPlaneArena32;
 
