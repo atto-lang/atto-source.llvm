@@ -70,6 +70,31 @@ void checks() {
  CHECK(inspect_unverified_report(copy.data(),copy.size(),p)==Result::RejectedVersion);
  wrong=p;wrong.minimum_tcb={};
  CHECK(inspect_unverified_report(b.data(),b.size(),wrong)==Result::RejectedPolicy);
+ // Report-data binding uses a verifier-issued nonce, image identity and
+ // ephemeral transport key; changing any component must change the digest.
+ std::array<std::uint8_t,32> n{}, image{};
+ n.fill(9);image.fill(3);
+ const std::uint8_t spki[]={0x30,0x03,0x01,0x02,0x03};
+ std::array<std::uint8_t,64> bound{}, changed{};
+ CHECK(compute_bound_report_data(n,image,spki,sizeof(spki),bound));
+ CHECK(nonzero(bound.data(),bound.size()));
+ auto changed_nonce=n;changed_nonce[0]^=1;
+ CHECK(compute_bound_report_data(changed_nonce,image,spki,sizeof(spki),changed));
+ CHECK(!equal_bytes(bound.data(),changed.data(),64));
+ auto changed_image=image;changed_image[0]^=1;
+ CHECK(compute_bound_report_data(n,changed_image,spki,sizeof(spki),changed));
+ CHECK(!equal_bytes(bound.data(),changed.data(),64));
+ const std::uint8_t altered[]={0x30,0x03,0x01,0x02,0x04};
+ CHECK(compute_bound_report_data(n,image,altered,sizeof(altered),changed));
+ CHECK(!equal_bytes(bound.data(),changed.data(),64));
+ changed.fill(1);
+ CHECK(!compute_bound_report_data(n,image,nullptr,5,changed));
+ CHECK(!nonzero(changed.data(),changed.size()));
+ auto bound_report=b;
+ std::memcpy(bound_report.data()+kReportDataOffset,bound.data(),64);
+ auto bound_policy=p;bound_policy.expected_report_data=bound;
+ CHECK(inspect_unverified_report(bound_report.data(),bound_report.size(),bound_policy)==Result::UnverifiedPolicyMatch);
+ CHECK(inspect_unverified_report(bound_report.data(),bound_report.size(),p)==Result::RejectedReportData);
  auto good=key("secp384r1");auto evil=key("secp384r1");auto small=key("prime256v1");
  CHECK(good&&evil&&small);if(!good||!evil||!small)return;
  sign(b,good.get());
