@@ -79,6 +79,44 @@ Program make_source() {
     source.inverted_main = std::move(main);
     return source;
 }
+Program make_bool_i64_source() {
+    Program source;
+    InvertedStructDecl decl;
+    decl.name = "Counter";
+    decl.fields = {
+        InvertedStructField{"active", InvertedScalarKind::Bool, true, 0},
+        InvertedStructField{"count", InvertedScalarKind::I64, true, 0},
+    };
+    source.inverted_structs.push_back(std::move(decl));
+    InvertedSourceMain main;
+    main.schema_name = "Counter"; main.owner_name = "rows";
+    main.capacity = 3;
+    main.three_scalar = true; // historical typed-mixed admission flag
+    using Kind = InvertedSourceOperation::Kind;
+    InvertedSourceOperation first;
+    first.kind = Kind::Push;
+    first.mixed_values = {bit(false),i64(11),InvertedSourceLiteral{}};
+    main.operations.push_back(first);
+    InvertedSourceOperation second;
+    second.kind = Kind::Push;
+    second.mixed_values = {bit(true),i64(42),InvertedSourceLiteral{}};
+    main.operations.push_back(second);
+    InvertedSourceOperation write;
+    write.kind = Kind::WriteField;
+    write.index = 1;
+    write.field = "active";
+    write.mixed_value = bit(true);
+    main.operations.push_back(write);
+    InvertedSourceOperation erase;
+    erase.kind = Kind::EraseSwap; erase.index = 0;
+    main.operations.push_back(erase);
+    InvertedSourceOperation read;
+    read.kind = Kind::ReturnRead; read.index = 0; read.field = "count";
+    main.operations.push_back(read);
+    source.inverted_main = std::move(main);
+    return source;
+}
+
 } // namespace
 
 int main() {
@@ -197,6 +235,75 @@ int main() {
         changed.writes[0]=f64(5.5);
         require(emitter.build(checked.mir,changed)!=ir,
                 "emitter discarded changed f64 write operand");
+    }
+    {
+        // The old bool/i64 PR now uses exactly the SAME typed emitter as the
+        // 3-column i64/bool/f64 guest. No duplicate specialized LLVM backend.
+        const auto pair_source=make_bool_i64_source();
+        const auto pair=verify_production_inverted_mixed(pair_source);
+        require(pair.mir.layout().columns()==2,"mixed two-column MIR not admitted");
+        require(pair.mir.layout().capacity_bytes(3)==32,
+                "two-column physical bool/i64 alignment wrong");
+        const auto pair_ir=emit_mixed_source_ir(pair);
+        require(pair_ir.find("alloca [3 x i1]")!=std::string::npos,
+                "mixed bool/i64 i1 lane missing");
+        require(pair_ir.find("alloca [3 x i64]")!=std::string::npos,
+                "mixed bool/i64 i64 lane missing");
+        require(pair_ir.find("alloca [3 x double]")==std::string::npos,
+                "two-column source invented a floating-point column");
+        require(pair_ir.find("store volatile i1 false, ptr %alive")!=std::string::npos,
+                "mixed pair owner revocation missing");
+        require(pair_ir.find("call void @llvm.trap()")!=std::string::npos,
+                "mixed pair logical row guard missing");
+        MixedLlvmEmitter shared(3);
+        require(shared.build(pair.mir,pair.operands)==pair_ir,
+                "same emitter cannot independently reproduce bool/i64 source");
+        require(shared.build(checked.mir,checked.operands)==ir,
+                "same emitter cannot produce original i64/bool/f64 source after pair");
+        require(shared.build(pair.mir,pair.operands)==pair_ir,
+                "mixed emitter retains stale state after schema change");
+    }
+    {
+        auto forged=make_bool_i64_source();
+        forged.inverted_main->operations[0].mixed_values[2]=bit(true);
+        rejects([&]{(void)verify_production_inverted_mixed(forged);},
+                "unused field payload");
+    }
+    {
+        auto forged=make_bool_i64_source();
+        forged.inverted_main->operations[0].mixed_values[0]=i64(1);
+        rejects([&]{(void)verify_production_inverted_mixed(forged);},
+                "scalar type mismatch");
+    }
+    {
+        auto forged=make_bool_i64_source();
+        forged.inverted_main->operations[4].field="active";
+        rejects([&]{(void)verify_production_inverted_mixed(forged);},
+                "must return i64");
+    }
+    {
+        auto forged=make_bool_i64_source();
+        forged.inverted_structs[0].fields[0].mutable_field=false;
+        rejects([&]{(void)verify_production_inverted_mixed(forged);},
+                "immutable inverted field");
+    }
+    {
+        auto forged=make_bool_i64_source();
+        forged.inverted_structs[0].fields[0].type=InvertedScalarKind::I64;
+        rejects([&]{(void)verify_production_inverted_mixed(forged);},
+                "requires bool/i64 order");
+    }
+    {
+        auto pair=verify_production_inverted_mixed(make_bool_i64_source());
+        pair.operands.rows[0][2]=f64(3.0);
+        rejects([&]{(void)emit_mixed_source_ir(pair);},
+                "unused typed row payload");
+    }
+    {
+        auto forged=make_bool_i64_source();
+        forged.inverted_main->three_scalar=false;
+        rejects([&]{(void)verify_production_inverted_mixed(forged);},
+                "matching three-scalar schema");
     }
     return 0;
 }

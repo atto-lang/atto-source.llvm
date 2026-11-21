@@ -506,7 +506,10 @@ struct InvertedSourceMain {
     std::string owner_name;
     std::size_t capacity = 0;
     std::vector<InvertedSourceOperation> operations;
-    bool three_scalar = false; // separate i64/bool/f64 production admission
+    // Historical admission tag: true for *typed mixed* profiles, either the
+    // exact bool/i64 pair or exactly one each i64/bool/f64. The original
+    // i64/i64 legacy source keeps false for fail-closed ABI separation.
+    bool three_scalar = false;
 };
 
 struct Program {

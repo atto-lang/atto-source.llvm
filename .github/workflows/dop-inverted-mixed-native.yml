@@ -4,6 +4,7 @@ on:
   pull_request:
     branches:
       - hardening/dop-heterogeneous-physical-soa-v1-20261106
+      - feature/dop-mixed-scalar-guest-v1-20261106
       - parity/inverted-production-main-i64-20261104
       - main
     paths:
@@ -16,6 +17,7 @@ on:
       - 'src/main/cpp/oreslang/types/Inverted*'
       - 'src/main/cpp/oreslang/main.cpp'
       - 'tests/native_inverted*'
+      - 'tests/check_dop_pair_source_blobs.py'
       - 'tests/fixtures/inverted-mixed/**'
   workflow_dispatch:
 
@@ -62,6 +64,12 @@ jobs:
             "$EXPECTED_HEAD" "$(git rev-parse HEAD^{tree})" \
             "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > build-evidence/identity.json
 
+      - name: Seal eight bool/i64 fixtures against original compiler and conformance blobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/check_dop_pair_source_blobs.py tests/fixtures/inverted-mixed
+          test -z "$(git status --porcelain=v1 --untracked-files=all -- . ':!build-evidence')"
       - name: Install authorized native toolchain
         shell: bash
         run: |
@@ -142,8 +150,8 @@ jobs:
               raise SystemExit('FAIL: missing actual executed CTest case status or duration')
           native=next(x for x in cases if x.attrib.get('name')=='native_inverted_mixed_source_to_native')
           text=' '.join(native.itertext())
-          exact_marker=('MIXED_ATTO_NATIVE_GUEST_PASS: 4 exit42, 2 trap signals, '
-                        '5 rejects; IR no-GC screened (not linked/FFI proof)')
+          exact_marker=('MIXED_ATTO_NATIVE_GUEST_PASS: 8 exit42, 4 trap signals, '
+                        '10 rejects; IR no-GC screened (not linked/FFI proof)')
           if exact_marker not in text:
               raise SystemExit('FAIL: no exact executed mixed native guest marker in JUnit result')
           legacy=next(x for x in cases
@@ -173,6 +181,8 @@ jobs:
           source_files=subprocess.check_output(['git','ls-files','-m'],text=True).strip()
           if source_files:
               raise SystemExit('FAIL: tracked source modified after checkout')
+          subprocess.run(['python3','tests/check_dop_pair_source_blobs.py',
+                          'tests/fixtures/inverted-mixed'],check=True)
           paths=['src/main/cpp/oreslang/frontend/Parser.cpp',
                  'src/main/cpp/oreslang/frontend/Parser.hpp',
                  'src/main/cpp/oreslang/types/InvertedMixedGuestLlvm.hpp',
@@ -183,12 +193,13 @@ jobs:
                  'tests/native_inverted_production_mir_test.cpp',
                  'src/main/cpp/oreslang/types/InvertedProductionSourceMir.hpp',
                  '.github/workflows/dop-inverted-mixed-native.yml',
+                 'tests/check_dop_pair_source_blobs.py',
                  'CMakeLists.txt',
                  'build/oreslang-no-gc-ir-audit',
                  'build/oreslang-llvmc']
           paths += sorted(str(p) for p in pathlib.Path('tests/fixtures/inverted-mixed').glob('*.atto'))
-          if len([p for p in paths if p.endswith('.atto')]) != 8:
-              raise SystemExit('FAIL: fixture inventory changed')
+          if len([p for p in paths if p.endswith('.atto')]) != 16:
+              raise SystemExit('FAIL: 2/3-column fixture inventory changed')
           receipt=dict(head=head,tree=source_tree,run=os.environ['GITHUB_RUN_ID'],
                        attempt=os.environ['GITHUB_RUN_ATTEMPT'],
                        evidence='COMPILER_BACKED_MIXED_ATTO_GUEST_EXECUTED',
@@ -217,7 +228,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: atto-mixed-native-${{ github.run_id }}-${{ github.run_attempt }}
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
           path: |
             build-evidence/identity.json

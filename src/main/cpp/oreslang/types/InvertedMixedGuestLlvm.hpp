@@ -1,6 +1,6 @@
 #pragma once
-// Restricted source -> independently checked HIR/MIR -> LLVM IR for exactly
-// three local i64/bool/f64 columns. This is an opt-in bounded production
+// Restricted source -> independently checked HIR/MIR -> LLVM IR for either
+// a bool/i64 pair or three local i64/bool/f64 columns. This is an opt-in bounded production
 // guest slice, NOT a general inverted class, actor heap, borrowing, SIMD, GPU,
 // hot-reload or multi-function lowering. No raw row handle may escape.
 #include "oreslang/types/InvertedProductionSourceMir.hpp"
@@ -84,17 +84,21 @@ inline VerifiedMixedSource verify_production_inverted_mixed(const Program& progr
     const auto& layout = schemas.front().layout;
     const auto& source = *program.inverted_main;
     if (!source.three_scalar || source.owner_name.empty() ||
-            source.schema_name != layout.name() || layout.columns() != 3)
-        throw std::invalid_argument("mixed inverted requires matching three-scalar schema");
-
+            source.schema_name != layout.name() ||
+            (layout.columns() != 2 && layout.columns() != 3))
+        throw std::invalid_argument("mixed inverted requires matching three-scalar schema or bool/i64 pair");
+    const bool pair = layout.columns() == 2;
     unsigned integers = 0, booleans = 0, floats = 0;
-    for (std::size_t field = 0; field < 3; ++field) {
+    for (std::size_t field = 0; field < layout.columns(); ++field) {
         integers += layout.column(field).type == InvertedScalarKind::I64;
         booleans += layout.column(field).type == InvertedScalarKind::Bool;
         floats += layout.column(field).type == InvertedScalarKind::F64;
     }
-    if (integers != 1 || booleans != 1 || floats != 1)
-        throw std::invalid_argument("mixed inverted requires one i64, one bool and one f64");
+    if (pair && (layout.column(0).type != InvertedScalarKind::Bool ||
+                 layout.column(1).type != InvertedScalarKind::I64))
+        throw std::invalid_argument("mixed inverted two-column layout requires bool/i64 order");
+    if (integers != 1 || booleans != 1 || floats != (pair ? 0u : 1u))
+        throw std::invalid_argument("mixed inverted requires valid bool/i64 or i64/bool/f64 schema");
     if (source.capacity == 0 || source.capacity > 256 ||
             source.operations.empty() || source.operations.size() > 1024)
         throw std::invalid_argument("mixed inverted capacity/operation budget exceeded");
@@ -120,10 +124,15 @@ inline VerifiedMixedSource verify_production_inverted_mixed(const Program& progr
                 if (operation.index != 0 || !operation.field.empty() ||
                         !unused_mixed_literal(operation.mixed_value))
                     throw std::invalid_argument("invalid mixed inverted push metadata");
-                for (std::size_t field = 0; field < 3; ++field)
+                for (std::size_t field = 0; field < layout.columns(); ++field)
                     check_mixed_literal(operation.mixed_values[field],
                                         layout.column(field).type);
-                plan.push(3);
+                // Inactive array elements are not a hidden fourth/third
+                // channel for forged typed source metadata.
+                for (std::size_t field = layout.columns(); field < 3; ++field)
+                    if (!unused_mixed_literal(operation.mixed_values[field]))
+                        throw std::invalid_argument("mixed inverted unused field payload");
+                plan.push(layout.columns());
                 operands.rows.push_back(operation.mixed_values);
                 break;
             }
@@ -269,17 +278,21 @@ public:
         // emitter for multiple units. The verified MIR is a separate input.
         code_.clear(); next_ = 0; pushes_ = 0; writes_ = 0;
         last_read_ = "0"; layout_ = nullptr;
-        if (verified.capacity() != capacity_ || verified.layout().columns() != 3)
-            throw std::invalid_argument("mixed LLVM requires checked three-column MIR");
+        const auto columns = verified.layout().columns();
+        if (verified.capacity() != capacity_ || (columns != 2 && columns != 3))
+            throw std::invalid_argument("mixed LLVM requires checked 2/3-column MIR");
         layout_ = &verified.layout();
         unsigned ints = 0, bools = 0, doubles = 0;
-        for (std::size_t i = 0; i < 3; ++i) {
+        for (std::size_t i = 0; i < columns; ++i) {
             ints += layout_->column(i).type == InvertedScalarKind::I64;
             bools += layout_->column(i).type == InvertedScalarKind::Bool;
             doubles += layout_->column(i).type == InvertedScalarKind::F64;
         }
-        if (ints != 1 || bools != 1 || doubles != 1)
-            throw std::invalid_argument("mixed LLVM requires distinct i64/bool/f64 columns");
+        if (columns == 2 && (layout_->column(0).type != InvertedScalarKind::Bool ||
+                             layout_->column(1).type != InvertedScalarKind::I64))
+            throw std::invalid_argument("mixed LLVM requires bool/i64 pair order");
+        if (ints != 1 || bools != 1 || doubles != (columns == 2 ? 0u : 1u))
+            throw std::invalid_argument("mixed LLVM requires valid typed scalar columns");
         const auto& operations = verified.instructions();
         if (operations.size() < 3 ||
                 operations.back().kind != OpKind::Close ||
@@ -293,12 +306,12 @@ public:
                     op.kind == OpKind::ReleaseRead || op.kind == OpKind::ReleaseWrite)
                 throw std::logic_error("mixed LLVM source loans, snapshot or suspension unsupported");
 
-        code_ = "; typed mixed i64/bool/f64 SoA MIR, local owner, no row handles\n";
+        code_ = "; typed mixed scalar SoA MIR (2/3 columns), local owner, no row handles\n";
         code_ += "declare void @llvm.trap()\n";
         code_ += "define i32 @main() {\nentry:\n";
         emit("%length = alloca i64"); emit("store i64 0, ptr %length");
         emit("%alive = alloca i1"); emit("store i1 true, ptr %alive");
-        for (std::size_t field = 0; field < 3; ++field) {
+        for (std::size_t field = 0; field < columns; ++field) {
             const auto* type = ir_type(layout_->column(field).type);
             emit(lane(field) + " = alloca [" + std::to_string(capacity_) +
                  " x " + type + "]");
@@ -316,12 +329,15 @@ public:
                     emit(inside + " = icmp ult i64 " + len + ", " +
                          std::to_string(capacity_));
                     guard(inside);
-                    for (std::size_t i = 0; i < 3; ++i) {
+                    for (std::size_t i = 0; i < columns; ++i) {
                         const auto& lit = inputs.rows[pushes_][i];
                         check_mixed_literal(lit, layout_->column(i).type);
                         emit(std::string("store ") + ir_type(lit.kind) + " " +
                              value_ir(lit) + ", ptr " + field_ptr(i, len));
                     }
+                    for (std::size_t i = columns; i < 3; ++i)
+                        if (!unused_mixed_literal(inputs.rows[pushes_][i]))
+                            throw std::invalid_argument("mixed LLVM unused typed row payload");
                     emit("store i64 1, ptr " + generation_ptr(len));
                     const auto plus = temp();
                     emit(plus + " = add i64 " + len + ", 1");
@@ -351,7 +367,7 @@ public:
                     const auto len = load("i64", "%length");
                     const auto last = temp();
                     emit(last + " = sub i64 " + len + ", 1");
-                    for (std::size_t field = 0; field < 3; ++field) {
+                    for (std::size_t field = 0; field < columns; ++field) {
                         const auto* type = ir_type(layout_->column(field).type);
                         const auto tail = field_ptr(field, last);
                         const auto value = load(type, tail);
@@ -372,7 +388,7 @@ public:
                     // unused capacity, at both O0 and O2.
                     emit("store volatile i1 false, ptr %alive");
                     for (std::size_t row = 0; row < capacity_; ++row) {
-                        for (std::size_t field = 0; field < 3; ++field) {
+                        for (std::size_t field = 0; field < columns; ++field) {
                             const auto kind = layout_->column(field).type;
                             emit(std::string("store volatile ") + ir_type(kind) + " " +
                                  zero(kind) + ", ptr " +
