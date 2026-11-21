@@ -105,6 +105,14 @@ public:
                 || !scheduler_target.scheduler_domain)
             throw std::invalid_argument("complete async envelope ownership required");
 
+        // The control ticket and scheduler target must come from the same
+        // trusted spawn. Equal numeric routing fields are not authority.
+        if (producer.scheduler_domain != scheduler_target.scheduler_domain
+                || !target_.matches_scheduler_incarnation(
+                        scheduler, scheduler_target))
+            throw std::invalid_argument(
+                    "exact scheduler incarnation binding required");
+
         target_.retain_resource_loan();
         loan_owned_ = true;
 

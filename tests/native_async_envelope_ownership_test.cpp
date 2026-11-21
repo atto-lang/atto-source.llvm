@@ -1,4 +1,5 @@
 #include "oreslang/runtime/NativeAsyncEnvelopeTxn.hpp"
+#include "oreslang/runtime/NativeScheduledActor.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -6,6 +7,7 @@
 #include <stdexcept>
 
 using oreslang::runtime::NativeActorGroup;
+using oreslang::runtime::NativeScheduledActor;
 using oreslang::runtime::NativeAsyncEnvelopeTxn;
 using oreslang::runtime::NativeAsyncMailboxAdmission;
 using oreslang::runtime::PriorityActorInbox;
@@ -47,8 +49,7 @@ static void setup_scheduler(WakeFixture& f) {
         2, 1, 1, on_data, nullptr, nullptr, on_wake, &f);
     CHECK(f.scheduler);
     f.producer = ores_native_actor_scheduler_spawn(f.scheduler, 0);
-    f.target = ores_native_actor_scheduler_spawn(f.scheduler, 1);
-    CHECK(f.producer.scheduler_domain && f.target.scheduler_domain);
+    CHECK(f.producer.scheduler_domain);
 }
 
 static void finish_scheduler(WakeFixture& f, bool target_already_stopped = false) {
@@ -85,9 +86,83 @@ static bool sync_offer_owned(
     return false;
 }
 
+
+static void malformed_scheduler_binding_rejects_before_group_publication() {
+    NativeActorGroup group(7010, 1);
+    WakeFixture f;
+    setup_scheduler(f);
+    f.target = ores_native_actor_scheduler_spawn(f.scheduler, 1);
+    CHECK(f.target.scheduler_domain);
+    CHECK(f.target.generation);
+
+    bool threw = false;
+    try {
+        (void)group.adopt(
+            7010, 50, f.target.generation, [] {},
+            nullptr, f.target);
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    CHECK(threw);
+    CHECK(group.worker_count() == 0);
+
+    OresNativeActorRef incomplete = f.target;
+    incomplete.scheduler_domain = 0;
+    threw = false;
+    try {
+        (void)group.adopt(
+            7010, 50, f.target.generation, [] {},
+            f.scheduler, incomplete);
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    CHECK(threw);
+    CHECK(group.worker_count() == 0);
+
+    threw = false;
+    try {
+        (void)group.adopt(
+            7010, 50, f.target.generation + 1, [] {},
+            f.scheduler, f.target);
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    CHECK(threw);
+    CHECK(group.worker_count() == 0);
+
+    // A complete ref from another scheduler can have the same public
+    // slot/generation. That numeric coincidence must fail before group
+    // publication when paired with this scheduler pointer.
+    auto* foreign = ores_native_actor_scheduler_open(
+        2, 1, 1, on_data, nullptr);
+    CHECK(foreign);
+    const auto foreign_target =
+        ores_native_actor_scheduler_spawn(foreign, 1);
+    CHECK(foreign_target.actor_slot == f.target.actor_slot);
+    CHECK(foreign_target.generation == f.target.generation);
+    CHECK(foreign_target.scheduler_domain != f.target.scheduler_domain);
+    threw = false;
+    try {
+        (void)group.adopt(
+            7010, 50, foreign_target.generation, [] {},
+            f.scheduler, foreign_target);
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    CHECK(threw);
+    CHECK(group.worker_count() == 0);
+    ores_native_actor_scheduler_retire(foreign);
+    CHECK(ores_native_actor_scheduler_try_destroy(foreign));
+
+    finish_scheduler(f);
+}
+
 static void unarmed_transaction_destruction_refunds_preparation_descriptor() {
     NativeActorGroup group(7000, 1);
-    auto target = group.adopt(7000, 40, 1, [] {});
+    WakeFixture f;
+    setup_scheduler(f);
+    auto target = NativeScheduledActor::spawn(group, f.scheduler, 1, 40);
+    CHECK(target.exact_scheduler_ref(f.scheduler, &f.target));
     CHECK(group.mark_ready(target));
     NativeAsyncMailboxAdmission admission(1, 8, 1, 8);
 
@@ -106,11 +181,15 @@ static void unarmed_transaction_destruction_refunds_preparation_descriptor() {
 
     CHECK(group.finalized(target));
     target.get_done().get();
+    finish_scheduler(f);
 }
 
 static void terminal_target_rejects_before_payload_or_wake_transfer() {
     NativeActorGroup group(7005, 1);
-    auto target = group.adopt(7005, 45, 1, [] {});
+    WakeFixture f;
+    setup_scheduler(f);
+    auto target = NativeScheduledActor::spawn(group, f.scheduler, 1, 45);
+    CHECK(target.exact_scheduler_ref(f.scheduler, &f.target));
     CHECK(group.mark_ready(target));
     CHECK(group.finalized(target));
     target.get_done().get();
@@ -121,8 +200,6 @@ static void terminal_target_rejects_before_payload_or_wake_transfer() {
     auto frozen = std::make_unique<Payload>();
     frozen->value = 11;
 
-    WakeFixture f;
-    setup_scheduler(f);
     {
         Txn txn(admission, handle, target, Lane::Normal, 8);
         bool threw = false;
@@ -147,14 +224,15 @@ static void terminal_target_rejects_before_payload_or_wake_transfer() {
 
 static void waiting_target_stop_fails_future_and_releases_owned_state() {
     NativeActorGroup group(7006, 1);
-    auto target = group.adopt(7006, 46, 1, [] {});
+    WakeFixture f;
+    setup_scheduler(f);
+    auto target = NativeScheduledActor::spawn(group, f.scheduler, 1, 46);
+    CHECK(target.exact_scheduler_ref(f.scheduler, &f.target));
     CHECK(group.mark_ready(target));
 
     Inbox inbox({1, 8}, {1, 8}, {1, 8}, 8);
     inbox.bind_target(target);
     NativeAsyncMailboxAdmission admission(1, 8, 2, 16);
-    WakeFixture f;
-    setup_scheduler(f);
 
     auto blocker = std::make_unique<Payload>();
     blocker->value = 3;
@@ -201,12 +279,13 @@ static void waiting_target_stop_fails_future_and_releases_owned_state() {
 
 static void transaction_move_transfers_descriptor_payload_and_loan_once() {
     NativeActorGroup group(7007, 1);
-    auto target = group.adopt(7007, 47, 1, [] {});
+    WakeFixture f;
+    setup_scheduler(f);
+    auto target = NativeScheduledActor::spawn(group, f.scheduler, 1, 47);
+    CHECK(target.exact_scheduler_ref(f.scheduler, &f.target));
     CHECK(group.mark_ready(target));
 
     NativeAsyncMailboxAdmission admission(1, 8, 1, 8);
-    WakeFixture f;
-    setup_scheduler(f);
 
     NativeAsyncMailboxAdmission::Handle handle;
     CHECK(admission.begin_preparation(&handle));
@@ -240,15 +319,16 @@ static void transaction_move_transfers_descriptor_payload_and_loan_once() {
 
 static void waiting_send_transfers_frozen_payload_and_exact_resource_loan() {
     NativeActorGroup group(7001, 1);
-    auto target = group.adopt(7001, 41, 1, [] {});
+    WakeFixture f;
+    setup_scheduler(f);
+    auto target = NativeScheduledActor::spawn(group, f.scheduler, 1, 41);
+    CHECK(target.exact_scheduler_ref(f.scheduler, &f.target));
     CHECK(group.mark_ready(target));
 
     Inbox inbox({1, 8}, {1, 8}, {1, 8}, 8);
     inbox.bind_target(target);
     NativeAsyncMailboxAdmission admission(1, 8, 4, 32);
 
-    WakeFixture f;
-    setup_scheduler(f);
 
     // Occupy the real and shadow NORMAL credit with an ordinary accepted send.
     auto blocker = std::make_unique<Payload>();
@@ -318,14 +398,15 @@ static void waiting_send_transfers_frozen_payload_and_exact_resource_loan() {
 
 static void waiting_cancellation_releases_payload_loan_and_wake() {
     NativeActorGroup group(7002, 1);
-    auto target = group.adopt(7002, 42, 1, [] {});
+    WakeFixture f;
+    setup_scheduler(f);
+    auto target = NativeScheduledActor::spawn(group, f.scheduler, 1, 42);
+    CHECK(target.exact_scheduler_ref(f.scheduler, &f.target));
     CHECK(group.mark_ready(target));
 
     Inbox inbox({1, 8}, {1, 8}, {1, 8}, 8);
     inbox.bind_target(target);
     NativeAsyncMailboxAdmission admission(1, 8, 2, 16);
-    WakeFixture f;
-    setup_scheduler(f);
 
     auto blocker = std::make_unique<Payload>();
     blocker->value = 2;
@@ -362,14 +443,15 @@ static void waiting_cancellation_releases_payload_loan_and_wake() {
 
 static void publication_exception_aborts_transfer_and_releases_target_loan() {
     NativeActorGroup group(7003, 1);
-    auto target = group.adopt(7003, 43, 1, [] {});
+    WakeFixture f;
+    setup_scheduler(f);
+    auto target = NativeScheduledActor::spawn(group, f.scheduler, 1, 43);
+    CHECK(target.exact_scheduler_ref(f.scheduler, &f.target));
     CHECK(group.mark_ready(target));
 
     Inbox inbox({1, 8}, {1, 8}, {1, 8}, 8);
     inbox.bind_target(target);
     NativeAsyncMailboxAdmission admission(1, 8, 2, 16);
-    WakeFixture f;
-    setup_scheduler(f);
 
     NativeAsyncMailboxAdmission::Handle handle;
     CHECK(admission.begin_preparation(&handle));
@@ -405,14 +487,15 @@ static void publication_exception_aborts_transfer_and_releases_target_loan() {
 
 static void producer_stop_after_transfer_does_not_retract_envelope() {
     NativeActorGroup group(7004, 1);
-    auto target = group.adopt(7004, 44, 1, [] {});
+    WakeFixture f;
+    setup_scheduler(f);
+    auto target = NativeScheduledActor::spawn(group, f.scheduler, 1, 44);
+    CHECK(target.exact_scheduler_ref(f.scheduler, &f.target));
     CHECK(group.mark_ready(target));
 
     Inbox inbox({1, 8}, {1, 8}, {1, 8}, 8);
     inbox.bind_target(target);
     NativeAsyncMailboxAdmission admission(1, 8, 2, 16);
-    WakeFixture f;
-    setup_scheduler(f);
 
     NativeAsyncMailboxAdmission::Handle handle;
     CHECK(admission.begin_preparation(&handle));
@@ -448,11 +531,12 @@ static void producer_stop_after_transfer_does_not_retract_envelope() {
 
 static void sealed_preparation_rejection_releases_reserved_wake() {
     NativeActorGroup group(7008, 1);
-    auto target = group.adopt(7008, 48, 1, [] {});
-    CHECK(group.mark_ready(target));
-    NativeAsyncMailboxAdmission admission(1, 8, 1, 8);
     WakeFixture f;
     setup_scheduler(f);
+    auto target = NativeScheduledActor::spawn(group, f.scheduler, 1, 48);
+    CHECK(target.exact_scheduler_ref(f.scheduler, &f.target));
+    CHECK(group.mark_ready(target));
+    NativeAsyncMailboxAdmission admission(1, 8, 1, 8);
 
     NativeAsyncMailboxAdmission::Handle handle;
     CHECK(admission.begin_preparation(&handle));
@@ -481,7 +565,86 @@ static void sealed_preparation_rejection_releases_reserved_wake() {
     finish_scheduler(f);
 }
 
+static void unbound_and_mismatched_scheduler_incarnations_reject_before_loans() {
+    NativeActorGroup group(7009, 1);
+    WakeFixture f;
+    setup_scheduler(f);
+    auto target = NativeScheduledActor::spawn(group, f.scheduler, 1, 49);
+    CHECK(target.exact_scheduler_ref(f.scheduler, &f.target));
+    CHECK(group.mark_ready(target));
+
+    auto rejected = [&](const oreslang::runtime::NativeActorRef& control,
+                        OresNativeActorScheduler* scheduler,
+                        OresNativeActorRef producer,
+                        OresNativeActorRef candidate) {
+        NativeAsyncMailboxAdmission admission(1, 8, 1, 8);
+        NativeAsyncMailboxAdmission::Handle handle;
+        CHECK(admission.begin_preparation(&handle));
+        auto payload = std::make_unique<Payload>();
+        payload->value = 23;
+        {
+            Txn txn(admission, handle, control, Lane::Normal, 8);
+            bool threw = false;
+            try {
+                (void)txn.reserve_and_arm_owned(
+                    payload, scheduler, producer, candidate, 901, 1, 1);
+            } catch (const std::invalid_argument&) {
+                threw = true;
+            }
+            CHECK(threw);
+            CHECK(payload && payload->value == 23);
+            CHECK(!txn.owns_payload() && !txn.owns_target_loan());
+            CHECK(control.outstanding_resource_loans() == 0);
+            CHECK(!ores_native_actor_scheduler_outstanding_wake_loans(
+                f.scheduler, f.producer));
+            CHECK(admission.pending_bytes() == 0);
+            CHECK(admission.used_frames() == 0);
+        }
+        CHECK(admission.active_descriptors() == 0);
+    };
+
+    auto altered = f.target;
+    ++altered.scheduler_domain;
+    rejected(target, f.scheduler, f.producer, altered);
+    altered = f.target;
+    ++altered.generation;
+    rejected(target, f.scheduler, f.producer, altered);
+    rejected(target, f.scheduler, f.producer, f.producer); // wrong actor slot
+    altered = f.producer;
+    ++altered.scheduler_domain;
+    rejected(target, f.scheduler, altered, f.target);
+
+    auto* foreign = ores_native_actor_scheduler_open(
+        2, 1, 1, on_data, nullptr);
+    CHECK(foreign);
+    const auto foreign_producer = ores_native_actor_scheduler_spawn(foreign, 0);
+    const auto foreign_target = ores_native_actor_scheduler_spawn(foreign, 1);
+    CHECK(foreign_target.actor_slot == f.target.actor_slot);
+    CHECK(foreign_target.generation == f.target.generation);
+    CHECK(foreign_target.scheduler_domain != f.target.scheduler_domain);
+    rejected(target, foreign, foreign_producer, foreign_target);
+    OresNativeActorRef no_projection = f.target;
+    CHECK(!target.exact_scheduler_ref(foreign, &no_projection));
+    CHECK(!no_projection.scheduler_domain);
+    ores_native_actor_scheduler_retire(foreign);
+    CHECK(ores_native_actor_scheduler_try_destroy(foreign));
+
+    CHECK(group.finalized(target));
+    target.get_done().get();
+    // Same routing labels and generation, but a new opaque control ticket.
+    // Ordinary adoption cannot forge the old scheduler binding.
+    auto replacement = group.adopt(7009, 49, target.generation(), [] {});
+    CHECK(replacement == target && !replacement.same_incarnation(target));
+    CHECK(group.mark_ready(replacement));
+    rejected(replacement, f.scheduler, f.producer, f.target);
+    CHECK(group.finalized(replacement));
+    replacement.get_done().get();
+    finish_scheduler(f);
+}
+
 int main() {
+    malformed_scheduler_binding_rejects_before_group_publication();
+    unbound_and_mismatched_scheduler_incarnations_reject_before_loans();
     sealed_preparation_rejection_releases_reserved_wake();
     unarmed_transaction_destruction_refunds_preparation_descriptor();
     terminal_target_rejects_before_payload_or_wake_transfer();

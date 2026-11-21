@@ -1,5 +1,7 @@
 #pragma once
 
+#include "oreslang/runtime/NativeActorScheduler.h"
+
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -119,6 +121,29 @@ public:
         return *this == other && ticket_ == other.ticket_;
     }
 
+    // Trusted projection of the scheduler-minted incarnation captured by
+    // NativeScheduledActor::spawn. Numeric routing labels are never authority.
+    bool exact_scheduler_ref(OresNativeActorScheduler* scheduler,
+                             OresNativeActorRef* out) const {
+        if (!out) return false;
+        *out = {};
+        std::lock_guard<std::mutex> guard(ticket_->mutex);
+        if (!scheduler || ticket_->scheduler != scheduler) return false;
+        *out = ticket_->scheduler_actor;
+        return true;
+    }
+
+    bool matches_scheduler_incarnation(OresNativeActorScheduler* scheduler,
+                                       OresNativeActorRef actor) const {
+        OresNativeActorRef exact{};
+        return exact_scheduler_ref(scheduler, &exact)
+            && generation_ == actor.generation
+            && exact.scheduler_domain == actor.scheduler_domain
+            && exact.actor_slot == actor.actor_slot
+            && exact.generation == actor.generation
+            && ores_native_actor_scheduler_poll_ready(scheduler, exact);
+    }
+
     /**
      * Register an enqueue-only host continuation. Never run guest code from
      * this callback; the caller must post guest resumption to its scheduler.
@@ -144,6 +169,8 @@ private:
 
     struct Ticket {
         std::mutex mutex;
+        OresNativeActorScheduler* scheduler = nullptr;
+        OresNativeActorRef scheduler_actor{};
         bool settled = false;
         ActorReadyResult result;
         std::vector<ReadyContinuation> waiters;
@@ -168,6 +195,7 @@ private:
     };
 
     friend class NativeActorGroup;
+    friend class NativeScheduledActor;
 
     NativeActorRef(std::uint64_t runtime_id, std::uint64_t actor_id,
                    std::uint64_t generation, std::shared_ptr<Ticket> ticket)
@@ -353,11 +381,26 @@ public:
 
     /** Immediate native equivalent of spawn: one *exclusive* manager. */
     NativeActorRef adopt(std::uint64_t runtime_id, std::uint64_t actor_id,
-                         std::uint64_t generation, StopRequest stop_request) {
+                         std::uint64_t generation, StopRequest stop_request,
+                         OresNativeActorScheduler* scheduler = nullptr,
+                         OresNativeActorRef scheduler_actor = {}) {
         if (!stop_request || actor_id == 0 || generation == 0)
             throw std::invalid_argument("invalid native actor admission");
         if (runtime_id != runtime_id_)
             throw std::invalid_argument("foreign runtime actor reference");
+        const bool has_scheduler_actor =
+            scheduler_actor.scheduler_domain != 0
+            || scheduler_actor.actor_slot != 0
+            || scheduler_actor.generation != 0;
+        if ((scheduler == nullptr) != !has_scheduler_actor
+                || (scheduler != nullptr
+                    && (!scheduler_actor.scheduler_domain
+                        || !scheduler_actor.generation
+                        || scheduler_actor.generation != generation
+                        || !ores_native_actor_scheduler_poll_ready(
+                            scheduler, scheduler_actor))))
+            throw std::invalid_argument(
+                "scheduled actor binding must be complete, live and scheduler-exact");
         auto& owners = registry();
         // All paths touching both locks take the same scoped pair.
         std::scoped_lock guard(mutex_, owners.mutex);
@@ -370,6 +413,11 @@ public:
         if (owners.live.find(key) != owners.live.end())
             throw std::logic_error("actor already managed by another group");
         auto ticket = std::make_shared<NativeActorRef::Ticket>();
+        // Bind scheduler authority before either ownership registry can publish
+        // the ref. Readers therefore never observe a managed scheduled actor
+        // with a temporarily-unbound incarnation ticket.
+        ticket->scheduler = scheduler;
+        ticket->scheduler_actor = scheduler_actor;
         NativeActorRef ref(runtime_id, actor_id, generation, std::move(ticket));
         workers_.emplace(actor_id, Entry{ref, std::move(stop_request), Phase::starting, {}});
         try {
