@@ -3892,12 +3892,18 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         auto* typed_ctx = b.CreateBitCast(ctx, ctx_type->getPointerTo());
         auto* version = b.CreateLoad(i32, b.CreateStructGEP(ctx_type, typed_ctx, 0));
         auto* slots = b.CreateLoad(i32, b.CreateStructGEP(ctx_type, typed_ctx, 1));
+        // Zero is not a live OresVM generation. Reject it before any
+        // stateful host callback is invoked by source-compiled native AOT.
+        auto* generation = b.CreateLoad(i64,
+            b.CreateStructGEP(ctx_type, typed_ctx, 2), "tenant.generation");
         auto* data = b.CreateLoad(native_ptr, b.CreateStructGEP(ctx_type, typed_ctx, 3));
         auto* load_fn = b.CreateLoad(native_ptr, b.CreateStructGEP(ctx_type, typed_ctx, 4));
         auto* store_fn = b.CreateLoad(native_ptr, b.CreateStructGEP(ctx_type, typed_ctx, 5));
         auto* compatible = b.CreateAnd(
             b.CreateAnd(b.CreateICmpEQ(version, llvm::ConstantInt::get(i32, ORES_ISOLATE_ABI_VERSION)),
-                        b.CreateICmpEQ(slots, llvm::ConstantInt::get(i32, ORES_ISOLATE_I64_SLOTS))),
+                        b.CreateAnd(
+                            b.CreateICmpEQ(slots, llvm::ConstantInt::get(i32, ORES_ISOLATE_I64_SLOTS)),
+                            b.CreateICmpNE(generation, llvm::ConstantInt::get(i64, 0)))),
             b.CreateAnd(b.CreateIsNotNull(data),
                 b.CreateAnd(b.CreateIsNotNull(load_fn), b.CreateIsNotNull(store_fn))));
         b.CreateCondBr(compatible, read, bad_context);
