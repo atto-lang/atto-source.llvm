@@ -45,7 +45,11 @@ pub fn compile(source: &str) -> Result<Vec<u8>, Diagnostic> {
             lexer::Tok::RBrace => braces = braces.saturating_sub(1),
             lexer::Tok::Ident(word) if braces == 0 => {
                 let next = toks.get(i + 1).map(|token| &token.tok);
-                if word == "declare" || word == "mtd" ||
+                // Inline `mtd name(...)` inside a class/actor must use the
+                // ordinary executable parser. Only receiver-form `mtd (...)`
+                // selects the syntax-only external-method frontend.
+                if word == "declare" ||
+                    (word == "mtd" && matches!(next, Some(lexer::Tok::LParen))) ||
                     (word == "use" && matches!(next,
                         Some(lexer::Tok::Ident(name)) if name == "namespace")) {
                     target = true;
