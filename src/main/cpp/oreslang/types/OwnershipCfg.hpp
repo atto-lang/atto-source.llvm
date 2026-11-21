@@ -314,7 +314,7 @@ inline Analysis verify(const Graph& graph) {
     // allowing a single release to discharge the wrong branch's loan.
     // The implicit ID is a stable encoding of the borrow's CFG site.
     std::map<std::uint64_t, std::pair<std::size_t, std::size_t>> borrow_sites;
-    std::set<std::uint64_t> claimed_write_sites;
+    std::map<std::uint64_t, std::string> claimed_write_sites;
     for (std::size_t block_id = 0; block_id < graph.blocks.size(); ++block_id) {
         const auto& block = graph.blocks[block_id];
         // Malformed successors are invalid even in presently unreachable
@@ -330,7 +330,7 @@ inline Analysis verify(const Graph& graph) {
                 violation(op.place, "loan identity on non-loan operation");
             if (op.kind == Operation::Kind::Reinitialize) {
                 if (!op.write_id || !*op.write_id ||
-                        !claimed_write_sites.insert(*op.write_id).second)
+                        !claimed_write_sites.emplace(*op.write_id, op.place).second)
                     violation(op.place, "duplicate or unproven reinitialization write-site");
                 if (op.loan_id)
                     violation(op.place, "write-site metadata cannot impersonate loan identity");
@@ -412,6 +412,12 @@ inline Analysis verify(const Graph& graph) {
         if (value.exclusive_loan_id)
             record_entry_token(*value.exclusive_loan_id);
     }
+    // The same integer cannot authenticate both a lexical/entry loan and a
+    // field-write restoration, even if one origin is currently unreachable.
+    // A ticket is not proof that a guest field assignment was emitted.
+    for (const auto& [ticket, target] : claimed_write_sites)
+        if (borrow_sites.count(ticket) || entry_loan_owners.count(ticket))
+            violation(target, "write-site ticket aliases loan identity");
     Analysis result;
     result.incoming.resize(graph.blocks.size());
     result.outgoing.resize(graph.blocks.size());
