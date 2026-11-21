@@ -25,6 +25,7 @@ struct LocalOwnership {
     bool moved = false;
     bool heap_owned = false; // Experimental region slots cannot transfer ownership yet.
     bool int_array = false; // Non-copy lexical array; no borrows or escapes.
+    bool copy_i64_array = false; // Verified lexical Array<int>, not String or record handle.
     bool record_view = false; // readonly materialized value, not an incoming loan
     bool mutable_owner = false; // lexical let mut or exclusive borrowed parameter
     bool assignable = false; // lexical slot replacement, not referent mutation
@@ -395,10 +396,26 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
         case Expression::Kind::ArrayCall: {
             if (!expr.left)
                 reject(expr, "native Array<int> operation requires a named owner");
-            array_owner(*expr.left, locals, false);
-            if (expr.name != "get" || expr.arguments.size() != 1)
-                reject(expr, "native Array<int> expression supports only get(index)");
-            check_value(*expr.arguments[0], locals, functions);
+            LocalOwnership& receiver = array_owner(*expr.left, locals, false);
+            const bool checked_copy = expr.name == "get_copy";
+            if (checked_copy && (expr.left->kind != Expression::Kind::Variable
+                    || !receiver.int_array || !receiver.copy_i64_array))
+                reject(expr, "native checked copy requires a lexical Array<int> of Copy<int> elements");
+            if ((expr.name != "get" && !checked_copy) || expr.arguments.size() != 1)
+                reject(expr, "native Array<int> expression requires get(index) or typed get_copy(index)");
+            // A raw i64 may NEVER be reinterpreted as a tagged Option handle.
+            // This source-owned tag is set only by the explicit sum binding.
+            if (checked_copy && expr.sum_type != "Option<int>")
+                reject(expr, "native checked copy requires explicit Option<int> provenance");
+            if (checked_copy) {
+                // No compiler-owned interprocedural loan reservation exists
+                // for arbitrary index effects yet. Require a pure scalar
+                // expression so mutation/transfer cannot occur between
+                // checking the owner and its native checked-copy call.
+                check_pure_guard(*expr.arguments[0], locals, functions);
+            } else {
+                check_value(*expr.arguments[0], locals, functions);
+            }
             return;
         }
         case Expression::Kind::SumConstruct:
@@ -698,6 +715,9 @@ void validate_i64_ownership(Program& program) {
             LocalOwnership entry;
             entry.heap_owned = binding.heap_owned;
             entry.int_array = binding.int_array;
+            entry.copy_i64_array = binding.int_array
+                && binding.array_element_type == ScalarType::I64
+                && binding.array_record_class.empty();
             entry.mutable_owner = binding.owner_mutable;
             entry.assignable = binding.assignable;
             entry.class_name = binding.class_name;
@@ -882,6 +902,9 @@ void validate_i64_ownership(Program& program) {
         auto scoped_entry = [&](const LocalBinding& binding) {
             LocalOwnership entry;
             entry.int_array = binding.int_array;
+            entry.copy_i64_array = binding.int_array
+                && binding.array_element_type == ScalarType::I64
+                && binding.array_record_class.empty();
             entry.mutable_owner = binding.owner_mutable;
             entry.assignable = binding.assignable;
             entry.class_name = binding.class_name;

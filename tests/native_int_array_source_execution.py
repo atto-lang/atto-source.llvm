@@ -19,6 +19,15 @@ except ImportError:  # Windows has no RLIMIT_CORE
 
 
 POSITIVE = {
+    "checked-copy-option-hit-miss": ("""pub fnc main(): int {
+  let mut Array<int> values = new Array<int>();
+  values.add(42);
+  val Option<int> hit = values.get_copy(0);
+  val Option<int> miss = values.get_copy(-1);
+  val Option<int> high = values.get_copy(2147483648);
+  return hit.unwrap_or(0) + miss.unwrap_or(0) + high.unwrap_or(0);
+}
+""", 42, 1),
     "add-get-set-size": ("""pub fnc main(): int {
   let mut Array<int> numbers = new Array<int>();
   numbers.add(4);
@@ -104,6 +113,23 @@ NATIVE_ABORT = {
 
 
 NEGATIVE = {
+    "get-copy-untyped": ("""pub fnc main(): int {
+ let mut Array<int> values = new Array<int>();
+ return values.get_copy(0);
+}
+""", "get_copy"),
+    "get-copy-wrong-option": ("""pub fnc main(): int {
+ let mut Array<int> values = new Array<int>();
+ val Option<bool> result = values.get_copy(0);
+ return 42;
+}
+""", "get_copy requires"),
+    "get-copy-string-element": ("""pub fnc main(): int {
+ let mut Array<String> values = new Array<String>();
+ val Option<int> result = values.get_copy(0);
+ return 42;
+}
+""", "get_copy requires Array<int>"),
     "reserved-abi-symbol": ("""fnc oreslang_int_array_get(int x): int {
   return x;
 }
@@ -163,7 +189,7 @@ pub fnc main(): int {
  a.add(1);
  return a.get(0, 1);
 }
-""", "supports only get(index)"),
+""", "get(index) or typed get_copy(index)"),
     "unsupported-field": ("""pub fnc main(): int {
  let mut Array<int> a = new Array<int>();
  return a.capacity;
@@ -179,7 +205,7 @@ pub fnc main(): int {
  let mut Array<int> a = new Array<int>();
  return a.add(2);
 }
-""", "expression supports only get(index)"),
+""", "get(index) or typed get_copy(index)"),
     "bad-set-arity": ("""pub fnc main(): int {
  let mut Array<int> a = new Array<int>();
  a.set(0);
@@ -196,7 +222,8 @@ def run(command, *, input=None):
 def verify(compiler: Path, clang: Path, root: Path, sanitized: bool):
     c_runtime = root / "src/main/cpp/oreslang/runtime/NativeIntArrayRegion.c"
     include = root / "src/main/cpp"
-    for path in (compiler, clang, c_runtime):
+    record_runtime = root / "src/main/cpp/oreslang/runtime/NativeRecordRegion.c"
+    for path in (compiler, clang, c_runtime, record_runtime):
         if not path.is_file():
             raise AssertionError(f"missing native source gate input: {path}")
     with tempfile.TemporaryDirectory(prefix="oreslang-array-source-") as directory:
@@ -222,14 +249,21 @@ def verify(compiler: Path, clang: Path, root: Path, sanitized: bool):
             if b"call i64 @oreslang_int_array_new(" in ir or \
                     b"call void @oreslang_int_array_add(" in ir:
                 raise AssertionError(f"{name}: legacy aborting allocator remains in generated IR")
+            if name == "checked-copy-option-hit-miss":
+                for required in (b"@oreslang_int_array_try_get_copy",
+                                 b"@ores_record_new", b"@ores_record_region_begin"):
+                    if required not in ir:
+                        raise AssertionError(f"{name}: missing compiler-owned Option ABI {required!r}")
             if not ir or b"define i32 @main()" not in ir:
                 raise AssertionError(f"{name}: missing native compiler-generated entrypoint")
             ll = work / f"{name}.ll"
             ll.write_bytes(ir)
             exe = work / name
             link = [str(clang), "-O1", "-Wno-override-module", "-std=c11",
-                    "-x", "ir", str(ll), "-x", "c", str(c_runtime),
-                    "-I", str(include), "-o", str(exe)]
+                    "-x", "ir", str(ll), "-x", "c", str(c_runtime)]
+            if b"@ores_record_new" in ir:
+                link.append(str(record_runtime))
+            link += ["-I", str(include), "-o", str(exe)]
             if sanitized:
                 link[1:1] = ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
             linked = run(link)
