@@ -192,6 +192,25 @@ def executable_case(binary, op, a, b, value):
                              (op, a, b, expected, p.returncode, p.stdout, p.stderr))
 
 
+def fanout_source(depth):
+    """Acyclic, tiny-AST graph with 2**depth nested calls at runtime."""
+    lines = ["pub fnc entry(int a):int{return f0(a);}"]
+    for i in range(depth):
+        lines.append("fnc f%d(int a):int{return f%d(a)+f%d(a);}" %
+                     (i, i + 1, i + 1))
+    lines.append("fnc f%d(int a):int{return a;}" % depth)
+    return "\n".join(lines)
+
+
+def linear_source(depth):
+    """A single-call chain: depth 30 admits 32 frames; 31 denies 33."""
+    lines = ["pub fnc entry(int a):int{return f0(a);}"]
+    for i in range(depth):
+        lines.append("fnc f%d(int a):int{return f%d(a);}" % (i, i + 1))
+    lines.append("fnc f%d(int a):int{return a;}" % depth)
+    return "\n".join(lines)
+
+
 def rejected(compiler, work, label, source, flags=None, expected_error=None):
     file = work / (label + ".ores")
     file.write_text(source + "\n", encoding="utf-8")
@@ -285,15 +304,71 @@ def main():
                           "fnc bad(int b):int{return b;}"),
             "named-arguments": ("fnc inc(int a):int{return a+1;}"
                                 "pub fnc twice(int a):int{return inc(a:a);}"),
+            "exponential-call-work": fanout_source(18),
+            "first-fanout-over-budget": fanout_source(14),
+            "depth-over-budget": linear_source(31),
         }
         reasons = {
             "only-private": "requires at least one pub function",
             "recursive": "recursive call graph unsupported",
             "indirect-cycle": "recursive call graph unsupported",
             "named-arguments": "requires positional-only calls",
+            "exponential-call-work": "evaluation work exceeds 65536-node call budget",
+            "first-fanout-over-budget": "evaluation work exceeds 65536-node call budget",
+            "depth-over-budget": "call depth exceeds 32",
         }
         for label, code in negatives.items():
             rejected(compiler, work, label, code, expected_error=reasons.get(label))
+        # A small acyclic call graph is still admitted; reject only
+        # genuinely excessive transitive work, not every multi-call AST.
+        bounded = work / "bounded-fanout.ores"
+        for label, code in (("small-fanout", fanout_source(8)),
+                            ("largest-binary-fanout-under-cap", fanout_source(13)),
+                            ("maximum-call-depth", linear_source(30))):
+            bounded.write_text(code, encoding="utf-8")
+            allowed = run([compiler, "--target=host",
+                           "--experimental-checked-i64-result-functions",
+                           str(bounded)])
+            if allowed.returncode or allowed.stderr or (
+                    "__oreslang_checked_v2_entry_1" not in allowed.stdout):
+                raise AssertionError(
+                    label + ": safe bounded graph was rejected: " + repr(allowed))
+            if label == "largest-binary-fanout-under-cap":
+                # Admission alone could falsely certify 49,149 evaluations.
+                # Execute the actual Oreslang-generated IR at both optimization
+                # levels; check exact full-width result, overflow propagation,
+                # failure atomicity, and null-out precedence.
+                fanout_ir = work / "bounded-fanout.ll"
+                fanout_ir.write_text(allowed.stdout, encoding="utf-8")
+                fanout_host = work / "bounded-fanout-host.c"
+                fanout_host.write_text(r"""
+#include <stdint.h>
+#include <limits.h>
+extern int32_t __oreslang_checked_v2_entry_1(int64_t, int64_t*);
+int main(void) {
+    int64_t out = INT64_C(987654321);
+    if (__oreslang_checked_v2_entry_1(1, &out) != 0 || out != 8192) return 10;
+    out = INT64_C(987654321);
+    if (__oreslang_checked_v2_entry_1(-1, &out) != 0 || out != -8192) return 11;
+    out = INT64_C(987654321);
+    if (__oreslang_checked_v2_entry_1(INT64_MAX, &out) != 1 ||
+        out != INT64_C(987654321)) return 12;
+    if (__oreslang_checked_v2_entry_1(INT64_MAX, 0) != 2) return 13;
+    return 0;
+}
+""", encoding="utf-8")
+                for optimization in ("0", "2"):
+                    fanout_exe = work / ("bounded-guest-O" + optimization)
+                    built = run([clang, "-O" + optimization, "-std=c11",
+                                 "-Wall", "-Wextra", "-Werror", "-Wno-override-module",
+                                 str(fanout_host), str(fanout_ir), "-o", str(fanout_exe)])
+                    if built.returncode or built.stderr:
+                        raise AssertionError("bounded result IR did not link: " + repr(built))
+                    ran = run([str(fanout_exe)])
+                    if ran.returncode or ran.stdout or ran.stderr:
+                        raise AssertionError(
+                            "bounded checked result execution failed O" +
+                            optimization + ": " + repr(ran))
         rejected(compiler, work, "mixed-trap", SOURCE,
                  ["--experimental-checked-i64-functions"])
         rejected(compiler, work, "mixed-status", SOURCE,

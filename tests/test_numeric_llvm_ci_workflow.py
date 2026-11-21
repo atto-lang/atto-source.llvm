@@ -50,6 +50,34 @@ class CheckedI64WorkflowAdmissionTest(unittest.TestCase):
                       matching[0])
 
 
+    def test_checked_i64_release_inventory_is_mandatory_and_precedes_execution(self):
+        yaml = CI.read_text(encoding="utf-8")
+        manifest = (ROOT / "tests/ctest_manifest_gate.py").read_text(encoding="utf-8")
+        inventory = yaml.index("      - name: Verify checked-i64 CTest inventory before full native suite")
+        targeted = yaml.index("      - name: Verify real checked-result compiler ABI before full CTest")
+        self.assertLess(inventory, targeted, "inventory gate must fail before guest execution")
+        for name, harness in (
+            ("numeric_experimental_checked_i64_status_abi", "native_checked_scalar_experimental.py"),
+            ("numeric_experimental_checked_pure_function_graph", "native_checked_pure_functions.py"),
+            ("numeric_experimental_checked_result_function_graph", "native_checked_result_functions.py"),
+        ):
+            with self.subTest(name=name):
+                self.assertIn('"' + name + '": "' + harness + '"', manifest)
+                self.assertIn("CHECKED_I64_GUEST_TESTS", manifest)
+        self.assertIn("critical CTest timeout is unsafe", manifest)
+
+    def test_native_evidence_upload_is_short_lived_and_not_self_certification(self):
+        yaml = CI.read_text(encoding="utf-8")
+        self.assertIn("--output-junit", yaml)
+        self.assertIn("build/checked-i64-ctest.xml", yaml)
+        self.assertIn("build/full-ctest.xml", yaml)
+        self.assertIn('"verified_compiled_claim": False', yaml)
+        self.assertIn("if: ${{ always() }}", yaml)
+        self.assertIn("retention-days: 3", yaml)
+        self.assertIn(
+            "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02", yaml)
+        self.assertNotIn("private-oreslang-source", yaml)
+
     def test_full_native_ci_steps_are_unique(self):
         yaml = CI.read_text(encoding="utf-8")
         names = re.findall(r"(?m)^      - name: ([^\r\n]+)$", yaml)

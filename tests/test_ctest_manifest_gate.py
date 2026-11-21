@@ -5,7 +5,7 @@ import sys
 import unittest
 
 from ctest_manifest_gate import (
-    CRITICAL_TESTS, GUEST_FIXTURES, ManifestFailure, NATIVE_EXECUTABLES,
+    CHECKED_I64_GUEST_TESTS, CRITICAL_TESTS, GUEST_FIXTURES, ManifestFailure, NATIVE_EXECUTABLES,
     SOURCE_ACTOR_TESTS, TIMED_TESTS, VISIBILITY_NEGATIVE_FIXTURES, VISIBILITY_POSITIVE, check_manifest,
 )
 
@@ -16,7 +16,11 @@ def fixture():
     entries = []
     for name in CRITICAL_TESTS:
         props = [{"name": "TIMEOUT", "value": 90.0}] if name in TIMED_TESTS else []
-        if name in VISIBILITY_NEGATIVE_FIXTURES or name == VISIBILITY_POSITIVE:
+        if name in CHECKED_I64_GUEST_TESTS:
+            command = [sys.executable, "/work/src/tests/" + CHECKED_I64_GUEST_TESTS[name],
+                       "--compiler", "/work/build/oreslang-llvmc",
+                       "--clang", "/usr/bin/clang"]
+        elif name in VISIBILITY_NEGATIVE_FIXTURES or name == VISIBILITY_POSITIVE:
             positive = name == VISIBILITY_POSITIVE
             source = ("class-public-field-read-native.ores" if positive
                       else VISIBILITY_NEGATIVE_FIXTURES[name])
@@ -75,6 +79,55 @@ class ManifestAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(ManifestFailure, expected):
             check_manifest(self.manifest)
 
+    def test_checked_i64_guest_ctests_cannot_be_missing(self):
+        for name in CHECKED_I64_GUEST_TESTS:
+            with self.subTest(name=name):
+                doc = fixture()
+                doc["tests"] = [x for x in doc["tests"] if x["name"] != name]
+                with self.assertRaisesRegex(ManifestFailure, "required CTest was not registered"):
+                    check_manifest(doc)
+
+    def test_checked_i64_guest_ctests_must_execute_correct_harness(self):
+        for name in CHECKED_I64_GUEST_TESTS:
+            for mutation in ("no-op", "wrong-script", "wrong-compiler",
+                             "missing-clang", "wrong-order", "extra-argument"):
+                with self.subTest(name=name, mutation=mutation):
+                    doc = fixture()
+                    entry = next(x for x in doc["tests"] if x["name"] == name)
+                    command = entry["command"]
+                    if mutation == "no-op":
+                        entry["command"] = [sys.executable, "-c", "pass"]
+                    elif mutation == "wrong-script":
+                        command[1] = "/work/src/tests/unrelated.py"
+                    elif mutation == "wrong-compiler":
+                        command[3] = "/tmp/fake-compiler"
+                    elif mutation == "missing-clang":
+                        command[5] = "--no-clang"
+                    elif mutation == "wrong-order":
+                        command[2], command[4] = command[4], command[2]
+                    else:
+                        command.append("--fake-success")
+                    with self.assertRaisesRegex(ManifestFailure, "wrong harness"):
+                        check_manifest(doc)
+
+    def test_checked_i64_guest_ctests_require_safe_timeouts(self):
+        for name in CHECKED_I64_GUEST_TESTS:
+            with self.subTest(name=name):
+                doc = fixture()
+                entry = next(x for x in doc["tests"] if x["name"] == name)
+                entry["properties"] = []
+                with self.assertRaisesRegex(ManifestFailure, "lacks numeric timeout"):
+                    check_manifest(doc)
+
+    def test_checked_i64_timeout_boolean_is_not_duration(self):
+        for name in CHECKED_I64_GUEST_TESTS:
+            with self.subTest(name=name):
+                doc = fixture()
+                entry = next(x for x in doc["tests"] if x["name"] == name)
+                entry["properties"][0]["value"] = True
+                with self.assertRaisesRegex(ManifestFailure, "timeout is unsafe"):
+                    check_manifest(doc)
+
     def test_complete_manifest_is_admitted(self):
         self.assertEqual(check_manifest(self.manifest), 260 + len(CRITICAL_TESTS))
 
@@ -123,7 +176,9 @@ class ManifestAuditTests(unittest.TestCase):
         self.fail_on("required CTest was not registered")
 
     def test_python_optimized_gates_cannot_be_missing(self):
-        for critical in CRITICAL_TESTS[:3]:
+        for critical in ("native_contract_harness_optimize_failclosed",
+                         "native_contract_harness_python_O",
+                         "native_contract_harness_python_OO"):
             corpus = fixture()
             corpus["tests"] = [x for x in corpus["tests"] if x["name"] != critical]
             with self.assertRaisesRegex(ManifestFailure, "required CTest"):
@@ -140,8 +195,10 @@ class ManifestAuditTests(unittest.TestCase):
                 check_manifest(document)
 
     def test_optimized_harness_must_execute_correct_script(self):
-        self.manifest["tests"][0]["command"][-1] = "tests/empty.py"
-        self.fail_on("wrong script")
+        target = next(x for x in self.manifest["tests"]
+                      if x["name"] == "native_contract_harness_optimize_failclosed")
+        target["command"][-1] = "tests/empty.py"
+        self.fail_on("wrong interpreter/arguments")
 
     def test_native_object_gates_cannot_be_omitted(self):
         for flag in ("--verify-object", "--clang", "--compiler", "--fixture"):
