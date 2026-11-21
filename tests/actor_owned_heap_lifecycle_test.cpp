@@ -13,8 +13,15 @@
 
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "actor heap check failed at %d\n", __LINE__); return 1; } } while (0)
 
-enum Misuse { WRONG_OWNER, WRONG_EPOCH, FORGED_SLOT, DROP_LOANED, WRITE_LOANED, STALE_SLOT_REUSED, FOREIGN_SLOT, DOUBLE_LOAN_RELEASE, REENTER, CALL_AFTER_RETIRE };
+enum Misuse { WRONG_OWNER, WRONG_EPOCH, FORGED_SLOT, DROP_LOANED, WRITE_LOANED, STALE_SLOT_REUSED, FOREIGN_SLOT, DOUBLE_LOAN_RELEASE, REENTER, CALL_AFTER_RETIRE, FOREIGN_CARRIER_TURN, NESTED_CARRIER_ACTOR, LATE_IMMUTABLE_INIT, LATE_MUTABLE_INIT };
 static void invalid_call(enum Misuse which) {
+    OresActorSlot foreign_slot = {0, 0, 0};
+    if (which == FOREIGN_SLOT) {
+        OresActorI64Heap* foreign = ores_actor_i64_heap_open(30, 7, 2);
+        OresActorTurn foreign_turn = ores_actor_i64_heap_enter(foreign, 30, 7);
+        foreign_slot = ores_actor_i64_heap_new(foreign, foreign_turn, 5);
+        ores_actor_i64_heap_leave(foreign, foreign_turn);
+    }
     OresActorI64Heap* heap = ores_actor_i64_heap_open(29, 7, 2);
     OresActorTurn turn = ores_actor_i64_heap_enter(heap, 29, 7);
     OresActorSlot slot = ores_actor_i64_heap_new(heap, turn, 99);
@@ -43,10 +50,7 @@ static void invalid_call(enum Misuse which) {
         (void) ores_actor_i64_heap_new(heap, turn, 12);
         (void) ores_actor_i64_heap_read(heap, turn, slot);
     } else if (which == FOREIGN_SLOT) {
-        OresActorI64Heap* foreign = ores_actor_i64_heap_open(30, 7, 2);
-        OresActorTurn other = ores_actor_i64_heap_enter(foreign, 30, 7);
-        OresActorSlot other_slot = ores_actor_i64_heap_new(foreign, other, 5);
-        (void) ores_actor_i64_heap_read(heap, turn, other_slot);
+        (void) ores_actor_i64_heap_read(heap, turn, foreign_slot);
     } else if (which == DOUBLE_LOAN_RELEASE) {
         OresActorLoan loan = ores_actor_i64_heap_borrow(heap, turn, slot);
         ores_actor_i64_heap_release(heap, loan);
@@ -56,6 +60,27 @@ static void invalid_call(enum Misuse which) {
     } else if (which == CALL_AFTER_RETIRE) {
         ores_actor_i64_heap_retire(heap);
         (void) ores_actor_i64_heap_new(heap, turn, 6);
+    } else if (which == FOREIGN_CARRIER_TURN) {
+        /* The compiler-facing fixed-field ABI must reject a current turn
+         * copied onto a different native carrier. */
+        ores_actor_i64_heap_field_init(heap, turn.domain, turn.epoch, 1, 77);
+        std::thread stolen([&] {
+            (void) ores_actor_i64_heap_field_read(
+                heap, turn.domain, turn.epoch, 1);
+        });
+        stolen.join();
+    } else if (which == NESTED_CARRIER_ACTOR) {
+        OresActorI64Heap* other = ores_actor_i64_heap_open(30, 8, 1);
+        (void) ores_actor_i64_heap_enter(other, 30, 8);
+    } else if (which == LATE_IMMUTABLE_INIT || which == LATE_MUTABLE_INIT) {
+        // The same legitimate carrier may resume the actor, but it may not
+        // initialize a previously blank fixed field on a later mailbox turn.
+        ores_actor_i64_heap_leave(heap, turn);
+        OresActorTurn resumed = ores_actor_i64_heap_enter(heap, 29, 7);
+        if (which == LATE_IMMUTABLE_INIT)
+            ores_actor_i64_heap_field_init(heap, resumed.domain, resumed.epoch, 1, 42);
+        else
+            ores_actor_i64_heap_field_init_mutable(heap, resumed.domain, resumed.epoch, 1, 42);
     }
     /* None of these calls may finish normally. */
 }
@@ -134,6 +159,25 @@ int main(void) {
     CHECK(rejects(DOUBLE_LOAN_RELEASE));
     CHECK(rejects(REENTER));
     CHECK(rejects(CALL_AFTER_RETIRE));
+    CHECK(rejects(FOREIGN_CARRIER_TURN));
+    CHECK(rejects(NESTED_CARRIER_ACTOR));
+    CHECK(rejects(LATE_IMMUTABLE_INIT));
+    CHECK(rejects(LATE_MUTABLE_INIT));
 #endif
+    /* Domain authority must remain unique across repeated actor incarnation
+     * creation/destruction. This exercises the saturating CAS issuance path
+     * under ordinary operation; exhaustion itself is intentionally unreachable
+     * in a bounded regression. */
+    uint64_t previous_domain = 0;
+    for (uint64_t i = 0; i < 1024; ++i) {
+        OresActorI64Heap* probe = ores_actor_i64_heap_open(1000 + i, 1, 1);
+        OresActorTurn probe_turn = ores_actor_i64_heap_enter(probe, 1000 + i, 1);
+        CHECK(probe_turn.domain != 0);
+        CHECK(probe_turn.domain > previous_domain);
+        previous_domain = probe_turn.domain;
+        ores_actor_i64_heap_leave(probe, probe_turn);
+        ores_actor_i64_heap_retire(probe);
+        CHECK(ores_actor_i64_heap_try_destroy(probe) == 1);
+    }
     return 0;
 }
