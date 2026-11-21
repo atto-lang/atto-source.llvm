@@ -170,6 +170,17 @@ if(BUILD_TESTING)
     add_test(NAME native_ownership_loan_write_domain_6
         COMMAND oreslang-native-loan-write-domain-6-test)
 
+    # Source-only typed-MIR use inventory / store-claim consistency.
+    # This cannot authorize NLL guest lowering without real SSA/emission.
+    add_executable(oreslang-native-mir-receipts-30-test
+        tests/native_ownership_mir_receipts_30_test.cpp)
+    target_include_directories(oreslang-native-mir-receipts-30-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-mir-receipts-30-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_ownership_mir_receipts_30
+        COMMAND oreslang-native-mir-receipts-30-test)
+
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.

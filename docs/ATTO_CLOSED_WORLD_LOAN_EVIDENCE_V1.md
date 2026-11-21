@@ -25,3 +25,12 @@ Generate the complete tokenized use-def stream from typed SSA; fence opaque call
 ## Ticket/loan identity-domain follow-up (stacked draft)
 
 `Reinitialize.write_id` cannot alias any lexical explicit/derived loan origin or any entry loan ID. The preflight checks unreachable blocks as well. Six new host C++ cases are registered as a tenth focused native CTest. These tests are **authored but NOT_EXECUTED** and cannot authenticate a real MIR field write, complete SSA uses or guest NLL parity.
+
+
+## Source-only typed-MIR SSA/use and store-claim bridge (nonpromoting)
+
+OwnershipMirEvidence.hpp adds an opt-in, one-block, caller-supplied typed-MIR inventory comparison. Each UseSharedLoan/UseExclusiveLoan CFG operation must match exactly one typed SSA use-site claim and one lowered edge, with identical LoanId, place, CFG site, SSA value, use class and site ID. Omitted, duplicated and forged use metadata fail closed. Call, capture, phi and send categories are classified but not independently authenticated. Exception unwind, cancellation and suspension use categories remain rejected pending cleanup and lifetime evidence.
+
+Every Reinitialize.write_id must separately match exactly one typed-MIR field-write claim and one native-store claim with identical place and stored SSA value; phi-only, missing, duplicated and misdirected store claims fail closed. The adapter calls the real CFG verifier, but two matching caller-supplied streams can still omit real uses or fabricate emission. Therefore it **always returns verified=false and compiler_backed=false** and is not invoked by guest lowering.
+
+30 additional native C++ cases are authored, registered as the eleventh focused CTest, and require an exact-head CTest execution with no failures or skips. The workflow also repairs an inherited malformed grep inventory command. All 30 tests are AUTHORED, NOT EXECUTED until actual source-org runner steps occur. Neither this bridge nor a store-shaped record proves emitted LLVM IR or native AttoLang guest behavior.
