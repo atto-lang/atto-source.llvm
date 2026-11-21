@@ -83,6 +83,9 @@ struct ResolvedPlace {
 // expressions from escaping the same untracked-projection safety gate.
 inline std::optional<ResolvedPlace> resolve_compiler_place(
         const Expression& value, const Locals& locals) {
+    // Lookup alone cannot prove ownership if another in-scope variable
+    // carries the same forged BindingId / live allocation origin.
+    validate_identity_inventory(locals);
     const Expression* node = &value;
     std::vector<std::string> fields;
     for (std::size_t depth = 0; depth <= 8; ++depth) {

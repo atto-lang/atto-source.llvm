@@ -3,6 +3,7 @@
 #include "oreslang/frontend/Parser.hpp"
 
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -50,7 +51,35 @@ struct LocalOwnership {
 };
 using Locals = std::unordered_map<std::string, LocalOwnership>;
 
+// Validate real compiler-minted identities at every analysis boundary.
+// Binding IDs are declaration identities, not address/heap identities.
+// A known allocation origin may have several historical/moved slots but
+// never two simultaneously live OWNED slots. Borrowed view roots do not
+// acquire ownership merely by carrying that origin.
+inline void validate_identity_inventory(const Locals& locals) {
+    std::unordered_map<std::uint64_t, std::string> bindings;
+    std::unordered_map<std::uint64_t, std::string> live_owners;
+    for (const auto& item : locals) {
+        const auto& name = item.first;
+        const auto& state = item.second;
+        if (name.empty() || state.binding_id.value == 0)
+            throw std::runtime_error(
+                "ownership violation: unminted compiler binding identity");
+        if (!bindings.emplace(state.binding_id.value, name).second)
+            throw std::runtime_error(
+                "ownership violation: duplicate compiler binding identity");
+        if (state.allocation_origin.value != 0 &&
+                state.mode == Mode::Value && !state.moved) {
+            if (!live_owners.emplace(state.allocation_origin.value, name).second)
+                throw std::runtime_error(
+                    "ownership violation: duplicate live allocation owner");
+        }
+    }
+}
+
 inline bool same_affine_state(const Locals& left, const Locals& right) {
+    validate_identity_inventory(left);
+    validate_identity_inventory(right);
     if (left.size() != right.size()) return false;
     for (const auto& item : left) {
         const auto found = right.find(item.first);

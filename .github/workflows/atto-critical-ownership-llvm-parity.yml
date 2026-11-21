@@ -13,6 +13,7 @@ on:
       - 'audit/llvm-share-place-negative-v2-*'
       - 'audit/llvm-resolved-place-origin-*'
       - 'audit/llvm-typed-place-id-fixtures-*'
+      - 'audit/llvm-identity-inventory-cfg-v2-*'
   pull_request:
     paths:
       - 'src/main/cpp/oreslang/frontend/Parser.cpp'
@@ -21,6 +22,7 @@ on:
       - 'tests/native_share_place_authority_test.cpp'
       - 'tests/native_share_projection_root_test.cpp'
       - 'tests/native_compiler_place_origin_test.cpp'
+      - 'tests/native_ownership_identity_inventory_30_test.cpp'
       - 'tests/contracts/atto_ownership_place_mir_50.json'
       - 'tests/ownership_compiler_fixture_matrix.py'
       - 'tests/test_ownership_compiler_fixture_matrix.py'
@@ -82,22 +84,23 @@ jobs:
           test -s /tmp/atto-ownership-join.xml
           echo "ATTO_LLVM_JOIN_PROOF=HOST_CPP17_EXECUTED"
 
-      - name: Execute four compiler-resolved place and Share classifier CTests
+      - name: Execute five production-owned place identity and Share classifier CTests
         shell: bash
         run: |
           set -euo pipefail
-          cmake --build build --parallel 2 --target oreslang-native-ownership-place-test oreslang-native-share-place-authority-test oreslang-native-share-projection-root-test oreslang-native-compiler-place-origin-test
-          ctest --test-dir build -N -R '^native_ownership_(take_place_classification|share_place_authority|share_projection_root|compiler_resolved_place_origin)$' > /tmp/atto-place-inventory.txt
+          cmake --build build --parallel 2 --target oreslang-native-ownership-place-test oreslang-native-share-place-authority-test oreslang-native-share-projection-root-test oreslang-native-compiler-place-origin-test oreslang-native-ownership-identity-inventory-30-test
+          ctest --test-dir build -N -R '^native_ownership_(take_place_classification|share_place_authority|share_projection_root|compiler_resolved_place_origin|identity_inventory_30)$' > /tmp/atto-place-inventory.txt
           grep -Eq 'Test +#[0-9]+: native_ownership_take_place_classification$' /tmp/atto-place-inventory.txt
           grep -Eq 'Test +#[0-9]+: native_ownership_share_place_authority$' /tmp/atto-place-inventory.txt
           grep -Eq 'Test +#[0-9]+: native_ownership_share_projection_root$' /tmp/atto-place-inventory.txt
           grep -Eq 'Test +#[0-9]+: native_ownership_compiler_resolved_place_origin$' /tmp/atto-place-inventory.txt
-          ctest --test-dir build -R '^native_ownership_(take_place_classification|share_place_authority|share_projection_root|compiler_resolved_place_origin)$' --output-on-failure --timeout 60 --output-junit /tmp/atto-ownership-place.xml
+          grep -Eq 'Test +#[0-9]+: native_ownership_identity_inventory_30$' /tmp/atto-place-inventory.txt
+          ctest --test-dir build -R '^native_ownership_(take_place_classification|share_place_authority|share_projection_root|compiler_resolved_place_origin|identity_inventory_30)$' --output-on-failure --timeout 60 --output-junit /tmp/atto-ownership-place.xml
           test -s /tmp/atto-ownership-place.xml
           python3 - <<'PY'
           from xml.etree import ElementTree
           root = ElementTree.parse('/tmp/atto-ownership-place.xml').getroot()
-          if int(root.get('tests', '-1')) != 4 or int(root.get('failures', '1')) or int(root.get('skipped', '1')):
+          if int(root.get('tests', '-1')) != 5 or int(root.get('failures', '1')) or int(root.get('skipped', '1')):
               raise SystemExit('native place/Share CTest evidence missing, failed or skipped')
           PY
           echo "ATTO_LLVM_RESOLVED_PLACE_PROVENANCE=HOST_CPP17_EXECUTED"

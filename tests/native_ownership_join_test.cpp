@@ -16,6 +16,7 @@ struct Mutation {
 
 int main() {
     Locals root{{"owner", LocalOwnership{}}};
+    root.at("owner").binding_id.value = 1;
     if (!same_affine_state(root, root)) return 1;
 
     // Each metadata dimension is independently relevant to borrowing,
@@ -23,6 +24,8 @@ int main() {
     // from the production join must break this test.
     const std::vector<Mutation> mutations = {
         {"mode", [](auto& x) { x.mode = oreslang::Parameter::Mode::Borrow; }},
+        {"binding_id", [](auto& x) { x.binding_id.value = 2; }},
+        {"allocation_origin", [](auto& x) { x.allocation_origin.value = 7; }},
         {"moved", [](auto& x) { x.moved = true; }},
         {"heap_owned", [](auto& x) { x.heap_owned = true; }},
         {"int_array", [](auto& x) { x.int_array = true; }},
@@ -56,12 +59,14 @@ int main() {
     }
 
     Locals with_sibling = root;
-    with_sibling.emplace("sibling", LocalOwnership{});
+    LocalOwnership sibling;
+    sibling.binding_id.value = 2;
+    with_sibling.emplace("sibling", sibling);
     if (same_affine_state(root, with_sibling) ||
         same_affine_state(with_sibling, root)) return 4;
     with_sibling.erase("owner");
     if (same_affine_state(root, with_sibling)) return 5;
 
-    std::cout << "PASS: 17 ownership metadata join mutations, symmetric mismatch, matching states, and root inventory\n";
+    std::cout << "PASS: 19 ownership metadata join mutations, symmetric mismatch, matching states, and root inventory\n";
     return 0;
 }
