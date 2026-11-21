@@ -13,6 +13,8 @@ int main(void) {
     int64_t scalar = 0;
     CHECK(atto_control32_allocate(a, &parent));
     CHECK(atto_control32_allocate(a, &child));
+    CHECK(((uint32_t)parent & ((1u << 20) - 1u)) == 1u);
+    CHECK(((uint32_t)parent >> 20) == 1u);
     CHECK(atto_control32_allocate(b, &foreign));
     CHECK((uint32_t)parent == (uint32_t)foreign);
     CHECK(!atto_control32_read_i64(b, parent, 0, &scalar));
@@ -45,6 +47,7 @@ int main(void) {
         CHECK(atto_control32_drop(limited, token));
         CHECK(atto_control32_allocate(limited, &token));
     }
+    CHECK(((uint32_t)token >> 20) == 4095u);
     CHECK(atto_control32_drop(limited, token));
     CHECK(!atto_control32_allocate(limited, &token) && token == 0);
     CHECK(atto_control32_read_i64(b, foreign, 0, &scalar) && scalar == 0);
