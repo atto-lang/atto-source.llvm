@@ -1,0 +1,15 @@
+namespace counter;
+// State views never escape the intrinsic. A detached Copy scalar is read
+// under the loan; mailbox publication follows only after scope exit.
+external mtd (Counter c) receive(ActorMail<int> mail): void {
+  self.handle_state(critical-write |s| -> {
+    s.total = s.total + mail.value;
+  });
+  // Detached immutable scalar; no actor-state loan crosses mailbox admission.
+  val int snapshot = self.handle_state(critical-read |s| -> s.total);
+  self.send(snapshot);
+  if mail.value == 4; do
+    self.end();
+  fi
+  return;
+}

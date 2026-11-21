@@ -1,0 +1,11 @@
+[package]
+name = "counter-v2-source-manifest-pin"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "counter-v2-source-manifest-pin"
+path = "src/main.rs"
+
+[dependencies]

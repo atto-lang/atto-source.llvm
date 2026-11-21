@@ -1,0 +1,62 @@
+# Exact PR-head, native host-only proof. Never characterize this as
+# successful AttoLang guest compilation, AOT code sharing, or OS sandboxing.
+name: Actor code reuse and private state (native host only)
+
+on:
+  pull_request:
+    paths:
+      - 'tests/actor_shared_code_private_state_test.cpp'
+      - 'src/main/cpp/oreslang/runtime/ActorOwnedHeap.hpp'
+      - 'src/main/cpp/oreslang/runtime/ActorHeapIdentity.hpp'
+      - 'src/main/cpp/oreslang/runtime/ManagedRef.hpp'
+      - '.github/workflows/actor-shared-code-private-state.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-actor-code-private-state:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Checkout exact PR head without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Assert exact head and clean source tree
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          echo "HOST_ONLY_SOURCE_HEAD=$EXPECTED_HEAD"
+          echo "HOST_ONLY_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Compile and execute optimized native host proof three times
+        shell: bash
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -O2 -UNDEBUG -pthread \
+            -Wall -Wextra -Wpedantic -Werror -I src/main/cpp \
+            tests/actor_shared_code_private_state_test.cpp \
+            -o "$RUNNER_TEMP/actor-shared-code-private"
+          for attempt in 1 2 3; do
+            timeout 30s "$RUNNER_TEMP/actor-shared-code-private"
+          done
+          echo "NATIVE_HOST_ONLY_ACTOR_CODE_ISOLATION_EXECUTED attempts=3"
+      - name: Compile and execute ASan UBSan native host proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          clang++ -std=c++17 -O1 -g -UNDEBUG -pthread \
+            -fno-omit-frame-pointer -fsanitize=address,undefined \
+            -Wall -Wextra -Wpedantic -Werror -I src/main/cpp \
+            tests/actor_shared_code_private_state_test.cpp \
+            -o "$RUNNER_TEMP/actor-shared-code-sanitized"
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+            UBSAN_OPTIONS=halt_on_error=1 \
+            timeout 30s "$RUNNER_TEMP/actor-shared-code-sanitized"
+          echo "NATIVE_HOST_ONLY_ACTOR_CODE_ISOLATION_SANITIZED_EXECUTED"
