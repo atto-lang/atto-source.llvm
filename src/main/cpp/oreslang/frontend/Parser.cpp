@@ -35,7 +35,7 @@ bool exceptional_control(std::string_view word) {
     return word == "throw" || word == "throw!" || word == "raise" || word == "raise!" ||
            word == "panic" || word == "panic!" ||
            word == "recover" || word == "defer" || word == "try" ||
-           word == "catch" || word == "finally" || word == "trap";
+           word == "catch" || word == "finally" || word == "trap" || word == "trap!";
 }
 
 bool digit(char ch) { return ch >= '0' && ch <= '9'; }
