@@ -10,6 +10,9 @@ on:
       - 'tests/source_actor_e2e.py'
       - 'tests/test_source_actor_receipts.py'
       - 'tests/fixtures/source-actor-*.ores'
+      - 'tests/fixtures/source-actor-*.atto'
+      - 'src/main/cpp/oreslang/runtime/ControlPlaneArena32.*'
+      - 'tests/control_plane_arena32_test.c'
       - '.github/workflows/source-actor-owned-drop.yml'
   workflow_dispatch:
 
@@ -66,6 +69,8 @@ jobs:
           grep -F 'PASS native source actor: source-actor-scoped-owned-i64.ores actors 1' \
             "$RUNNER_TEMP/source-actor-owned-drop-release.log"
           grep -F 'PASS native source actor: source-actor-two-owned-heaps.ores actors 2' \
+          grep -Fx 'PASS native source actor: source-actor-two-owned-heaps.atto actors 2' \
+            "$RUNNER_TEMP/source-actor-owned-drop-release.log"
             "$RUNNER_TEMP/source-actor-owned-drop-release.log"
           grep -F 'PASS current-source actor lowering and physical heap reclamation' \
             "$RUNNER_TEMP/source-actor-owned-drop-release.log"
@@ -110,10 +115,12 @@ jobs:
           ]
           marker = "PASS native source actor: source-actor-scoped-owned-i64.ores actors 1"
           isolation_marker = "PASS native source actor: source-actor-two-owned-heaps.ores actors 2"
+          canonical_marker = "PASS native source actor: source-actor-two-owned-heaps.atto actors 2"
           final = "PASS current-source actor lowering and physical heap reclamation"
           for path in logs:
               output = path.read_text()
               if (output.count(marker) != 1 or output.count(isolation_marker) != 1
+                      or output.count(canonical_marker) != 1
                       or output.count(final) != 1):
                   raise SystemExit("source actor native execution marker missing or duplicated")
           sha = git("rev-parse", "HEAD")
@@ -127,7 +134,13 @@ jobs:
               "tests/source_actor_e2e.py",
               "tests/fixtures/source-actor-scoped-owned-i64.ores",
               "tests/fixtures/source-actor-two-owned-heaps.ores",
+              "tests/fixtures/source-actor-two-owned-heaps.atto",
           ]
+          # Same source bytes under both extensions, each separately compiled,
+          # linked and executed above. Do not allow silent fixture drift.
+          if git("hash-object", "tests/fixtures/source-actor-two-owned-heaps.ores") != git(
+                  "hash-object", "tests/fixtures/source-actor-two-owned-heaps.atto"):
+              raise SystemExit("legacy/canonical source actor fixture parity drift")
           receipt = {
               "schema": "oreslang.native_source_actor_owned_drop_v1",
               "head_sha": sha,
@@ -139,6 +152,7 @@ jobs:
               "release_native_execution_verified": True,
               "asan_ubsan_native_execution_verified": True,
               "two_actor_owned_heaps_native_execution_verified": True,
+              "canonical_atto_two_actor_guest_execution_verified": True,
               "ffi_await_unwind_ownership_verified": False,
               "java_net_backend_verified": False,
               "zero_gc_full_backend_verified": False,
