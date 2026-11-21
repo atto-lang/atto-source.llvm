@@ -115,6 +115,18 @@ if(BUILD_TESTING)
     add_test(NAME native_ownership_identity_inventory_30
         COMMAND oreslang-native-ownership-identity-inventory-30-test)
 
+    # Stage-zero static CFG proof: explicit field reinitialization and
+    # compiler-ID-annotated last-use/suspension operations. This does not
+    # enable NLL in guest code until typed MIR proves complete use sites.
+    add_executable(oreslang-native-ownership-nll-partial-move-30-test
+        tests/native_ownership_nll_partial_move_30_test.cpp)
+    target_include_directories(oreslang-native-ownership-nll-partial-move-30-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-ownership-nll-partial-move-30-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_ownership_nll_partial_move_30
+        COMMAND oreslang-native-ownership-nll-partial-move-30-test)
+
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
