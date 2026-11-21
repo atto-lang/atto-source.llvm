@@ -62,3 +62,13 @@ if(BUILD_TESTING)
     "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
   target_compile_options(oreslang-actor-slab-heap-bench PRIVATE -O2 -Wall -Wextra -Wpedantic -Werror)
 endif()
+if(BUILD_TESTING)
+  # Cross-backend contract: same words as atto-source.rs src/actor_slab_heap.rs.
+  add_executable(oreslang-actor-slab-heap-golden-test tests/actor_slab_heap_golden_test.cpp)
+  target_include_directories(oreslang-actor-slab-heap-golden-test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+  target_compile_options(oreslang-actor-slab-heap-golden-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+  add_test(NAME native_actor_slab_heap_golden_v1
+    COMMAND oreslang-actor-slab-heap-golden-test
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/actor_slab_heap_golden_v1.txt")
+endif()
