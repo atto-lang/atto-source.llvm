@@ -1,0 +1,17 @@
+// Three distinct physical column types, one local stack-owned SoA.
+// Positive guest: native main must exit 42 after bounded mutation and erase.
+define inverted struct Particle as
+    let x: int;
+    alive: bool;
+    let energy: f64;
+end
+
+fnc main(): int {
+    let rows = InvertedArray<Particle>.with_capacity(3);
+    rows.push(11, true, 1.5);
+    rows.push(17, false, -2.25);
+    rows.set(1, energy, 3.75);
+    rows.set(1, x, 42);
+    rows.erase_swap(0);
+    return rows.get(0, x);
+}

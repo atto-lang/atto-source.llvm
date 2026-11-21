@@ -6,6 +6,7 @@
 #include "oreslang/types/InvertedMirLlvmI64.hpp"
 
 #include <cstdint>
+#include <cmath>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -34,6 +35,25 @@ inline VerifiedInvertedSourceI64 verify_production_inverted_i64(
         throw std::logic_error("production inverted schema preflight incomplete");
     const auto& schema = schemas.front().layout;
     const auto& source = *program.inverted_main;
+    // New typed operands are a distinct ABI: a forged/deserialized AST
+    // must never hide them in the legacy pair and let this emitter ignore
+    // silently unverified source. Preserve the unmodified old guest path.
+    if (source.three_scalar)
+        throw std::invalid_argument("production two-i64 slice rejects mixed source tag");
+    for (const auto& operation : source.operations) {
+        const auto clean = [](const InvertedSourceLiteral& value) {
+            // A forged mixed field must be byte-canonical even when unused.
+            // Negative zero compares equal to zero but has a nonzero sign bit.
+            return value.kind == InvertedScalarKind::I64 && value.integer == 0 &&
+                   !value.boolean && value.floating == 0.0 &&
+                   !std::signbit(value.floating);
+        };
+        for (const auto& typed : operation.mixed_values)
+            if (!clean(typed))
+                throw std::invalid_argument("legacy two-i64 operation contains mixed operands");
+        if (!clean(operation.mixed_value))
+            throw std::invalid_argument("legacy two-i64 operation contains mixed operands");
+    }
     if (schema.name() != source.schema_name ||
             source.owner_name.empty() ||
             schema.columns() != 2 ||

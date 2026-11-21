@@ -4,6 +4,7 @@
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/types/InvertedSchemaMirAdmission.hpp"
 #include "oreslang/types/InvertedProductionSourceMir.hpp"
+#include "oreslang/types/InvertedMixedGuestLlvm.hpp"
 
 #include <stdexcept>
 #include <string>
@@ -219,5 +220,63 @@ fnc main(): int {
         (void)parse_unresolved_program(
             "define inverted struct P as x: int = 1; end");
     }, "expected ';'");
+
+    // Real production lexer/source AST -> checked mixed MIR -> LLVM IR.
+    // The real guest process execution is separately required by CTest.
+    const auto mixed_guest = parse_program(R"atto(
+define inverted struct Particle as
+    let x: int;
+    alive: bool;
+    let energy: f64;
+end
+fnc main(): int {
+    let rows = InvertedArray<Particle>.with_capacity(3);
+    rows.push(11, true, 1.5);
+    rows.push(17, false, -2.25);
+    rows.set(1, energy, 3.75);
+    rows.set(1, x, 42);
+    rows.erase_swap(0);
+    return rows.get(0, x);
+}
+)atto");
+    check(mixed_guest.inverted_main.has_value() &&
+          mixed_guest.inverted_main->three_scalar &&
+          mixed_guest.inverted_structs.size() == 1 &&
+          mixed_guest.inverted_structs.front().fields.size() == 3,
+          "production typed mixed main missing from AST");
+    const auto verified_mixed = dop::mir::verify_production_inverted_mixed(mixed_guest);
+    check(verified_mixed.mir.instructions().size() == 8 &&
+          verified_mixed.mir.instructions().back().kind == dop::hir::OpKind::Close,
+          "mixed source failed independent typed MIR/owner close");
+    const auto mixed_ir = dop::mir::emit_mixed_source_ir(verified_mixed);
+    check(mixed_ir.find("alloca [3 x i64]") != std::string::npos &&
+          mixed_ir.find("alloca [3 x i1]") != std::string::npos &&
+          mixed_ir.find("alloca [3 x double]") != std::string::npos &&
+          mixed_ir.find("0x400E000000000000") != std::string::npos &&
+          mixed_ir.find("store volatile double") != std::string::npos,
+          "production AST mixed MIR lost typed LLVM column lowering");
+    rejects([] {
+        (void)parse_program(R"atto(
+define inverted struct P as x: int; active: bool; f: f64; end
+fnc main(): int {
+    let rows = InvertedArray<P>.with_capacity(2);
+    rows.push(1, 1, 1.5);
+    return rows.get(0, x);
+}
+)atto");
+    }, "mixed inverted bool column");
+    rejects([] {
+        (void)parse_program(R"atto(
+define inverted struct P as x: int; active: bool; f: f64; end
+fnc main(): int {
+    let rows = InvertedArray<P>.with_capacity(2);
+    rows.push(1, true, 1.5);
+    return rows.get(0, f);
+}
+)atto");
+    }, "mixed inverted int main");
+    rejects([] {
+        (void)parse_program("fnc main(): int { return 1.5; }");
+    }, "native floating-point/decimal literal unsupported");
     return 0;
 }

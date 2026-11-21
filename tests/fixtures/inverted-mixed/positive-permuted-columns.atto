@@ -1,0 +1,13 @@
+// Nominal field order is schema order, not a hard-coded i64-first layout.
+define inverted struct Particle as
+    alive: bool;
+    let energy: f64;
+    let id: int;
+end
+fnc main(): int {
+    let rows = InvertedArray<Particle>.with_capacity(2);
+    rows.push(true, -0.0, 7);
+    rows.push(false, 2.25, 42);
+    rows.erase_swap(0);
+    return rows.get(0, id);
+}

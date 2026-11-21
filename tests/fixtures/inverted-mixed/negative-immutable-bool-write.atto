@@ -1,0 +1,11 @@
+define inverted struct Particle as
+    let x: int;
+    alive: bool;
+    let energy: f64;
+end
+fnc main(): int {
+    let rows = InvertedArray<Particle>.with_capacity(2);
+    rows.push(42, true, 1.5);
+    rows.set(0, alive, false);
+    return rows.get(0, x);
+}

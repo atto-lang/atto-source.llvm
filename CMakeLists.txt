@@ -365,6 +365,14 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit"
             "${CMAKE_CURRENT_SOURCE_DIR}/contracts/dop-inverted-v1")
     set_tests_properties(native_inverted_production_source_to_native PROPERTIES TIMEOUT 180)
+    # A separate real compiler-backed three-column i64/bool/f64 guest gate.
+    # The local C++ MIR regression below is not a substitute for this lane.
+    add_test(NAME native_inverted_mixed_source_to_native
+        COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_inverted_mixed_guest.sh"
+            "$<TARGET_FILE:oreslang-llvmc>" "${ORE_INVERTED_PRODUCTION_CLANG}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/inverted-mixed"
+            "${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit")
+    set_tests_properties(native_inverted_mixed_source_to_native PROPERTIES TIMEOUT 180)
     add_test(NAME native_type_constraint_descriptor_v1
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_type_constraint_descriptors.py"
@@ -2075,6 +2083,18 @@ if(BUILD_TESTING)
     add_test(NAME inverted_production_source_mir_cpp17
         COMMAND oreslang-inverted-production-mir-test)
     set_tests_properties(inverted_production_source_mir_cpp17 PROPERTIES TIMEOUT 30)
+
+    add_executable(oreslang-inverted-mixed-mir-test
+        tests/native_inverted_mixed_mir_test.cpp)
+    target_include_directories(oreslang-inverted-mixed-mir-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-inverted-mixed-mir-test PROPERTIES
+        CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+    target_compile_options(oreslang-inverted-mixed-mir-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME inverted_mixed_source_mir_cpp17
+        COMMAND oreslang-inverted-mixed-mir-test)
+    set_tests_properties(inverted_mixed_source_mir_cpp17 PROPERTIES TIMEOUT 30)
 
     add_executable(oreslang-dop-inverted-columns-test tests/dop_inverted_columns_test.cpp)
     target_include_directories(oreslang-dop-inverted-columns-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")

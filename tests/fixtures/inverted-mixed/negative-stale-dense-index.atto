@@ -1,0 +1,13 @@
+// Invalid former dense index must produce a real trap, not exit status 42.
+define inverted struct Particle as
+    let x: int;
+    alive: bool;
+    let energy: f64;
+end
+fnc main(): int {
+    let rows = InvertedArray<Particle>.with_capacity(2);
+    rows.push(42, true, 1.5);
+    rows.push(13, false, 2.25);
+    rows.erase_swap(0);
+    return rows.get(1, x);
+}

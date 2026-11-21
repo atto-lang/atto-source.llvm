@@ -1,0 +1,226 @@
+name: AttoLang bounded heterogeneous inverted native guest
+
+on:
+  pull_request:
+    branches:
+      - hardening/dop-heterogeneous-physical-soa-v1-20261106
+      - parity/inverted-production-main-i64-20261104
+      - main
+    paths:
+      - '.github/workflows/dop-inverted-mixed-native.yml'
+      - 'CMakeLists.txt'
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'src/main/cpp/oreslang/frontend/Parser.hpp'
+      # Shared typed HIR/MIR and the legacy source verifier can invalidate
+      # mixed or two-i64 compilation without touching the new emitter.
+      - 'src/main/cpp/oreslang/types/Inverted*'
+      - 'src/main/cpp/oreslang/main.cpp'
+      - 'tests/native_inverted*'
+      - 'tests/fixtures/inverted-mixed/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: atto-dop-mixed-guest-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  compiler-mixed-native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      SOURCE_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+    steps:
+      - name: Admit only exact same-repository immutable PR head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$SOURCE_REPOSITORY" = "$GITHUB_REPOSITORY"
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+
+      - name: Check out exact PR head instead of synthetic merge commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Seal source head and tree before build
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          echo "ATTO_MIXED_HEAD=$EXPECTED_HEAD"
+          echo "ATTO_MIXED_TREE=$(git rev-parse HEAD^{tree})"
+          sha256sum tests/fixtures/inverted-mixed/*.atto
+          mkdir -p build-evidence
+          printf '{"head":"%s","tree":"%s","run":"%s","attempt":"%s"}\n' \
+            "$EXPECTED_HEAD" "$(git rev-parse HEAD^{tree})" \
+            "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > build-evidence/identity.json
+
+      - name: Install authorized native toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            build-essential cmake clang llvm-dev python3 rustc cargo
+          clang --version
+          cmake --version
+          rustc --version
+
+      - name: Compile production parser, verifier, native compiler and auditor
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --parallel 2 --target \
+            oreslang-llvmc \
+            oreslang-inverted-mixed-mir-test \
+            oreslang-inverted-production-mir-test \
+            oreslang-native-inverted-struct-ast-test \
+            oreslang-no-gc-ir-audit-build
+          test -x build/oreslang-llvmc
+          test -x build/oreslang-inverted-mixed-mir-test
+          test -x build/oreslang-inverted-production-mir-test
+          test -x build/oreslang-native-inverted-struct-ast-test
+          test -x build/oreslang-no-gc-ir-audit
+
+      - name: Verify required CTest cases are actually registered
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build -N -R '^(inverted_mixed_source_mir_cpp17|inverted_production_source_mir_cpp17|native_inverted_struct_schema_ast|native_inverted_mixed_source_to_native|native_inverted_production_source_to_native)$' > build-evidence/inventory.txt
+          cat build-evidence/inventory.txt
+          python3 - <<'PY'
+          import pathlib, re
+          cases = re.findall(r'Test\s+#\d+:\s+(\S+)',pathlib.Path('build-evidence/inventory.txt').read_text())
+          expected={'inverted_mixed_source_mir_cpp17',
+                    'inverted_production_source_mir_cpp17',
+                    'native_inverted_struct_schema_ast',
+                    'native_inverted_mixed_source_to_native',
+                    'native_inverted_production_source_to_native'}
+          if len(cases)!=5 or set(cases)!=expected:
+              raise SystemExit(f'FAIL: wrong DOP mixed native CTest inventory: {cases}')
+          PY
+
+      - name: Execute real guest compiler, Clang O0/O2 and negative traps
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build --output-on-failure --timeout 180 \
+            --output-junit "$GITHUB_WORKSPACE/build-evidence/mixed-ctest.xml" \
+            -R '^(inverted_mixed_source_mir_cpp17|inverted_production_source_mir_cpp17|native_inverted_struct_schema_ast|native_inverted_mixed_source_to_native|native_inverted_production_source_to_native)$'
+
+      - name: Qualify exact-head execution receipts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess, xml.etree.ElementTree as ET
+          root=pathlib.Path('.')
+          tree=ET.parse(root/'build-evidence/mixed-ctest.xml').getroot()
+          cases=list(tree.iter('testcase'))
+          expected={'inverted_mixed_source_mir_cpp17',
+                    'inverted_production_source_mir_cpp17',
+                    'native_inverted_struct_schema_ast',
+                    'native_inverted_mixed_source_to_native',
+                    'native_inverted_production_source_to_native'}
+          observed=[x.attrib.get('name') for x in cases]
+          if len(observed)!=5 or set(observed)!=expected:
+              raise SystemExit(f'FAIL: missing actual CTest case: {observed}')
+          if any(x.find('failure') is not None or x.find('skipped') is not None or
+                 x.find('error') is not None for x in cases):
+              raise SystemExit('FAIL: failed/skipped CTest cannot certify native execution')
+          if any(x.attrib.get('status') != 'run' or
+                 not x.attrib.get('time') or float(x.attrib['time']) <= 0
+                 for x in cases):
+              raise SystemExit('FAIL: missing actual executed CTest case status or duration')
+          native=next(x for x in cases if x.attrib.get('name')=='native_inverted_mixed_source_to_native')
+          text=' '.join(native.itertext())
+          exact_marker=('MIXED_ATTO_NATIVE_GUEST_PASS: 4 exit42, 2 trap signals, '
+                        '5 rejects; IR no-GC screened (not linked/FFI proof)')
+          if exact_marker not in text:
+              raise SystemExit('FAIL: no exact executed mixed native guest marker in JUnit result')
+          legacy=next(x for x in cases
+                      if x.attrib.get('name')=='native_inverted_production_source_to_native')
+          legacy_marker=('PASS: production .atto -> typed MIR -> no-GC-screened IR, '
+                         '10 native exit-42 (O0/O2), 4 bounds signals, 5 source rejects, '
+                         '5 mode rejects, known-GC denied')
+          if legacy_marker not in ' '.join(legacy.itertext()):
+              raise SystemExit('FAIL: missing actual legacy two-i64 native guest marker')
+          head=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+          source_tree=subprocess.check_output(['git','rev-parse','HEAD^{tree}'],text=True).strip()
+          if head != os.environ['EXPECTED_HEAD']:
+              raise SystemExit('FAIL: source head changed')
+          identity=json.loads((root/'build-evidence/identity.json').read_text())
+          expected_identity={
+              'head': head, 'tree': source_tree,
+              'run': os.environ['GITHUB_RUN_ID'],
+              'attempt': os.environ['GITHUB_RUN_ATTEMPT']
+          }
+          if identity != expected_identity:
+              raise SystemExit('FAIL: initial source identity differs from final receipt')
+          if os.environ.get('GITHUB_JOB')!='compiler-mixed-native' or not os.environ.get('RUNNER_NAME'):
+              raise SystemExit('FAIL: missing expected allocated runner or job identity')
+          if subprocess.run(['git','diff','--exit-code','HEAD','--'],
+                            check=False,stdout=subprocess.DEVNULL).returncode != 0:
+              raise SystemExit('FAIL: source worktree or tracked tests changed during build')
+          source_files=subprocess.check_output(['git','ls-files','-m'],text=True).strip()
+          if source_files:
+              raise SystemExit('FAIL: tracked source modified after checkout')
+          paths=['src/main/cpp/oreslang/frontend/Parser.cpp',
+                 'src/main/cpp/oreslang/frontend/Parser.hpp',
+                 'src/main/cpp/oreslang/types/InvertedMixedGuestLlvm.hpp',
+                 'src/main/cpp/oreslang/main.cpp',
+                 'tests/native_inverted_mixed_guest.sh',
+                 'tests/native_inverted_mixed_mir_test.cpp',
+                 'tests/native_inverted_production_guest.sh',
+                 'tests/native_inverted_production_mir_test.cpp',
+                 'src/main/cpp/oreslang/types/InvertedProductionSourceMir.hpp',
+                 '.github/workflows/dop-inverted-mixed-native.yml',
+                 'CMakeLists.txt',
+                 'build/oreslang-no-gc-ir-audit',
+                 'build/oreslang-llvmc']
+          paths += sorted(str(p) for p in pathlib.Path('tests/fixtures/inverted-mixed').glob('*.atto'))
+          if len([p for p in paths if p.endswith('.atto')]) != 8:
+              raise SystemExit('FAIL: fixture inventory changed')
+          receipt=dict(head=head,tree=source_tree,run=os.environ['GITHUB_RUN_ID'],
+                       attempt=os.environ['GITHUB_RUN_ATTEMPT'],
+                       evidence='COMPILER_BACKED_MIXED_ATTO_GUEST_EXECUTED',
+                       ctest_cases=observed,
+                       native_success_marker=exact_marker,
+                       legacy_success_marker=legacy_marker,
+                       job=os.environ['GITHUB_JOB'],
+                       runner_name=os.environ['RUNNER_NAME'],
+                       toolchains={
+                         tool:subprocess.check_output(
+                           [tool,'--version'],text=True).splitlines()[0]
+                         for tool in ('clang','clang++','cmake','rustc')
+                       },
+                       files={p:hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest() for p in paths},
+                       ctest_xml_sha256=hashlib.sha256(
+                         (root/'build-evidence/mixed-ctest.xml').read_bytes()).hexdigest(),
+                       inventory_sha256=hashlib.sha256(
+                         (root/'build-evidence/inventory.txt').read_bytes()).hexdigest())
+          out=root/'build-evidence/mixed-native-receipt.json'
+          out.write_text(json.dumps(receipt,sort_keys=True,indent=2)+'\n')
+          print(out.read_text())
+          PY
+
+      - name: Publish independent evidence artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: atto-mixed-native-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            build-evidence/identity.json
+            build-evidence/inventory.txt
+            build-evidence/mixed-ctest.xml
+            build-evidence/mixed-native-receipt.json
