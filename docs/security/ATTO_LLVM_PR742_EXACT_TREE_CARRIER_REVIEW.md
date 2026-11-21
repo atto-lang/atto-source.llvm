@@ -18,9 +18,17 @@ This request accompanies [LLVM PR #742](https://github.com/atto-lang/atto-source
 | Directories | 91 |
 | Symlinks/gitlinks | 0 / 0 |
 | Independent export authorization | **PENDING** |
-| Fresh private carrier with executed steps | **NOT VERIFIED** |
+| Fresh private carrier with executed steps | **YES, source-free canary only**: StreemPilot run #44959517105, 3/3 actual steps |
 
 The source head, source root, and destination must be re-read immediately before export. Any source-head/tree drift invalidates this request; a PR-controlled manifest is *never its own export authority*. Copying a subset of files does not establish an exact Git-tree mirror. The destination root SHA, all Git blob OIDs, file paths, executable modes, symlinks and gitlinks must match the independently approved source snapshot.
+
+## Newly discovered working PRIVATE carrier (still NOT approved)
+
+* Candidate: **`StreemPilot/streempilot-e2e`**, private destination numeric repository ID **`1318678075`**. It is not currently in the LLVM protected-source allowlist or in a PR742 immutable carrier contract.
+* [Real private Actions run #44959517105](https://github.com/StreemPilot/streempilot-e2e/actions/runs/44959517105) completed `success`, with **three actually executed job steps** (setup; GCC+Clang compile/run a source-free C11 program; completion). Exact canary commit `37921471cc8c5d595f3b77149ec44617e54890c0`; workflow `.github/workflows/atto-pr742-sourcefree-private-admission.yml` blob `74652cdc49dad69c627f6df652956b17597024bd`. This proves runner admission for that **one private run**, not a guaranteed balance or permission to export private code.
+* **Critical independent source governance blocker verified live:** GitHub's `branches/main` API reports `protected:false`, `protection.enabled:false` and required checks `off` for **both** `atto-lang/atto-source.llvm` and `StreemPilot/streempilot-e2e`. Therefore the source's protected-main and destination security gates are not currently satisfied. An administrator must establish and independently verify branch/ruleset enforcement. This review-only branch and a GitHub App's broad repository permission do not substitute for it.
+* Even after protection is effective, an independent source-security owner must update **the source-side allowed destination** and **the exact PR742 immutable test-plan + workflow blob binding** on the protected, reviewed policy branch. Until then the admission canary authorizes **nothing beyond itself**.
+* No private Atto compiler blobs were copied to this carrier. Do not move source just because the canary succeeded.
 
 ## Carrier candidates are NOT approved for this PR
 
@@ -52,4 +60,4 @@ Use the unchanged [source-actor workflow](../../.github/workflows/source-actor-o
 * Classify `ActorOwnedI64Heap` guest execution separately from `ControlPlaneArena32` host access: neither implies actual guest-level i128 control-arena lowering.
 * Fail if a required step was skipped, marker absent/duplicated, current head changed, source tree differs, compiler binary did not execute, sanitizer failed, or the test consumed unapproved private source.
 
-**Pending independent decisions:** private runner admission, protected source and private destination permission, per-PR742 immutable plan, security-owner approval, retention/cleanup. **No full compiler guest CI execution, Java/.NET parity or process-wide zero-GC certification is claimed.**
+**Pending independent decisions:** verified protected source and destination main/rulesets, source-side destination allowlist, per-PR742 immutable plan, independent security-owner approval, retention/cleanup. Private runner *canary* admission was demonstrated once on StreemPilot #44959517105; it does not satisfy these pending policy items. **No full compiler guest CI execution, Java/.NET parity or process-wide zero-GC certification is claimed.**
