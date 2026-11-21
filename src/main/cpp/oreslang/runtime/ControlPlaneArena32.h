@@ -12,6 +12,11 @@ int atto_control32_allocate(AttoControlPlaneArena32 *arena, uint64_t *out_witnes
 int atto_control32_drop(AttoControlPlaneArena32 *arena, uint64_t witness);
 int atto_control32_write_i64(AttoControlPlaneArena32 *arena, uint64_t witness, unsigned field, int64_t value);
 int atto_control32_read_i64(AttoControlPlaneArena32 *arena, uint64_t witness, unsigned field, int64_t *out);
+/* Coherent little-endian 128-bit scalar as two 64-bit limbs; one arena lock.
+ * Only compiler-validated 128-bit fields may use this; i64 field writes can
+ * otherwise overwrite a limb. Native host API, not a guest pointer. */
+int atto_control32_write_i128(AttoControlPlaneArena32 *arena, uint64_t witness, uint64_t low, uint64_t high);
+int atto_control32_read_i128(AttoControlPlaneArena32 *arena, uint64_t witness, uint64_t *out_low, uint64_t *out_high);
 int atto_control32_write_ref(AttoControlPlaneArena32 *arena, uint64_t owner, uint64_t child);
 int atto_control32_read_ref(AttoControlPlaneArena32 *arena, uint64_t owner, uint64_t *out);
 void atto_control32_retire(AttoControlPlaneArena32 *arena);
