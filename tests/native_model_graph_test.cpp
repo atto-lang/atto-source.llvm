@@ -3,6 +3,7 @@
 
 #include <cassert>
 #include <fstream>
+#include <iostream>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -133,7 +134,12 @@ void expect_error(const std::string& code, const std::string& source) {
         (void)oreslang::parse_program(source);
         assert(false && "expected native model admission failure");
     } catch (const std::runtime_error& error) {
-        assert(std::string(error.what()).find(code) != std::string::npos);
+        if (std::string(error.what()).find(code) == std::string::npos) {
+            std::cerr << "MODEL_DIAGNOSTIC_MISMATCH expected=" << code
+                      << " actual=" << error.what()
+                      << " source=" << source.substr(0, 180) << "\\n";
+            throw;
+        }
     }
 }
 

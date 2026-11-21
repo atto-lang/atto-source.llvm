@@ -250,9 +250,32 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_source_i64_os_exit_subset PROPERTIES TIMEOUT 120)
+    # Model source-to-native proof must use Rust, never Python. Compile the
+    # standalone harness at build time, fail closed when rustc is unavailable.
+    find_program(ORE_MODEL_RUSTC NAMES rustc REQUIRED)
+    set(ORE_MODEL_RUST_RUNNER "${CMAKE_CURRENT_BINARY_DIR}/native_model_source_execution_rs${CMAKE_EXECUTABLE_SUFFIX}")
+    set(ORE_MODEL_RUST_SELFTEST "${CMAKE_CURRENT_BINARY_DIR}/native_model_harness_selftest_rs${CMAKE_EXECUTABLE_SUFFIX}")
+    add_custom_command(
+        OUTPUT "${ORE_MODEL_RUST_RUNNER}"
+        COMMAND "${ORE_MODEL_RUSTC}" --edition=2021 -C opt-level=1
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_model_source_execution.rs"
+            -o "${ORE_MODEL_RUST_RUNNER}"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_model_source_execution.rs"
+        VERBATIM)
+    add_custom_command(
+        OUTPUT "${ORE_MODEL_RUST_SELFTEST}"
+        COMMAND "${ORE_MODEL_RUSTC}" --edition=2021 --test
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_model_source_execution.rs"
+            -o "${ORE_MODEL_RUST_SELFTEST}"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_model_source_execution.rs"
+        VERBATIM)
+    add_custom_target(oreslang-native-model-rust-gates ALL
+        DEPENDS "${ORE_MODEL_RUST_RUNNER}" "${ORE_MODEL_RUST_SELFTEST}")
+    add_test(NAME native_model_harness_selftest
+        COMMAND "${ORE_MODEL_RUST_SELFTEST}")
+    set_tests_properties(native_model_harness_selftest PROPERTIES TIMEOUT 15)
     add_test(NAME native_model_source_execution
-        COMMAND "${Python3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_model_source_execution.py"
+        COMMAND "${ORE_MODEL_RUST_RUNNER}"
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_SOURCE_I64_CLANG}"
             --corpus "${CMAKE_CURRENT_SOURCE_DIR}/tests/model-executable-v1-conformance.cases")

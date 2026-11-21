@@ -318,6 +318,9 @@ private:
         ModelDecl model;
         model.offset = token_.offset;
         model.name = identifier();
+        // Retain previously admitted model names so local value storage can
+        // fail with a precise diagnostic instead of a generic ':' parse error.
+        known_model_names_.insert(model.name);
         model.exported = exported;
         if (callable_nominal_name(model.name))
             fail("MODEL_TYPE_NAME_COLLISION: callable signatures cannot be model types");
@@ -851,6 +854,11 @@ private:
                 binding.owner_mutable = token_.text == "val";
                 advance();
                 binding.name = identifier();
+                if (known_model_names_.count(binding.name) &&
+                        token_.kind == Kind::Identifier) {
+                    fail("MODEL_VALUE_STORAGE_UNSUPPORTED: native model instances "
+                         "must be immediately consumed by .run(input)");
+                }
                 // Distinguish actor capabilities from scalar data before IR.
                 // Unsupported generic futures never become fake blocking calls.
                 if (token_.text != ":" && token_.text != "=") require(":");
@@ -2015,6 +2023,7 @@ private:
     Token token_;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
+    std::unordered_set<std::string> known_model_names_;
 };
 
 } // namespace
