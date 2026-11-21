@@ -7,6 +7,8 @@ on:
     paths:
       - 'src/main/cpp/oreslang/runtime/NativeActorPubSub*'
       - 'src/main/cpp/oreslang/runtime/NativeActorMembershipRegistry.hpp'
+      - 'src/main/cpp/oreslang/runtime/SourceActorBootstrap.c'
+      - 'src/main/cpp/oreslang/runtime/SourceActorBootstrap.h'
       - 'tests/native_actor_pubsub*'
       - 'tests/source_actor_pubsub_identity_bridge_test.cpp'
       - 'tests/actor_pubsub_source_gate.py'
