@@ -216,6 +216,19 @@ if(BUILD_TESTING)
         ${ORE_LLVM_LIBS})
     add_test(NAME native_ownership_ir_store_live_readback_14
         COMMAND oreslang-native-ir-store-live-readback-14-test)
+    # Compiler-authored FieldWrite sites connected to real LLVM StoreInsts.
+    # This proves neither complete NLL/CFG SSA use capture nor guest ownership.
+    add_executable(oreslang-native-source-field-write-link-26-test
+        tests/native_source_field_write_link_26_test.cpp)
+    target_include_directories(oreslang-native-source-field-write-link-26-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+        "${LLVM_INCLUDE_DIRS}")
+    target_compile_options(oreslang-native-source-field-write-link-26-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(oreslang-native-source-field-write-link-26-test PRIVATE
+        ${ORE_LLVM_LIBS})
+    add_test(NAME native_ownership_source_field_write_link_26
+        COMMAND oreslang-native-source-field-write-link-26-test)
 
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.

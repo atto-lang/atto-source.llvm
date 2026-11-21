@@ -21,6 +21,7 @@ on:
       - 'audit/llvm-mir-opaque-effects-hardening-*'
       - 'audit/llvm-ir-ssa-store-census-*'
       - 'audit/llvm-store-live-readback-and-ci-*'
+      - 'audit/llvm-source-physical-fieldwrite-link-*'
   pull_request:
     paths:
       - 'src/main/cpp/oreslang/frontend/Parser.cpp'
@@ -41,10 +42,12 @@ on:
       - 'tests/native_ownership_mir_opaque_effects_18_test.cpp'
       - 'tests/native_ir_ssa_store_census_30_test.cpp'
       - 'tests/native_ir_store_live_readback_14_test.cpp'
+      - 'tests/native_source_field_write_link_26_test.cpp'
       - 'scripts/ownership-ci-workflow-shape.mjs'
-      - 'tests/ownership_ci_workflow_shape_23.test.mjs'
+      - 'tests/ownership_ci_workflow_shape_28.test.mjs'
       - 'bin/check-ownership-workflow-shape.mjs'
       - 'src/main/cpp/oreslang/backend/NativeIrOwnershipCensus.hpp'
+      - 'src/main/cpp/oreslang/backend/NativeSourceFieldWriteLinks.hpp'
       - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
       - 'src/main/cpp/oreslang/types/OwnershipMirEvidence.hpp'
       - 'tests/contracts/atto_ownership_place_mir_50.json'
@@ -83,11 +86,11 @@ jobs:
           echo "ATTO_LLVM_EXACT_TREE=$(git rev-parse 'HEAD^{tree}')"
           # SOURCE_ONLY: static CI guard never authenticates native/guest work.
           node --check scripts/ownership-ci-workflow-shape.mjs
-          node --check tests/ownership_ci_workflow_shape_23.test.mjs
+          node --check tests/ownership_ci_workflow_shape_28.test.mjs
           node --check bin/check-ownership-workflow-shape.mjs
-          node --test --test-reporter=tap tests/ownership_ci_workflow_shape_23.test.mjs | tee /tmp/atto-ownership-workflow-shape.tap
-          grep -Eq '^# tests 23$' /tmp/atto-ownership-workflow-shape.tap
-          grep -Eq '^# pass 23$' /tmp/atto-ownership-workflow-shape.tap
+          node --test --test-reporter=tap tests/ownership_ci_workflow_shape_28.test.mjs | tee /tmp/atto-ownership-workflow-shape.tap
+          grep -Eq '^# tests 28$' /tmp/atto-ownership-workflow-shape.tap
+          grep -Eq '^# pass 28$' /tmp/atto-ownership-workflow-shape.tap
           grep -Eq '^# fail 0$' /tmp/atto-ownership-workflow-shape.tap
           node bin/check-ownership-workflow-shape.mjs
       - name: Install Clang/LLVM developer toolchain
@@ -117,12 +120,12 @@ jobs:
           test -s /tmp/atto-ownership-join.xml
           echo "ATTO_LLVM_JOIN_PROOF=HOST_CPP17_EXECUTED"
 
-      - name: Execute fourteen source-owned place, identity and NLL integrity CTests
+      - name: Execute fifteen source-owned place, identity and NLL integrity CTests
         shell: bash
         run: |
           set -euo pipefail
-          cmake --build build --parallel 2 --target oreslang-native-ownership-place-test oreslang-native-share-place-authority-test oreslang-native-share-projection-root-test oreslang-native-compiler-place-origin-test oreslang-native-ownership-identity-inventory-30-test oreslang-native-ownership-nll-partial-move-30-test oreslang-native-ownership-nll-closed-world-16-test oreslang-native-derived-last-use-12-test oreslang-native-ownership-opaque-loan-metadata-10-test oreslang-native-loan-write-domain-6-test oreslang-native-mir-receipts-30-test oreslang-native-mir-opaque-effects-18-test oreslang-native-ir-ssa-census-30-test oreslang-native-ir-store-live-readback-14-test
-          ctest --test-dir build -N -R '^native_ownership_(take_place_classification|share_place_authority|share_projection_root|compiler_resolved_place_origin|identity_inventory_30|nll_partial_move_30|nll_closed_world_16|derived_last_use_12|opaque_loan_metadata_10|loan_write_domain_6|mir_receipts_30|mir_opaque_effects_18|ir_ssa_store_census_30|ir_store_live_readback_14)$' > /tmp/atto-place-inventory.txt
+          cmake --build build --parallel 2 --target oreslang-native-ownership-place-test oreslang-native-share-place-authority-test oreslang-native-share-projection-root-test oreslang-native-compiler-place-origin-test oreslang-native-ownership-identity-inventory-30-test oreslang-native-ownership-nll-partial-move-30-test oreslang-native-ownership-nll-closed-world-16-test oreslang-native-derived-last-use-12-test oreslang-native-ownership-opaque-loan-metadata-10-test oreslang-native-loan-write-domain-6-test oreslang-native-mir-receipts-30-test oreslang-native-mir-opaque-effects-18-test oreslang-native-ir-ssa-census-30-test oreslang-native-ir-store-live-readback-14-test oreslang-native-source-field-write-link-26-test
+          ctest --test-dir build -N -R '^native_ownership_(take_place_classification|share_place_authority|share_projection_root|compiler_resolved_place_origin|identity_inventory_30|nll_partial_move_30|nll_closed_world_16|derived_last_use_12|opaque_loan_metadata_10|loan_write_domain_6|mir_receipts_30|mir_opaque_effects_18|ir_ssa_store_census_30|ir_store_live_readback_14|source_field_write_link_26)$' > /tmp/atto-place-inventory.txt
           grep -Eq 'Test +#[0-9]+: native_ownership_take_place_classification$' /tmp/atto-place-inventory.txt
           grep -Eq 'Test +#[0-9]+: native_ownership_share_place_authority$' /tmp/atto-place-inventory.txt
           grep -Eq 'Test +#[0-9]+: native_ownership_share_projection_root$' /tmp/atto-place-inventory.txt
@@ -137,7 +140,8 @@ jobs:
           grep -Eq 'Test +#[0-9]+: native_ownership_mir_opaque_effects_18$' /tmp/atto-place-inventory.txt
           grep -Eq 'Test +#[0-9]+: native_ownership_ir_ssa_store_census_30$' /tmp/atto-place-inventory.txt
           grep -Eq 'Test +#[0-9]+: native_ownership_ir_store_live_readback_14$' /tmp/atto-place-inventory.txt
-          ctest --test-dir build -R '^native_ownership_(take_place_classification|share_place_authority|share_projection_root|compiler_resolved_place_origin|identity_inventory_30|nll_partial_move_30|nll_closed_world_16|derived_last_use_12|opaque_loan_metadata_10|loan_write_domain_6|mir_receipts_30|mir_opaque_effects_18|ir_ssa_store_census_30|ir_store_live_readback_14)$' --output-on-failure --timeout 60 --output-junit /tmp/atto-ownership-place.xml
+          grep -Eq 'Test +#[0-9]+: native_ownership_source_field_write_link_26$' /tmp/atto-place-inventory.txt
+          ctest --test-dir build -R '^native_ownership_(take_place_classification|share_place_authority|share_projection_root|compiler_resolved_place_origin|identity_inventory_30|nll_partial_move_30|nll_closed_world_16|derived_last_use_12|opaque_loan_metadata_10|loan_write_domain_6|mir_receipts_30|mir_opaque_effects_18|ir_ssa_store_census_30|ir_store_live_readback_14|source_field_write_link_26)$' --output-on-failure --timeout 60 --output-junit /tmp/atto-ownership-place.xml
           test -s /tmp/atto-ownership-place.xml
           python3 - <<'PY'
           from xml.etree import ElementTree
@@ -157,13 +161,14 @@ jobs:
               'native_ownership_mir_opaque_effects_18',
               'native_ownership_ir_ssa_store_census_30',
               'native_ownership_ir_store_live_readback_14',
+              'native_ownership_source_field_write_link_26',
           }
           observed = [case.get('name') for case in root.iter('testcase')]
-          if (int(root.get('tests', '-1')) != 14 or
+          if (int(root.get('tests', '-1')) != 15 or
                   int(root.get('failures', '1')) or
                   int(root.get('errors', '0')) or
                   int(root.get('skipped', '1')) or
-                  len(observed) != 14 or len(set(observed)) != 14 or
+                  len(observed) != 15 or len(set(observed)) != 15 or
                   set(observed) != expected):
               raise SystemExit(f'focused ownership CTest evidence mismatch: {observed!r}')
           PY

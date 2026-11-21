@@ -15,10 +15,10 @@ const denied=(source,code)=>{
   assert.equal(r.guestExecutionVerified,false);
   assert.ok(r.errors.some(x=>x.startsWith(code)),JSON.stringify(r.errors));
 };
-test('01 canonical fourteen-CTest workflow has valid source-only shape',()=>{
+test('01 canonical fifteen-CTest workflow has valid source-only shape',()=>{
   const r=inspect(workflow);
   assert.equal(r.structurallyValid,true,JSON.stringify(r.errors));
-  assert.equal(r.checkedNativeCTestCount,14);
+  assert.equal(r.checkedNativeCTestCount,15);
   assert.equal(r.verified,false);
   assert.equal(r.guestExecutionVerified,false);
 });
@@ -30,9 +30,9 @@ test('03 stray command after final receipt is rejected',()=>{
   denied(workflow+' /tmp/atto-place-inventory.txt\n',
     'ORPHANED_OR_UNINDENTED_RUN_COMMAND');
 });
-test('04 stale thirteen-test count is rejected',()=>{
-  denied(workflow.replace("int(root.get('tests', '-1')) != 14",
-      "int(root.get('tests', '-1')) != 13"),'STALE_NATIVE_CTEST_CARDINALITY');
+test('04 stale fourteen-test count is rejected',()=>{
+  denied(workflow.replace("int(root.get('tests', '-1')) != 15",
+      "int(root.get('tests', '-1')) != 14"),'STALE_NATIVE_CTEST_CARDINALITY');
 });
 test('05 missing typed-MIR CTest inventory entry is rejected',()=>{
   denied(workflow.replace(
@@ -121,4 +121,28 @@ test('22 losing physical LLVM census target must fail closed',()=>{
 test('23 losing physical live-store liveness target must fail closed',()=>{
   denied(workflow.replace('oreslang-native-ir-store-live-readback-14-test',
     'dummy-native-liveness-test'),'MISSING_NATIVE_BUILD_OR_RECEIPT');
+});
+test('24 new source-to-physical-store CTest must have inventory receipt',()=>{
+  denied(workflow.replace(
+    "          grep -Eq 'Test +#[0-9]+: native_ownership_source_field_write_link_26$' /tmp/atto-place-inventory.txt\n",
+    ''),'MISSING_OR_DUPLICATED_CTEST:source_field_write_link_26');
+});
+test('25 new source-to-physical-store inventory cannot be duplicated',()=>{
+  const line="          grep -Eq 'Test +#[0-9]+: native_ownership_source_field_write_link_26$' /tmp/atto-place-inventory.txt\n";
+  denied(workflow.replace(line,()=>line+line),
+    'MISSING_OR_DUPLICATED_CTEST:source_field_write_link_26');
+});
+test('26 missing physical source-to-store native build target is rejected',()=>{
+  denied(workflow.replace('oreslang-native-source-field-write-link-26-test',
+    'dummy-compiler-link-target'),'MISSING_NATIVE_BUILD_OR_RECEIPT');
+});
+test('27 source store link header PR trigger must be present',()=>{
+  denied(workflow.replace(
+    "      - 'src/main/cpp/oreslang/backend/NativeSourceFieldWriteLinks.hpp'",
+    "      - 'another-file.hpp'"),'MISSING_EXACT_HEAD_TRIGGER');
+});
+test('28 pushed reconciliation branch must be watched',()=>{
+  denied(workflow.replace(
+    "      - 'audit/llvm-source-physical-fieldwrite-link-*'",
+    "      - 'unwatched-branch-*'"),'MISSING_EXACT_HEAD_TRIGGER');
 });
