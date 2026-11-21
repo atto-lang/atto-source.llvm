@@ -2,6 +2,7 @@
 
 #include <pthread.h>
 #include <sched.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -262,48 +263,187 @@ static void test_seal_revokes_dormant_and_waiting_but_not_running(void) {
           ORES_STD_SYNC_GRANTED);
 }
 
-static ores_task_bound_state_region stress_region =
-    ORES_TASK_BOUND_STATE_REGION_INIT(500u, 8u);
-static uint64_t stress_value = 0;
+static void test_writer_fairness_matrix_against_late_readers(void) {
+    const unsigned int counts[] = {3u, 7u, 15u};
+    for (unsigned int c = 0; c < sizeof(counts)/sizeof(counts[0]); ++c) {
+        const unsigned int late_count = counts[c];
+        ores_task_bound_state_region region =
+            ORES_TASK_BOUND_STATE_REGION_INIT(400u + late_count, 6u);
+        const ores_state_task_identity holder =
+            task(4u, 50u + late_count, 1u, 1u);
+        const ores_state_task_identity writer =
+            task(4u, 60u + late_count, 2u, 1u);
+        ores_state_task_identity late_owner[15];
+        ores_std_sync_result late[15];
+
+        ores_std_sync_result held =
+            request_retry(&region, holder, ORES_STD_READ);
+        CHECK(held.code == ORES_STD_SYNC_GRANTED);
+        start_retry(&region, holder, held.ticket);
+
+        ores_std_sync_result queued_writer =
+            request_retry(&region, writer, ORES_STD_WRITE);
+        CHECK(queued_writer.code == ORES_STD_SYNC_QUEUED);
+
+        for (unsigned int i = 0; i < late_count; ++i) {
+            late_owner[i] =
+                task(4u, 100u + late_count * 16u + i, 10u + i, 1u);
+            late[i] = request_retry(
+                &region, late_owner[i], ORES_STD_READ);
+            CHECK(late[i].code == ORES_STD_SYNC_QUEUED);
+            CHECK(queued_writer.ticket.sequence < late[i].ticket.sequence);
+            if (i != 0u)
+                CHECK(late[i - 1u].ticket.sequence < late[i].ticket.sequence);
+        }
+
+        // Releasing the initial reader must wake only the older writer.
+        end_retry(&region, holder, held.ticket);
+        ores_std_sync_result wake =
+            release_retry(&region, holder, held.ticket);
+        CHECK(wake.code == ORES_STD_SYNC_GRANTED);
+        CHECK(wake.failed_count == 0u);
+        CHECK(wake.admitted_count == 1u);
+        CHECK(ores_state_region_ticket_equal(
+            wake.admitted[0], queued_writer.ticket));
+
+        start_retry(&region, writer, queued_writer.ticket);
+        for (unsigned int i = 0; i < late_count; ++i)
+            CHECK(ores_state_region_start(
+                &region, late_owner[i], late[i].ticket) ==
+                ORES_STD_SYNC_QUEUED);
+
+        // Once the writer retires, the entire queued reader cohort may enter,
+        // but the exact wake list must preserve FIFO ticket order.
+        end_retry(&region, writer, queued_writer.ticket);
+        wake = release_retry(&region, writer, queued_writer.ticket);
+        CHECK(wake.code == ORES_STD_SYNC_GRANTED);
+        CHECK(wake.failed_count == 0u);
+        CHECK(wake.admitted_count == late_count);
+        for (unsigned int i = 0; i < late_count; ++i)
+            CHECK(ores_state_region_ticket_equal(
+                wake.admitted[i], late[i].ticket));
+
+        for (unsigned int i = 0; i < late_count; ++i)
+            start_retry(&region, late_owner[i], late[i].ticket);
+        for (unsigned int i = 0; i < late_count; ++i) {
+            end_retry(&region, late_owner[i], late[i].ticket);
+            CHECK(release_retry(
+                &region, late_owner[i], late[i].ticket).code ==
+                ORES_STD_SYNC_GRANTED);
+        }
+
+        ores_std_sync_result stop;
+        do { stop = ores_state_region_seal(&region); }
+        while (stop.code == ORES_STD_SYNC_RETRY);
+        CHECK(stop.code == ORES_STD_SYNC_GRANTED);
+        CHECK(stop.failed_count == 0u);
+        CHECK(ores_state_region_quiescent(&region) ==
+              ORES_STD_SYNC_GRANTED);
+    }
+}
+
+static void test_concurrent_task_bound_stress_matrix(void);
 
 typedef struct stress_arg {
+    ores_task_bound_state_region* region;
     ores_state_task_identity owner;
+    uint64_t* value;
+    atomic_uint* active_readers;
+    atomic_uint* active_writers;
+    atomic_uint* ready;
+    atomic_bool* start;
+    unsigned int iterations;
     bool writer;
 } stress_arg;
 
 static void* stress_worker(void* payload) {
     stress_arg* arg = (stress_arg*)payload;
-    for (unsigned int n = 0; n < 2000u; ++n) {
+    atomic_fetch_add_explicit(arg->ready, 1u, memory_order_release);
+    while (!atomic_load_explicit(arg->start, memory_order_acquire))
+        sched_yield();
+    for (unsigned int n = 0; n < arg->iterations; ++n) {
         const ores_std_access access =
             arg->writer ? ORES_STD_WRITE : ORES_STD_READ;
         ores_std_sync_result ticket =
-            request_retry(&stress_region, arg->owner, access);
-        start_retry(&stress_region, arg->owner, ticket.ticket);
+            request_retry(arg->region, arg->owner, access);
+        start_retry(arg->region, arg->owner, ticket.ticket);
         if (arg->writer) {
-            ++stress_value;
+            CHECK(atomic_fetch_add_explicit(
+                arg->active_writers, 1u, memory_order_seq_cst) == 0u);
+            CHECK(atomic_load_explicit(
+                arg->active_readers, memory_order_seq_cst) == 0u);
+            uint64_t previous = *arg->value;
+            sched_yield();
+            *arg->value = previous + 1u;
+            CHECK(atomic_load_explicit(
+                arg->active_readers, memory_order_seq_cst) == 0u);
+            CHECK(atomic_fetch_sub_explicit(
+                arg->active_writers, 1u, memory_order_seq_cst) == 1u);
         } else {
-            volatile uint64_t snapshot = stress_value;
-            (void)snapshot;
+            atomic_fetch_add_explicit(
+                arg->active_readers, 1u, memory_order_seq_cst);
+            CHECK(atomic_load_explicit(
+                arg->active_writers, memory_order_seq_cst) == 0u);
+            volatile uint64_t snapshot = *arg->value;
+            sched_yield();
+            CHECK(snapshot <= *arg->value);
+            CHECK(atomic_load_explicit(
+                arg->active_writers, memory_order_seq_cst) == 0u);
+            (void) snapshot;
+            CHECK(atomic_fetch_sub_explicit(
+                arg->active_readers, 1u, memory_order_seq_cst) > 0u);
         }
-        end_retry(&stress_region, arg->owner, ticket.ticket);
+        end_retry(arg->region, arg->owner, ticket.ticket);
         CHECK(release_retry(
-            &stress_region, arg->owner, ticket.ticket).code ==
+            arg->region, arg->owner, ticket.ticket).code ==
             ORES_STD_SYNC_GRANTED);
     }
     return NULL;
 }
 
-static void test_concurrent_task_bound_stress(void) {
-    pthread_t threads[8];
-    stress_arg args[8];
-    for (unsigned int i = 0; i < 8u; ++i) {
-        args[i].owner = task(9u, 100u + i, 10u + i, 1u);
-        args[i].writer = i < 3u;
-        CHECK(pthread_create(&threads[i], NULL, stress_worker, &args[i]) == 0);
+static void test_concurrent_task_bound_stress_matrix(void) {
+    const unsigned int counts[] = {3u, 7u, 15u};
+    const unsigned int iterations = 350u;
+    for (unsigned int c = 0; c < sizeof(counts)/sizeof(counts[0]); ++c) {
+        const unsigned int count = counts[c];
+        const unsigned int writer_count = (count + 2u)/3u;
+        ores_task_bound_state_region region =
+            ORES_TASK_BOUND_STATE_REGION_INIT(500u + count, 8u);
+        uint64_t protected_value = 0u;
+        atomic_uint active_readers = ATOMIC_VAR_INIT(0u);
+        atomic_uint active_writers = ATOMIC_VAR_INIT(0u);
+        atomic_uint ready = ATOMIC_VAR_INIT(0u);
+        atomic_bool start = ATOMIC_VAR_INIT(false);
+        pthread_t threads[15];
+        stress_arg args[15];
+        for (unsigned int i = 0; i < count; ++i) {
+            args[i].region = &region;
+            args[i].owner = task(9u, 100u + i, 10u + i, 1u);
+            args[i].value = &protected_value;
+            args[i].active_readers = &active_readers;
+            args[i].active_writers = &active_writers;
+            args[i].ready = &ready;
+            args[i].start = &start;
+            args[i].iterations = iterations;
+            args[i].writer = i < writer_count;
+            CHECK(pthread_create(&threads[i], NULL, stress_worker, &args[i]) == 0);
+        }
+        while (atomic_load_explicit(&ready, memory_order_acquire) != count)
+            sched_yield();
+        atomic_store_explicit(&start, true, memory_order_release);
+        for (unsigned int i = 0; i < count; ++i)
+            CHECK(pthread_join(threads[i], NULL) == 0);
+        CHECK(protected_value == (uint64_t) writer_count * iterations);
+        CHECK(atomic_load_explicit(
+            &active_readers, memory_order_seq_cst) == 0u);
+        CHECK(atomic_load_explicit(
+            &active_writers, memory_order_seq_cst) == 0u);
+        ores_std_sync_result stop;
+        do { stop = ores_state_region_seal(&region); }
+        while (stop.code == ORES_STD_SYNC_RETRY);
+        CHECK(stop.code == ORES_STD_SYNC_GRANTED);
+        CHECK(ores_state_region_quiescent(&region) == ORES_STD_SYNC_GRANTED);
     }
-    for (unsigned int i = 0; i < 8u; ++i)
-        CHECK(pthread_join(threads[i], NULL) == 0);
-    CHECK(stress_value == 6000u);
 }
 
 int main(void) {
@@ -313,7 +453,8 @@ int main(void) {
     test_foreign_region_and_generation();
     test_reader_cohort_writer_fairness_and_owner_binding();
     test_seal_revokes_dormant_and_waiting_but_not_running();
-    test_concurrent_task_bound_stress();
+    test_writer_fairness_matrix_against_late_readers();
+    test_concurrent_task_bound_stress_matrix();
     puts("Oreslang task-bound state-region admission PASS");
     return 0;
 }
