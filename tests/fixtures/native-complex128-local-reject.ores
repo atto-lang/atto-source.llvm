@@ -1,0 +1,4 @@
+pub fnc bad(): int {
+  val value: complex = 1.0 + 2.0i;
+  return 0;
+}

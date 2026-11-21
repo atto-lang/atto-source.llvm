@@ -16,11 +16,34 @@ jobs:
         compiler: [g++, clang++]
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact source revision and clean tree
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet
+          git diff --cached --quiet
+          printf 'EXACT_SOURCE_HEAD=%s\n' "$EXPECTED_HEAD"
       - name: Compile and execute exact ABI/DOP safety suites with ASan and UBSan
         env:
           CXX_BIN: ${{ matrix.compiler }}
         run: bash scripts/verify-target-abi-dop.sh "$CXX_BIN"
+      - name: Install LLVM toolchain for complex128 ABI proof
+        if: matrix.compiler == 'clang++'
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang llvm-dev python3
+      - name: Build and execute complex128 compiler ABI gates on this architecture
+        if: matrix.compiler == 'clang++'
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-complex             -DCMAKE_BUILD_TYPE=Release             -DBUILD_TESTING=ON             -DCMAKE_C_COMPILER=clang             -DCMAKE_CXX_COMPILER=clang++
+          cmake --build build-complex --parallel 2 --target oreslang-llvmc
+          ctest --test-dir build-complex             -R '^native_complex128_'             --output-on-failure --timeout 240
       - name: ThreadSanitizer read-loan quiescence regression
         if: matrix.runner == 'ubuntu-24.04' && matrix.compiler == 'g++'
         run: |

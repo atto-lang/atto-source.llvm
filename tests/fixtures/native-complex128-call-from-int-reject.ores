@@ -1,0 +1,7 @@
+pub fnc helper(): complex {
+  return 1.0 + 2.0i;
+}
+
+pub fnc bad(): int {
+  return helper();
+}

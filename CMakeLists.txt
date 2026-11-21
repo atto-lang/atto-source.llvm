@@ -404,16 +404,55 @@ if(BUILD_TESTING)
                 ${ARGN})
     endfunction()
 
-    # Complex128 is deliberately fail-closed until the native frontend has a
-    # typed {f64,f64} value category and exact finite scalar lowering. These
-    # tests prevent an imaginary/decimal token or type annotation from being
-    # misparsed as the existing checked-i64 subset or emitting partial IR.
-    oreslang_contract_test(native_complex128_type_failclosed
+    # First typed complex128 native slice: zero-argument return-only
+    # functions lower to a by-value {double,double} LLVM aggregate. Complex
+    # parameters/calls/locals/multiply/divide remain fail-closed until their
+    # ABI, ownership and exact-rounding paths are separately admitted.
+    oreslang_contract_test(native_complex128_parameter_failclosed
         native-complex-type-reject.ores
-        --diagnostic "native complex128 type requires verified LLVM scalar lowering")
-    oreslang_contract_test(native_complex128_literal_failclosed
+        --diagnostic "native complex128 parameters require typed complex ABI lowering")
+    oreslang_contract_test(native_complex128_literal_in_int_failclosed
         native-complex-literal-reject.ores
-        --diagnostic "native complex128/f64 literal requires verified LLVM numeric lowering")
+        --diagnostic "native floating/imaginary literal requires complex128 return context")
+    oreslang_contract_test(native_complex128_multiply_failclosed
+        native-complex128-multiply-reject.ores
+        --diagnostic "native complex128 multiplication requires exact once-rounded lowering")
+    oreslang_contract_test(native_complex128_divide_failclosed
+        native-complex128-divide-reject.ores
+        --diagnostic "native complex128 division requires exact once-rounded lowering")
+    oreslang_contract_test(native_complex128_integer_narrowing_failclosed
+        native-complex128-int-narrow-reject.ores
+        --diagnostic "native complex128 integer promotion exceeds exact binary64 range")
+    oreslang_contract_test(native_complex128_local_failclosed
+        native-complex128-local-reject.ores
+        --diagnostic "native complex128 is currently supported only as a zero-argument return type")
+    oreslang_contract_test(native_complex128_call_from_int_failclosed
+        native-complex128-call-from-int-reject.ores
+        --diagnostic "native complex128 call results require typed complex call ABI lowering")
+    oreslang_contract_test(native_complex128_call_from_complex_failclosed
+        native-complex128-call-from-complex-reject.ores
+        --diagnostic "native complex128 calls require typed complex call ABI lowering")
+    oreslang_contract_test(native_complex128_real_conjugate_failclosed
+        native-complex128-real-conjugate-reject.ores
+        --diagnostic "native complex128 conjugation requires a complex operand")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_complex128_return_ir_verifies
+            native-complex128-return.ores
+            --ir "ret { double, double }"
+            --verify-object --clang "${ORE_CLANG}")
+        add_test(NAME native_complex128_return_aot_raw_bits
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_complex128_aot.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-complex128-return.ores")
+        set_tests_properties(
+            native_complex128_return_ir_verifies
+            native_complex128_return_aot_raw_bits
+            PROPERTIES TIMEOUT 120)
+    else()
+        message(FATAL_ERROR "Native complex128 ABI verification requires Clang")
+    endif()
 
     # A Python -O/PYTHONOPTIMIZE run must never turn failed compiler
     # admission/IR checks into a green CTest. Uses only fake compilers;

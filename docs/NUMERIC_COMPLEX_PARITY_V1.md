@@ -25,7 +25,7 @@ This contract is an implementation target, not a declaration of runtime feature 
 ## Reference corpus and limitations
 
 `contracts/v1/numeric-complex/complex128-finite-reference-v1.json`
-holds thirteen cases for add/subtract/multiply/divide/conjugate and one
+holds sixteen cases for add/subtract/multiply/divide/conjugate and one
 complex row-major matrix multiplication. Operands are short decimal text
 first parsed as **IEEE binary64**. The source-free Python oracle then
 uses **exact rational arithmetic on those decoded binary64 values** and
@@ -64,7 +64,7 @@ artifact that explicitly says native/guest parity is **false**.
    real-to-complex promotion and reject lossy implicit exact Decimal
    or BigInt conversions. Do not assume the proposed `Complex<T>`
    generic is available from the lowercase `complex` type.
-2. **Arithmetic:** execute all thirteen scalar vectors through the actual
+2. **Arithmetic:** execute all sixteen scalar vectors through the actual
    compiler/guest runtime, including wide-exponent divisions,
    subnormal imaginary components, signed cross terms and conjugation.
    For finite complex128 multiplication and division, the v1 target is the
@@ -153,7 +153,7 @@ scalar/guest implementation.
 
 ## Frozen finite-reference input and issue identity admission
 
-The finite-complex128 oracle now pins all **13** scalar vector identities
+The finite-complex128 oracle now pins all **16** scalar vector identities
 to their exact operation and binary64 input decimal strings, and pins
 the `1×2 @ 2×1` complex matrix input planes. It also checks exact
 source-issue anchors for Java #120, #1033, and division issue #1042.
@@ -179,3 +179,21 @@ uploaded short-lived [artifact #12110614229](https://github.com/cliptown/cliptow
 Its checks were not copied from the private Oreslang source tree;
 **the actual source finite/IEEE oracle files and Oreslang native guest
 compilers have not been tested successfully by that host**.
+
+
+## Refreshed LLVM typed complex128 slice (2026-10-17)
+
+LLVM branch `feature/complex128-typed-scalar-refresh-20261017` reapplies
+the reviewed typed-return complex128 work from draft #532 onto the newest
+actor/serde/arena integration head. The current 13-method frozen finite-input
+verifier is retained unchanged and the separate IEEE-special reference corpus
+is layered beside it.
+
+This native slice represents complex128 as LLVM `{ double, double }` and
+executes return-only literal trees with add, subtract, negate and conjugation,
+including raw-component ABI checks at `-O0` and `-O2`. Integer promotion
+is restricted to the exact binary64 range. Complex multiplication, division,
+locals, parameters and complex call ABI remain deliberately fail-closed until
+their exact once-rounded semantics and ownership/ABI lowering are implemented.
+No reference-only run is evidence of native parity until exact-head compiler,
+CTest and linked native execution actually run.
