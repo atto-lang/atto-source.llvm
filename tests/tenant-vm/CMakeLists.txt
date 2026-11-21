@@ -45,6 +45,27 @@ add_test(NAME tenant_vm_confidential_attestation_preflight_test
     COMMAND tenant_vm_confidential_attestation_preflight_test)
 set_tests_properties(tenant_vm_confidential_attestation_preflight_test PROPERTIES TIMEOUT 10)
 
+# ABI-correct SNP raw report inspection and signature-only P384/SHA384 test.
+# This test signs a *synthetic* report using a locally generated key and MUST
+# NOT be recorded as AMD-backed hardware attestation or endorsement evidence.
+find_package(OpenSSL QUIET COMPONENTS Crypto)
+if(OpenSSL_FOUND)
+    add_executable(tenant_vm_sev_snp_report_verification_test
+        sev_snp_report_verification_test.cpp)
+    target_link_libraries(tenant_vm_sev_snp_report_verification_test PRIVATE OpenSSL::Crypto)
+    if(TENANT_VM_SANITIZE)
+        target_compile_options(tenant_vm_sev_snp_report_verification_test PRIVATE
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(tenant_vm_sev_snp_report_verification_test PRIVATE
+            -fsanitize=address,undefined)
+    endif()
+    add_test(NAME tenant_vm_sev_snp_report_verification_test
+        COMMAND tenant_vm_sev_snp_report_verification_test)
+    set_tests_properties(tenant_vm_sev_snp_report_verification_test PROPERTIES TIMEOUT 30)
+else()
+    message(STATUS "SNP OpenSSL signature primitive NOT_EXECUTED: OpenSSL::Crypto unavailable")
+endif()
+
 # Enforced path: tenant source or Wasm, admitted and lowered to a loadable library. Needs WABT.
 find_program(WAT2WASM wat2wasm)
 find_program(WASM2C wasm2c)
