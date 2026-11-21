@@ -437,7 +437,10 @@ struct TenantVmHost::Core {
     std::atomic<std::uint64_t> traps_contained{0};
     std::atomic<std::uint64_t> kills_delivered{0};
 
-    OresVmHostApi api{};
+    // Every callback resolves its authority from the current carrier. This
+    // table contains NO host-specific state and must remain valid after any
+    // TenantVmHost instance retires. Lowered modules cache the table pointer.
+    static const OresVmHostApi api;
 
     // ------------------------------------------------------------- scheduling
 
@@ -543,6 +546,21 @@ struct TenantVmHost::Core {
                 reason = FailReason::TurnDeadline;
             if (reason != FailReason::HostKill) traps_contained.fetch_add(1, std::memory_order_relaxed);
         }
+        // The turn sequence became even in execute(), before clearing its Vm/Actor
+        // pointers. The fault and deadline classification above is the LAST consumer
+        // of these carrier-local values. Do not leave a retired tenant's generation,
+        // timeout, fault address, or restartability available when this pthread next
+        // runs an unrelated tenant. The watchdog's watched_seq is owned by the
+        // watchdog and is intentionally NOT mutated here. The abort sequence is
+        // likewise preserved to fence a signal sent for the previous turn.
+        c->vm_generation.store(0, std::memory_order_seq_cst);
+        c->started_ns.store(0, std::memory_order_relaxed);
+        c->deadline_ms.store(0, std::memory_order_relaxed);
+        c->restartable_turn.store(false, std::memory_order_relaxed);
+        c->deadline_abort_seq.store(0, std::memory_order_seq_cst);
+        c->fault_address = 0;
+        c->trap_was_checked = false;
+        c->current_seq = 0;
 
         bool restarted = false;
         bool terminated = false;
@@ -1432,6 +1450,25 @@ struct TenantVmHost::Core {
     }
 };
 
+// Lowered Wasm libraries are shared by multiple TenantVmHost roots and cache
+// this callback-table address in their module globals. A table allocated
+// inside Core would become a dangling pointer as soon as its owning root
+// retires while another root is executing the same guest module.
+//
+// The function pointers are root-agnostic: host_enter() resolves the Core,
+// tenant and actor from the executing pthread's t_carrier. This immutable
+// process-lifetime table prevents the cross-root use-after-free.
+const OresVmHostApi TenantVmHost::Core::api = {
+    ORES_VM_GUEST_ABI_VERSION,
+    &TenantVmHost::Core::host_alloc,
+    &TenantVmHost::Core::host_free,
+    &TenantVmHost::Core::host_send,
+    &TenantVmHost::Core::host_spawn,
+    &TenantVmHost::Core::host_stop,
+    &TenantVmHost::Core::host_commit,
+    &trap_from_guest
+};
+
 namespace {
 std::future<TurnResult> ready_result(Status status) {
     std::promise<TurnResult> promise;
@@ -1447,14 +1484,6 @@ TenantVmHost::TenantVmHost(HostLimits limits) : core_(std::make_shared<Core>(lim
         throw std::invalid_argument("TenantVmHost limits");
     install_handlers_once();
     Core* core = core_.get();
-    core->api.abi_version = ORES_VM_GUEST_ABI_VERSION;
-    core->api.alloc = &Core::host_alloc;
-    core->api.free = &Core::host_free;
-    core->api.send = &Core::host_send;
-    core->api.spawn = &Core::host_spawn;
-    core->api.stop = &Core::host_stop;
-    core->api.commit = &Core::host_commit;
-    core->api.trap = &trap_from_guest;
 
     const auto give_up = [core](const char* what) {
         core->stop_carriers(); // nothing else can be running yet, and Core must not outlive a carrier

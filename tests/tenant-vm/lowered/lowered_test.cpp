@@ -367,6 +367,116 @@ void atto_actor_state_is_private_and_durable() {
     std::printf("  1000 durable turns; state private per actor, tenant and program\n");
 }
 
+// One pthread is deliberately shared between two concurrently admitted TenantVMs.
+// The real .atto compiler must have produced these actors; the host must neither keep
+// the previous tenant's execution context on the carrier nor let a failed tenant's
+// old actor handle regain access when its tenant name is reused.
+void atto_carrier_handoff_and_tenant_reincarnation() {
+    const LoadedGuest counter = load("atto_counter");
+    const LoadedGuest fault_guest = load("hostile_guard");
+    if (!counter.module || !fault_guest.module) return;
+    HostLimits limits;
+    limits.carriers = 1;  // Every cross-tenant turn must use the SAME pthread.
+    TenantVmHost host(limits);
+
+    auto first = host.open(spec("handoff-a", counter));
+    auto second = host.open(spec("handoff-b", counter));
+    auto doomed = host.open(spec("handoff-failed", fault_guest));
+    REQUIRE_OK(first);
+    REQUIRE_OK(second);
+    REQUIRE_OK(doomed);
+    std::vector<VmActor> actors_a, actors_b;
+    for (int j = 0; j < 3; ++j) {
+        auto a = host.spawn_actor(first.handle, 0);
+        auto b = host.spawn_actor(second.handle, 0);
+        REQUIRE_OK(a);
+        REQUIRE_OK(b);
+        actors_a.push_back(a.actor);
+        actors_b.push_back(b.actor);
+    }
+    auto failing_actor = host.spawn_actor(doomed.handle, 0);
+    REQUIRE_OK(failing_actor);
+
+    // All six compiled .atto actor instances maintain independent state even
+    // though there is exactly one carrier and every turn changes its tenant.
+    for (int round = 1; round <= 48; ++round) {
+        for (int j = 0; j < 3; ++j) {
+            const auto a = host.call(actors_a[j], one(j + 1)).get();
+            const auto b = host.call(actors_b[j], one(j + 4)).get();
+            CHECK_STATUS(a.status, Status::Ok);
+            CHECK_STATUS(b.status, Status::Ok);
+            CHECK(word(a.payload) == round * (j + 1));
+            CHECK(word(b.payload) == round * (j + 4));
+        }
+        if (round == 24) {
+            // A fault through a validated, test-only Wasm guest retires its VM.
+            // The same pthread must subsequently execute healthy .atto tenants.
+            CHECK_STATUS(host.call(failing_actor.actor, msg(OP_TRAP)).get().status, Status::TenantFailed);
+            CHECK(host.wait_closed(doomed.handle).phase == Phase::Failed);
+            // Reusing the tenant name must create fresh memory and authority.
+            auto fresh = host.open(spec("handoff-failed", counter));
+            REQUIRE_OK(fresh);
+            auto newborn = host.spawn_actor(fresh.handle, 0);
+            REQUIRE_OK(newborn);
+            CHECK_STATUS(host.call(failing_actor.actor, msg(OP_ADD, 1)).get().status, Status::StaleHandle);
+            CHECK(word(host.call(newborn.actor, one(0)).get().payload) == 0);
+            CHECK(word(host.call(newborn.actor, one(17)).get().payload) == 17);
+            CHECK_STATUS(host.begin_shutdown(fresh.handle), Status::Ok);
+            CHECK(host.wait_closed(fresh.handle).phase == Phase::Stopped);
+        }
+    }
+    CHECK(host.stats().wild_accesses == 0);
+    CHECK(host.stats().live_vms == 2);
+}
+
+// Two completely independent root hosts can load the SAME compiled .atto module
+// and execute its spawn/send host imports at the same time. The lowered adapter's
+// module-global g_host must point to an immutable, root-agnostic callback table:
+// root selection comes from the active pthread, not whichever host ran last.
+void atto_shared_module_across_independent_roots() {
+    const LoadedGuest fleet = load("atto_fleet");
+    if (!fleet.module) return;
+    CHECK(fleet.module->kind_count == 3);
+    HostLimits limits;
+    limits.carriers = 2;
+    TenantVmHost survivor(limits);
+    auto long_lived = survivor.open(spec("identical-name", fleet));
+    REQUIRE_OK(long_lived);
+
+    for (int round = 0; round < 12; ++round) {
+        {
+            TenantVmHost short_lived(limits);
+            auto transient = short_lived.open(spec("identical-name", fleet));
+            REQUIRE_OK(transient);
+            auto main_a = survivor.spawn_actor(long_lived.handle, 2);
+            auto main_b = short_lived.spawn_actor(transient.handle, 2);
+            REQUIRE_OK(main_a);
+            REQUIRE_OK(main_b);
+            // Submit before awaiting either, so both independent roots may
+            // concurrently enter the exact same dlopen'ed module and host API.
+            auto first = survivor.call(main_a.actor, {});
+            auto second = short_lived.call(main_b.actor, {});
+            const auto result_a = first.get();
+            const auto result_b = second.get();
+            CHECK_STATUS(result_a.status, Status::Ok);
+            CHECK_STATUS(result_b.status, Status::Ok);
+            CHECK(word(result_a.payload) == 43);
+            CHECK(word(result_b.payload) == 43);
+            CHECK_STATUS(short_lived.begin_shutdown(transient.handle), Status::Ok);
+            CHECK(short_lived.wait_closed(transient.handle).phase == Phase::Stopped);
+        }
+        // The short-lived Core just retired while its sibling root remains.
+        // A dangling adapter callback pointer must never poison future turns.
+        auto probe = survivor.spawn_actor(long_lived.handle, 0);
+        REQUIRE_OK(probe);
+        const auto p = survivor.call(probe.actor, one(1)).get();
+        CHECK_STATUS(p.status, Status::Ok);
+    }
+    CHECK_STATUS(survivor.begin_shutdown(long_lived.handle), Status::Ok);
+    CHECK(survivor.wait_closed(long_lived.handle).phase == Phase::Stopped);
+    CHECK(survivor.stats().wild_accesses == 0);
+}
+
 // A trap in source restarts that actor from its last finished turn. Everything else carries on.
 void atto_failed_actor_restarts_from_stored_state() {
     const LoadedGuest counter = load("atto_counter");
@@ -855,6 +965,8 @@ const Case cases[] = {
     {"loader_admits_only_exact_bytes", loader_admits_only_exact_bytes},
 #if defined(TENANT_VM_HAVE_ATTO)
     {"atto_actor_state_is_private_and_durable", atto_actor_state_is_private_and_durable},
+    {"atto_carrier_handoff_and_tenant_reincarnation", atto_carrier_handoff_and_tenant_reincarnation},
+    {"atto_shared_module_across_independent_roots", atto_shared_module_across_independent_roots},
     {"atto_failed_actor_restarts_from_stored_state", atto_failed_actor_restarts_from_stored_state},
     {"atto_without_bounds_checks_no_restart", atto_without_bounds_checks_no_restart},
     {"atto_runaway_source_ends_only_its_turn", atto_runaway_source_ends_only_its_turn},

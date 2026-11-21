@@ -116,6 +116,40 @@ void thousand_vms_in_one_process() {
     CHECK_STATUS(host.open(spec("one-too-many")).status, Status::TenantQuota);
 }
 
+// The lowered Wasm adapter stores a module-wide callback-table address. It
+// cannot refer to one heap-allocated Core: separate OresVM roots can use the
+// same module concurrently, and either root can retire first. The trusted C
+// fixture exposes the table address only to this test (never to safe guests).
+void host_api_table_is_shared_across_root_lifetimes() {
+    TenantVmHost survivor;
+    auto one = survivor.open(spec("same-name"));
+    REQUIRE_OK(one);
+    auto a = survivor.spawn_actor(one.handle, KIND_HOST_API_TABLE_ID);
+    REQUIRE_OK(a);
+    const auto original = survivor.call(a.actor, {}).get();
+    CHECK_STATUS(original.status, Status::Ok);
+    const auto stable_id = word(original.payload);
+    CHECK(stable_id != 0);
+
+    {
+        TenantVmHost short_lived;
+        auto two = short_lived.open(spec("same-name"));
+        REQUIRE_OK(two);
+        auto b = short_lived.spawn_actor(two.handle, KIND_HOST_API_TABLE_ID);
+        REQUIRE_OK(b);
+        // Both roots are live simultaneously; an instance-owned table would
+        // differ and could be freed while the other root still uses it.
+        auto again = short_lived.call(b.actor, {}).get();
+        CHECK_STATUS(again.status, Status::Ok);
+        CHECK_EQ(word(again.payload), stable_id);
+    }
+    // The previous root is gone. Its cached callback pointer must not be
+    // needed to run the survivor's next turn.
+    const auto still_live = survivor.call(a.actor, {}).get();
+    CHECK_STATUS(still_live.status, Status::Ok);
+    CHECK_EQ(word(still_live.payload), stable_id);
+}
+
 void equal_offsets_are_different_memory() {
     TenantVmHost host;
     auto a = host.open(spec("a"));
@@ -1599,6 +1633,7 @@ void restart_stress() {
 
 struct Case { const char* name; void (*run)(); };
 const Case cases[] = {
+    {"host_api_table_is_shared_across_root_lifetimes", host_api_table_is_shared_across_root_lifetimes},
     {"equal_offsets_are_different_memory", equal_offsets_are_different_memory},
     {"messaging_stays_inside_the_vm", messaging_stays_inside_the_vm},
     {"faults_end_only_that_vm", faults_end_only_that_vm},
