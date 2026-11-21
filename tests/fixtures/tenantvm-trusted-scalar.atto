@@ -1,0 +1,6 @@
+// Real AttoLang source, compiled through oreslang-llvmc --isolate-entry.
+// No FFI, native pointers, mutable LLVM globals or unbounded guest effects.
+// The trusted host supplies the old tenant-owned i64 slot through the ABI.
+pub fnc tenant_step(int old, int delta): int {
+    return old + delta;
+}
