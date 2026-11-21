@@ -5,6 +5,8 @@ find_package(Threads REQUIRED)
 
 option(TENANT_VM_SANITIZE "ASan+UBSan on the host" OFF)
 option(TENANT_VM_TSAN "TSan on the host" OFF)
+# Security verification runners must not silently skip missing OpenSSL crypto.
+option(TENANT_VM_REQUIRE_SNP_CRYPTO "Reject host test configuration without OpenSSL::Crypto SNP tests" OFF)
 # Release evidence MUST include compiler-generated .atto guests, not a host-only suite.
 option(TENANT_VM_REQUIRE_ATTO_GUESTS "Reject configurations without exact-source .atto compiler lowering" OFF)
 
@@ -49,6 +51,9 @@ set_tests_properties(tenant_vm_confidential_attestation_preflight_test PROPERTIE
 # This test signs a *synthetic* report using a locally generated key and MUST
 # NOT be recorded as AMD-backed hardware attestation or endorsement evidence.
 find_package(OpenSSL QUIET COMPONENTS Crypto)
+if(TENANT_VM_REQUIRE_SNP_CRYPTO AND NOT OpenSSL_FOUND)
+    message(FATAL_ERROR "SNP_CRYPTO_NOT_EXECUTED: OpenSSL::Crypto required for SNP signature and VCEK tests")
+endif()
 if(OpenSSL_FOUND)
     add_executable(tenant_vm_sev_snp_report_verification_test
         sev_snp_report_verification_test.cpp)
