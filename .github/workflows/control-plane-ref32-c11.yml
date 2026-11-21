@@ -1,0 +1,46 @@
+name: Native C11 control-plane Ref32 host (not guest)
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/ControlPlaneArena32.h'
+      - 'src/main/cpp/oreslang/runtime/ControlPlaneArena32.c'
+      - 'tests/control_plane_arena32_test.c'
+      - '.github/workflows/control-plane-ref32-c11.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-host-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact immutable head, not synthetic PR merge
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain)"
+      - name: Strict GCC optimized host probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcc -std=c11 -O2 -DATTO_CONTROL32_TESTING=1 -Wall -Wextra -Werror -pedantic -pthread -Isrc/main/cpp/oreslang/runtime             src/main/cpp/oreslang/runtime/ControlPlaneArena32.c tests/control_plane_arena32_test.c -o /tmp/atto-control-c11
+          /tmp/atto-control-c11 | tee "$RUNNER_TEMP/control-gcc.log"
+          grep -Fx 'PASS llvm control deterministic 50000-op native lifetime model (NOT compiled Atto)' "$RUNNER_TEMP/control-gcc.log"
+          grep -Fx 'PASS llvm control i128 coherent concurrent host (NOT compiled Atto)' "$RUNNER_TEMP/control-gcc.log"
+      - name: Clang ASan and UBSan host probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O1 -g -DATTO_CONTROL32_TESTING=1 -Wall -Wextra -Werror -pedantic -fsanitize=address,undefined -fno-omit-frame-pointer -pthread -Isrc/main/cpp/oreslang/runtime             src/main/cpp/oreslang/runtime/ControlPlaneArena32.c tests/control_plane_arena32_test.c -o /tmp/atto-control-san
+          ASAN_OPTIONS=detect_leaks=1 /tmp/atto-control-san | tee "$RUNNER_TEMP/control-san.log"
+          grep -Fx 'PASS llvm control deterministic 50000-op native lifetime model (NOT compiled Atto)' "$RUNNER_TEMP/control-san.log"
+          grep -Fx 'PASS llvm control i128 coherent concurrent host (NOT compiled Atto)' "$RUNNER_TEMP/control-san.log"
+      - name: Explicit scope
+        run: echo 'HOST-ONLY native control heap; not compiled Atto guest or full scheduler integration'
