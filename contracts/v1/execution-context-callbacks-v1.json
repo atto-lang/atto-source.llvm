@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "contract": "CALLBACK_DISPATCH_AND_PREEMPTION_V1",
+  "cases": [
+    {
+      "id": "sync_resolve_registration",
+      "capture": "active_execution",
+      "resolve": "same_stack",
+      "guest_inline": false,
+      "fresh_resume_dispatch": true
+    },
+    {
+      "id": "cross_carrier_resolve",
+      "capture": "active_execution",
+      "resolve": "foreign_carrier",
+      "producer_ambient_ignored": true,
+      "guest_inline": false
+    },
+    {
+      "id": "nested_scope_restore",
+      "capture": "callback_context",
+      "nested": true,
+      "restore_lifo": true
+    },
+    {
+      "id": "callback_throw_cleanup",
+      "capture": "active_execution",
+      "resolve": "throws",
+      "scope_cleared": true,
+      "accounting_released": true
+    },
+    {
+      "id": "duplicate_resolve",
+      "one_shot": true,
+      "first_wins": true,
+      "second": "diagnostic"
+    },
+    {
+      "id": "cancel_vs_resolve",
+      "race": true,
+      "terminal_outcomes": 1,
+      "no_resurrection": true
+    },
+    {
+      "id": "terminal_waiter_race",
+      "terminal_before_waiter": true,
+      "resumes": 1,
+      "lost_wakeup": false
+    },
+    {
+      "id": "stale_generation",
+      "generation_checked": true,
+      "result": "reject"
+    },
+    {
+      "id": "late_after_retire",
+      "retired": true,
+      "may_release_lifetime_pin": true,
+      "may_resume_guest": false
+    },
+    {
+      "id": "provenance_not_authority",
+      "callback_context_installed": true,
+      "active_execution_authority": false
+    },
+    {
+      "id": "trace_boundary",
+      "boundary": "HOST_CALLBACK",
+      "preserve_lineage": true,
+      "producer_is_guest_owner": false
+    },
+    {
+      "id": "await_boundary",
+      "boundary": "AWAIT",
+      "preserve_lineage": true,
+      "fresh_resume_dispatch": true
+    },
+    {
+      "id": "callback_trace_snapshot",
+      "capture": "active_trace",
+      "snapshot_immutable": true,
+      "snapshot_bounded": true,
+      "mutable_trace_on_producer": false,
+      "attach_failure": true
+    },
+    {
+      "id": "nested_callback_trace",
+      "capture": "callback_context",
+      "nested": true,
+      "preserve_prior_boundaries": true,
+      "requires_producer_ambient_trace": false,
+      "mutable_trace_install": false
+    },
+    {
+      "id": "trace_snapshot_dedupe",
+      "same_snapshot_attachments": 1,
+      "bounded": true,
+      "unbounded_growth": false
+    },
+    {
+      "id": "boundary_vocabulary",
+      "required": [
+        "AWAIT",
+        "HOST_CALLBACK",
+        "TIMER",
+        "IO",
+        "ACTOR_MESSAGE",
+        "SUPERVISOR_CONTROL",
+        "TASK_JOIN",
+        "SPAWN"
+      ],
+      "relabeling": false
+    },
+    {
+      "id": "scope_cleanup",
+      "nested": false,
+      "after_callback_current_context": "previous_or_none"
+    },
+    {
+      "id": "bounded_retention",
+      "cancel_or_retire": true,
+      "waiter_detached": true,
+      "unbounded_growth": false
+    }
+  ]
+}

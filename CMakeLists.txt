@@ -246,6 +246,16 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_source_budget.py"
             "$<TARGET_FILE:oreslang-llvmc>")
     set_tests_properties(native_compiler_source_budget PROPERTIES TIMEOUT 25)
+    # Canonical callback source parity fixture. Until native async/Future
+    # lowering exists, require one precise fail-closed diagnostic plus a
+    # successful scalar compiler control. Rejection is not PASS parity.
+    add_test(NAME native_execution_context_callback_source_expected_reject
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_execution_context_callback_source_gate.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/execution-context-callbacks/v1/callback_sync_resolve.ores")
+    set_tests_properties(native_execution_context_callback_source_expected_reject
+        PROPERTIES TIMEOUT 45)
     # End-to-end source -> LLVM IR -> Clang -> actual native OS process.
     # Four portable cases have lossless exit status; DO NOT claim seven.
     find_program(ORE_SOURCE_I64_CLANG NAMES clang-18 clang-19 clang clang-17 clang-16 clang-15 clang-14)
@@ -2222,6 +2232,25 @@ if(BUILD_TESTING)
     add_test(NAME native_execution_continuation_aosoa_trace
         COMMAND oreslang-native-execution-continuation-store-test)
     set_tests_properties(native_execution_continuation_aosoa_trace
+        PROPERTIES TIMEOUT 30)
+
+    # Host callback provenance pins logical ancestry across foreign completion
+    # carriers without creating a guest execution/allocation capability.
+    add_executable(oreslang-native-callback-context-test
+        tests/native_callback_context_test.c
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeCallbackContext.c
+        src/main/cpp/oreslang/runtime/NativeLogicalTrace.c)
+    target_include_directories(oreslang-native-callback-context-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-callback-context-test PRIVATE
+        Threads::Threads)
+    target_compile_options(oreslang-native-callback-context-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_callback_context_provenance
+        COMMAND oreslang-native-callback-context-test)
+    set_tests_properties(native_callback_context_provenance
         PROPERTIES TIMEOUT 30)
 
     # Stop one child without waiting for an unrelated actor's busy turn.
