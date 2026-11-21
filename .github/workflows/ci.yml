@@ -30,9 +30,22 @@ jobs:
           set -euo pipefail
           [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
-          git diff --quiet --exit-code
-          test -z "$(git ls-files --others --exclude-standard)"
+          # Do not run git diff/status: configured clean filters can execute.
+          # Detect ALL untracked files, including ignored-source injections.
+          python3 scripts/verify-raw-worktree.py --self-test
+          python3 scripts/verify-raw-worktree.py .
           echo "EXACT_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      # Fail fast on the typed sum resolver, without waiting for the full
+      # LLVM toolchain installation or unrelated native actor test suites.
+      # This host-only gate is not compiled guest parity evidence.
+      - name: Compile and execute native sum payload admission (C++17 host only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror \
+            -I src/main/cpp tests/native_sum_payload_admission_test.cpp \
+            -o /tmp/oreslang-native-sum-payload-admission
+          /tmp/oreslang-native-sum-payload-admission
       - name: Install LLVM toolchain and native linker
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang llvm-dev python3
       - name: Configure

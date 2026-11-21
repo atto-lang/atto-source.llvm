@@ -33,6 +33,8 @@ Program initial(const std::string& sum, const std::string& name,
         "Option<int>", ScalarType::I64, ScalarType::I64});
     program.sum_types.push_back({NativeSumType::Kind::Option,
         "Option<String>", ScalarType::String, ScalarType::I64});
+    program.sum_types.push_back({NativeSumType::Kind::Option,
+        "Option<bool>", ScalarType::Bool, ScalarType::I64});
     program.sum_types.push_back({NativeSumType::Kind::Result,
         "Result<int,String>", ScalarType::I64, ScalarType::String});
     Function function;
@@ -59,10 +61,198 @@ Program fallback(const std::string& sum, Kind argumentKind) {
     program.functions.front().locals.push_back(std::move(next));
     return program;
 }
+// Exercise both ternary arms through the actual native sum resolver. A
+// mismatched false arm previously inherited the true arm's Hint unnoticed.
+Program conditional_payload(Kind yes, Kind no) {
+    Program program = initial("Option<int>", "Some", scalar(Kind::Integer));
+    auto ternary = scalar(Kind::Conditional);
+    ternary->condition = scalar(Kind::Boolean);
+    ternary->when_true = scalar(yes);
+    ternary->when_false = scalar(no);
+    program.functions.front().locals.front().initializer =
+        constructor("Some", std::move(ternary));
+    return program;
+}
+Program conditional_default(Kind yes, Kind no) {
+    Program program = fallback("Option<int>", Kind::Integer);
+    auto ternary = scalar(Kind::Conditional);
+    ternary->condition = scalar(Kind::Boolean);
+    ternary->when_true = scalar(yes);
+    ternary->when_false = scalar(no);
+    program.functions.front().locals.back().initializer->arguments.front() =
+        std::move(ternary);
+    return program;
+}
+Program conditional_bool_payload() {
+    Program program = initial("Option<bool>", "Some", scalar(Kind::Boolean));
+    auto ternary = scalar(Kind::Conditional);
+    ternary->condition = scalar(Kind::Boolean);
+    ternary->when_true = scalar(Kind::Boolean);
+    ternary->when_false = scalar(Kind::Boolean);
+    program.functions.front().locals.front().initializer =
+        constructor("Some", std::move(ternary));
+    return program;
+}
+// Check the error arm of Result<int,String>, not just Some/Option paths.
+Program conditional_error(Kind yes, Kind no) {
+    Program program = initial("Result<int,String>", "Err", scalar(Kind::String));
+    auto ternary = scalar(Kind::Conditional);
+    ternary->condition = scalar(Kind::Boolean);
+    ternary->when_true = scalar(yes);
+    ternary->when_false = scalar(no);
+    program.functions.front().locals.front().initializer =
+        constructor("Err", std::move(ternary));
+    return program;
+}
+// A nested false-arm conditional must be type-checked at every depth.
+Program nested_conditional_payload(Kind nestedFalse) {
+    Program program = initial("Option<int>", "Some", scalar(Kind::Integer));
+    auto outer = scalar(Kind::Conditional);
+    outer->condition = scalar(Kind::Boolean);
+    outer->when_true = scalar(Kind::Integer);
+    auto inner = scalar(Kind::Conditional);
+    inner->condition = scalar(Kind::Boolean);
+    inner->when_true = scalar(Kind::Integer);
+    inner->when_false = scalar(nestedFalse);
+    outer->when_false = std::move(inner);
+    program.functions.front().locals.front().initializer =
+        constructor("Some", std::move(outer));
+    return program;
+}
+// Negative AST shapes can originate from malformed internal passes;
+// the resolver must reject these even when no parser is involved.
+Program malformed_conditional(Kind guard, bool dropGuard, bool dropFalseArm) {
+    Program program = conditional_payload(Kind::Integer, Kind::Integer);
+    auto& expr = *program.functions.front().locals.front().initializer->arguments.front();
+    if (dropGuard) expr.condition.reset();
+    else expr.condition = scalar(guard);
+    if (dropFalseArm) expr.when_false.reset();
+    return program;
+}
+// Compatibility lowering permits a complete equality guard pair, but
+// must reject half-constructed or simultaneous canonical/legacy forms.
+Program conditional_guard_pair(bool canonical, bool lhs, bool rhs,
+                               Kind lhsKind = Kind::Integer,
+                               Kind rhsKind = Kind::Integer) {
+    Program program = conditional_payload(Kind::Integer, Kind::Integer);
+    auto& expr = *program.functions.front().locals.front().initializer->arguments.front();
+    if (!canonical) expr.condition.reset();
+    if (lhs) expr.condition_lhs = scalar(lhsKind);
+    if (rhs) expr.condition_rhs = scalar(rhsKind);
+    return program;
+}
+// Even malformed internal call AST nodes must fail with a diagnostic
+// instead of indexing past the partial name vector or dereferencing null.
+Program malformed_call_payload(bool shortNames, bool nullArgument) {
+    Program program = initial("Option<int>", "Some", scalar(Kind::Integer));
+    auto call = scalar(Kind::Call);
+    call->name = "external";
+    call->arguments.push_back(scalar(Kind::Integer));
+    if (nullArgument) call->arguments.push_back(nullptr);
+    else call->arguments.push_back(scalar(Kind::Integer));
+    if (shortNames) call->argument_names.push_back("arg0");
+    program.functions.front().locals.front().initializer =
+        constructor("Some", std::move(call));
+    return program;
+}
+// Absent internal AST children must reject before constructor inference
+// or unwrap_or access evaluation touches the missing pointer.
+Program malformed_constructor_payload(bool has_context) {
+    Program program = initial(has_context ? "Option<int>" : "", "Some", scalar(Kind::Integer));
+    program.functions.front().locals.front().initializer->arguments.front().reset();
+    return program;
+}
+Program malformed_sum_access(bool missing_receiver) {
+    Program program = fallback("Option<int>", Kind::Integer);
+    auto& access = program.functions.front().locals.back().initializer;
+    if (missing_receiver) access->left.reset();
+    else access->arguments.front().reset();
+    return program;
+}
+// Fail closed on malformed AST children even when bypassing the source parser.
+Program malformed_field_payload() {
+    Program program = initial("Option<int>", "Some", scalar(Kind::Integer));
+    auto field = scalar(Kind::Field);
+    field->name = "value"; // Deliberately omit required receiver.
+    program.functions.front().locals.front().initializer =
+        constructor("Some", std::move(field));
+    return program;
+}
+Program malformed_record_payload() {
+    Program program = initial("Option<int>", "Some", scalar(Kind::Integer));
+    auto record = scalar(Kind::RecordConstruct);
+    record->name = "Missing";
+    record->arguments.push_back(nullptr);
+    program.functions.front().locals.front().initializer =
+        constructor("Some", std::move(record));
+    return program;
+}
+// Internal AST mutation regressions: missing children must fail admission
+// with deterministic diagnostics, never crash or silently default to i64.
+Program malformed_local_constructor_argument() {
+    Program p = initial("Option<int>", "Some", scalar(Kind::Integer));
+    p.functions.front().locals.front().constructor_arguments.push_back(nullptr);
+    return p;
+}
+Program malformed_generic_expression_argument() {
+    Program p = initial("Option<int>", "Some", scalar(Kind::Integer));
+    auto expr = scalar(Kind::Add);
+    expr->arguments.push_back(nullptr);
+    p.functions.front().locals.front().initializer =
+        constructor("Some", std::move(expr));
+    return p;
+}
+Program malformed_array_commit_value() {
+    Program p = initial("Option<int>", "Some", scalar(Kind::Integer));
+    Statement stmt;
+    stmt.kind = Statement::Kind::ArrayCommitFilled;
+    stmt.array_commit_values.push_back(nullptr);
+    p.functions.front().statements.push_back(std::move(stmt));
+    return p;
+}
+Program malformed_structured_branch_local(Statement::Kind kind) {
+    Program p = initial("Option<int>", "Some", scalar(Kind::Integer));
+    Statement stmt;
+    stmt.kind = kind;
+    // Intentionally no branch_local, even though lowering consumes it.
+    p.functions.front().statements.push_back(std::move(stmt));
+    return p;
+}
+Program malformed_guarded_return() {
+    Program p = initial("Option<int>", "Some", scalar(Kind::Integer));
+    GuardedReturn guard;
+    guard.condition = scalar(Kind::Boolean);
+    p.functions.front().early_returns.push_back(std::move(guard));
+    return p;
+}
+Program malformed_class_ctor_type_count() {
+    Program p = initial("Option<int>", "Some", scalar(Kind::Integer));
+    ClassDecl cls;
+    cls.name = "BrokenCtor";
+    cls.constructor_parameters = {"first", "second"};
+    cls.constructor_parameter_types = {ScalarType::I64};
+    p.classes.push_back(std::move(cls));
+    return p;
+}
 void require_success(Program p, const std::string& label) {
     try { resolve_native_sums(p); }
     catch (const std::exception& e) {
         throw std::runtime_error(label + ": unexpectedly rejected: " + e.what());
+    }
+}
+void require_conditional_annotation(Program p, ScalarType scalar,
+                                    const std::string& label) {
+    try { resolve_native_sums(p); }
+    catch (const std::exception& e) {
+        throw std::runtime_error(label + ": unexpectedly rejected: " + e.what());
+    }
+    const auto& outer = p.functions.front().locals.front().initializer;
+    if (!outer || outer->arguments.size() != 1 || !outer->arguments.front() ||
+        outer->arguments.front()->kind != Kind::Conditional ||
+        outer->arguments.front()->resolved_type != scalar ||
+        !outer->arguments.front()->sum_type.empty() ||
+        !outer->arguments.front()->resolved_class.empty()) {
+        throw std::runtime_error(label + ": typed conditional metadata not propagated");
     }
 }
 void require_rejection(Program p, const std::string& diagnostic,
@@ -78,6 +268,101 @@ void require_rejection(Program p, const std::string& diagnostic,
 
 int main() {
     try {
+        require_rejection(malformed_local_constructor_argument(),
+            "native sum local constructor has null argument",
+            "local class constructor null argument");
+        require_rejection(malformed_generic_expression_argument(),
+            "native sum expression has null argument",
+            "unknown expression child null argument");
+        require_rejection(malformed_array_commit_value(),
+            "native sum array commit has null value",
+            "array commit null value");
+        require_rejection(malformed_structured_branch_local(Statement::Kind::ForEach),
+            "native sum structured statement missing branch local",
+            "foreach missing branch binding");
+        require_rejection(malformed_structured_branch_local(Statement::Kind::ForIndex),
+            "native sum structured statement missing branch local",
+            "for-index missing branch binding");
+        require_rejection(malformed_structured_branch_local(Statement::Kind::ScopedLocal),
+            "native sum structured statement missing branch local",
+            "scoped local missing branch binding");
+        require_rejection(malformed_guarded_return(),
+            "native sum guarded return missing result",
+            "guard missing return expression");
+        require_rejection(malformed_class_ctor_type_count(),
+            "native sum class constructor parameter type count mismatch",
+            "incomplete class constructor type ABI");
+        require_rejection(malformed_constructor_payload(true),
+            "constructor has null payload", "typed Some with missing AST child");
+        require_rejection(malformed_constructor_payload(false),
+            "constructor has null payload", "inferred Some with missing AST child");
+        require_rejection(malformed_sum_access(true),
+            "access missing receiver", "unwrap_or with null receiver");
+        require_rejection(malformed_sum_access(false),
+            "access has null argument", "unwrap_or with null fallback");
+        require_rejection(malformed_field_payload(),
+            "native sum field missing receiver", "field with null receiver");
+        require_rejection(malformed_record_payload(),
+            "native sum record constructor has null argument",
+            "record constructor with null value");
+        require_rejection(malformed_call_payload(true, false),
+            "call argument name count mismatch", "partial named-call AST vector");
+        require_rejection(malformed_call_payload(false, true),
+            "call has null argument", "null call argument AST must reject");
+        require_success(conditional_guard_pair(false, true, true),
+            "complete legacy equality guard remains permitted");
+        require_success(conditional_guard_pair(false, true, true, Kind::Boolean, Kind::Boolean),
+            "legacy bool == bool guard remains permitted");
+        require_success(conditional_guard_pair(false, true, true, Kind::String, Kind::String),
+            "legacy String == String guard remains permitted");
+        require_rejection(conditional_guard_pair(false, true, true, Kind::Integer, Kind::String),
+            "equality guard types do not match", "legacy int == String forbidden");
+        require_rejection(conditional_guard_pair(false, true, true, Kind::String, Kind::Boolean),
+            "equality guard types do not match", "legacy String == bool forbidden");
+        require_rejection(conditional_guard_pair(false, true, true, Kind::Integer, Kind::Boolean),
+            "equality guard types do not match", "legacy int == bool forbidden");
+        require_rejection(conditional_guard_pair(true, true, true),
+            "conditional conflicting guard forms", "canonical plus legacy guard");
+        require_rejection(conditional_guard_pair(true, true, false),
+            "conditional conflicting guard forms", "canonical plus half legacy guard");
+        require_rejection(conditional_guard_pair(false, true, false),
+            "conditional missing guard or branch", "incomplete legacy guard");
+        require_rejection(conditional_guard_pair(false, false, true),
+            "conditional missing guard or branch", "right-only legacy guard");
+        require_rejection(malformed_conditional(Kind::Integer, false, false),
+            "conditional guard must be bool", "integer guard cannot select sum payload");
+        require_rejection(malformed_conditional(Kind::String, false, false),
+            "conditional guard must be bool", "string guard cannot select sum payload");
+        require_rejection(malformed_conditional(Kind::Boolean, true, false),
+            "conditional missing guard or branch", "ternary without guard");
+        require_rejection(malformed_conditional(Kind::Boolean, false, true),
+            "conditional missing guard or branch", "ternary without false branch");
+        require_success(conditional_error(Kind::String, Kind::String),
+            "both Result Err ternary arms are String");
+        require_conditional_annotation(conditional_error(Kind::String, Kind::String),
+            ScalarType::String, "Result Err<String> conditional must lower as String");
+        require_conditional_annotation(conditional_bool_payload(),
+            ScalarType::Bool, "Option<bool> conditional must lower as bool");
+        require_rejection(initial("Option<bool>", "Some", scalar(Kind::Integer)),
+            "payload type does not match", "no int in Option<bool>");
+        require_rejection(conditional_error(Kind::String, Kind::Integer),
+            "conditional branch payload types do not match", "Err false arm is int");
+        require_rejection(conditional_error(Kind::Integer, Kind::String),
+            "conditional branch payload types do not match", "Err true arm is int");
+        require_success(nested_conditional_payload(Kind::Integer),
+            "nested conditional is scalar i64");
+        require_rejection(nested_conditional_payload(Kind::Boolean),
+            "conditional branch payload types do not match", "nested false arm is bool");
+        require_success(conditional_payload(Kind::Integer, Kind::Integer),
+            "both ternary payload arms are i64");
+        require_success(conditional_default(Kind::Integer, Kind::Integer),
+            "both ternary fallback arms are i64");
+        require_rejection(conditional_payload(Kind::Integer, Kind::String),
+            "conditional branch payload types do not match", "String in false Some arm");
+        require_rejection(conditional_payload(Kind::String, Kind::Integer),
+            "conditional branch payload types do not match", "int in false Some arm");
+        require_rejection(conditional_default(Kind::Integer, Kind::Boolean),
+            "conditional branch payload types do not match", "bool in false fallback arm");
         require_success(initial("Option<int>", "Some", scalar(Kind::Integer)), "Some<int>");
         require_success(initial("Option<String>", "Some", scalar(Kind::String)), "Some<String>");
         require_success(initial("Option<int>", "None"), "None<int>");
@@ -106,7 +391,7 @@ int main() {
             "fallback type does not match", "Option unwrap_or mismatch");
         require_rejection(fallback("Result<int,String>", Kind::String),
             "fallback type does not match", "Result unwrap_or mismatch");
-        std::cout << "native sum typed payload admission: PASS 17 assertions (host-only)\n";
+        std::cout << "native sum typed payload admission: PASS 60 assertions (host-only)\n";
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "native sum typed payload admission: " << e.what() << '\n';

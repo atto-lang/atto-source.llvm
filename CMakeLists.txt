@@ -888,6 +888,29 @@ if(BUILD_TESTING)
                 ${ARGN})
     endfunction()
 
+    # Genuine AttoLang Option/Result parity: actual source compiler, native
+    # Clang O0/O2 binaries and diagnostic-specific fail-closed negatives.
+    # The host-only NativeSumTypes resolver above does not satisfy this gate.
+    if(ORE_CLANG AND (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR CMAKE_SYSTEM_NAME STREQUAL "Darwin"))
+        add_test(NAME native_atto_sum_o0_o2_compiler_guest
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_sum_atto_o0_o2.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --auditor "${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit"
+                --root "${CMAKE_CURRENT_SOURCE_DIR}")
+        set_tests_properties(native_atto_sum_o0_o2_compiler_guest
+            PROPERTIES TIMEOUT 240)
+    endif()
+
+    # Source-only fake-auditor negative controls; NEVER guest parity proof.
+    add_test(NAME native_sum_auditor_source_only_contract
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_sum_atto_o0_o2.py"
+            --self-test)
+    set_tests_properties(native_sum_auditor_source_only_contract
+        PROPERTIES TIMEOUT 20)
+
     # A Python -O/PYTHONOPTIMIZE run must never turn failed compiler
     # admission/IR checks into a green CTest. Uses only fake compilers;
     # no LLVM toolchain or private-source mirror is needed.

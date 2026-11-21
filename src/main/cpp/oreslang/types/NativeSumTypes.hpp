@@ -41,6 +41,10 @@ inline void resolve_native_sums(Program& program) {
     expression = [&](Expression& e, const Env& env, const std::string& expected) -> Hint {
         using E = Expression::Kind;
         if (e.kind == E::SumConstruct) {
+            // Malformed internal ASTs must never dereference absent payloads,
+            // including the context-free Some(...) inference path.
+            for (const auto& arg : e.arguments)
+                if (!arg) throw std::runtime_error("native sum constructor has null payload");
             std::string selected = expected;
             if (selected.empty()) {
                 if (e.name != "Some" || e.arguments.size() != 1) throw std::runtime_error("native sum constructor requires a declared Option/Result context");
@@ -73,12 +77,22 @@ inline void resolve_native_sums(Program& program) {
         if (e.kind == E::Boolean) return {ScalarType::Bool};
         if (e.kind == E::Integer) return {};
         if (e.kind == E::Field) {
+            if (!e.left)
+                throw std::runtime_error("native sum field missing receiver");
             const auto owner = expression(*e.left, env, {});
             if (!owner.cls.empty() && classes.count(owner.cls))
                 for (const auto& field : classes.at(owner.cls)->fields) if (field.name == e.name) return field_hint(field);
             return {};
         }
         if (e.kind == E::Call) {
+            // A partial named-argument vector previously allowed unchecked
+            // e.argument_names[i] indexing while resolving sum contexts.
+            // Every call argument must also be a real expression node.
+            if (!e.argument_names.empty() &&
+                e.argument_names.size() != e.arguments.size())
+                throw std::runtime_error("native sum call argument name count mismatch");
+            for (const auto& arg : e.arguments)
+                if (!arg) throw std::runtime_error("native sum call has null argument");
             const auto found = functions.find(native_function_slot(e.name, e.arguments.size()));
             for (std::size_t i = 0; i < e.arguments.size(); ++i) {
                 std::size_t slot = i;
@@ -93,12 +107,18 @@ inline void resolve_native_sums(Program& program) {
         }
         if (e.kind == E::RecordConstruct) {
             for (std::size_t i = 0; i < e.arguments.size(); ++i) {
+                if (!e.arguments[i])
+                    throw std::runtime_error("native sum record constructor has null argument");
                 const ClassField* field = classes.count(e.name) ? constructor_field(*classes.at(e.name), i) : nullptr;
                 expression(*e.arguments[i], env, field ? field->sum_type : std::string{});
             }
             return {ScalarType::I64, {}, e.name};
         }
         if (e.kind == E::ArrayCall || e.kind == E::SumAccess) {
+            if (!e.left)
+                throw std::runtime_error("native sum access missing receiver");
+            for (const auto& arg : e.arguments)
+                if (!arg) throw std::runtime_error("native sum access has null argument");
             const auto owner = expression(*e.left, env, {});
             std::vector<Hint> argument_types;
             argument_types.reserve(e.arguments.size());
@@ -124,23 +144,71 @@ inline void resolve_native_sums(Program& program) {
             return {owner.element, {}, owner.element_class};
         }
         if (e.kind == E::Conditional) {
-            if (e.condition) expression(*e.condition, env, {});
-            if (e.condition_lhs) expression(*e.condition_lhs, env, {});
-            if (e.condition_rhs) expression(*e.condition_rhs, env, {});
+            // A malformed or untyped ternary must not reach sum payload
+            // inference. Compatibility equality guards use lhs/rhs, while
+            // the canonical conditional has an explicitly typed bool guard.
+            if (e.condition && (e.condition_lhs || e.condition_rhs))
+                throw std::runtime_error("native sum conditional conflicting guard forms");
+            if (!e.when_true || !e.when_false ||
+                (!e.condition && (!e.condition_lhs || !e.condition_rhs)))
+                throw std::runtime_error("native sum conditional missing guard or branch");
+            if (e.condition) {
+                const Hint guard = expression(*e.condition, env, {});
+                if (guard.scalar != ScalarType::Bool || !guard.sum.empty() ||
+                    !guard.cls.empty() || guard.array)
+                    throw std::runtime_error("native sum conditional guard must be bool");
+            }
+            if (e.condition_lhs) {
+                // The older equality-only ternary still requires a typed,
+                // compatible pair. Traversing the operands without comparing
+                // their hints silently admitted int == String guards.
+                const Hint lhs = expression(*e.condition_lhs, env, {});
+                const Hint rhs = expression(*e.condition_rhs, env, {});
+                if (lhs.scalar != rhs.scalar || lhs.sum != rhs.sum ||
+                    lhs.cls != rhs.cls || lhs.array != rhs.array ||
+                    (lhs.array && (lhs.element != rhs.element ||
+                                   lhs.element_class != rhs.element_class)))
+                    throw std::runtime_error("native sum conditional equality guard types do not match");
+            }
             const auto yes = expression(*e.when_true, env, expected);
-            expression(*e.when_false, env, expected.empty() ? yes.sum : expected);
+            const auto no = expression(*e.when_false, env, expected.empty() ? yes.sum : expected);
+            // Constructor payload inference must not take the first arm's
+            // scalar type and silently ignore a differently typed second arm.
+            // This is checked before a conditional is allowed to inhabit an
+            // Option/Result scalar ABI slot (and before IR is generated).
+            if (yes.scalar != no.scalar || yes.sum != no.sum ||
+                yes.cls != no.cls || yes.array != no.array ||
+                (yes.array && (yes.element != no.element ||
+                               yes.element_class != no.element_class)))
+                throw std::runtime_error("native sum conditional branch payload types do not match");
+            // The Hint must be reflected in the typed AST, not only returned
+            // to the surrounding Some/Ok/Err validation. Otherwise a bool or
+            // String ternary can pass the payload checker while later native
+            // lowering still sees Expression's default i64 annotation.
+            e.resolved_type = yes.scalar;
+            e.sum_type = yes.sum;
+            e.resolved_class = yes.cls;
             return yes;
         }
         Hint left;
         if (e.left) left = expression(*e.left, env, {});
         if (e.right) expression(*e.right, env, {});
-        for (auto& arg : e.arguments) expression(*arg, env, {});
+        for (auto& arg : e.arguments) {
+            if (!arg)
+                throw std::runtime_error("native sum expression has null argument");
+            expression(*arg, env, {});
+        }
         if (e.kind == E::LogicalNot || e.kind == E::Equal || e.kind == E::NotEqual || e.kind == E::Less || e.kind == E::LessEqual ||
                 e.kind == E::Greater || e.kind == E::GreaterEqual || e.kind == E::LogicalAnd || e.kind == E::LogicalOr || e.kind == E::LogicalXor)
             return {ScalarType::Bool};
         return left;
     };
     for (auto& cls : program.classes) {
+        // An incomplete internal type vector must not be indexed as a full
+        // constructor ABI. An empty vector still means legacy all-int slots.
+        if (!cls.constructor_parameter_types.empty() &&
+                cls.constructor_parameter_types.size() != cls.constructor_parameters.size())
+            throw std::runtime_error("native sum class constructor parameter type count mismatch");
         Env env;
         for (std::size_t i = 0; i < cls.constructor_parameters.size(); ++i) {
             const auto* field = constructor_field(cls, i);
@@ -154,6 +222,8 @@ inline void resolve_native_sums(Program& program) {
         for (auto& binding : fn.locals) {
             if (binding.initializer) expression(*binding.initializer, env, binding.sum_type);
             for (std::size_t i = 0; i < binding.constructor_arguments.size(); ++i) {
+                if (!binding.constructor_arguments[i])
+                    throw std::runtime_error("native sum local constructor has null argument");
                 const auto* field = classes.count(binding.class_name) ? constructor_field(*classes.at(binding.class_name), i) : nullptr;
                 expression(*binding.constructor_arguments[i], env, field ? field->sum_type : std::string{});
             }
@@ -162,6 +232,13 @@ inline void resolve_native_sums(Program& program) {
         std::function<void(std::vector<Statement>&, Env&)> statements;
         statements = [&](std::vector<Statement>& items, Env& scope) {
             for (auto& item : items) {
+                // For and scoped-local lowering unconditionally uses the
+                // branch binding; reject malformed internal ASTs first.
+                if ((item.kind == Statement::Kind::ForEach ||
+                     item.kind == Statement::Kind::ForIndex ||
+                     item.kind == Statement::Kind::ScopedLocal) &&
+                        !item.branch_local)
+                    throw std::runtime_error("native sum structured statement missing branch local");
                 if (item.branch_local && item.branch_local->initializer) expression(*item.branch_local->initializer, scope, item.branch_local->sum_type);
                 if (item.kind == Statement::Kind::ForEach || item.kind == Statement::Kind::ForIndex) {
                     if (item.expression) expression(*item.expression, scope, {});
@@ -180,7 +257,11 @@ inline void resolve_native_sums(Program& program) {
                     for (const auto& field : classes.at(scope.at(item.receiver).cls)->fields) if (field.name == item.field) context = field.sum_type;
                 if (item.expression) expression(*item.expression, scope, context);
                 if (item.array_commit_length) expression(*item.array_commit_length, scope, {});
-                for (auto& value : item.array_commit_values) expression(*value, scope, {});
+                for (auto& value : item.array_commit_values) {
+                    if (!value)
+                        throw std::runtime_error("native sum array commit has null value");
+                    expression(*value, scope, {});
+                }
                 Env yes = scope, no = scope;
                 statements(item.then_statements, yes); statements(item.else_statements, no);
                 if (item.kind == Statement::Kind::ScopedLocal) scope.emplace(item.branch_local->name, local_hint(*item.branch_local));
@@ -191,6 +272,8 @@ inline void resolve_native_sums(Program& program) {
             if (guard.condition) expression(*guard.condition, env, {});
             if (guard.lhs) expression(*guard.lhs, env, {});
             if (guard.rhs) expression(*guard.rhs, env, {});
+            if (!guard.result)
+                throw std::runtime_error("native sum guarded return missing result");
             expression(*guard.result, env, fn.return_sum);
         }
         if (fn.result) expression(*fn.result, env, fn.return_sum);

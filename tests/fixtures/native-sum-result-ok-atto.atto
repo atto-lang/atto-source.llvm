@@ -1,0 +1,4 @@
+pub fnc main(): int {
+  val Result<int,String> result = Ok(42);
+  return result.unwrap_or(0);
+}

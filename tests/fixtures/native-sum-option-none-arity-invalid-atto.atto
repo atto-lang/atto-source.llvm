@@ -1,0 +1,4 @@
+pub fnc main(): int {
+  val Option<int> absent = None(42);
+  return 42;
+}
