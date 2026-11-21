@@ -10,6 +10,12 @@ on:
       - 'src/main/cpp/oreslang/frontend/PinnedAttoSourceOpen.hpp'
       - 'src/main/cpp/oreslang/frontend/ProjectRootImport.hpp'
       - 'src/main/cpp/oreslang/frontend/ModuleLoader.cpp'
+      - 'src/main/cpp/oreslang/frontend/HostLogicalUnitIds.hpp'
+      - 'src/main/cpp/oreslang/frontend/AttoManifestSnapshot.hpp'
+      - 'tests/native_atto_manifest_snapshot_test.cpp'
+      - 'tests/native_host_logical_unit_ids_test.cpp'
+      - 'tests/native_atto_logical_identity_guest.py'
+      - 'docs/ATTO_LOGICAL_SOURCE_UNIT_IDENTITY.md'
       - 'tests/project_root_import_test.cpp'
       - 'tests/native_pinned_atto_source_open_test.cpp'
       - 'tests/native_module_imports.py'
@@ -56,6 +62,37 @@ jobs:
             "$RUNNER_TEMP/atto-root-import-${compiler}"
           done
           echo 'ATTO_LLVM_HOST_IMPORT_SECURITY=PASS; GUEST=NOT_EXECUTED'
+      - name: GCC and Clang canonical logical unit identity (host-only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          for compiler in g++ clang++; do
+            "${compiler}" -std=c++20 -O1 -Wall -Wextra -Wpedantic -Werror \
+              -UNDEBUG -Isrc/main/cpp \
+              tests/native_host_logical_unit_ids_test.cpp \
+              -o "$RUNNER_TEMP/atto-logical-unit-${compiler}"
+            "$RUNNER_TEMP/atto-logical-unit-${compiler}"
+            "${compiler}" -std=c++20 -O0 -Wall -Wextra -Wpedantic -Werror \
+              -UNDEBUG -Isrc/main/cpp \
+              tests/native_atto_manifest_snapshot_test.cpp \
+              -o "$RUNNER_TEMP/atto-manifest-snapshot-${compiler}"
+            "$RUNNER_TEMP/atto-manifest-snapshot-${compiler}"
+          done
+          clang++ -std=c++20 -O0 -g0 -Wall -Wextra -Wpedantic -Werror \
+            -UNDEBUG -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Isrc/main/cpp tests/native_host_logical_unit_ids_test.cpp \
+            -o "$RUNNER_TEMP/atto-logical-unit-sanitizers"
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+            UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+            "$RUNNER_TEMP/atto-logical-unit-sanitizers"
+          clang++ -std=c++20 -O0 -g0 -Wall -Wextra -Wpedantic -Werror \
+            -UNDEBUG -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Isrc/main/cpp tests/native_atto_manifest_snapshot_test.cpp \
+            -o "$RUNNER_TEMP/atto-manifest-snapshot-sanitizers"
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+            UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+            "$RUNNER_TEMP/atto-manifest-snapshot-sanitizers"
+          echo 'ATTO_LLVM_LOGICAL_UNIT_HOST_ONLY_PASS=1; SNAPSHOT_SANITIZERS=PASS; GUEST=NOT_EXECUTED'
       - name: GCC and Clang pinned canonical input ASan and UBSan regression
         shell: bash
         run: |
@@ -90,7 +127,7 @@ jobs:
           test "$(git write-tree)" = "$(git rev-parse 'HEAD^{tree}')"
           echo "ATTO_LLVM_SOURCE_HEAD=$EXPECTED_HEAD"
           echo "ATTO_LLVM_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
-          python3 -m py_compile tests/native_module_imports.py
+          python3 -m py_compile tests/native_module_imports.py tests/native_atto_logical_identity_guest.py
           # Identical Git blobs are required on the Java and LLVM source
           # branches; do not silently test unrelated programs called "42".
           test "$(git hash-object --no-filters tests/fixtures/atto-native-parity/main.atto)" =             '5ffe955025a664d5f069e441a9cbcaa9227d06a8'
@@ -116,16 +153,47 @@ jobs:
             -DORE_RT_AOT_CLANG="$(command -v clang-19)" \
             -DORE_RT_AOT_CXX="$(command -v clang++-19)"
           cmake --build "$RUNNER_TEMP/atto-native-parity-build" \
-            --target oreslang-llvmc oreslang-native-project-root-import-test oreslang-native-pinned-atto-source-open-test --parallel 2
+            --target oreslang-llvmc oreslang-native-project-root-import-test oreslang-native-pinned-atto-source-open-test oreslang-native-host-logical-unit-ids-test oreslang-native-atto-manifest-snapshot-test --parallel 2
           test -x "$RUNNER_TEMP/atto-native-parity-build/oreslang-llvmc"
           echo 'ATTO_LLVM_REAL_COMPILER_BUILD=PASS'
       - name: Execute linked native .atto program and malicious-source rejections
         shell: bash
         run: |
           set -euo pipefail
+          # A successful ctest with zero matched tests is not a pass.
+          # Demand the complete native real-compiler and host admission set.
+          ctest --test-dir "$RUNNER_TEMP/atto-native-parity-build" \
+            --show-only=json-v1 > "$RUNNER_TEMP/atto-native-ctest-inventory.json"
+          python3 -c 'import json,sys; names={t["name"] for t in json.load(open(sys.argv[1], encoding="utf-8"))["tests"]}; required=set("native_project_root_import_security native_source_module_graph_execution native_pinned_atto_source_path_admission native_atto_host_logical_unit_identity native_atto_manifest_snapshot_security native_atto_logical_unit_linked_guest_gate".split()); missing=required-names; print("ATTO_LLVM_REGISTERED_NATIVE_CTESTS="+str(len(required-missing))); print("ATTO_LLVM_MISSING_NATIVE_CTESTS="+",".join(sorted(missing))); sys.exit(bool(missing))' "$RUNNER_TEMP/atto-native-ctest-inventory.json"
           ctest --test-dir "$RUNNER_TEMP/atto-native-parity-build" \
             --output-on-failure --timeout 180 \
-            -R '^(native_project_root_import_security|native_source_module_graph_execution|native_pinned_atto_source_path_admission)
+            -R '^(native_project_root_import_security|native_source_module_graph_execution|native_pinned_atto_source_path_admission|native_atto_host_logical_unit_identity|native_atto_manifest_snapshot_security|native_atto_logical_unit_linked_guest_gate)
+          echo 'ATTO_LLVM_COMPILER_LINKED_GUEST=PASS'
+      - name: Recheck exact source head and tracked changes
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git write-tree)" = "$(git rev-parse 'HEAD^{tree}')"
+          git diff --exit-code --
+          git diff --cached --exit-code --
+          echo 'ATTO_LLVM_SOURCE_IDENTITY_AFTER=PASS'
+
+          echo 'ATTO_LLVM_COMPILER_LINKED_GUEST=PASS'
+      - name: Recheck exact source head and tracked changes
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git write-tree)" = "$(git rev-parse 'HEAD^{tree}')"
+          git diff --exit-code --
+          git diff --cached --exit-code --
+          echo 'ATTO_LLVM_SOURCE_IDENTITY_AFTER=PASS'
+
           echo 'ATTO_LLVM_COMPILER_LINKED_GUEST=PASS'
       - name: Recheck exact source head and tracked changes
         shell: bash

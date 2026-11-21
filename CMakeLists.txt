@@ -773,6 +773,18 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ORE_RT_AOT_CLANG}")
     set_tests_properties(native_source_module_graph_execution PROPERTIES TIMEOUT 120)
 
+    # Real compiler -> LLVM IR -> Clang O0/O2 -> native guest and
+    # compiler-negative .atto logical-ID admission. Never a mock pass.
+    if(UNIX)
+        add_test(NAME native_atto_logical_unit_linked_guest_gate
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_atto_logical_identity_guest.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_RT_AOT_CLANG}")
+        set_tests_properties(native_atto_logical_unit_linked_guest_gate
+            PROPERTIES TIMEOUT 180)
+    endif()
+
     # Pure host resolver security test for canonical +/ project-root imports.
     # This does not claim pkg:/bare-path resolution or full TOML semantics.
     add_executable(oreslang-native-project-root-import-test
@@ -797,6 +809,30 @@ if(BUILD_TESTING)
         add_test(NAME native_pinned_atto_source_path_admission
             COMMAND oreslang-native-pinned-atto-source-open-test)
         set_tests_properties(native_pinned_atto_source_path_admission
+            PROPERTIES TIMEOUT 20)
+    endif()
+
+    # Host-only logical source-unit identity; real guest compilation is gated separately.
+    if(UNIX)
+        add_executable(oreslang-native-host-logical-unit-ids-test
+            tests/native_host_logical_unit_ids_test.cpp)
+        target_include_directories(oreslang-native-host-logical-unit-ids-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_options(oreslang-native-host-logical-unit-ids-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+        add_test(NAME native_atto_host_logical_unit_identity
+            COMMAND oreslang-native-host-logical-unit-ids-test)
+        set_tests_properties(native_atto_host_logical_unit_identity PROPERTIES TIMEOUT 20)
+
+        add_executable(oreslang-native-atto-manifest-snapshot-test
+            tests/native_atto_manifest_snapshot_test.cpp)
+        target_include_directories(oreslang-native-atto-manifest-snapshot-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_options(oreslang-native-atto-manifest-snapshot-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+        add_test(NAME native_atto_manifest_snapshot_security
+            COMMAND oreslang-native-atto-manifest-snapshot-test)
+        set_tests_properties(native_atto_manifest_snapshot_security
             PROPERTIES TIMEOUT 20)
     endif()
 

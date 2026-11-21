@@ -1,6 +1,8 @@
 #include "oreslang/frontend/ModuleLoader.hpp"
 #include "oreslang/frontend/CoreLibrarySources.hpp"
 #include "oreslang/frontend/ProjectRootImport.hpp"
+#include "oreslang/frontend/HostLogicalUnitIds.hpp"
+#include "oreslang/frontend/AttoManifestSnapshot.hpp"
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -16,6 +18,8 @@ constexpr std::size_t max_bytes = 8u * 1024u * 1024u;
 constexpr std::size_t max_units = 128, max_depth = 32;
 struct Unit {
     fs::path path;
+    // Compiler-owned root-relative provenance; never a physical host path.
+    std::string logical_unit_id;
     SourceIdentity identity;
     Program program;
     std::string prefix;
@@ -33,11 +37,20 @@ struct Unit {
     std::unordered_map<std::string, bool> class_exports;
     std::unordered_map<std::string, bool> constructor_exports;
 };
+frontend::SourceStamp source_stamp(const SourceIdentity& identity) {
+    return frontend::SourceStamp{
+        identity.device, identity.inode, identity.size,
+        identity.mtime_sec, identity.mtime_nsec,
+        identity.ctime_sec, identity.ctime_nsec, identity.valid
+    };
+}
 class Loader {
     std::vector<std::unique_ptr<Unit>> units;
     std::size_t bytes = 0, read_bytes = 0, edges = 0;
     std::unordered_map<std::string, std::size_t> paths;
     bool owned, scalar_loop, host;
+    std::unique_ptr<frontend::HostLogicalUnitIds> logical_units;
+    std::unique_ptr<frontend::AttoManifestSnapshot> package_manifest;
     std::uint32_t root_provider_bits = 0;
 public:
     Loader(bool owned, bool scalar_loop, bool host,
@@ -46,11 +59,54 @@ public:
           root_provider_bits(admitted_provider_bits) {}
     Program run(const std::string& path, std::string text, SourceIdentity identity) {
         read_bytes = text.size();
-        visit(fs::canonical(path), std::move(text), identity, 0, false,
+        // Preserve the uncanonicalized input spelling through source admission:
+        // canonical() would otherwise erase symlink aliases before checking.
+        const fs::path entry_path = fs::absolute(path).lexically_normal();
+        if (project_root_import_detail::is_atto_source(entry_path)) {
+            project_root_import_detail::reject_atto_symlink_components(entry_path);
+            fs::path cursor = entry_path.parent_path();
+            for (;;) {
+                const fs::path canonical_manifest = cursor / ".atto.pkg.toml";
+                const fs::path legacy_manifest = cursor / ".ores.pkg.toml";
+                const bool has_canonical_manifest =
+                    project_root_import_detail::exists_marker(canonical_manifest);
+                if (has_canonical_manifest ||
+                        project_root_import_detail::exists_marker(legacy_manifest)) {
+                    // The package marker grants logical root ownership, so it
+                    // must be validated even when imports are only ./relative.
+                    // Prefer canonical; invalid canonical must never fall back
+                    // to an otherwise valid legacy sibling. Read the original
+                    // .atto marker through the no-follow descriptor opener.
+                    const fs::path marker = has_canonical_manifest
+                        ? canonical_manifest : legacy_manifest;
+                    package_manifest =
+                        std::make_unique<frontend::AttoManifestSnapshot>(marker);
+                    logical_units = std::make_unique<frontend::HostLogicalUnitIds>(cursor);
+                    const auto logical_entry_id = logical_units->admit(entry_path);
+                    // Bind the selected project path to the descriptor already
+                    // read by the CLI, not a later filesystem alias.
+                    const auto candidate_path = entry_path.string();
+                    const auto after = capture_source_identity(
+                        candidate_path.c_str(), max_bytes,
+                        "native entry exceeds 8 MiB source read budget");
+                    if (!ores_source_identity_equal(identity, after))
+                        throw std::runtime_error("ATTO_UNIT_SOURCE_CHANGED: entry source identity changed");
+                    logical_units->bind_opened_source(logical_entry_id, source_stamp(identity));
+                    break;
+                }
+                if (cursor == cursor.root_path()) break;
+                const auto parent = cursor.parent_path();
+                if (parent.empty() || parent == cursor) break;
+                cursor = parent;
+            }
+        }
+        visit(fs::canonical(entry_path), std::move(text), identity, 0, false,
               frontend::CompilerLibraryTier::Core, root_provider_bits);
+        recheck_source_graph();
         if (units.front()->program.imports.empty()) {
             auto root = std::move(units.front()->program);
             resolve_and_validate_program(root);
+            recheck_source_graph();
             return root;
         }
         Program linked;
@@ -106,11 +162,38 @@ public:
             }
         }
         resolve_and_validate_program(linked);
+        recheck_source_graph();
         return linked;
     }
 private:
+    void recheck_source_graph() const {
+        // Keep legacy/rootless and freestanding paths on their established
+        // admission contract; the new identity registry is package-scoped.
+        if (!logical_units) return;
+        // Detect post-read mutation before returning an admitted program.
+        // A source file's metadata must match the descriptor actually read,
+        // not merely the pathname selected by dependency resolution.
+        for (const auto& holder : units) {
+            const auto& unit = *holder;
+            if (unit.compiler_owned_library) continue;
+            const auto pathname = unit.path.string();
+            SourceIdentity after{};
+            try {
+                after = capture_source_identity(
+                    pathname.c_str(), max_bytes,
+                    "native source exceeds 8 MiB admission limit");
+            } catch (const std::exception&) {
+                throw std::runtime_error(
+                    "ATTO_UNIT_SOURCE_CHANGED: " + unit.logical_unit_id);
+            }
+            if (!ores_source_identity_equal(unit.identity, after))
+                throw std::runtime_error(
+                    "ATTO_UNIT_SOURCE_CHANGED: " + unit.logical_unit_id);
+        }
+        if (package_manifest) package_manifest->recheck();
+    }
     [[noreturn]] static void fail(const Unit& unit, const std::string& reason) {
-        throw std::runtime_error(unit.path.string() + ": " + reason);
+        throw std::runtime_error(unit.logical_unit_id + ": " + reason);
     }
     static bool same_file(SourceIdentity left, SourceIdentity right) {
         return left.valid && right.valid && left.device == right.device && left.inode == right.inode;
@@ -128,6 +211,10 @@ private:
             throw std::runtime_error(path.string() + ": native target admission unsupported: ores environment headers require compiler verification");
         const auto index = units.size();
         auto unit = std::make_unique<Unit>();
+        unit->logical_unit_id = logical_units && !compiler_owned_library
+            ? logical_units->admit(path) : path.generic_string();
+        if (logical_units && !compiler_owned_library)
+            logical_units->bind_opened_source(unit->logical_unit_id, source_stamp(identity));
         unit->path = std::move(path); unit->identity = identity;
         unit->prefix = index ? "__ores_module_" + std::to_string(index) + "." : "";
         unit->compiler_owned_library = compiler_owned_library;
@@ -276,6 +363,17 @@ private:
                     if (error) fail(current, "cannot resolve native import '" + raw + "'");
                 }
 
+                // Use the unresolved, compiler-owned pathname. Resolving
+                // symlinks before admission would erase an unsafe alias.
+                if (logical_units) {
+                    const auto logical_dependency_id = logical_units->admit(admission_path);
+                    const auto pinned_path = admission_path.string();
+                    const auto source_at_resolution = capture_source_identity(
+                        pinned_path.c_str(), max_bytes,
+                        "native source exceeds 8 MiB admission limit");
+                    logical_units->bind_opened_source(
+                        logical_dependency_id, source_stamp(source_at_resolution));
+                }
                 const auto known = paths.find(dependency.string());
                 selected = known == paths.end() ? units.size() : known->second;
                 if (selected == index) fail(current, "source file cannot import itself");
