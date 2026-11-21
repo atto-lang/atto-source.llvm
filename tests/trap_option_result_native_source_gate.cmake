@@ -43,7 +43,15 @@ set(case_3 [=[trap fnc checked():int { return 7; } pub fnc main():int { return 7
 set(case_4 [=[pub fnc main():int { val Option<int> outcome = trap true; return 7; }]=])
 set(case_5 [=[pub fnc main():int { throw Error("ordinary"); return 7; }]=])
 set(case_6 [=[pub fnc main():int { val Option<int> outcome = trap Some(7); return 7; }]=])
-foreach(n RANGE 1 6)
+# Canonical bang forms MUST NOT reuse legacy Option<int> and scalar caught
+# throw paths. Explicit Error payload/unwind proof is not yet implemented.
+set(case_7 [=[pub fnc main():int { return trap! 7; }]=])
+set(case_8 [=[pub fnc main():int {
+    try { throw! 7; }
+    catch (error) { return error; }
+    finally { }
+}]=])
+foreach(n RANGE 1 8)
     set(source "${case_${n}}")
     set(path "${CMAKE_CURRENT_BINARY_DIR}/ores_trap_gate_reject_${n}.atto")
     file(WRITE "${path}" "${source}\n")
@@ -58,8 +66,11 @@ foreach(n RANGE 1 6)
     if(diagnostic STREQUAL "")
         message(FATAL_ERROR "missing negative source diagnostic in case ${n}")
     endif()
+    if(n EQUAL 8 AND NOT diagnostic MATCHES "E_THROW_BANG_ERROR_TYPE_UNVERIFIED")
+        message(FATAL_ERROR "canonical throw! reached legacy scalar catch path: ${diagnostic}")
+    endif()
     if(ir MATCHES "define [^\n]*@" OR ir MATCHES "target triple")
         message(FATAL_ERROR "rejected trap source produced LLVM IR in case ${n}")
     endif()
 endforeach()
-message(STATUS "LLVM_TRAP_OPTION_RESULT_NATIVE_SOURCE_GATE=6_REJECTED_1_POSITIVE (not semantic parity)")
+message(STATUS "LLVM_TRAP_OPTION_RESULT_NATIVE_SOURCE_GATE=8_REJECTED_1_POSITIVE (not semantic parity)")
