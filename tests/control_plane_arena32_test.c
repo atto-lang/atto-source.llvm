@@ -53,6 +53,19 @@ static void *write_pair_worker(void *raw) {
 int main(void) {
     CHECK(strcmp(ATTO_CONTROL_REF32_ABI, "control_generation12_slot20_v1") == 0);
     CHECK(ATTO_CONTROL_RECORD_BYTES == 32u);
+#ifdef ATTO_CONTROL32_TESTING
+    uint32_t issuer_probe = UINT32_MAX;
+    CHECK(atto_control32_test_claim_issuer(0, &issuer_probe) && issuer_probe == 1u);
+    CHECK(atto_control32_test_claim_issuer(UINT32_MAX - 1u, &issuer_probe)
+          && issuer_probe == UINT32_MAX);
+    CHECK(!atto_control32_test_claim_issuer(UINT32_MAX, &issuer_probe)
+          && issuer_probe == 0);
+    CHECK(!atto_control32_test_claim_issuer(UINT64_MAX, &issuer_probe)
+          && issuer_probe == 0);
+    CHECK(!atto_control32_test_claim_issuer(UINT64_MAX - 1u, &issuer_probe)
+          && issuer_probe == 0);
+    CHECK(!atto_control32_test_claim_issuer(0, NULL));
+#endif
     AttoControlPlaneArena32 *a = atto_control32_new(2), *b = atto_control32_new(2);
     CHECK(a && b);
     uint64_t parent = 0, child = 0, foreign = 0, value = 0;
