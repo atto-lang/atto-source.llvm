@@ -97,6 +97,13 @@ public:
             if (op.kind == OpKind::Snapshot)
                 throw std::logic_error("MIR LLVM snapshot value lowering not implemented");
         }
+        // An executable main needs an actual scalar result. Close alone
+        // cannot fabricate return-zero, and an earlier read cannot serve as
+        // the result if subsequent owner mutations changed the collection.
+        const auto& instructions = module.instructions();
+        if (instructions.size() < 3 ||
+                instructions[instructions.size() - 2].kind != OpKind::ReadField)
+            throw std::logic_error("MIR LLVM requires terminal field read before close");
         code_ = "; typed MIR, experimental local i64 pair LLVM IR; no external row handles\n";
         code_ += "declare void @llvm.trap()\n";
         code_ += "define i32 @main() {\nentry:\n";

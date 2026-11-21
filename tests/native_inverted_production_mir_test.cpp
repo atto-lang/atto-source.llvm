@@ -189,6 +189,26 @@ int main() {
         assert(different.find("store i64 73, ptr") != std::string::npos);
         assert(emitter.build(compiled.mir, compiled.operands) == first);
     }
+    // These MIR sequences are individually valid owner operations, but not
+    // executable main functions: neither ends with a scalar field read.
+    {
+        using oreslang::dop::hir::LinearPlan;
+        LinearPlan no_read(compiled.mir.layout(), 2);
+        no_read.push(2);
+        no_read.close();
+        I64PairIrOperands rows;
+        rows.rows = {{{42, 501}}};
+        reject([&]{ (void)emit_native_i64_pair_ir(Module::lower(no_read), rows); },
+               "terminal field read before close");
+        LinearPlan stale_read(compiled.mir.layout(), 2);
+        stale_read.push(2);
+        stale_read.read_runtime_checked(0, "x");
+        stale_read.push(2);
+        stale_read.close();
+        rows.rows.push_back({{21, 502}});
+        reject([&]{ (void)emit_native_i64_pair_ir(Module::lower(stale_read), rows); },
+               "terminal field read before close");
+    }
     // Metadata may be supplied by a forged/deserialized Program rather than
     // the production parser. Reject before any LLVM IR is emitted.
     {

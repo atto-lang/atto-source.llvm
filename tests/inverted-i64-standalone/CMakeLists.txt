@@ -104,6 +104,14 @@ if(BUILD_TESTING)
             "$<TARGET_FILE:oreslang-inverted-mir-ir-guest>"
             "${ORE_LLVM_IR_CLANG}")
     set_tests_properties(inverted_verified_mir_ir_native_guest PROPERTIES TIMEOUT 120)
+    # Synthetic source-free smoke exercises the *test gate*, not AttoLang
+    # compiler correctness: catch false numeric exit-132 and wrong diagnostics.
+    add_test(NAME inverted_mir_ir_gate_source_free_selftest
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_LIST_DIR}/../native_inverted_mir_gate_selftest.py"
+            --shell "${CMAKE_CURRENT_LIST_DIR}/../native_inverted_mir_ir_guest.sh"
+            --clang "${ORE_LLVM_IR_CLANG}")
+    set_tests_properties(inverted_mir_ir_gate_source_free_selftest PROPERTIES TIMEOUT 180)
     add_test(NAME inverted_i64_standalone_source_to_native
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_LIST_DIR}/../native_inverted_i64_guest.py"
