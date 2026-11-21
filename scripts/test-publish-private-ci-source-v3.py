@@ -1112,9 +1112,9 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                     "state": "open",
                     "head": {
                         "sha": "9" * 40,
-                        "repo": {"full_name": v3.SOURCE_REPO},
+                        "repo": {"full_name": v3.SOURCE_REPO, "id": v3.SOURCE_REPO_ID},
                     },
-                    "base": {"ref": "main"},
+                    "base": {"ref": "main", "repo": {"full_name": v3.SOURCE_REPO, "id": v3.SOURCE_REPO_ID}},
                 }
             if route == f"repos/{v3.SOURCE_REPO}/git/commits/" + "9" * 40:
                 return {"sha": "9" * 40, "tree": {"sha": SOURCE_TREE}}
@@ -1201,8 +1201,8 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                     return {
                         "number": 669, "state": "open",
                         "head": {"sha": "9" * 40,
-                                 "repo": {"full_name": v3.SOURCE_REPO}},
-                        "base": {"ref": "main"},
+                                 "repo": {"full_name": v3.SOURCE_REPO, "id": v3.SOURCE_REPO_ID}},
+                        "base": {"ref": "main", "repo": {"full_name": v3.SOURCE_REPO, "id": v3.SOURCE_REPO_ID}},
                     }
                 if route == f"repos/{v3.SOURCE_REPO}/git/commits/" + "9" * 40:
                     return {"sha": "9" * 40,
@@ -1229,9 +1229,9 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                     "state": "open",
                     "head": {
                         "sha": "9" * 40,
-                        "repo": {"full_name": v3.SOURCE_REPO},
+                        "repo": {"full_name": v3.SOURCE_REPO, "id": v3.SOURCE_REPO_ID},
                     },
-                    "base": {"ref": "main"},
+                    "base": {"ref": "main", "repo": {"full_name": v3.SOURCE_REPO, "id": v3.SOURCE_REPO_ID}},
                 }
             if "/git/commits/" in route:
                 return {"sha": "9" * 40, "tree": {"sha": SOURCE_TREE}}
@@ -1261,9 +1261,9 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                     "state": "open",
                     "head": {
                         "sha": "9" * 40,
-                        "repo": {"full_name": v3.SOURCE_REPO},
+                        "repo": {"full_name": v3.SOURCE_REPO, "id": v3.SOURCE_REPO_ID},
                     },
-                    "base": {"ref": "main"},
+                    "base": {"ref": "main", "repo": {"full_name": v3.SOURCE_REPO, "id": v3.SOURCE_REPO_ID}},
                 }
             if "/git/commits/" in route:
                 return {"sha": "9" * 40, "tree": {"sha": SOURCE_TREE}}
@@ -1300,9 +1300,9 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                     "state": "open",
                     "head": {
                         "sha": "9" * 40,
-                        "repo": {"full_name": v3.SOURCE_REPO},
+                        "repo": {"full_name": v3.SOURCE_REPO, "id": v3.SOURCE_REPO_ID},
                     },
-                    "base": {"ref": "main"},
+                    "base": {"ref": "main", "repo": {"full_name": v3.SOURCE_REPO, "id": v3.SOURCE_REPO_ID}},
                 }
             if "/git/commits/" in route:
                 return {"sha": "9" * 40, "tree": {"sha": SOURCE_TREE}}
