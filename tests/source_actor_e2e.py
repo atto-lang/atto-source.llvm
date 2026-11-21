@@ -169,6 +169,25 @@ def main():
         assert result.returncode != 0 and diagnostic in result.stderr, (name, diagnostic, result.stderr)
         assert not result.stdout.strip(), ("unsafe LLVM IR emitted for rejected source", name)
     print(f"PASS {len(negatives)} no-IR actor ownership and await boundary cases", flush=True)
+    # Shared Node? linked-object graph is a future native heap target, NOT a
+    # scalar-frame guest. A compiler may only produce executable IR once it
+    # proves nominal reference types and actor heap ownership/borrow semantics.
+    # Pin the byte-exact canonical .atto source from conformance PR #461.
+    import hashlib
+    graph_path = fixtures / "atto-actor-hybrid-memory-node-graph-reject.atto"
+    graph_bytes = graph_path.read_bytes()
+    git_blob = hashlib.sha1(
+        b"blob " + str(len(graph_bytes)).encode("ascii") + b"\\0" + graph_bytes
+    ).hexdigest()
+    assert git_blob == "d472cccb3da24ee8f9fed44f99c1c7742d3240de", git_blob
+    graph_result = run([args.compiler, str(graph_path)])
+    assert graph_result.returncode != 0, (
+        "unverified linked Node? actor heap source emitted an executable guest",
+        graph_result.stdout[:500], graph_result.stderr[:500])
+    assert graph_result.stderr.strip(), "missing compiler rejection diagnostic"
+    assert not graph_result.stdout.strip(), "rejected guest emitted LLVM IR"
+    print("PASS native LLVM linked Ref32 Node graph denied before guest IR", flush=True)
+
     with tempfile.TemporaryDirectory(prefix="oreslang-native-source-actor-") as temp:
         for name, actors, count, last in positives:
             flags = ["--experimental-owned-int"] if name in {
