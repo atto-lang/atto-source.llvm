@@ -32,3 +32,11 @@ NOT_EXECUTED. Preserve independent authorized source-export governance.
 
 This feature branch stacks on the imported native macro M1 PR #619 and its
 ancestors; keep it unmerged until exact-head AOT and security evidence exists.
+
+## Canonical `expand!` source syntax
+
+The preferred spelling is `expand! macro_name(const ...)` or
+`expand! alias.macro_name(syntax expr ...)` with an adjacent `!`.
+Declaration-position macro invocations fail closed on the limited LLVM scalar
+backend until typed declaration generation exists. Legacy `name!(...)` is
+accepted temporarily for previously authored scalar corpus tests.

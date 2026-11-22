@@ -1,4 +1,4 @@
 import * as m from "./macros.atto";
 pub fnc main() -> int {
-  return m.splice_expr!(syntax expr 42);
+  return expand! m.splice_expr(syntax expr 42);
 }

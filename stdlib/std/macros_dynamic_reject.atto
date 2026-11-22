@@ -1,2 +1,2 @@
 import * as m from "./macros.atto";
-pub fnc main(int input) -> int { return m.const_retry_count!(const input); }
+pub fnc main(int input) -> int { return expand! m.const_retry_count(const input); }

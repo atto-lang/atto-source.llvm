@@ -111,6 +111,33 @@ pub fnc main(): int {
   return identity!(syntax expr literal!(const 6 * 7));
 }
 )");
+    // Canonical expand! syntax: same typed scalar expansion before LLVM IR.
+    scalar_42(R"(
+define macro literal(Const<int> value) -> Syntax<Expr> {
+  return quote(value);
+}
+pub fnc main(): int { return expand! literal(const 6 * 7); }
+)");
+    scalar_42(R"(
+define macro identity(Syntax<Expr> value) -> Syntax<Expr> {
+  return value;
+}
+pub fnc main(): int { return expand! identity(syntax expr 42); }
+)");
+    denied(R"(
+define macro literal(Const<int> value) -> Syntax<Expr> {
+  return quote(value);
+}
+pub fnc main(int input): int { return expand! literal(const input); }
+)");
+    denied(R"(
+pub fnc main(): int { return expand! missing(const 42); }
+)");
+    denied(R"(
+expand! missing(type User);
+pub fnc main(): int { return 42; }
+)");
+
     // Compiler admission rejects unsafe and unsupported macro forms before
     // any LLVM IR can be emitted. No source-string substitution or JIT.
     denied(R"(

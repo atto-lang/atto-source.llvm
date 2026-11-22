@@ -1,4 +1,4 @@
 import * as m from "./macros.atto";
 pub fnc main() -> int {
-  return m.const_timeout_ns!(const 21 * 2);
+  return expand! m.const_timeout_ns(const 21 * 2);
 }

@@ -1396,13 +1396,16 @@ private:
     }
 
     std::unique_ptr<Expression> macro_expression(const std::string& name,
-                                                  std::size_t offset) {
+                                                  std::size_t offset,
+                                                  bool legacy_sigil = true) {
         const auto it = macros_.find(name);
         if (it == macros_.end())
             fail("NATIVE_MACRO_EXPANDER_REQUIRED: undeclared macro invocation before LLVM IR; runtime fallback is forbidden");
         if (++macro_expansions_ > kMaxNativeMacroExpansions)
             fail("NATIVE_MACRO_BUDGET: expansion count exceeded; runtime fallback is forbidden");
-        require_macro("!");
+        // Canonical expand! has already consumed the sigil before its static
+        // macro name. The old name!(...) form still works during migration.
+        if (legacy_sigil) require_macro("!");
         require_macro("(");
         const MacroKind kind = it->second;
         if (kind == MacroKind::ConstIntQuote) {
@@ -1436,6 +1439,13 @@ private:
     }
 
     bool macro_invocation_ahead() const {
+        // Declaration-position expand! is compile-time syntax too, but
+        // declaration generation is not available in the scalar LLVM subset.
+        if (token_.kind == Kind::Identifier && token_.text == "expand") {
+            const Token bang = peek_next();
+            if (bang.text == "!" && bang.offset == token_.offset + token_.text.size())
+                return true;
+        }
         if (token_.kind != Kind::Identifier) return false;
         Lexer probe = lexer_;
         Token next = probe.next();
@@ -3850,6 +3860,20 @@ private:
                 throw std::runtime_error(
                     "native nb match/switch is invalid: nb applies to channel/select operations, not dispatch arms at byte " +
                     std::to_string(token_.offset));
+        }
+        // 'expand!' is contextual, and its ! must be adjacent. Resolve an
+        // immutable qualified macro name directly, before expression codegen.
+        // This never invokes a runtime function or source evaluator.
+        if (token_.kind == Kind::Identifier && token_.text == "expand") {
+            const Token bang = peek_next();
+            if (bang.text == "!" && bang.offset == token_.offset + token_.text.size()) {
+                advance(); // expand
+                require_macro("!");
+                std::string name = identifier();
+                if (module_names_.count(name) && accept("."))
+                    name += "." + identifier();
+                return macro_expression(name, offset, false);
+            }
         }
         if (token_.text == "match") return value_match_expression();
         if (token_.text == "switch") return value_switch_expression();
