@@ -71,12 +71,16 @@ int atto_udp_loopback_port(atto_udp_loopback *s) {
 int atto_udp_loopback_send(atto_udp_loopback *s, unsigned port,
         const uint8_t *bytes, size_t size, size_t *sent) {
     if (sent) *sent = 0;
-    if (!sent || !port || port > 65535u || size > MAX_UDP4_PAYLOAD || (!bytes && size)) return -EINVAL;
+    if (!sent || !port || port > 65535u) return -EINVAL;
     int rc = gate(s);
     if (rc) return rc;
     if (s->fd < 0) rc = -EBADF;
     else if ((rc = admission(s, s->requested_port, ATTO_UDP_LOCAL)) == 0 &&
             (rc = admission(s, port, ATTO_UDP_SEND)) == 0) {
+        /* A denied destination wins before inspecting caller payload size or
+         * copying bytes. The host still validates both after authorization. */
+        if (size > MAX_UDP4_PAYLOAD || (!bytes && size)) rc = -EINVAL;
+        else {
         struct sockaddr_in addr = {0};
         addr.sin_family = AF_INET;
         addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -87,6 +91,7 @@ int atto_udp_loopback_send(atto_udp_loopback *s, unsigned port,
         if (n < 0) rc = -errno;
         else if ((size_t)n != size) rc = -EIO;
         else *sent = (size_t)n;
+        }
     }
     pthread_mutex_unlock(&s->lock);
     return rc;
