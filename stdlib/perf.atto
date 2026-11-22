@@ -1,0 +1,29 @@
+// Compiler-owned std perf clock candidate. Not an installed native std import.
+// Native lowering MUST supply a monotonic clock; strict AOT must not need JIT.
+// Compile-time false must fold away the entire guarded call.
+define module Perf as
+  pub fnc begin_ns(bool enabled) -> int {
+    if !enabled; do
+      return 0;
+    fi
+    return process.monotonic_ns();
+  }
+
+  pub fnc duration_ns(int started_ns) -> int {
+    if started_ns <= 0; do
+      return 0;
+    fi
+    val int finished = process.monotonic_ns();
+    if finished < started_ns; do
+      return 0;
+    fi
+    return finished - started_ns;
+  }
+
+  pub fnc should_sample(int sample_key, int every_n) -> bool {
+    if sample_key < 0 || every_n < 1 || every_n > 65536; do
+      return false;
+    fi
+    return (sample_key % every_n) == 0;
+  }
+end
