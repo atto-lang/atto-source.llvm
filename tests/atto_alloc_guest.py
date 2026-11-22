@@ -39,6 +39,11 @@ def main() -> None:
     parser.add_argument("--clang", required=True)
     args = parser.parse_args()
 
+    runtime_c = ROOT / "src/main/cpp/oreslang/runtime/NativeIntArrayRegion.c"
+    if runtime_c.is_symlink() or not runtime_c.is_file():
+        raise AssertionError("missing native allocator runtime C provider")
+    native_includes = ROOT / "src/main/cpp"
+
     compiler = str(Path(args.compiler).resolve(strict=True))
     clang = str(Path(args.clang).resolve(strict=True))
     positive = negative = sanitized = 0
@@ -67,7 +72,10 @@ def main() -> None:
             ll = d / "main.ll"
             ll.write_text(result.stdout, encoding="utf-8")
             native = d / "guest"
-            built = run([clang, str(ll), "-O2", "-o", str(native)])
+            built = run([clang, "-O2", "-Wno-override-module",
+                         "-x", "ir", str(ll),
+                         "-x", "c", str(runtime_c),
+                         "-I", str(native_includes), "-o", str(native)])
             if built.returncode != 0:
                 raise AssertionError((module, "link", built.stderr[:2500]))
             # Prove guest has no runtime dependency on .atto source or loader.
@@ -81,9 +89,11 @@ def main() -> None:
             # Sanitizer-linked run is useful evidence, not a proof that every
             # compiler-generated memory access has been instrumented.
             sanitized_exe = d / "guest-sanitized"
-            san_link = run([clang, str(ll), "-O1", "-g",
+            san_link = run([clang, "-O1", "-g",
                             "-fsanitize=address,undefined",
-                            "-fno-omit-frame-pointer", "-o", str(sanitized_exe)])
+                            "-fno-omit-frame-pointer", "-Wno-override-module",
+                            "-x", "ir", str(ll), "-x", "c", str(runtime_c),
+                            "-I", str(native_includes), "-o", str(sanitized_exe)])
             if san_link.returncode != 0:
                 raise AssertionError((module, "sanitizer link", san_link.stderr[:2500]))
             out = subprocess.run([str(sanitized_exe)], capture_output=True, text=True,
@@ -93,6 +103,35 @@ def main() -> None:
             if out.returncode != 0:
                 raise AssertionError((module, "sanitizer", out.returncode, out.stderr[:2500]))
             sanitized += 1
+
+        # Test exact canonical import spelling against embedded compiler source.
+        # These are additional native guests, not a source-only registry lookup.
+        for module in MODULES:
+            d = base / ("canonical-" + module)
+            d.mkdir()
+            fixture = source_file(ROOT / "tests" / "fixtures" / "alloc" /
+                                  (module + "_smoke.atto"))
+            entry = d / "main.atto"
+            entry.write_text(fixture, encoding="utf-8")
+            emitted = run([compiler, str(entry)])
+            if emitted.returncode != 0 or not emitted.stdout.strip():
+                raise AssertionError((module, "canonical import", emitted.stderr[:2500]))
+            if "define " not in emitted.stdout or "@main" not in emitted.stdout:
+                raise AssertionError((module, "canonical compiler emitted no native guest"))
+            ll = d / "main.ll"
+            ll.write_text(emitted.stdout, encoding="utf-8")
+            native = d / "guest"
+            linked = run([clang, "-O2", "-Wno-override-module",
+                          "-x", "ir", str(ll), "-x", "c", str(runtime_c),
+                          "-I", str(native_includes), "-o", str(native)])
+            if linked.returncode != 0:
+                raise AssertionError((module, "canonical link", linked.stderr[:2500]))
+            entry.rename(d / "main.atto.hidden")
+            result = run([str(native)], timeout=20)
+            if result.returncode != 0:
+                raise AssertionError((module, "canonical execution",
+                                      result.returncode, result.stderr[:2500]))
+            positive += 1
 
         # Negative checks after positive admission avoid celebrating errors
         # caused merely by unsupported classes, imports or generic syntax.
@@ -125,7 +164,7 @@ pub fnc main(): int {
                 raise AssertionError((module, "private field access admitted or IR leaked",
                                       rejected.returncode, rejected.stderr[:1500]))
             negative += 1
-    if positive != 3 or sanitized != 3 or negative != 2:
+    if positive != 6 or sanitized != 3 or negative != 2:
         raise AssertionError("incomplete guest and negative fixture coverage")
     print(f"ATTO_ALLOC_LLVM_COMPILED_GUEST_PASS positive={positive} "
           f"sanitizer_linked={sanitized} private_denied={negative}")

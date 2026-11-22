@@ -119,6 +119,42 @@ inline const CoreLibrarySource* find_compiler_library_source(std::string_view ra
         core_provider_bit(CoreProviderRequirement::Allocator)
     };
 
+    static constexpr std::string_view kSlabSource =
+#include "oreslang/frontend/GeneratedSlabAtto.inc"
+    ;
+    static constexpr CoreLibrarySource kSlab{
+        CompilerLibraryTier::Alloc,
+        "atto.alloc/slab",
+        "slab",
+        "@atto.alloc/slab.atto",
+        kSlabSource,
+        core_provider_bit(CoreProviderRequirement::Allocator)
+    };
+
+    static constexpr std::string_view kDequeSource =
+#include "oreslang/frontend/GeneratedDequeAtto.inc"
+    ;
+    static constexpr CoreLibrarySource kDeque{
+        CompilerLibraryTier::Alloc,
+        "atto.alloc/deque",
+        "deque",
+        "@atto.alloc/deque.atto",
+        kDequeSource,
+        core_provider_bit(CoreProviderRequirement::Allocator)
+    };
+
+    static constexpr std::string_view kActorHeapSource =
+#include "oreslang/frontend/GeneratedActorHeapAtto.inc"
+    ;
+    static constexpr CoreLibrarySource kActorHeap{
+        CompilerLibraryTier::Alloc,
+        "atto.alloc/actor_heap",
+        "actor_heap",
+        "@atto.alloc/actor_heap.atto",
+        kActorHeapSource,
+        core_provider_bit(CoreProviderRequirement::Allocator)
+    };
+
     if (raw == "atto.core/numeric" || raw == "atto.core/numeric.atto" ||
             raw == "ores.core/numeric" || raw == "ores.core/numeric.ores")
         return &kNumeric;
@@ -128,6 +164,15 @@ inline const CoreLibrarySource* find_compiler_library_source(std::string_view ra
     if (raw == "atto.alloc/int_buffer_bundle" || raw == "atto.alloc/int_buffer_bundle.atto" ||
             raw == "alloc/int_buffer_bundle" || raw == "alloc/int_buffer_bundle.ores")
         return &kIntBufferBundle;
+    if (raw == "atto.alloc/slab" || raw == "atto.alloc/slab.atto" ||
+            raw == "alloc/slab" || raw == "alloc/slab.atto")
+        return &kSlab;
+    if (raw == "atto.alloc/deque" || raw == "atto.alloc/deque.atto" ||
+            raw == "alloc/deque" || raw == "alloc/deque.atto")
+        return &kDeque;
+    if (raw == "atto.alloc/actor_heap" || raw == "atto.alloc/actor_heap.atto" ||
+            raw == "alloc/actor_heap" || raw == "alloc/actor_heap.atto")
+        return &kActorHeap;
     return nullptr;
 }
 
