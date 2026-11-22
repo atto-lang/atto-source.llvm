@@ -67,3 +67,19 @@ This is **not** an executable spawn implementation or host capability grant.
 pure .atto policy (expected exit 42). No real guest compiler execution,
 native child creation, AOT, async I/O or lifecycle test is yet verified.
 Status: **SOURCE ONLY / NOT EXECUTED**.
+
+## Lowercase public module name (2026-11-22)
+
+The module is declared `define module process as`, and guest code imports
+`import module process from "std/process";`, or explicitly
+`import module process from "atto.std/process";`. Member calls use lowercase
+`process.spawn(...)`. Public types such as `Command` and `ExitStatus`
+stay PascalCase. A compiler with a global `process` intrinsic must make
+the explicitly imported module win lexical lookup while exposing the host
+intrinsic under a separate, unshadowed path (Java uses `std.process`).
+The module must not recursively resolve `process.spawn` to itself.
+
+**Target contract only, not executed backend support:** this draft is still
+pure admission source until its local resolver, guest compiled fixtures and
+authorized host bridge are implemented and verified.
+
