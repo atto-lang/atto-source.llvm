@@ -17,6 +17,18 @@ enable_testing()
 add_test(NAME process_isolated_actor_fault COMMAND atto_actor_process_isolation_test)
 set_tests_properties(process_isolated_actor_fault PROPERTIES TIMEOUT 15)
 
+# Standalone, pointer-free Result/Error parser foundation; not LLVM guest codegen.
+add_library(atto_result_int_parse_v1 STATIC src/result_int_parse_v1.c)
+target_include_directories(atto_result_int_parse_v1 PUBLIC include)
+add_executable(atto_result_int_parse_v1_test tests/result_int_parse_v1_test.c)
+target_link_libraries(atto_result_int_parse_v1_test PRIVATE atto_result_int_parse_v1)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(atto_result_int_parse_v1 PRIVATE -Wall -Wextra -Wconversion -Werror -pedantic)
+  target_compile_options(atto_result_int_parse_v1_test PRIVATE -Wall -Wextra -Wconversion -Werror -pedantic -UNDEBUG)
+endif()
+add_test(NAME result_int_parse_v1_host COMMAND atto_result_int_parse_v1_test)
+set_tests_properties(result_int_parse_v1_host PROPERTIES TIMEOUT 15)
+
 # Compare complete canonical source bytes before any native build.
 # Expected SHA-256 values are from atto-common-source PR #30.
 file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/include/atto/tenant_bytes_v1.hpp" ATTO_SHARED_ALLOC_HEADER_SHA)
