@@ -1,0 +1,4 @@
+// Must reject: nested map cannot silently mutate the inner nominal Result error.
+fnc invalid(Option<Result<Option<int>,String>> value): Option<Result<Option<int>,bool>> {
+  return value.map((Result<Option<int>,String> inner) -> inner);
+}

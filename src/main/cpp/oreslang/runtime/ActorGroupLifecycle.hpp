@@ -9,6 +9,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -365,34 +366,26 @@ public:
 
     ~NativeActorGroup() { close(); }
 
-    /** Immediate native equivalent of spawn: one *exclusive* manager. */
+    /** Host-owned root adoption and atomic same-group child admission. */
     NativeActorRef adopt(std::uint64_t runtime_id, std::uint64_t actor_id,
                          std::uint64_t generation, StopRequest stop_request) {
-        if (!stop_request || actor_id == 0 || generation == 0)
-            throw std::invalid_argument("invalid native actor admission");
-        if (runtime_id != runtime_id_)
-            throw std::invalid_argument("foreign runtime actor reference");
-        auto& owners = registry();
-        // All paths touching both locks take the same scoped pair.
-        std::scoped_lock guard(mutex_, owners.mutex);
-        if (closed_) throw std::logic_error("ActorGroup is closed");
-        if (workers_.find(actor_id) != workers_.end())
-            throw std::logic_error("actor already managed by group");
-        if (workers_.size() >= maximum_workers_)
-            throw std::logic_error("ActorGroup worker capacity exceeded");
-        const Key key{runtime_id, actor_id};
-        if (owners.live.find(key) != owners.live.end())
-            throw std::logic_error("actor already managed by another group");
-        auto ticket = std::make_shared<NativeActorRef::Ticket>();
-        NativeActorRef ref(runtime_id, actor_id, generation, std::move(ticket));
-        workers_.emplace(actor_id, Entry{ref, std::move(stop_request), Phase::starting, {}});
-        try {
-            owners.live.emplace(key, Owner{generation, group_id_, ref.ticket_});
-        } catch (...) {
-            workers_.erase(actor_id);
-            throw;
-        }
-        return ref;
+        return adopt_impl(runtime_id,actor_id,generation,std::move(stop_request),nullptr);
+    }
+
+    NativeActorRef adopt_child(const NativeActorRef& parent,
+                               std::uint64_t runtime_id, std::uint64_t actor_id,
+                               std::uint64_t generation, StopRequest stop_request) {
+        return adopt_impl(runtime_id,actor_id,generation,std::move(stop_request),&parent);
+    }
+
+    /** Read-only diagnostic lineage, never a supervisor/capability grant. */
+    std::optional<std::uint64_t> spawned_by(const NativeActorRef& child) const {
+        std::lock_guard<std::mutex> guard(mutex_);
+        const auto it = workers_.find(child.actor_id());
+        if (child.runtime_id() != runtime_id_ || it == workers_.end()
+            || !it->second.ref.same_incarnation(child))
+            throw std::invalid_argument("unknown or stale child actor reference");
+        return it->second.spawned_by;
     }
 
     /**
@@ -645,6 +638,7 @@ private:
         StopRequest stop_request;
         Phase phase;
         std::function<void()> pending_control;
+        std::optional<std::uint64_t> spawned_by;
     };
 
     Entry* find_active_locked(const NativeActorRef& ref) {
@@ -653,6 +647,39 @@ private:
         if (it == workers_.end() || !(it->second.ref == ref)
             || it->second.ref.ticket_ != ref.ticket_) return nullptr;
         return &it->second;
+    }
+
+    NativeActorRef adopt_impl(std::uint64_t runtime_id, std::uint64_t actor_id,
+                              std::uint64_t generation, StopRequest stop_request,
+                              const NativeActorRef* parent) {
+        if (!stop_request || actor_id == 0 || generation == 0)
+            throw std::invalid_argument("invalid native actor admission");
+        if (runtime_id != runtime_id_)
+            throw std::invalid_argument("foreign runtime actor reference");
+        auto& owners = registry();
+        // Atomic parent validation + child insertion + group closure fence.
+        std::scoped_lock guard(mutex_, owners.mutex);
+        if (closed_) throw std::logic_error("ActorGroup is closed");
+        std::optional<std::uint64_t> lineage;
+        if (parent) {
+            Entry* p = find_active_locked(*parent);
+            if (!p || p->phase == Phase::stopping)
+                throw std::logic_error("nested spawn parent is stale, stopping, or foreign");
+            lineage = parent->actor_id();
+        }
+        if (workers_.find(actor_id) != workers_.end())
+            throw std::logic_error("actor already managed by group");
+        if (workers_.size() >= maximum_workers_)
+            throw std::logic_error("ActorGroup worker capacity exceeded");
+        const Key key{runtime_id,actor_id};
+        if (owners.live.find(key) != owners.live.end())
+            throw std::logic_error("actor already managed by another group");
+        auto ticket = std::make_shared<NativeActorRef::Ticket>();
+        NativeActorRef ref(runtime_id,actor_id,generation,std::move(ticket));
+        workers_.emplace(actor_id,Entry{ref,std::move(stop_request),Phase::starting,{},lineage});
+        try { owners.live.emplace(key,Owner{generation,group_id_,ref.ticket_}); }
+        catch (...) { workers_.erase(actor_id); throw; }
+        return ref;
     }
 
     /**

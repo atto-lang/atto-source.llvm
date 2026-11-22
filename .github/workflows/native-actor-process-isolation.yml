@@ -1,0 +1,35 @@
+name: Native actor process fault containment substrate
+on:
+  push:
+    paths:
+      - native/**
+      - .github/workflows/native-actor-process-isolation.yml
+  pull_request:
+    paths:
+      - native/**
+      - .github/workflows/native-actor-process-isolation.yml
+permissions:
+  contents: read
+jobs:
+  posix-process-faults:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        config: [Debug, Release]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Prove exact PR head checkout
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED"
+      - name: Compile independent POSIX host boundary
+        run: |
+          cmake -S native -B build -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DCMAKE_C_COMPILER=${{ matrix.compiler }}
+          cmake --build build --parallel
+      - name: Prove host survives fatal actor worker faults
+        run: ctest --test-dir build --output-on-failure

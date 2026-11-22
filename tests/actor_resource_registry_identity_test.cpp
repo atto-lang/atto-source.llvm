@@ -26,12 +26,14 @@ static void require(bool value, const char* message) {
 static Ticket acquire(Registry& registry, Activity role) {
     if (role == Activity::turn) return registry.acquire_turn();
     if (role == Activity::loan) return registry.acquire_loan();
-    return registry.acquire_callback();
+    if (role == Activity::callback) return registry.acquire_callback();
+    return registry.acquire_handoff();
 }
 static void release(Registry& registry, Activity role, Ticket ticket) {
     if (role == Activity::turn) registry.release_turn(ticket);
     else if (role == Activity::loan) registry.release_loan(ticket);
-    else registry.release_callback(ticket);
+    else if (role == Activity::callback) registry.release_callback(ticket);
+    else registry.release_handoff(ticket);
 }
 static void rejects(Registry& registry, Activity role, Ticket ticket) {
     bool rejected = false;
@@ -87,7 +89,7 @@ static void same_address(Activity role) {
     replacement->~Registry();
 }
 
-static void concurrent_instances() {
+static void concurrent_instances(Activity role) {
     constexpr unsigned workers = 12, per_worker = 16;
     using Held = std::pair<std::unique_ptr<Registry>, Ticket>;
     std::array<std::vector<Held>, workers> batches;
@@ -104,7 +106,7 @@ static void concurrent_instances() {
                 batch.reserve(per_worker);
                 for (unsigned i = 0; i < per_worker; ++i) {
                     auto registry = i % 2 ? make_peer_registry() : std::make_unique<Registry>(41, 7);
-                    const auto ticket = registry->acquire_callback();
+                    const auto ticket = acquire(*registry, role);
                     batch.emplace_back(std::move(registry), ticket);
                 }
             } catch (...) { failures[worker] = std::current_exception(); }
@@ -119,12 +121,12 @@ static void concurrent_instances() {
     for (auto* target : all) {
         target->first->retire();
         for (auto* source : all) if (target != source)
-            rejects(*target->first, Activity::callback, source->second);
+            rejects(*target->first, role, source->second);
         require(target->first->try_reclaim().status == Reclaim::busy,
                 "concurrent instance identity collision drained a live callback");
     }
     for (auto* held : all) {
-        held->first->release_callback(held->second);
+        release(*held->first, role, held->second);
         require(held->first->try_reclaim().status == Reclaim::complete,
                 "concurrent registry did not drain its own callback");
     }
@@ -132,12 +134,12 @@ static void concurrent_instances() {
 
 int main() {
     try {
-        for (const auto role : {Activity::turn, Activity::loan, Activity::callback}) {
+        for (const auto role : {Activity::turn, Activity::loan, Activity::callback, Activity::handoff}) {
             same_identity(role);
             same_address(role);
+            concurrent_instances(role);
         }
-        concurrent_instances();
-        std::puts("PASS resource registry identity: all roles, same-address reuse, two translation units, copied/replayed tickets, 192 concurrent instances and 36672 foreign releases");
+        std::puts("PASS resource registry identity: all roles, same-address reuse, two translation units, copied/replayed tickets, 768 concurrent instances and 146688 foreign releases");
         return 0;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "FAIL resource registry identity: %s\n", error.what());
