@@ -1,0 +1,18 @@
+// Sends out of order, so the worker's check must trap. Shows the check in fleet.atto can fail.
+fnc next_in_order(int seen, int n): int {
+  if (n eq seen + 1) { return n; } fi
+  return 9223372036854775807 + n;
+}
+define actor Ordered as {
+  let seen: int = 0;
+  pub fnc on_message(int n): int {
+    seen = next_in_order(seen, n);
+    return seen;
+  }
+}
+pub fnc main(): int {
+  const a = spawn Ordered();
+  a.send(2);
+  stop a;
+  return 43;
+}

@@ -1,4 +1,5 @@
 #include "oreslang/types/OwnershipChecker.hpp"
+#include "oreslang/types/PointerIntOwnership.hpp"
 #include "oreslang/types/NativeClassLayout.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/types/OwnershipCfg.hpp"
@@ -310,6 +311,7 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
         }
         case Expression::Kind::Copy:
         case Expression::Kind::Share:
+        case Expression::Kind::Cast: // Cast is checked static identity, but operand may move.
         case Expression::Kind::Negate:
         case Expression::Kind::LogicalNot:
             check_value(*expr.left, locals, functions);
@@ -445,6 +447,7 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
             return;
         case Expression::Kind::Negate:
         case Expression::Kind::LogicalNot:
+        case Expression::Kind::Cast:
         case Expression::Kind::Copy:
         case Expression::Kind::Share:
             check_pure_guard(*expr.left, locals, functions);
@@ -534,6 +537,7 @@ void check_caught_throw_scalar_read(const Expression& expr, Locals& locals,
         }
         case Expression::Kind::Negate:
         case Expression::Kind::LogicalNot:
+        case Expression::Kind::Cast:
             check_caught_throw_scalar_read(*expr.left, locals, functions);
             return;
         case Expression::Kind::Add:
@@ -575,6 +579,16 @@ void check_caught_throw_scalar_read(const Expression& expr, Locals& locals,
 } // namespace
 
 void validate_i64_ownership(Program& program) {
+    if (program.pointer_int_plan) {
+        // Pointer<int> cannot be smuggled through an i64 scalar, class or
+        // actor plan: only a dedicated nominal pointer HIR is admitted.
+        if (!program.functions.empty() || !program.classes.empty() ||
+                !program.actors.empty() || !program.imports.empty() ||
+                !program.cooperative_loops.empty())
+            throw std::runtime_error("Pointer<int> ownership cannot mix scalar or actor IR");
+        pointer_int_aot::validate_ownership(*program.pointer_int_plan);
+        return;
+    }
     // A re-validation attempt must revoke every stale lowering authorization
     // before checking anything. Failed ownership admission therefore cannot
     // leave executable Future-pipeline authority from an earlier pass.
@@ -728,8 +742,22 @@ void validate_i64_ownership(Program& program) {
             entry.assignable = binding.assignable;
             entry.class_name = binding.class_name;
             if (binding.int_array) {
-                if (!binding.owner_mutable || binding.heap_owned || binding.initializer)
+                if (!binding.owner_mutable || binding.heap_owned)
                     throw std::runtime_error("invalid native Array<int> owner");
+                if (binding.initializer) {
+                    const Expression& split = *binding.initializer;
+                    if (binding.array_element_type != ScalarType::String ||
+                            split.kind != Expression::Kind::ArrayCall ||
+                            split.name != "split_literal" ||
+                            !split.left || split.arguments.size() != 1)
+                        throw std::runtime_error(
+                            "ownership violation: only String.split_literal may initialize a native owned array");
+                    // Verify borrowed inputs before creating a new unique
+                    // array owner. The receiver and delimiter stay in the
+                    // same invocation String region until the split finishes.
+                    check_value(*split.left, locals, functions);
+                    check_value(*split.arguments.front(), locals, functions);
+                }
             } else if (binding.name.rfind("$effect", 0) == 0 && binding.initializer &&
                     binding.initializer->kind == Expression::Kind::ArrayCall) {
                 const auto& call = *binding.initializer;
@@ -905,6 +933,7 @@ void validate_i64_ownership(Program& program) {
         for (const auto& item : locals) root_names.insert(item.first);
         std::unordered_map<std::string, unsigned> iteration_loans;
         std::function<void(const Statement&, Locals&)> check_effect;
+        std::size_t scalar_loop_depth = 0;
         auto scoped_entry = [&](const LocalBinding& binding) {
             LocalOwnership entry;
             entry.int_array = binding.int_array;
@@ -930,6 +959,26 @@ void validate_i64_ownership(Program& program) {
                 state.erase(action.branch_local->name);
         };
         check_effect = [&](const Statement& stmt, Locals& state) {
+            if (stmt.kind == Statement::Kind::Break ||
+                    stmt.kind == Statement::Kind::Continue) {
+                if (!scalar_loop_depth)
+                    throw std::runtime_error("ownership violation: break/continue outside native scalar loop");
+                return;
+            }
+            if (stmt.kind == Statement::Kind::Loop) {
+                if (++scalar_loop_depth > 16)
+                    throw std::runtime_error("ownership violation: native scalar loop nesting limit");
+                struct Depth {
+                    std::size_t& n;
+                    ~Depth() { --n; }
+                } scoped_depth{scalar_loop_depth};
+                Locals body = state;
+                scoped_effects(stmt.then_statements, body);
+                if (!same_affine_state(state, body))
+                    throw std::runtime_error(
+                        "ownership violation: scalar loop backedge changes affine ownership/loans");
+                return;
+            }
             if (stmt.kind == Statement::Kind::ScalarWrite) {
                 const auto found = state.find(stmt.receiver);
                 if (found == state.end()) throw std::runtime_error("assignment requires a visible scalar slot");
@@ -945,6 +994,14 @@ void validate_i64_ownership(Program& program) {
                 if (!writable()) throw std::runtime_error("assignment cannot publish through an active loan");
                 state.at(stmt.receiver).moved = false;
                 return;
+            }
+            if (stmt.kind == Statement::Kind::TelemetryLogInfo) {
+                // Source literal and exact checked runtime descriptor are
+                // validated by the parser and backend-specific IR admission.
+                // This statement reads/moves no guest-owned state.
+                if (!stmt.expression && stmt.telemetry_operation.size() > 0 &&
+                    stmt.telemetry_operation.size() <= 96) return;
+                throw std::runtime_error("unverified native static log.info ownership effect");
             }
             if (stmt.kind == Statement::Kind::UsingTelemetrySpan) {
                 // Token is compiler-owned and unrepresentable in Locals.
@@ -1020,7 +1077,20 @@ void validate_i64_ownership(Program& program) {
                 if (state.count(local.name))
                     throw std::runtime_error("ownership violation: branch local shadows live owner at byte " +
                         std::to_string(local.offset));
-                if (local.initializer) check_value(*local.initializer, state, functions);
+                if (local.int_array && local.initializer) {
+                    const Expression& split = *local.initializer;
+                    if (local.array_element_type != ScalarType::String ||
+                            split.kind != Expression::Kind::ArrayCall ||
+                            split.name != "split_literal" ||
+                            !split.left || split.arguments.size() != 1 ||
+                            !local.owner_mutable)
+                        throw std::runtime_error(
+                            "ownership violation: scoped array initializer must be checked String.split_literal");
+                    check_value(*split.left, state, functions);
+                    check_value(*split.arguments.front(), state, functions);
+                } else if (local.initializer) {
+                    check_value(*local.initializer, state, functions);
+                }
                 state.emplace(local.name, scoped_entry(local));
                 return;
             }

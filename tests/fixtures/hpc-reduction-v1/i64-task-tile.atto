@@ -1,0 +1,9 @@
+// Native one-Task Atto HPC overlap candidate: no captures or mutable loans.
+// The producer starts before the caller's immutable scalar tile; actual
+// physical scheduling and multicore speedup are still NOT_EXECUTED.
+pub fnc main(): int {
+  let Task<int> first = task { return ((1 + 2) + 3) + 4; };
+  val int second = ((5 + 6) + 7) + 14;
+  let int partial = await first;
+  return partial + second;
+}

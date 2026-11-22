@@ -1,0 +1,69 @@
+name: Native lazy first-actor parity (exact source)
+on:
+  push:
+    branches:
+      - feat/lazy-actor-admission-parity-20261103
+  pull_request:
+    paths:
+      - ".github/workflows/native-lazy-actor-parity.yml"
+      - "src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+      - "src/main/cpp/oreslang/runtime/NativeActorScheduler.h"
+      - "src/main/cpp/oreslang/runtime/NativeOresVM.c"
+      - "src/main/cpp/oreslang/runtime/NativeOresVM.h"
+      - "src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+      - "tests/native_vm_lazy_first_actor_admission_test.c"
+      - "CMakeLists.txt"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-lazy-actor-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  exact-native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [gcc, clang]
+    env:
+      CC: ${{ matrix.cc }}
+    steps:
+      - name: Checkout exact source commit without stored credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify exact source and clean checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+          echo "source_commit=$(git rev-parse HEAD)"
+          echo "source_tree=$(git rev-parse 'HEAD^{tree}')"
+          echo "scheduler_blob=$(git rev-parse HEAD:src/main/cpp/oreslang/runtime/NativeActorScheduler.c)"
+      - name: Compile real native runtime with carrier-failure injection
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$CC" -std=c11 -O1 -g -pthread -Wall -Wextra -Wpedantic -Werror \
+            -fno-omit-frame-pointer -fsanitize=address,undefined \
+            -DORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE=1 \
+            -Isrc/main/cpp \
+            tests/native_vm_lazy_first_actor_admission_test.c \
+            src/main/cpp/oreslang/runtime/NativeOresVM.c \
+            src/main/cpp/oreslang/runtime/NativeActorFuture.c \
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+            -o native-vm-lazy-parity
+      - name: Run real native C admission, isolation and pthread-creation failure test
+        shell: bash
+        run: |
+          set -euo pipefail
+          for run in $(seq 1 10); do
+            echo "native_parity_round=$run compiler=$CC"
+            ./native-vm-lazy-parity
+          done

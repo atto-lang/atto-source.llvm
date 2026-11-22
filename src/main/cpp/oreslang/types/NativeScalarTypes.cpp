@@ -55,6 +55,9 @@ void require(Type actual, Type expected, std::size_t offset, const std::string& 
 }
 }
 void validate_native_scalar_types(const Program& program) {
+    // This API also accepts compiler-created ASTs; do not assume that a
+    // caller previously ran resolve_native_sums or the text parser.
+    validate_native_sum_registry(program);
     std::unordered_map<std::string, const ClassDecl*> classes;
     std::unordered_map<std::string, const Function*> functions;
     for (const auto& cls : program.classes) classes.emplace(cls.name, &cls);
@@ -79,6 +82,7 @@ void validate_native_scalar_types(const Program& program) {
     };
     std::function<Type(const Expression&, const Locals&)> expression;
     expression = [&](const Expression& e, const Locals& locals) -> Type {
+        validate_native_sum_expression_shape(e);
         const auto evaluate = [&]() -> Type {
         using E = Expression::Kind;
         switch (e.kind) {
@@ -127,6 +131,14 @@ void validate_native_scalar_types(const Program& program) {
             case E::LogicalNot:
                 require(expression(*e.left, locals), scalar(true), e.offset, "! requires bool");
                 return scalar(true);
+            case E::Cast: {
+                // Java-parity checked scalar identity cast: a static proof that the
+                // operand already has the target type, never a conversion or bitcast.
+                const Type target = scalar(e.cast_target);
+                require(expression(*e.left, locals), target, e.offset,
+                        "checked identity cast requires an operand of the target type");
+                return target;
+            }
             case E::Equal: case E::NotEqual: {
                 auto left = expression(*e.left, locals), right = expression(*e.right, locals);
                 if (!(left == right) || (left.kind != Kind::Int && left.kind != Kind::Bool && left.kind != Kind::String)) fail(e.offset, "equality operand types");
@@ -163,6 +175,28 @@ void validate_native_scalar_types(const Program& program) {
                 return scalar(false);
             case E::ArrayCall: {
                 const auto owner = expression(*e.left, locals);
+                // The parser admits String.contains_literal(String) as a pure,
+                // checked scalar call that reuses the ArrayCall node; type it
+                // here as bool instead of treating the String as an array.
+                if (e.name == "contains_literal" && owner.kind != Kind::Array) {
+                    require(owner, scalar(ScalarType::String), e.offset,
+                            "String.contains_literal requires a String receiver");
+                    if (e.arguments.size() != 1)
+                        fail(e.offset, "String.contains_literal requires exactly one String argument");
+                    require(expression(*e.arguments[0], locals), scalar(ScalarType::String),
+                            e.arguments[0]->offset, "String.contains_literal requires a String needle");
+                    return scalar(true);
+                }
+                // String.split_literal(String) yields one owned Array<String>.
+                if (e.name == "split_literal" && owner.kind != Kind::Array) {
+                    require(owner, scalar(ScalarType::String), e.offset,
+                            "String.split_literal requires a String receiver");
+                    if (e.arguments.size() != 1)
+                        fail(e.offset, "String.split_literal requires exactly one String delimiter");
+                    require(expression(*e.arguments[0], locals), scalar(ScalarType::String),
+                            e.arguments[0]->offset, "String.split_literal requires a String delimiter");
+                    return Type{Kind::Array, "String"};
+                }
                 if (owner.kind != Kind::Array) fail(e.offset, "array receiver");
                 const Type element = owner.name == "String" ? scalar(ScalarType::String) : owner.name == "int" ? scalar(false)
                     : Type{Kind::Class, immutable_record(owner.name).name};
@@ -277,6 +311,7 @@ void validate_native_scalar_types(const Program& program) {
         std::function<void(const std::vector<Statement>&, Locals&)> statements;
         statements = [&](const std::vector<Statement>& items, Locals& scope) {
             for (const auto& item : items) {
+                validate_native_sum_statement_shape(item);
                 if (item.kind == Statement::Kind::UsingTelemetrySpan) {
                     // Compiler-owned AOT tracing token is not a scalar,
                     // class, field receiver or guest-visible local. Recurse

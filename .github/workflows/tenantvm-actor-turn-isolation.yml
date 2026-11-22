@@ -1,0 +1,59 @@
+name: TenantVM physical actor turn object authority (HOST ONLY)
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/OresVM.hpp'
+      - 'src/main/cpp/oreslang/runtime/OresIsolateVM.hpp'
+      - 'src/main/cpp/oreslang/runtime/OresIsolateAbi.h'
+      - 'tests/native_tenantvm_actor_turn_object_test.cpp'
+      - 'tests/tenantvm_actor_turn_exact_checkout.sh'
+      - 'tests/tenantvm_actor_turn_gate_selftest.sh'
+      - '.github/workflows/tenantvm-actor-turn-isolation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  actor-turn-provenance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [g++, clang++]
+        mode: [optimized-ndebug, address-undefined-sanitizers]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          submodules: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact native source head
+        shell: bash
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+      - name: Validate exact-checkout gate against synthetic source fixture
+        if: matrix.compiler == 'g++' && matrix.mode == 'optimized-ndebug'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tests/tenantvm_actor_turn_gate_selftest.sh
+      - name: Compile and execute reviewed exact-head C++ actor turn regression
+        shell: bash
+        env:
+          CXX: ${{ matrix.compiler }}
+          MODE: ${{ matrix.mode }}
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          case "$MODE" in
+            optimized-ndebug) mode=optimized ;;
+            address-undefined-sanitizers) mode=asan-ubsan ;;
+            *) exit 2 ;;
+          esac
+          bash tests/tenantvm_actor_turn_exact_checkout.sh "$EXPECTED" "$CXX" "$mode"

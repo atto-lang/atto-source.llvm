@@ -1,0 +1,45 @@
+name: native-actor-send-result-v1
+on:
+  pull_request:
+    paths:
+      - runtime/actor_send_result_v1.h
+      - runtime/actor_runtime.c
+      - tests/native_actor_send_result_v1.c
+      - docs/NATIVE_ACTOR_SEND_RESULT_V1.md
+      - ci/test_native_actors.sh
+      - .github/workflows/native-actor-send-result-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tagged-native-send:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: GCC and Clang native actor admission
+        shell: bash
+        run: |
+          set -euo pipefail
+          for cc in gcc clang; do
+            "$cc" -std=c11 -O2 -pthread -Wall -Wextra -Werror -Wpedantic \
+              runtime/actor_runtime.c tests/native_actor_send_result_v1.c \
+              -o "/tmp/atto_send_result_$cc"
+            timeout 20s "/tmp/atto_send_result_$cc" | tee "/tmp/atto_send_result_$cc.out"
+            grep -q 'PASS tagged native actor send: full/stale/no-loss/drain' "/tmp/atto_send_result_$cc.out"
+          done
+      - name: Clang ASan UBSan native actor admission
+        shell: bash
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O1 -g -pthread -Wall -Wextra -Werror -Wpedantic \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            runtime/actor_runtime.c tests/native_actor_send_result_v1.c \
+            -o /tmp/atto_send_result_sanitized
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            timeout 20s /tmp/atto_send_result_sanitized | tee /tmp/atto_send_result_sanitized.out
+          grep -q 'PASS tagged native actor send: full/stale/no-loss/drain' /tmp/atto_send_result_sanitized.out
