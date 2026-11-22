@@ -948,6 +948,12 @@ bool callable_nominal_name(std::string_view name) {
     return name == "Callable" || name == "Fnc" || name == "Function"
             || name == "Routine" || name == "Method";
 }
+// Compiler-owned affine and synchronization type names must not be
+// impersonated by guest aliases, actors or nominal class definitions.
+bool native_ownership_intrinsic_name(std::string_view name) {
+    return name == "Atomic" || name == "Box" || name == "Arc" ||
+           name == "Weak";
+}
 
 // Entry is a compiler-owned nominal product in the Java/Graal frontend.
 // Until the native backend has a real two-slot representation, projection
@@ -2016,6 +2022,8 @@ private:
                   "define model is a runtime type and value");
 
         decl.name = identifier();
+        if (native_ownership_intrinsic_name(decl.name))
+            fail("NATIVE_OWNERSHIP_INTRINSIC_RESERVED: compiler-owned type cannot be redefined");
         if (decl.name == "String" || decl.name == "string" || callable_nominal_name(decl.name) || entry_builtin_name(decl.name))
             fail("TYPE_DECL_RESERVED_BUILTIN: compiler-owned nominal type name '" +
                  decl.name + "' cannot be redefined");
@@ -2154,7 +2162,7 @@ private:
         const std::string name = identifier();
         if (name == "String" || name == "string" || name == "int" ||
                 name == "bool" || reserved(name) || callable_nominal_name(name) ||
-                entry_builtin_name(name))
+                entry_builtin_name(name) || native_ownership_intrinsic_name(name))
             fail("native forward type cannot shadow builtin or reserved types");
         if (token_.text == "<")
             fail("native generic type alias forward requires a verified monomorphization ABI");
@@ -2177,7 +2185,8 @@ private:
             fail("native generic type alias requires a verified monomorphization ABI");
         if (name == "int" || name == "bool" || name == "string" ||
                 name == "String" || reserved(name) ||
-                callable_nominal_name(name) || entry_builtin_name(name))
+                callable_nominal_name(name) || entry_builtin_name(name) ||
+                native_ownership_intrinsic_name(name))
             fail("native type alias cannot shadow a builtin or reserved language name");
         require("=");
         std::string target;
@@ -3316,6 +3325,12 @@ private:
         method_scope_ = owner;
         struct RestoreReceivers { std::unordered_set<std::string>& target; std::unordered_set<std::string> prior; ~RestoreReceivers() { target = std::move(prior); } } restore_receivers{class_receivers_, std::move(class_receivers_)};
         class_receivers_.clear();
+        struct RestoreBoxReceivers {
+            std::unordered_set<std::string>& target;
+            std::unordered_set<std::string> prior;
+            ~RestoreBoxReceivers() { target = std::move(prior); }
+        } restore_boxes{box_receivers_, std::move(box_receivers_)};
+        box_receivers_.clear();
         struct RestoreClassLocals {
             std::unordered_map<std::string, std::string>& locals;
             std::unordered_map<std::string, std::string> saved;
@@ -3837,10 +3852,46 @@ private:
             require(";");
             return true;
         };
+        auto native_box_local = [&]() -> bool {
+            if (!(token_.text == "val" && peek_next().text == "Box"))
+                return false;
+            // Restrict to the already-proven hosted owned-i64 region and
+            // immutable single-owner, no-escape synchronous main. This does
+            // not admit actor transport, Box moves, asynchronous suspension
+            // or a guest-visible raw pointer.
+            if (!experimental_owned_int_)
+                fail("ATTO_BOX_MAIN_V1_REJECT: requires --experimental-owned-int");
+            if (!owner.empty() || value.name != "main" || value.async_source_i64 ||
+                    !value.parameters.empty() || !value.locals.empty() ||
+                    !value.source_tasks.empty() || !value.future_pipelines.empty() ||
+                    !value.actor_spawns.empty() || !box_receivers_.empty())
+                fail("ATTO_BOX_MAIN_V1_REJECT: one local Box<int> only in synchronous zero-arg main");
+            LocalBinding binding;
+            binding.offset = token_.offset;
+            binding.native_box_i64 = binding.heap_owned = true;
+            require("val"); require("Box"); require("<");
+            if (!accept("int"))
+                fail("ATTO_BOX_MAIN_V1_REJECT: only Box<int> is supported");
+            require(">");
+            binding.name = identifier();
+            require("=");
+            require("Box"); require("<");
+            if (!accept("int"))
+                fail("ATTO_BOX_MAIN_V1_REJECT: only Box<int> constructor is supported");
+            require(">"); require("(");
+            auto initial = make_expression(Expression::Kind::Integer, token_.offset);
+            initial->integer = signed_integer_literal();
+            binding.initializer = std::move(initial);
+            require(")"); require(";");
+            box_receivers_.insert(binding.name);
+            value.locals.push_back(std::move(binding));
+            return true;
+        };
         while (token_.text == "const" || token_.text == "val" || token_.text == "let" ||
                 token_.text == "int" || token_.text == "bool" ||
                 token_.text == "string" || token_.text == "String" ||
                 token_.text == "stdio" || array_effect_ahead()) {
+            if (native_box_local()) continue;
             // Typed Future<void> is admitted ONLY as a linear lexical alias
             // for one already-spawned ActorRef.get_ready() lifecycle promise.
             // No scalar/object borrow crosses this suspension, and general
@@ -6732,6 +6783,18 @@ private:
             auto field = make_expression(Expression::Kind::Field, offset);
             field->left = std::move(expr);
             field->name = identifier();
+            if (field->left && field->left->kind == Expression::Kind::Variable &&
+                    box_receivers_.count(field->left->name)) {
+                if (field->left->native_box_read || field->name != "get")
+                    fail("ATTO_BOX_MAIN_V1_REJECT: only Box<int>.get() is admitted");
+                require("("); require(")");
+                field->kind = Expression::Kind::Variable;
+                field->name = field->left->name;
+                field->native_box_read = true;
+                field->left.reset();
+                expr = std::move(field);
+                continue;
+            }
             // Keep ActorRef.send(...) for the outer actor action parser.
             // Eager ArrayCall parsing would erase the send/stop ordering.
             const bool named_class_receiver = field->left
@@ -6946,6 +7009,8 @@ private:
         // '_' is reserved for wildcard/inference-hole use, never a
         // stable runtime nominal identity or module contract name.
         std::string name = identifier();
+        if (native_ownership_intrinsic_name(name))
+            fail("NATIVE_OWNERSHIP_INTRINSIC_RESERVED: compiler-owned nominal cannot be redefined");
         if (name == "pattern") fail("contextual pattern keyword cannot declare a native nominal type");
         if (name == "_") fail("wildcard '_' cannot be declared as a nominal type name");
         return name;
@@ -9197,6 +9262,7 @@ private:
     std::unordered_set<std::string> function_import_names_;
     std::string method_scope_;
     std::unordered_set<std::string> class_receivers_;
+    std::unordered_set<std::string> box_receivers_;
     std::unordered_map<std::string, std::string> class_literal_locals_;
     std::unordered_map<std::string,
         std::unordered_map<std::string, ScalarType>> public_class_fields_;
