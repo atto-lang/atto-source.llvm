@@ -48,6 +48,9 @@ sources=(
   tests/actor_mailbox_completion_model_test.cpp
   tests/native_actor_control_data_lane_test.cpp
   tests/supervisor_control_turn_test.cpp
+  tests/native_actor_mailbox_completion_stress_test.cpp
+  tests/native_actor_mailbox_lifecycle_test.cpp
+  tests/native_actor_mailbox_randomized_model_test.cpp
 )
 printf 'Compiler: %s; sanitizer: %s; repeats: %s\n' "$cxx" "$mode" "$repeats"
 for source in "${sources[@]}"; do

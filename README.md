@@ -1,5 +1,18 @@
 # AttoLang Native LLVM backend
 
+## AttoLang migration and authoritative language contracts (2026-11-18)
+
+**AttoLang** is the current language name (**formerly Oreslang**). This `ores-truffle-oreslang/oreslang-source.llvm` repository retains the historical name and implementation context; the AttoLang-named counterpart is **[atto-lang/atto-source.llvm](https://github.com/atto-lang/atto-source.llvm)**, the destination for new AttoLang development. This legacy LLVM tree and the AttoLang LLVM repository may differ in code and tests. Verify exact commit trees and guest execution before considering a feature migrated.
+
+The **[atto-spec](https://github.com/atto-lang/atto-spec)** repository now owns normative language syntax and semantics, rather than this backend README, the old Oreslang repository names, or Java/Truffle behavior alone. Portable, positive **and negative** language tests belong in [atto-platform-conformance](https://github.com/atto-lang/atto-platform-conformance); compare implementations via [atto-compilers-parity-testing](https://github.com/atto-lang/atto-compilers-parity-testing). [atto-common-source](https://github.com/atto-lang/atto-common-source) owns portable `.atto` libraries. Backend-specific compiler code stays in its corresponding `atto-source.*` repository.
+
+**Current source-design directions (targets, not claims this backend implements them):** canonical `.atto` for new portable source, `snake_case` function/method names, ownership operations `borrow!`, `take!`, `share!`, `copy!`, and `copy!!`; [implicit borrowing for nonprimitive arguments](https://github.com/atto-lang/atto-spec/blob/main/language/implicit-argument-borrow-v1.md) is still a design target subject to compiler verification. [File/module `define const`](https://github.com/atto-lang/atto-spec/blob/main/language/file-module-const-v1.md) supports proposed constexpr values **and** non-throwing, one-time runtime `os.read_env` initialization. [The proposed operator contract](https://github.com/atto-lang/atto-spec/blob/main/language/bitwise-and-stream-operators-v1.md) uses `<<<`, `>>>`, and `ashr` for shifts and reserves `<<`/`>>` for directional stream I/O; it is **not** automatically supported by legacy backends. [Shared ownership](https://github.com/atto-lang/atto-spec/blob/main/language/shared-ownership-and-guards-v1.md) does not grant unsynchronized mutable aliasing. Check spec documents for proposal/admission status before changing a parser or example.
+
+**Compatibility and verification:** Keep existing `.ores` fixtures, `oreslang-*` commands, package IDs, fixed ABIs, and wire identifiers wherever still used; an AttoLang name change alone does not prove that a renamed CLI, syntax form, AOT target, actor isolation, zero-GC runtime or guest feature works. Retain exact legacy commands below when they describe this checkout. Do not use Python for project scripts, tests, CI helpers or tooling; use Rust for supporting tooling/tests where practical, without misrepresenting the backend implementation language. Record source commit/tree, target/toolchain, real positive/negative **compiled guest execution**, and `passed`/`failed`/`unsupported`/`not executed` for every claimed parity result. Host-only tests or workflows with zero executed steps are **not** compiler parity evidence.
+
+> **Security integration (draft):** [AttoLang LLVM wasm32 actor → Volucro authenticated Wasmi Store](docs/ATTO_VOLUCRO_WASM_ACTOR_ISOLATION_V1.md) supplies a real source-to-Wasm-to-Volucro smoke harness, exact-head provenance checks, and documented security gaps. Not production native tenant isolation.
+
+
 **AttoLang** is the current public language name (formerly **Oreslang**).
 This compiler/runtime remains the independent native LLVM implementation; existing tool names, `.ores` fixtures, module identifiers and compiled ABI remain unchanged.
 This branding change does not establish new syntax, source-extension support,
@@ -10,16 +23,16 @@ Do not rename repositories, dependencies, commands or fixed interfaces merely
 to make their names match the public brand.
 
 
-Native companion to [oreslang-source.java](https://github.com/ores-truffle-oreslang/oreslang-source.java).
+Native counterpart to [atto-source.java](https://github.com/atto-lang/atto-source.java); the historical Java checkout remains [oreslang-source.java](https://github.com/ores-truffle-oreslang/oreslang-source.java).
 Tracks [LLVM port issue #1](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/1).
 
-Please keep parity with oreslang-source.java in terms of features and capability. The same guest code that runs on graalvm should compile and execute with gcc/llvm.
+Target portable parity with AttoLang's Java/GraalVM backend under atto-spec; establish each backend's actual supported subset through executed guest conformance tests.
 Do not use python for anything, use Rust instead of python to support the language.
 
 Notes on the compiler and runtime:
 
 * Strive for zero gc. The borrow checker should accomplish this, and having separate heaps/arenas per actor helps reduce any remaining gc overhead.
-* Borrow checking uses reserved keywords `rt copy, rt share, rt take, rt borrow`
+* Legacy ownership syntax in this checkout includes `rt copy`, `rt share`, `rt take` and `rt borrow`; current AttoLang target source prefers `copy!`, `copy!!` (deep copy), `share!`, `take!`, `borrow!`, and implicit checked parameter borrowing where executed conformance proves support. See [atto-spec](https://github.com/atto-lang/atto-spec) before rewriting historical fixtures.
 * Go for full AOT. Some JIT elements are ok, as long as they can be explicitly controlled/governed by user. But we need native binaries.
 * Strive for hard real time not just soft-real time by minimizing JIT (or having JIT switched off for certain paths) and moving towards full AOT.
 * Use data-oriented design and data oriented programming - be mindful of using AoS, SoA, AoSoA and SoAoS where possible.
@@ -27,7 +40,13 @@ Notes on the compiler and runtime:
 * OresLang must be built around excellent tree-shaking so we can get final binary executables as small as possible and reduce startup overhead etc.
 
 
-**Parity commitment: LLVM and Java/GraalVM are first-class Oreslang backends with the same language and observable runtime semantics.** Full feature parity is a standing requirement for the compiler, type system, standard library, actors, supervision, ownership/borrowing, scheduling, async/await, I/O and error handling—not an optional stretch goal. Features added to either backend must be tracked against the other backend and covered by shared conformance tests. LLVM must not be treated as a permanently restricted dialect of Oreslang.
+## OresVM root host and tenant IsolateVM architecture
+
+**OresVM** is the root supervisor and tenant admission runtime; each **IsolateVM** is a tenant-owned execution domain containing many Oreslang actors. The OresIsolateContext is a temporary guest-call ABI view, not a separate VM. This distinction and the relevant V8 isolate/context, pointer-compression and security lessons are documented in [OresVM vs IsolateVM](docs/ORESVM_VS_ISOLATEVM.md).
+
+The host uses a concrete, privately owned IsolateVM C++ class. There is also a narrow opt-in synchronous scalar .ores-to-LLVM isolate entry, but general guest source lowering, the actor scheduler and OS-process sandboxing remain outstanding. See [OresVM tenant-isolate substrate status](docs/ORESVM_TENANT_ISOLATES.md).
+
+**Parity target: LLVM and Java/GraalVM are first-class AttoLang backends intended to share language and observable runtime semantics.** Full feature parity is a standing requirement for the compiler, type system, standard library, actors, supervision, ownership/borrowing, scheduling, async/await, I/O and error handling—not an optional stretch goal. Features added to either backend must be tracked against the other backend and covered by shared conformance tests. LLVM must not be treated as a permanently restricted dialect of Oreslang.
 
 **Current verification status (October 2026):** LLVM has a tested but incomplete native source-to-IR/AOT implementation. **Full end-to-end parity has not yet been verified.** The inventory below documents implementation gaps to close, not exceptions to the parity requirement. Unsupported source fails closed rather than silently compiling with different semantics.
 
@@ -169,7 +188,11 @@ building blocks, not a substitute for the remaining guest-language support.
   capability limits without weakening the full host backend parity target.
 
 The detailed status matrix and open obligations live in the
-[source parity contract](docs/SOURCE_PARITY.md).
+[source parity contract](docs/SOURCE_PARITY.md). The first strict source-level
+Java/GraalVM ↔ LLVM execution gate is documented in
+[Java/LLVM source-execution qualification](docs/JAVA_LLVM_SOURCE_EXECUTION_GATE.md).
+LLVM-only native CTests are important regression evidence, but never count as
+completed Java differential execution without a pinned, executed Java run.
 
 Native I/O API naming: blocking I/O operations will require the `_blocking` suffix; async I/O may use `_async`. This is a documented target contract, **not yet an implemented compiler check**.
 
@@ -299,3 +322,12 @@ dot products, reductions and matrix multiplication remain unsupported here
 and must fail closed rather than silently map to i64. See the existing
 `native_float_division_unavailable` contract. Java/LLVM numerical parity is
 not claimed by this fixture.
+
+## Legacy repository scope and contribution routing (2026-11-18)
+
+**Historical checkout:** `ores-truffle-oreslang/oreslang-source.llvm`. **AttoLang destination:** [`atto-lang/atto-source.llvm`](https://github.com/atto-lang/atto-source.llvm).
+
+**Scope:** LLVM/native lowering, native AOT, ownership-aware runtime, target-specific code generation. The historical repository and new counterpart may not contain identical commits, pull requests, issues, or artifacts; a same-suffix repo is not proof of an in-place GitHub ownership transfer or identical Git history. Compare exact SHAs and migrate outstanding work deliberately; open new AttoLang design changes against [atto-spec](https://github.com/atto-lang/atto-spec) and new backend work in the appropriate AttoLang repository. The former plan to transfer `oreslang-source.llvm` under its unchanged legacy name is superseded as a naming destination by `atto-source.llvm` (without implying the old GitHub repository itself has moved).
+
+Keep the [historical organization migration tracker](https://github.com/ores-truffle-oreslang/.github/issues/26) and [review runbook](https://github.com/ores-truffle-oreslang/.github/pull/25) for migration/security context, not as proof of a completed transfer. Preserve access controls, private source provenance, branch protections, PR/issue history and CI evidence; do not assume an existing `atto-*` repository is a verified byte-for-byte transfer. Host-only or source-free canaries do not prove guest code execution or parity.
+

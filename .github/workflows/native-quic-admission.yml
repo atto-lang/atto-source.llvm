@@ -5,7 +5,9 @@ on:
       - 'src/main/cpp/oreslang/runtime/NativeQuicAdmission.hpp'
       - 'tests/native_quic_admission_test.cpp'
       - 'src/main/cpp/oreslang/runtime/NativeQuicLeaseLedger.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeQuicLoopbackUdp.hpp'
       - 'tests/native_quic_lease_ledger_test.cpp'
+      - 'tests/native_quic_loopback_udp_test.cpp'
       - 'scripts/test-native-quic-admission.sh'
       - '.github/workflows/native-quic-admission.yml'
   workflow_dispatch:

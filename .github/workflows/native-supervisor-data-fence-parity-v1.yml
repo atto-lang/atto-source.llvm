@@ -1,0 +1,62 @@
+name: LLVM supervisor DATA admission fence native parity
+on:
+  pull_request:
+    paths:
+      - 'tests/native_preallocated_supervisor_races_test.cpp'
+      - 'src/main/cpp/oreslang/runtime/ActorGroupLifecycle.hpp'
+      - 'src/main/cpp/oreslang/runtime/PriorityActorInbox.hpp'
+      - 'src/main/cpp/oreslang/runtime/BoundedActorPort.hpp'
+      - '.github/workflows/native-supervisor-data-fence-parity-v1.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-real-components:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [g++, clang++]
+        mode: [optimized, sanitized]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify original source SHA and critical native blob identities
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          test "$(git hash-object tests/native_preallocated_supervisor_races_test.cpp)" = 5237e706ccb7cf63f10360a931ac4a482ff9caa1
+          test "$(git hash-object src/main/cpp/oreslang/runtime/ActorGroupLifecycle.hpp)" = 066f23a0d4c2e17c5369e81e829f4daf14e980f5
+          test "$(git hash-object src/main/cpp/oreslang/runtime/PriorityActorInbox.hpp)" = 848a0cbc6f31a274056a09482ea5cf74162b17bb
+      - name: Build and run actual bound native supervisor inbox test
+        shell: bash
+        env:
+          CXX: ${{ matrix.compiler }}
+          MODE: ${{ matrix.mode }}
+        run: |
+          set -euo pipefail
+          flags="-O2"
+          if [[ "$MODE" == sanitized ]]; then
+            flags="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer"
+          fi
+          exe="$RUNNER_TEMP/llvm-supervisor-data-fence"
+          "$CXX" -std=c++17 $flags -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -pthread -I src/main/cpp tests/native_preallocated_supervisor_races_test.cpp -o "$exe"
+          ASAN_OPTIONS=detect_leaks=1 "$exe" | tee "$RUNNER_TEMP/supervisor-data-fence.log"
+          grep -Fx 'LLVM_SUPERVISOR_DATA_FENCE_HOST_PASS|new_races=128|guest_atto=0' \
+            "$RUNNER_TEMP/supervisor-data-fence.log"
+      - name: Verify no source changes after test
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"

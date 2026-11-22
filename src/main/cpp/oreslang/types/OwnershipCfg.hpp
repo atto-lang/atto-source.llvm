@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <map>
@@ -7,6 +8,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -51,9 +53,13 @@ struct Operation {
     enum class Kind {
         Initialize, Read, Move, Drop, DropIfOwned,
         ReadObject, MoveObject, BorrowShared, BorrowExclusive,
-        ReleaseShared, ReleaseExclusive
+        ReleaseShared, ReleaseExclusive, Suspend
     };
-    Kind kind;
+    // A default-constructed instruction must never expose an indeterminate
+    // enum (undefined behavior under optimizer/sanitizers). The empty place
+    // then fails closed with 'unknown CFG place' if emitted without filling
+    // the operation from typed compiler IR.
+    Kind kind = Kind::Read;
     std::string place;
     // Optional explicit lexical loan identity; absent borrow IDs derive from
     // the original CFG operation site, not the active traversal order.
@@ -97,12 +103,57 @@ inline PlaceState& place(State& state, const std::string& key) {
 // apply(), and vice versa. Until this verifier has a proven projection tree,
 // reject those mixed layouts instead of allowing a loan to be bypassed.
 // Siblings (p.a and p.b) remain independent places.
+// The flat representation only proves disjointness for named field paths.
+// Array indexes, pointer dereferences, escaped separators and generated
+// unverified place expressions must be lowered to typed PlaceIds first.
+// Otherwise a key like "p[0]" incorrectly appears disjoint from "p" and a
+// write through it could bypass an outstanding exclusive/shared loan.
+// This deliberately restricts the flat verifier to ASCII identifier segments.
 inline void validate_disjoint_place_layout(const State& state) {
+    constexpr std::size_t kMaxPlacePathBytes = 256;
+    constexpr std::size_t kMaxPlacePathSegments = 16;
     for (const auto& item : state) {
         const std::string& key = item.first;
-        if (key.empty() || key.front() == '.' || key.back() == '.' ||
+        if (key.empty() || key.size() > kMaxPlacePathBytes ||
+                key.front() == '.' || key.back() == '.' ||
                 key.find("..") != std::string::npos)
             violation(key, "invalid CFG place path");
+        std::size_t segments = 0;
+        std::size_t at = 0;
+        while (at < key.size()) {
+            if (++segments > kMaxPlacePathSegments)
+                violation(key, "unproven or overdeep CFG field path");
+            const auto valid_start = [](unsigned char ch) {
+                return (ch >= 'A' && ch <= 'Z') ||
+                    (ch >= 'a' && ch <= 'z') || ch == '_';
+            };
+            const auto valid_continuation = [&](unsigned char ch) {
+                return valid_start(ch) || (ch >= '0' && ch <= '9');
+            };
+            // Main's parser names compiler-owned ANF locals with a leading
+            // '$' (e.g. '$effect1' for discarded comma-body items). Admit
+            // that marker only on the root segment; '$' never appears in a
+            // user identifier or a field projection ("p.$a" stays rejected).
+            if (at == 0 && key[at] == '$' && key.size() > 1) ++at;
+            // The ownership checker tracks a fieldless nominal object through
+            // one unspellable proof slot, '<owner>.$identity'. Admit exactly
+            // that compiler-owned leaf; any other '$' projection, or a path
+            // continuing below it, stays rejected.
+            constexpr std::string_view kIdentityLeaf = "$identity";
+            if (at > 0 && key.compare(at, std::string::npos, kIdentityLeaf) == 0) {
+                at = key.size();
+                continue;
+            }
+            if (!valid_start(static_cast<unsigned char>(key[at])))
+                violation(key, "unproven CFG place projection syntax");
+            ++at;
+            while (at < key.size() && key[at] != '.') {
+                if (!valid_continuation(static_cast<unsigned char>(key[at])))
+                    violation(key, "unproven CFG place projection syntax");
+                ++at;
+            }
+            if (at < key.size()) ++at;
+        }
         for (std::size_t dot = key.find('.'); dot != std::string::npos;
                 dot = key.find('.', dot + 1)) {
             if (state.count(key.substr(0, dot)))
@@ -116,9 +167,34 @@ inline void require_owned(const std::string& key, const PlaceState& value) {
         violation(key, "not definitely initialized on every CFG predecessor");
 }
 
+// apply() also has direct compiler callers, outside verify()'s entry
+// normalization. Do not let release erase malformed ownership evidence or
+// dereference an empty identity set. Legacy anonymous entry loans must first
+// go through verify(), which explicitly normalizes their reserved identity.
+inline void validate_operation_state(const State& state) {
+    for (const auto& [name, value] : state) {
+        if (!value.possible || (value.possible &
+                static_cast<ValueMask>(~(kOwned | kMoved | kUninitialized | kDropped)))) {
+            violation(name, "invalid operation ownership mask");
+        }
+        if (value.shared_loans > 65535 ||
+                value.shared_loans != value.shared_loan_ids.size() ||
+                value.exclusive_loan != value.exclusive_loan_id.has_value()) {
+            violation(name, "unproven operation loan identity");
+        }
+        if (value.exclusive_loan && value.shared_loans) {
+            violation(name, "conflicting operation borrow states");
+        }
+        if ((value.exclusive_loan || value.shared_loans) && value.possible != kOwned) {
+            violation(name, "live loan on non-owned operation place");
+        }
+    }
+}
+
 inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
     // Keep direct helper callers as safe as verify(Graph), not just the CFG path.
     validate_disjoint_place_layout(state);
+    validate_operation_state(state);
     if (op.kind == Operation::Kind::ReadObject ||
             op.kind == Operation::Kind::MoveObject) {
         // A non-Copy object requires *all* its fields. A moved field does
@@ -145,6 +221,16 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
             for (auto& item : state)
                 if (item.first.compare(0, prefix.size(), prefix) == 0)
                     item.second.possible = kMoved;
+        return;
+    }
+    // A suspended logical continuation cannot carry an active loan.
+    // Check every place before falling through to a place-specific operation.
+    if (op.kind == Operation::Kind::Suspend) {
+        for (const auto& entry : state) {
+            const auto& loan = entry.second;
+            if (loan.shared_loans || loan.exclusive_loan)
+                violation(entry.first, "borrow crosses suspension");
+        }
         return;
     }
     PlaceState& value = place(state, op.place);
@@ -200,7 +286,9 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
             if (!value.shared_loans) violation(op.place, "unmatched shared loan release");
             if (!op.loan_id && value.shared_loan_ids.size() != 1)
                 violation(op.place, "shared loan release requires unambiguous provenance");
-            const auto to_release = op.loan_id.value_or(*value.shared_loan_ids.begin());
+            // value_or eagerly evaluates its argument even for an explicit ID.
+            // State validation above proves the fallback set is nonempty.
+            const auto to_release = op.loan_id ? *op.loan_id : *value.shared_loan_ids.begin();
             if (!value.shared_loan_ids.erase(to_release))
                 violation(op.place, "shared loan release has foreign provenance");
             --value.shared_loans;
@@ -215,6 +303,7 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
             return;
         case Operation::Kind::ReadObject:
         case Operation::Kind::MoveObject:
+        case Operation::Kind::Suspend:
             break;
     }
     violation(op.place, "invalid CFG operation");
@@ -244,9 +333,32 @@ inline bool join_into(State& target, const State& incoming) {
     return changed;
 }
 
+// Conservative bounds on untrusted typed-CFG input and fixed-point effort.
+// These protect the native checker itself; they are NOT a certification of
+// source-to-MIR completeness, compiler emissions, or actor heap invariants.
+inline constexpr std::size_t kMaxCfgBlocks = 4096;
+inline constexpr std::size_t kMaxCfgEntryPlaces = 65536;
+inline constexpr std::size_t kMaxCfgEdges = 16384;
+inline constexpr std::size_t kMaxCfgOperationsPerBlock = 1024;
+inline constexpr std::size_t kMaxCfgOperations = 100000;
+inline constexpr std::size_t kMaxCfgWork = 2000000;
+
 inline Analysis verify(const Graph& graph) {
     if (graph.blocks.empty())
         throw std::runtime_error("ownership violation: empty CFG");
+    if (graph.blocks.size() > kMaxCfgBlocks ||
+            graph.entry.size() > kMaxCfgEntryPlaces)
+        throw std::runtime_error("ownership violation: CFG resource budget exceeded");
+    std::size_t total_edges = 0;
+    std::size_t total_operations = 0;
+    for (const auto& block : graph.blocks) {
+        if (block.operations.size() > kMaxCfgOperationsPerBlock ||
+                block.operations.size() > kMaxCfgOperations - total_operations ||
+                block.successors.size() > kMaxCfgEdges - total_edges)
+            throw std::runtime_error("ownership violation: CFG resource budget exceeded");
+        total_operations += block.operations.size();
+        total_edges += block.successors.size();
+    }
     // Each lexical borrow must own a globally unique provenance token,
     // including across mutually exclusive CFG predecessors. Otherwise two
     // different borrows with the same count and token could spuriously join,
@@ -274,6 +386,27 @@ inline Analysis verify(const Graph& graph) {
                 violation(op.place, "duplicate lexical loan identity");
         }
     }
+    // The verifier currently starts from block 0. A disconnected but
+    // structurally well-formed block would otherwise receive no analysis,
+    // and later compiler transforms could expose unverified operations.
+    // Reject the entire typed CFG unless every declared block is reachable.
+    std::vector<bool> reachable(graph.blocks.size(), false);
+    std::deque<std::size_t> pending{0};
+    reachable[0] = true;
+    while (!pending.empty()) {
+        const auto block_id = pending.front();
+        pending.pop_front();
+        for (const auto next : graph.blocks[block_id].successors) {
+            if (!reachable[next]) {
+                reachable[next] = true;
+                pending.push_back(next);
+            }
+        }
+    }
+    for (std::size_t block_id = 0; block_id < reachable.size(); ++block_id)
+        if (!reachable[block_id])
+            violation(std::to_string(block_id), "unreachable CFG block");
+
     // Reject malformed initial abstract states before any CFG edge is
     // processed. Unknown bits and contradictory live-loan provenance
     // must not silently enter the fixed-point lattice.
@@ -344,13 +477,26 @@ inline Analysis verify(const Graph& graph) {
     std::deque<std::size_t> queue{0};
     std::vector<bool> queued(graph.blocks.size(), false);
     queued[0] = true;
+    // Bound the amount of actual reprocessing after validating input size.
+    // Loops may legitimately need multiple visits; an adversarial CFG must
+    // not monopolize the compiler in an unbounded fixed-point computation.
+    std::size_t remaining_work = kMaxCfgWork;
+    auto charge_work = [&](std::size_t cost) {
+        if (cost > remaining_work)
+            throw std::runtime_error("ownership violation: CFG analysis work budget exceeded");
+        remaining_work -= cost;
+    };
     while (!queue.empty()) {
+        // Every state includes entry places. Most CFG operations scan them,
+        // so counting only instructions would severely undercharge work.
+        charge_work(1 + entry.size());
         const auto index = queue.front();
         queue.pop_front();
         queued[index] = false;
         State current = *result.incoming[index];
         const BasicBlock& block = graph.blocks[index];
         for (std::size_t site = 0; site < block.operations.size(); ++site) {
+            charge_work(1 + current.size());
             // Reserve zero for an explicitly known loan at entry. Source
             // position gives stable IDs across fixed-point reprocessing.
             if (index >= UINT32_MAX || site >= UINT32_MAX)
@@ -365,6 +511,7 @@ inline Analysis verify(const Graph& graph) {
                     violation(item.first, "loan escapes CFG exit");
         result.outgoing[index] = current;
         for (std::size_t next : block.successors) {
+            charge_work(1 + current.size());
             if (next >= graph.blocks.size())
                 throw std::runtime_error("ownership violation: CFG edge outside graph");
             bool changed = false;

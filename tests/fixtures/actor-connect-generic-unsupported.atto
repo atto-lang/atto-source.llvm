@@ -1,0 +1,2 @@
+// Named generic spelling must not sidestep live ActorRef admission.
+pub fnc main(): int { return Actor.connect<int>(reader_ref, writer_ref); }
