@@ -9947,6 +9947,13 @@ target_include_directories(atto-checked-actor-ir PRIVATE
 )
 target_link_libraries(atto-checked-actor-ir PRIVATE ${ORE_LLVM_LIBS})
 
+# This source-only gate deliberately does NOT certify a Channel<int> guest.
+# It proves the native lexical rejection boundary on exact C++17 host code.
+enable_testing()
+add_executable(atto-channel-int-lexical-gate tests/channel_int_lexical_gate.cpp)
+target_include_directories(atto-channel-int-lexical-gate PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+add_test(NAME atto-channel-int-lexical-gate COMMAND atto-channel-int-lexical-gate)
+
 # Host-runtime actor slab heap (Offset32 + Handle32); no LLVM dependency.
 # See docs/ACTOR_SLAB_HEAP.md. Not compiled .atto allocation evidence.
 include(CTest)
