@@ -1,0 +1,42 @@
+name: Atto backend-local arena policy source-only gate
+on:
+  pull_request:
+    paths:
+      - 'stdlib/alloc/arena_plan.atto'
+      - 'contracts/atto-arena-policy-v1.json'
+      - 'tests/atto-arena-policy-source.test.mjs'
+      - 'docs/ATTO_BACKEND_LOCAL_LIBRARIES.md'
+      - '.github/workflows/atto-arena-policy-source.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-only-policy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact source head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact clean checkout and tree
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet
+          git diff --cached --quiet
+          echo "ATTO_ARENA_POLICY_EXACT_HEAD=$EXPECTED_HEAD"
+          echo "ATTO_ARENA_POLICY_EXACT_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Run 38 source-subset vectors plus pinned blob checks
+        run: node --test tests/atto-arena-policy-source.test.mjs
+      - name: Record scope boundary
+        if: always()
+        run: |
+          echo 'Source-only subset gate: not native Atto guest execution, allocator drop proof, Java/LLVM parity, or Native AOT.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Zero-step CI means NOT_EXECUTED. Private-source mirrors require independent export authorization.' >> "$GITHUB_STEP_SUMMARY"
