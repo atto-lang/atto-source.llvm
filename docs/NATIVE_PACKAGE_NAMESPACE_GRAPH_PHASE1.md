@@ -199,3 +199,24 @@ integration fixture is authored but **not yet executed** on an exact-head
 native LLVM runner. This does **not** integrate an authoritative host lock
 store or enable guest namespace execution. Production compiler/codegen
 still rejects imports until typed, verified cross-file lowering exists.
+
+## Canonical package namespace import syntax — staged admission (2026-11-20)
+
+The executable native parser recognizes the newly standardized
+`import pkg 'z';`, `import pkg 'z' as alias;`, and
+`import module Math from pkg 'z';` spellings as separate **package**
+selectors. These do **not** use the ordinary source-file import
+resolver. They intentionally fail with
+`package namespace imports require a verified package-export linker`
+before any LLVM output. Reject-only native test fixtures check this
+boundary, including unquoted selectors and invalid implicit aliases.
+
+The host-only v2 namespace graph described above is not sufficient
+authority to link these imports in a real guest. Executable support requires
+a pinned manifest/lockfile dependency graph, declared public package export
+table, package-instance ownership/provenance, duplicate-binding and
+private-export gates, and verified qualified-call lowering with real
+native guest execution. The parser gate is NOT guest parity evidence.
+
+Normative syntax: atto-lang/atto-spec#150.
+Conformance: atto-lang/atto-platform-conformance#241.

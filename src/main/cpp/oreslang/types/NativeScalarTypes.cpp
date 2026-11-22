@@ -131,6 +131,14 @@ void validate_native_scalar_types(const Program& program) {
             case E::LogicalNot:
                 require(expression(*e.left, locals), scalar(true), e.offset, "! requires bool");
                 return scalar(true);
+            case E::Cast: {
+                // Java-parity checked scalar identity cast: a static proof that the
+                // operand already has the target type, never a conversion or bitcast.
+                const Type target = scalar(e.cast_target);
+                require(expression(*e.left, locals), target, e.offset,
+                        "checked identity cast requires an operand of the target type");
+                return target;
+            }
             case E::Equal: case E::NotEqual: {
                 auto left = expression(*e.left, locals), right = expression(*e.right, locals);
                 if (!(left == right) || (left.kind != Kind::Int && left.kind != Kind::Bool && left.kind != Kind::String)) fail(e.offset, "equality operand types");

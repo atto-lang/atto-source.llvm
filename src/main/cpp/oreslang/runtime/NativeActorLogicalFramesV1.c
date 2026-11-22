@@ -25,6 +25,19 @@ struct OresNativeActorLogicalFramesV1 {
     unsigned char* bytes;
 };
 static _Atomic uint64_t next_domain = 1;
+/* Mint a process-unique frame-domain identity without ever wrapping.
+ * UINT64_MAX is a permanently exhausted sentinel, not a reusable token.
+ * A relaxed CAS suffices: this counter publishes no frame-storage data.
+ */
+static uint64_t mint_domain(void) {
+    uint64_t expected = atomic_load_explicit(&next_domain, memory_order_relaxed);
+    while (expected != 0 && expected != UINT64_MAX) {
+        if (atomic_compare_exchange_weak_explicit(&next_domain, &expected,
+                expected + UINT64_C(1), memory_order_relaxed, memory_order_relaxed))
+            return expected;
+    }
+    return 0;
+}
 static void wipe(void* addr, size_t n) {
     volatile unsigned char* p = (volatile unsigned char*)addr;
     while (n--) *p++ = 0;
@@ -62,8 +75,8 @@ OresNativeActorLogicalFramesV1* ores_logical_frames_v1_open(
     OresNativeActorLogicalFramesV1* s = calloc(1, sizeof(*s));
     if (!s) return NULL;
     s->owner = owner; s->incarnation = incarnation;
-    s->domain = atomic_fetch_add_explicit(&next_domain, 1, memory_order_relaxed);
-    if (!s->domain || s->domain == UINT64_MAX) { free(s); return NULL; }
+    s->domain = mint_domain();
+    if (!s->domain) { free(s); return NULL; }
     s->max_turns = turns; s->max_depth = depth; s->frame_bytes = bytes;
     s->turns = calloc(turns, sizeof(*s->turns));
     s->frame_generations = calloc((size_t)turns * depth, sizeof(uint64_t));

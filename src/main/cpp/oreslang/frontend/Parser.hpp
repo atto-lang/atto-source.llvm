@@ -7,6 +7,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include "oreslang/types/PointerIntHIR.hpp"
 #include "oreslang/types/FunctionEffects.hpp"
 #include "oreslang/types/FuturePipelineContract.hpp"
 #include "oreslang/types/NativeHasFutureContract.hpp"
@@ -43,11 +44,11 @@ struct GenericParameter {
 struct Expression {
     enum class Kind {
         Integer, Boolean, String, Console, Variable,
-        Negate, LogicalNot,
+        Negate, Abs, LogicalNot,
         Add, Subtract, Multiply, Remainder, Modulo, BitXor,
         Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
         LogicalAnd, LogicalOr, LogicalXor,
-        Conditional,
+        Conditional, Cast,
         Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field,
         ShiftLeft, ShiftRight, ShiftUnsignedRight
     };
@@ -56,6 +57,7 @@ struct Expression {
     std::int64_t integer = 0;
     bool boolean = false;
     mutable ScalarType resolved_type = ScalarType::I64;
+    ScalarType cast_target = ScalarType::I64; // checked, identity-only native scalar cast
     mutable std::string resolved_class;
     std::string name;
     std::unique_ptr<Expression> left;
@@ -132,7 +134,8 @@ struct LocalBinding {
     std::string move_source;
     bool owner_mutable = false; // explicit let mut; required for exclusive class loan
     bool field_mutable = false; // actor-owned fields only
-    ScalarType scalar_type = ScalarType::I64;
+    mutable ScalarType scalar_type = ScalarType::I64;
+    bool inferred_scalar = false; // resolved by scalar type pass, never assume i64
     std::string pending_type_alias; // transparent compile-time alias identity
     std::size_t offset = 0;
     std::string sum_type;
@@ -342,6 +345,10 @@ struct Statement {
 // All locals and ordinary statements precede guards; branch-local objects
 // and suspension remain unsupported until path-sensitive cleanup is proven.
 struct GuardedReturn {
+    // The new else-free 'guard cond { return value; }' is an early exit on
+    // FALSE. Legacy 'if cond { return value; } fi' returns on TRUE.
+    // Keep the polarity explicit: AST paths, typers and cleanup are shared.
+    bool return_on_false = false;
     std::unique_ptr<Expression> condition;
     std::unique_ptr<Expression> lhs; // stacked equality-only compatibility
     std::unique_ptr<Expression> rhs;
@@ -408,6 +415,7 @@ struct Function {
     bool exported = false;
     std::string method_owner; // compiler-owned class method privilege, never source syntax
     bool native_internal = false; // linker-owned private imported implementation
+    bool foreign_import = false; // exact approved C symbol, declaration-only, never guest-implemented
     // Explicit compiler-owned host C u32 trampoline, never the guest i64 ABI.
     // Only the browser v1 ABI version symbol is admitted in the first slice.
     std::string c_export_u32_symbol;
@@ -421,6 +429,9 @@ enum class MaxActorThreads : std::uint8_t { LOW = 1, MEDIUM = 2, HIGH = 3 };
 
 struct ActorDecl {
     std::string name;
+    // Contract metadata: native scalar actor transport is always int-only.
+    // Explicit 'sends' remains rejected until transitive effects exist.
+    bool declared_receives_i64 = false;
     std::vector<LocalBinding> fields; // bounded, actor-confined integer slots
     Function on_message; // exactly one synchronous pub on_message(int): int
     std::size_t offset = 0;
@@ -571,6 +582,13 @@ struct InvertedSourceMain {
 };
 
 struct Program {
+    // Host compilation authority, injected by the trusted CLI/loader only.
+    // Source code cannot forge this bit; parsed programs default denied.
+    bool foreign_i64_granted = false;
+    // M2a: same nominal HIR is consumed by canonical parser, existing
+    // ownership checker and LLVM backend. No raw pointer-as-i64 may enter
+    // ordinary source Expression or ScalarType storage.
+    std::unique_ptr<pointer_int_aot::Plan> pointer_int_plan;
     std::vector<FileExport> exports;
     std::vector<ModuleImport> imports;
     std::vector<NamespaceImportSyntax> namespace_imports;
@@ -598,12 +616,14 @@ struct Program {
 // is one zero-local actor lifecycle await in trusted zero-argument main:
 // direct/typed get_ready readiness or explicit ActorRef.get_done().
 Program parse_program(std::string_view source, bool experimental_owned_int = false,
-                      bool experimental_rt_scalar_loop = false);
+                      bool experimental_rt_scalar_loop = false,
+                      bool experimental_pointer_int_aot = false);
 
 // Internal module-linking stages: syntax trees are NOT admitted for codegen.
 // resolve_and_validate_program must run after all module names are resolved.
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int = false,
-                                 bool experimental_rt_scalar_loop = false);
+                                 bool experimental_rt_scalar_loop = false,
+                                 bool experimental_pointer_int_aot = false);
 // HOST-ONLY preparatory AST: caller must supply already authenticated frozen
 // source bytes, and only the verified package graph may consume the result.
 // Unlike parse_program(), this must never authorize IR or guest execution.

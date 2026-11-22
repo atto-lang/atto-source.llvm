@@ -1,0 +1,128 @@
+{
+  "schema": "atto.llvm.native-actor-bootstrap.v1",
+  "status": "PASS_LINUX_X86_64_BOUNDED_LEGACY_ACTOR_AOT",
+  "source": {
+    "repo": "atto-lang/atto-source.llvm",
+    "commit": "4e843d10e17f3264efcdd7dd1be6b7e9691f5a7f",
+    "full_git_tree": "f40cb5044af7ffb55cbd05dd7024cc7963d6042d",
+    "blob_count": 43,
+    "codegen_blob": "fb5d05772f0b47d49876897dbbf02d825111460b",
+    "native_runtime_blob": "95780f61ed1deba59a2375710a25eee6e9e5b86a",
+    "test_script_blob": "1aeff548f616423d68ffdd96509dfd51750c1b2c",
+    "abi_stress_blob": "3258ca2c5fe0a7f08dc07697e58585e099afc074",
+    "frontend_typechecker_blob": "18c9b7e3e9696bfdd56fa5130f52a9a71a796c43"
+  },
+  "carrier": {
+    "repository": "athlet-o/athleto-e2e",
+    "mirror_snapshot": "0ad2fd144e0df19e6d5c54ab711a4367dcdd8249",
+    "workflow_commit": "088ad52fd17ec2541a11c04dd9c35ddaf7f3c129",
+    "run": "https://github.com/athlet-o/athleto-e2e/actions/runs/43657189906",
+    "conclusion": "success",
+    "exact_tree_verified": true,
+    "source_blob_verification": true,
+    "cross_org_checkout_secret": false
+  },
+  "runtime_profile": {
+    "guest_source_extension": ".atto",
+    "supported_declaration": "define actor ... as ... receive(ActorMail<int|bool> mail): void ... end",
+    "execution": "checked_frontend_to_LLVM_IR_to_Clang_18_native_ELF",
+    "native_actor_handler_execution": true,
+    "no_guest_interpreter": true,
+    "no_wasm_runtime": true,
+    "no_guest_gc_in_profile": true,
+    "actor_model": "bounded pthread-per-actor bootstrap",
+    "max_actor_instances": 32,
+    "threads_per_actor": 1,
+    "actor_own_stack_bytes": 262144,
+    "actor_own_arena_bytes": 65536,
+    "state_slot_bytes": 8,
+    "max_global_state_slots": 1024,
+    "relative_arena_offsets_bits": 32,
+    "mailbox_capacity_per_actor": 128,
+    "mailbox_order": "FIFO_per_actor",
+    "handle_scheme": "generation_and_slot_checked_u32",
+    "send_full_result": "NATIVE_TRAP_NOT_YET_RESULT",
+    "close_policy": "main_completion_stops_admission_then_drains_accepted_mail_before_joins",
+    "actor_spawn_in_actor": "NOT_SUPPORTED"
+  },
+  "executed_tests": {
+    "native_actor_guest_fixtures": 4,
+    "guest_executions_per_fixture": 20,
+    "total_native_actor_guest_executions": 80,
+    "guest_expected_exit": 0,
+    "distinct_actor_types_two": true,
+    "same_actor_type_two_instances_isolated": true,
+    "own_receiver_method_invoked": true,
+    "per_actor_FIFO_sequence": true,
+    "boolean_mail": true,
+    "negative_compilation_rejections": 3,
+    "remote_state_rejected": true,
+    "wrong_payload_type_rejected": true,
+    "target_declare_mtd_profile_rejected": true,
+    "abi_concurrent_producers": 4,
+    "abi_actor_instances": 8,
+    "abi_messages_per_run": 1600,
+    "abi_runs": 5,
+    "abi_total_messages": 8000,
+    "abi_stale_or_forged_generation_rejected": true,
+    "abi_drain_on_close": true,
+    "asan_ubsan_actor_guest": true,
+    "asan_ubsan_abi_stress": true,
+    "previous_native_scalar_protocol_cases_retained": 1255,
+    "previous_atomic_artifact_hardening_passed": true,
+    "mailbox_full_retry_path": "IMPLEMENTED_BUT_NOT_EXPLICITLY_ASSERTED_NONZERO"
+  },
+  "guest_fixture_blobs": [
+    {
+      "path": "tests/actors/pass/180-two-types-state.atto",
+      "blob": "31a7248917db4fad90069af7d2c236d7a257dfa0",
+      "executions": 20
+    },
+    {
+      "path": "tests/actors/pass/181-same-type-separate-state.atto",
+      "blob": "08b2d59fb772886508eda38ff03de2c61e1dfd5a",
+      "executions": 20
+    },
+    {
+      "path": "tests/actors/pass/182-method-and-fifo.atto",
+      "blob": "fd6c08535705b52972427afc940476a8ebfb6e46",
+      "executions": 20
+    },
+    {
+      "path": "tests/actors/pass/183-bool-mail.atto",
+      "blob": "bcbf4c0a4e72abca113a0cda21c9333cd467da2a",
+      "executions": 20
+    }
+  ],
+  "negative_fixture_blobs": [
+    {
+      "path": "tests/actors/fail/184-actor-ref-state-access.atto",
+      "blob": "977b3259bcec01b2000f0b0f10efde53f370d533"
+    },
+    {
+      "path": "tests/actors/fail/185-actor-message-mismatch.atto",
+      "blob": "3adaa75dd908bf5a5c6dfdb1e9f567e8a5d4b0af"
+    },
+    {
+      "path": "tests/actors/fail/186-declare-mtd-not-lowered.atto",
+      "blob": "e729fc5c1e973f64cb832cce184910b7351c4995"
+    }
+  ],
+  "unsupported": {
+    "syntax_namespace_declare_actor_mtd_native": false,
+    "actor_sealed_state_critical_read_write": false,
+    "async_suspend_scheduler": false,
+    "work_stealing_scheduler": false,
+    "actor_child_spawn_in_receive": false,
+    "send_returns_result": false,
+    "individual_actor_cancel_and_close_api": false,
+    "supervisor_priority_control": false,
+    "panic_raise_throw_lifecycle": false,
+    "per_actor_untrusted_isolate": false,
+    "full_language_actor_aot": false,
+    "real_quic_tls_udp_network": false,
+    "http3_wire_client_server": false,
+    "independent_java_net_wasm_actor_runtime": false,
+    "zero_gc_full_language": false
+  }
+}

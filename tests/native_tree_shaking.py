@@ -43,6 +43,9 @@ CLASS_SURFACE = """define class Pair as
   pub final mut int b: start * 2;
   constructor(int start) { return; }
 end
+fnc unused_class_helper(): int {
+  return 99;
+}
 pub fnc main(): int {
   let Pair p = new Pair(13);
   return p.a + p.b;
@@ -179,12 +182,33 @@ def main():
                 "conservative tree shaking changed public overload ABI "+repr(symbol))
 
     class_control=compile_ir(args.compiler,CLASS_SURFACE,False)
-    class_shaken=compile_ir(args.compiler,CLASS_SURFACE,True)
+    class_shaken=compile_ir(args.compiler,CLASS_SURFACE,True,("main",))
     require(class_control.returncode==0,
             "class control compile failed: "+repr(class_control.stderr[:1024]))
-    require(class_shaken.returncode!=0 and class_shaken.stdout==b"" and
-            b"rejects class declarations until class initializer roots are modeled" in class_shaken.stderr,
-            "class tree shaking did not fail closed")
+    require(class_shaken.returncode==0,
+            "class conservative tree shake failed: "+repr(class_shaken.stderr[:1024]))
+    # Phase-0 does not model calls from class field initializers/constructors.
+    # Its only safe behavior for a class-containing program is the identity
+    # transform. Even an unreferenced helper must remain until Phase-2 proves
+    # the semantic dependency closure.
+    require(class_shaken.stdout==class_control.stdout,
+            "class tree shaking changed IR before initializer roots were modeled")
+    require(b"@unused_class_helper(" in class_shaken.stdout,
+            "conservative class mode discarded a helper")
+    with tempfile.TemporaryDirectory(prefix="oreslang-class-tree-shake-") as td:
+        ir=Path(td)/"class.ll"
+        exe=Path(td)/"class"
+        ir.write_bytes(class_shaken.stdout)
+        linked=run([str(args.clang),"-O2","-x","ir",str(ir),"-o",str(exe)])
+        require(linked.returncode==0,
+                "class conservative IR failed to link: "+repr(linked.stderr[:1024]))
+        result=run([str(exe)])
+        require(result.returncode==40 and result.stdout==b"" and result.stderr==b"",
+                "class constructor changed behavior under conservative tree shaking")
+    invalid_class_root=compile_ir(args.compiler,CLASS_SURFACE,True,("missing",))
+    require(invalid_class_root.returncode!=0 and invalid_class_root.stdout==b"" and
+            b"unknown tree-shake root" in invalid_class_root.stderr,
+            "class conservative mode admitted an unknown explicit root")
 
     actor_control=compile_ir(args.compiler,ACTOR_SURFACE,False)
     actor_shaken=compile_ir(args.compiler,ACTOR_SURFACE,True)

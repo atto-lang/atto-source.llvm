@@ -1,0 +1,34 @@
+name: LLVM native Result parser HOST ONLY
+on:
+  pull_request:
+    paths:
+      - "native/include/atto/result_int_parse_v1.h"
+      - "native/src/result_int_parse_v1.c"
+      - "native/tests/result_int_parse_v1_test.c"
+      - "native/CMakeLists.txt"
+      - ".github/workflows/int-parse-native-host.yml"
+permissions:
+  contents: read
+jobs:
+  native-result-host:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [gcc, clang]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Exact head and tree
+        run: |
+          git rev-parse HEAD
+          git rev-parse HEAD^{tree}
+      - name: Native host ABI test (not .atto guest)
+        run: |
+          cmake -S native -B /tmp/atto-result-${{ matrix.cc }} -DCMAKE_C_COMPILER=${{ matrix.cc }} -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/atto-result-${{ matrix.cc }} --target atto_result_int_parse_v1_test
+          ctest --test-dir /tmp/atto-result-${{ matrix.cc }} -R '^result_int_parse_v1_host$' --output-on-failure
+          echo ATTO_LLVM_RESULT_ATTO_GUEST=NOT_EXECUTED

@@ -63,7 +63,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends cmake ninja-build clang-18 llvm-18-dev
+          sudo apt-get install -y --no-install-recommends cmake ninja-build clang-18 llvm-18-dev lld-18
           cmake -S . -B /tmp/atto-inverted-full -G Ninja -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm
           cmake --build /tmp/atto-inverted-full --target oreslang-llvmc --parallel 2
           test -x /tmp/atto-inverted-full/oreslang-llvmc
@@ -73,7 +73,12 @@ jobs:
           set -euo pipefail
           bash tests/native_inverted_source_guest_hardening.sh /tmp/atto-inverted-full/oreslang-llvmc clang-18 contracts/dop-inverted-v1
           bash tests/native_inverted_source_randomized.sh /tmp/atto-inverted-full/oreslang-llvmc clang-18
-          echo 'REAL_SOURCE_GUEST_FULL_TREE_EXECUTED'
+          binary=/tmp/atto-inverted-full/oreslang-llvmc
+          binary_sha256="$(sha256sum "$binary" | cut -d ' ' -f 1)"
+          [[ "$binary_sha256" =~ ^[a-f0-9]{64}$ ]]
+          echo "REAL_LLVM_COMPILER_SHA256=$binary_sha256"
+          bash tests/native_inverted_wasm32_source_guest.sh "$binary" clang-18 contracts/dop-inverted-v1 "$binary_sha256"
+          echo 'REAL_NATIVE_AND_WASM32_SOURCE_GUEST_FULL_TREE_EXECUTED'
 
   full-repository-ctest:
     runs-on: ubuntu-24.04

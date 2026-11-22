@@ -1,0 +1,2 @@
+// Fail closed before LLVM IR is emitted.
+pub fnc main(): int { return missing_baremetal_symbol; }

@@ -9,6 +9,11 @@ void attempt_public_mint(NativeRegionRegistry& registry,
     (void)registry.issue(NativeRegionRegistry::Trust::Trusted, owner, 1, 1,
                          data, 16, TrustedPointerWindow::Mode::ReadWrite);
 }
+#elif defined(ORESLANG_TEST_NEGATIVE_PUBLIC_FENCE)
+void attempt_public_actor_fence(NativeRegionRegistry& registry,
+                                ActorHeapIdentity owner) {
+    registry.fence_actor(owner);
+}
 #elif defined(ORESLANG_TEST_NEGATIVE_FLOAT)
 void attempt_float(TrustedPointerWindow& window, ActorHeapIdentity owner) {
     (void)window.at<float>(owner);

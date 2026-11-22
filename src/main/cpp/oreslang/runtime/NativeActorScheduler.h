@@ -88,6 +88,13 @@ int ores_native_actor_scheduler_configure_turn_gate(
 void ores_native_actor_scheduler_signal_turn_gate(OresNativeActorScheduler* scheduler);
 OresNativeActorRef ores_native_actor_scheduler_spawn(
     OresNativeActorScheduler* scheduler, size_t actor_slot);
+/* Optional Java-parity physical admission: initialize one native pthread and
+ * wait for its scheduler-loop receipt BEFORE publishing the first ActorRef.
+ * Idle actors reuse that worker; independent runnable lanes grow on demand
+ * within the configured bound. Failed pthread creation does not consume
+ * the actor slot. Metadata-only spawn() is retained for host integrations. */
+OresNativeActorRef ores_native_actor_scheduler_spawn_ready(
+    OresNativeActorScheduler* scheduler, size_t actor_slot);
 /* Send succeeds only after atomic admission to a live, generation-matched
  * actor mailbox. It does NOT promise execution or successful processing.
  * No guest callback, blocking wait, or memory allocation occurs here.
@@ -312,6 +319,12 @@ int ores_native_actor_scheduler_set_affinity_window(
         OresNativeActorScheduler* s, uint32_t window);
 /* Turns taken ahead of their queue head because of carrier affinity. */
 uint64_t ores_native_actor_scheduler_affine_picks(OresNativeActorScheduler* s);
+/* Number of turns changing physical carriers since their actor's previous
+ * turn; WAKE/TASK-only count isolates resumed continuation migrations.
+ * These are cache-locality PROXIES, not hardware L1/L2 miss measurements.
+ * Counter reads are lock-protected; NULL returns zero. */
+uint64_t ores_native_actor_scheduler_carrier_migrations(OresNativeActorScheduler* s);
+uint64_t ores_native_actor_scheduler_continuation_migrations(OresNativeActorScheduler* s);
 uint64_t ores_native_actor_scheduler_control_completed(
     OresNativeActorScheduler* scheduler);
 OresNativeActorScheduler* ores_native_actor_scheduler_open(

@@ -10,7 +10,9 @@
 
 namespace oreslang {
 inline llvm::Type* native_pointer_type(llvm::LLVMContext& context, llvm::Type* pointee) {
-#if LLVM_VERSION_MAJOR >= 23
+    // Pointers are opaque from LLVM 17: getPointerTo() already returned this
+    // `ptr` type, and it is deprecated (-Werror) from LLVM 21.
+#if LLVM_VERSION_MAJOR >= 17
     (void)pointee;
     return llvm::PointerType::get(context, 0);
 #else

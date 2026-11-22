@@ -1,0 +1,8 @@
+// Mutable caller state may not cross the restricted Task<int> await gate.
+// This must fail before LLVM IR or an executable is published.
+pub fnc main(): int {
+  let Task<int> first = task { return 10; };
+  let int mutable_tile = 32;
+  let int partial = await first;
+  return partial + mutable_tile;
+}

@@ -96,11 +96,63 @@ inline llvm::Value* emit_checked_actor_ref32_address(
         throw std::invalid_argument("actor reference must lower inside an active function");
 
     auto* fn = active->getParent();
+    auto* source_bounds_block = llvm::BasicBlock::Create(
+        context, "ref32.source.bounds", fn);
+    auto* source_read_block = llvm::BasicBlock::Create(
+        context, "ref32.source.read", fn);
     auto* proof_block = llvm::BasicBlock::Create(context, "ref32.proof", fn);
     auto* bounds_block = llvm::BasicBlock::Create(context, "ref32.bounds", fn);
     auto* safe_block = llvm::BasicBlock::Create(context, "ref32.deref", fn);
     auto* trap_block = llvm::BasicBlock::Create(context, "ref32.invalid", fn);
 
+    // Even the SOURCE reference field may be an untrusted native address.
+    // Validate its four-byte read against this arena BEFORE loading any
+    // encoded bits. Target-proof validation only occurs after that read, so
+    // it cannot protect the source-field address by itself.
+    builder.CreateBr(source_bounds_block);
+    builder.SetInsertPoint(source_bounds_block);
+    llvm::Value* base = builder.CreatePtrToInt(
+        access.actor_arena_base, intptr, "ref32.base.address");
+    llvm::Value* source = builder.CreatePtrToInt(
+        access.field_address, intptr, "ref32.source.address");
+    if (native32) {
+        base = builder.CreateZExt(base, i64, "ref32.base.wide");
+        source = builder.CreateZExt(source, i64, "ref32.source.wide");
+    }
+    const std::uint64_t max_span = native32
+        ? address_max : UINT64_C(34359738360);
+    auto* span_compatible = builder.CreateICmpULE(access.actor_arena_span,
+        llvm::ConstantInt::get(i64, max_span));
+    auto* source_span_enough = builder.CreateICmpUGE(
+        access.actor_arena_span, llvm::ConstantInt::get(i64, 4));
+    auto* source_after_base = builder.CreateICmpUGE(source, base);
+    auto* source_delta = builder.CreateSub(source, base, "ref32.source.delta");
+    auto* source_fits = builder.CreateICmpULE(source_delta,
+        builder.CreateSub(access.actor_arena_span, llvm::ConstantInt::get(i64, 4)),
+        "ref32.source.fits");
+    auto* pointer_max = llvm::ConstantInt::get(i64, address_max);
+    auto* arena_no_wrap = builder.CreateICmpULE(
+        builder.CreateSub(access.actor_arena_span, llvm::ConstantInt::get(i64, 1)),
+        builder.CreateSub(pointer_max, base), "ref32.arena.no_wrap");
+    auto* base_nonzero = builder.CreateICmpNE(
+        base, llvm::ConstantInt::get(i64, 0));
+    auto* base_aligned = builder.CreateICmpEQ(
+        builder.CreateAnd(base, llvm::ConstantInt::get(i64, 7)),
+        llvm::ConstantInt::get(i64, 0));
+    auto* source_aligned = builder.CreateICmpEQ(
+        builder.CreateAnd(source, llvm::ConstantInt::get(i64, 3)),
+        llvm::ConstantInt::get(i64, 0));
+    auto* source_valid = builder.CreateAnd(
+        builder.CreateAnd(source_span_enough, span_compatible),
+        builder.CreateAnd(source_after_base,
+            builder.CreateAnd(source_fits,
+                builder.CreateAnd(arena_no_wrap,
+                    builder.CreateAnd(base_nonzero,
+                        builder.CreateAnd(base_aligned, source_aligned))))),
+        "ref32.source.valid");
+    builder.CreateCondBr(source_valid, source_read_block, trap_block);
+
+    builder.SetInsertPoint(source_read_block);
     // Physical guest storage is *always* i32. Do not load a machine pointer
     // or reinterpret the i32 field as a C ABI pointer.
     auto* field_ptr = builder.CreatePointerCast(access.field_address,
@@ -134,23 +186,12 @@ inline llvm::Value* emit_checked_actor_ref32_address(
     // An actor arena exceeding the compressed encoding's addressable span
     // must have been assigned native64 by the physical-layout planner.
     // On 32-bit targets the span is additionally capped by the address space.
-    const std::uint64_t max_span = native32
-        ? address_max : UINT64_C(34359738360);
-    auto* span_compatible = builder.CreateICmpULE(access.actor_arena_span,
-        llvm::ConstantInt::get(i64, max_span));
     auto* max_offset = builder.CreateSub(access.actor_arena_span, width);
     auto* inside = builder.CreateICmpULE(offset, max_offset);
 
     // LLVM GEP does not itself guarantee that converting a byte offset to
     // a pointer stays within the host pointer range. Reject wrap explicitly.
     // All checks run in i64 on both widths; a 32-bit base is zero-extended.
-    llvm::Value* base = builder.CreatePtrToInt(access.actor_arena_base, intptr,
-                                               "ref32.base.address");
-    if (native32) base = builder.CreateZExt(base, i64, "ref32.base.wide");
-    auto* base_nonzero = builder.CreateICmpNE(base, llvm::ConstantInt::get(i64, 0));
-    auto* aligned = builder.CreateICmpEQ(
-        builder.CreateAnd(base, llvm::ConstantInt::get(i64, 7)),
-        llvm::ConstantInt::get(i64, 0));
     auto* access_end = builder.CreateAdd(offset,
         llvm::ConstantInt::get(i64, access_bytes - 1), "ref32.access_end");
     auto* ceiling = llvm::ConstantInt::get(i64, address_max);
@@ -163,7 +204,7 @@ inline llvm::Value* emit_checked_actor_ref32_address(
     auto* admitted = builder.CreateAnd(
         builder.CreateAnd(builder.CreateAnd(span_enough, span_compatible), inside),
         builder.CreateAnd(base_nonzero,
-            builder.CreateAnd(aligned,
+            builder.CreateAnd(base_aligned,
                 builder.CreateAnd(end_representable, no_wrap))));
     builder.CreateCondBr(admitted, safe_block, trap_block);
 

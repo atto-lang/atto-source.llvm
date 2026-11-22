@@ -1,0 +1,84 @@
+name: M4 LLVM source-owned guest receipt (UNSIGNED NOT_CERTIFIED)
+on:
+  push:
+    branches: [ci/m4-llvm-guest-receipt-20261107]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  llvm-guest-evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 85
+    env:
+      ATTO_BUILD_JOBS: "2"
+      LLVM_DIR: /usr/lib/llvm-18/lib/cmake/llvm
+      ATTO_E2E_EXPECTED_HEAD_SHA: ${{ github.sha }}
+      EXPECTED_CARRIER_HEAD_SHA: ${{ github.sha }}
+    steps:
+      - name: Checkout exact source head without credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Rust emitter negative controls
+        run: |
+          set -euo pipefail
+          rustc --edition=2021 --test ci/evidence/emit_m4_guest_receipt.rs -o "$RUNNER_TEMP/atto-receipt-tests"
+          "$RUNNER_TEMP/atto-receipt-tests"
+      - name: Verify 57 original Git blobs
+        run: python3 ci/verify-source-subset.py
+      - name: Install native LLVM 18 and tenant build tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang-18 lld-18 llvm-18-dev libzstd-dev wabt cmake python3 file jq
+          sudo ln -sf /usr/bin/clang-18 /usr/local/bin/clang
+          sudo ln -sf /usr/bin/clang++-18 /usr/local/bin/clang++
+          sudo ln -sf /usr/bin/wasm-ld-18 /usr/local/bin/wasm-ld
+      - name: Build original LLVM compiler and actual native guest
+        run: bash tools/tenant-vm/verify-atto-e2e.sh
+      - name: Execute the M4 actor fixture in native tenant guest
+        run: bash ci/m4/verify-shared-counter.sh
+      - name: Emit bounded Rust receipt with numeric GitHub job identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "atto-lang/atto-source.llvm"
+          test "$GITHUB_REF" = "refs/heads/ci/m4-llvm-guest-receipt-20261107"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          gh api --hostname github.com -X GET \
+            "/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" \
+            > "$RUNNER_TEMP/atto-jobs.json"
+          job_id="$(jq -er --arg sha "$GITHUB_SHA" --argjson attempt "$GITHUB_RUN_ATTEMPT" \
+            'if .total_count == (.jobs|length) and .total_count < 100 then
+              [.jobs[] | select(.name=="llvm-guest-evidence" and .run_attempt==$attempt and .head_sha==$sha)]
+              | if length==1 then .[0].id else error("ambiguous job identity") end
+             else error("jobs page truncated") end' "$RUNNER_TEMP/atto-jobs.json")"
+          test "$job_id" -gt 0
+          export ATTO_NUMERIC_JOB_ID="$job_id"
+          # Local nonce only; no independent verifier challenge.
+          export ATTO_GUEST_NONCE="$(openssl rand -hex 32)"
+          rustc --edition=2021 -C opt-level=2 ci/evidence/emit_m4_guest_receipt.rs -o "$RUNNER_TEMP/atto-emit-receipt"
+          "$RUNNER_TEMP/atto-emit-receipt"
+          test -s ci/guest-evidence/guest-receipt.json
+          test -s ci/guest-evidence/guest-stdout.bin
+          test "$(find ci/guest-evidence -type f | wc -l)" -eq 2
+      - name: Upload only private unsigned observation ZIP
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: llvm-m4-guest-observation-unsigned
+          path: |
+            ci/guest-evidence/guest-receipt.json
+            ci/guest-evidence/guest-stdout.bin
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+      - name: Explicit fail-closed certification scope
+        run: |
+          echo 'LLVM_M4_GUEST_OBSERVATION=EXECUTED_BY_SOURCE_BRANCH_WORKFLOW'
+          echo 'LLVM_M4_SIGNED_PROVENANCE=NOT_AVAILABLE'
+          echo 'LLVM_M4_VERIFIER_CHALLENGE=NOT_ISSUED'
+          echo 'LLVM_M4_REPLAY_LEDGER=NOT_PERSISTED'
+          echo 'LLVM_M4_SOURCE_SCOPE=SELECTED_57_BLOBS_NOT_COMPLETE'
+          echo 'LLVM_M4_RELEASE_CERTIFICATION=NOT_CERTIFIED'
