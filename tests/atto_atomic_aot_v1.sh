@@ -17,9 +17,29 @@ for name in positive-int positive-cas positive-bool; do
     exit 1
   fi
 done
-grep -q 'atomicrmw add' "$dir/positive-int.ll"
+grep -q 'llvm.sadd.with.overflow.i64' "$dir/positive-int.ll"
+grep -q 'cmpxchg ptr' "$dir/positive-int.ll"
+if grep -q 'atomicrmw add' "$dir/positive-int.ll"; then
+  echo "checked Atomic<int>.fetch_add lowered to wrapping atomicrmw" >&2; exit 1
+fi
 grep -q 'cmpxchg' "$dir/positive-cas.ll"
 grep -q 'i8' "$dir/positive-bool.ll"
+# Overflow must trap BEFORE publishing a wrapped atomic update.
+# A runtime signal is expected; zero/normal exit is never a valid overflow.
+ulimit -c 0 || true
+for name in overflow-add underflow-sub; do
+  "$dir/atto-atomic-aot" "tests/atto-atomic-aot-v1/$name.atto" "$dir/$name.ll"
+  grep -q 'llvm.trap' "$dir/$name.ll"
+  grep -q 'cmpxchg ptr' "$dir/$name.ll"
+  "${CLANG:-clang}" -x ir -Wno-override-module "$dir/$name.ll" -o "$dir/$name"
+  set +e
+  "$dir/$name" >/dev/null 2>&1
+  rc=$?
+  set -e
+  if [ "$rc" -lt 128 ]; then
+    echo "Overflow did not trap: $name returned $rc" >&2; exit 1
+  fi
+done
 for file in tests/atto-atomic-aot-v1/reject-*.atto; do
   rm -f "$dir/reject.ll"
   if "$dir/atto-atomic-aot" "$file" "$dir/reject.ll" >"$dir/reject.log" 2>&1; then
