@@ -18,6 +18,19 @@ define module metrics as
     return true;
   }
 
+  // Detached immutable counter observation for a later async collector.
+  pub define class CounterSnapshot as
+    let int sampled_value;
+    let int configured_limit;
+
+    pub constructor(int sampled_value, int configured_limit) {
+      self.sampled_value = sampled_value;
+      self.configured_limit = configured_limit;
+    }
+    pub value(): int { return self.sampled_value; }
+    pub limit(): int { return self.configured_limit; }
+  end
+
   pub define class Counter as
     let mut int current = 0;
     let int ceiling;
@@ -40,6 +53,9 @@ define module metrics as
     pub increment(mut self)(): bool { return self.add(1); }
     pub value(): int { return self.current; }
     pub limit(): int { return self.ceiling; }
+    pub snapshot(): CounterSnapshot {
+      return new CounterSnapshot(self.current, self.ceiling);
+    }
     pub reset(mut self)(): int {
       let int previous = self.current;
       self.current = 0;
@@ -70,6 +86,42 @@ define module metrics as
     pub value(): int { return self.current; }
     pub minimum(): int { return self.lower; }
     pub maximum(): int { return self.upper; }
+  end
+
+  // A snapshot cannot mutate or borrow its originating histogram.
+  // Both arrays are copied once on capture; exporter work happens outside
+  // a critical section or owner actor turn.
+  pub define class HistogramSnapshot as
+    let Array<int> finite_bounds;
+    let Array<int> per_bucket;
+    let int accepted_samples;
+    let int accepted_sum;
+    let int rejected_samples;
+
+    pub constructor(Array<int> finite_bounds, Array<int> per_bucket,
+                    int accepted_samples, int accepted_sum, int rejected_samples) {
+      self.finite_bounds = finite_bounds;
+      self.per_bucket = per_bucket;
+      self.accepted_samples = accepted_samples;
+      self.accepted_sum = accepted_sum;
+      self.rejected_samples = rejected_samples;
+    }
+    pub count(): int { return self.accepted_samples; }
+    pub sum(): int { return self.accepted_sum; }
+    pub rejected_count(): int { return self.rejected_samples; }
+    pub bucket_total(): int { return self.per_bucket.size; }
+    pub bucket_count(int index): Result<int, String> {
+      if index < 0 || index >= self.per_bucket.size; do
+        return Err("BucketOutOfRange");
+      fi
+      return Ok(self.per_bucket.get(index));
+    }
+    pub bucket_upper(int index): Result<int, String> {
+      if index < 0 || index >= self.finite_bounds.size; do
+        return Err("NoFiniteUpperBound");
+      fi
+      return Ok(self.finite_bounds.get(index));
+    }
   end
 
   pub define class Histogram as
@@ -133,6 +185,18 @@ define module metrics as
       return Ok(self.thresholds.get(index));
     }
     pub bucket_total(): int { return self.counts.size; }
+    pub snapshot(): HistogramSnapshot {
+      let mut Array<int> copied_bounds = new Array<int>();
+      let mut Array<int> copied_counts = new Array<int>();
+      for (let int i = 0; i < self.thresholds.size; i = i + 1) {
+        copied_bounds.add(self.thresholds.get(i));
+      }
+      for (let int i = 0; i < self.counts.size; i = i + 1) {
+        copied_counts.add(self.counts.get(i));
+      }
+      return new HistogramSnapshot(copied_bounds, copied_counts,
+                                   self.samples, self.total, self.rejected);
+    }
   end
 
   pub fnc counter(int maximum): Counter {
