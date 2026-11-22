@@ -446,7 +446,7 @@ impl Emit<'_> {
                         BinOp::Gt => 0x64,
                         BinOp::Le => 0x65,
                         BinOp::Ge => 0x66,
-                        BinOp::And | BinOp::Or => unreachable!("conditions are bool"),
+                        BinOp::And | BinOp::Or | BinOp::BitXor => unreachable!("int XOR and bool conditions cannot use float codegen"),
                     });
                     return;
                 }
@@ -454,6 +454,7 @@ impl Emit<'_> {
                     BinOp::Add => self.call(self.l.helper(H_ADD)),
                     BinOp::Sub => self.call(self.l.helper(H_SUB)),
                     BinOp::Mul => self.call(self.l.helper(H_MUL)),
+                    BinOp::BitXor => self.op(0x85), // Wasm i64.xor (no checked overflow)
                     BinOp::And => self.op(0x71), // i32.and
                     BinOp::Or => self.op(0x72),  // i32.or
                     BinOp::Lt => self.op(0x53),

@@ -45,6 +45,8 @@ pub enum Tok {
     /// Contiguous `yield*` delegation token; whitespace makes it two tokens.
     YieldStar,
     Slash,
+    Caret,
+    DoubleCaret,
     Bang,
     Question,
     Pipe,
@@ -306,7 +308,9 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
             ('>', _) => (Tok::Gt, 1),
             ('*', _) => (Tok::Star, 1),
             ('/', _) => (Tok::Slash, 1),
-            ('%', _) | ('^', _) => {
+            ('^', Some('^')) => (Tok::DoubleCaret, 2),
+            ('^', _) => (Tok::Caret, 1),
+            ('%', _) => {
                 return Err(Diagnostic::new(
                     pos,
                     "E_UNSUPPORTED",

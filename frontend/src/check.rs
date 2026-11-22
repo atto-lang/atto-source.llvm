@@ -2399,6 +2399,12 @@ impl<'a> FnCx<'a> {
             }
             let ty = match op {
                 BinOp::Add | BinOp::Sub | BinOp::Mul => Type::Int,
+                BinOp::BitXor => {
+                    if a.ty != Type::Int || b.ty != Type::Int {
+                        return Err(type_err(pos, "bitwise XOR '^^' requires two int operands"));
+                    }
+                    Type::Int
+                },
                 BinOp::Div => unreachable!("int / int rejected above"),
                 BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => Type::Bool,
                 BinOp::Eq | BinOp::Ne => {
