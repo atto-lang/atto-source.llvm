@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export CARGO_NET_OFFLINE=true
-test "$(git hash-object frontend/src/check.rs)" = "fc8806e97d94f408fd145f48b73ab33324dae2fa"
+bash ci/assert_legacy_frontend_frozen.sh
 test "$(git hash-object tests/actors/pass/180-two-types-state.atto)" = "31a7248917db4fad90069af7d2c236d7a257dfa0"
 test "$(git hash-object tests/actors/pass/181-same-type-separate-state.atto)" = "08b2d59fb772886508eda38ff03de2c61e1dfd5a"
 test "$(git hash-object tests/actors/pass/182-method-and-fifo.atto)" = "fd6c08535705b52972427afc940476a8ebfb6e46"

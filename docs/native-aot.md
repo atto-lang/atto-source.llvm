@@ -1,5 +1,7 @@
 # AttoLang → LLVM native AOT bootstrap
 
+> **Migration notice (2026-11-20):** `frontend/` is an exact frozen copy of the 2026-11-14 `atto-source.rs` Rust browser compiler, NOT the canonical frontend. The authoritative Rust implementation lives in [`atto-source.rs`](https://github.com/atto-lang/atto-source.rs). The draft [Rust #468](https://github.com/atto-lang/atto-source.rs/pull/468) rehomes this Rust LLVM AOT emitter onto that canonical crate, without copying a parser. This old build path is kept working until the replacement is compiled, tested, reviewed and all CI consumers are moved. No backend parity or successful current-head build is claimed. `atto-source.wasm` remains the runtime/Worker host, not a second compiler.
+
 This backend is an **actual compiler**, not a source-only placeholder. It uses an exact-SHA-vendored copy of the Rust-hosted Atto lexer, parser and typed checker, and adds a separate Rust LLVM IR emitter in `src/main.rs`.
 
 ## Build and run
