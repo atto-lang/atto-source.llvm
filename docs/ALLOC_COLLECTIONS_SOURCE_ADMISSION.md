@@ -24,24 +24,31 @@ and `new_map`, `capacity`, `get`, `get_or`,
 
 ## Admission and unsupported boundaries
 
-This is **SOURCE ONLY**, not native guest parity. The LLVM compiler currently
-embeds a closed source registry of `numeric`, `int_buffer`, and
-`int_buffer_bundle`; it does **not** install or link these three new
-modules. Do not extend the generated registry or grant allocator provider
-admission just to turn a red native compiler into a green test.
+The compiler-owned LLVM source registry now **registers** these three
+`.atto` modules, and the exact-byte Rust generator pins their Git blob IDs.
+The generated C++17 includes and registry probe test unit identity, canonical
+`atto.alloc/*` plus legacy `alloc/*` spelling, and allocator-provider
+requirements. This is SOURCE / REGISTRY evidence only.
+
+The important missing gate is still **actual native guest execution**.
+The current native parser, class constructor and ownership/type lowering for
+`Array<int>`, typed `Option`/`Result`, and container methods have not
+been demonstrated with these new modules. A successful source embedding or
+C++ registry probe is never proof that the guest can import and execute them.
 
 Before promoting this draft:
 
-1. Extend native class/method/typechecking, owned `Array<int>`, `Option`,
-   `Result`, checked arithmetic and module-linked constructor support where
-   presently unavailable; refuse unknown constructs with diagnostics.
-2. Register the new files only with exact Git blob SHA verification through
-   `tools/atto-library-embed`, generate compiler-owned includes, retain
-   canonical/legacy unit identity, and enforce allocator-provider closure.
-3. Execute native compiler + linked guest fixtures on the immutable PR SHA,
-   including negative import/path, bounds, capacity and ownership fixtures.
-4. Run sanitizer, freestanding-provider rejection, and AOT evidence gates.
-5. Treat pending, zero-step and host-model-only results as `NOT_EXECUTED`.
+1. Add an exact-head native `oreslang-llvmc` compiler run importing
+   `atto.alloc/bitset`, `atto.alloc/linked_list` and `atto.alloc/map`.
+2. Resolve actual compiler diagnostics without host-language emulation or a
+   more permissive unsigned allocator fallback.
+3. Link compiler-emitted IR to the explicit native Array allocation provider;
+   execute values in guest programs and compare with the deterministic
+   behavioral vectors. Prove failure is clean, with no IR on rejection.
+4. Run native sanitizer, freestanding-provider rejection, and ownership
+   move/drop tests on the same immutable commit.
+5. Mark zero-step runner jobs and host/source-only results `NOT_EXECUTED`;
+   never claim native/JIT/AOT parity from those results.
 
-No Java source is imported or shared with this repo at runtime, and these
-source files are independently maintained here.
+The source implementations are independently owned by this compiler and
+need not match Java's text or internal algorithm.
