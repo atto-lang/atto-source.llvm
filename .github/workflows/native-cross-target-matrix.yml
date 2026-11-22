@@ -43,4 +43,5 @@ jobs:
       - name: Cross-target matrix (host oracle vs 4 triples)
         run: |
           rustc --edition=2021 -D warnings tests/native_cross_target_matrix.rs -o xmatrix
-          ./xmatrix --compiler build/oreslang-llvmc --clang clang-19 --zig zig --root .
+          ./xmatrix --compiler build/oreslang-llvmc --clang clang-19 --zig zig --root . \
+            --runtime-dir src/main/cpp/oreslang/runtime
