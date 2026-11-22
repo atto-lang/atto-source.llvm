@@ -1,0 +1,62 @@
+name: LLVM ref32 source bounds (generated native IR)
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/backend/ManagedRefLowering.hpp'
+      - 'tests/managed_ref_llvm_lowering_test.cpp'
+      - 'tests/managed_ref_llvm_e2e_harness.cpp'
+      - 'tests/managed_ref_llvm_e2e.rs'
+      - '.github/workflows/llvm-ref32-source-guard.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  generated-llvm-ref32:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Pin exact source head
+        shell: bash
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+      - name: Install native LLVM development dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-dev clang libclang-dev
+      - name: Build LLVM IR producer and execute generated O0/O2 guests
+        shell: bash
+        run: |
+          set -euo pipefail
+          LLVM_CONFIG="$(command -v llvm-config)"
+          major="$("$LLVM_CONFIG" --version | cut -d. -f1)"
+          CXX="clang++-$major"
+          command -v "$CXX"
+          include="$("$LLVM_CONFIG" --includedir)"
+          libdir="$("$LLVM_CONFIG" --libdir)"
+          read -r -a libs <<< "$("$LLVM_CONFIG" --libs core support)"
+          read -r -a system_libs <<< "$("$LLVM_CONFIG" --system-libs)"
+          "$CXX" -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror \
+            -fexceptions -frtti -Isrc/main/cpp -isystem "$include" \
+            tests/managed_ref_llvm_lowering_test.cpp -L "$libdir" \
+            "${libs[@]}" "${system_libs[@]}" -o "$RUNNER_TEMP/ref32-ir-producer"
+          "$RUNNER_TEMP/ref32-ir-producer"
+          rustc --edition=2021 -D warnings tests/managed_ref_llvm_e2e.rs \
+            -o "$RUNNER_TEMP/ref32-ir-e2e"
+          for optimization in -O0 -O2; do
+            "$RUNNER_TEMP/ref32-ir-e2e" \
+              --ir-producer "$RUNNER_TEMP/ref32-ir-producer" \
+              --clang "$CXX" \
+              --harness tests/managed_ref_llvm_e2e_harness.cpp \
+              --clang-arg "$optimization"
+          done
+          echo "GENERATED_LLVM_IR_EXECUTED: sha=$GITHUB_SHA (NOT source .atto parity)"

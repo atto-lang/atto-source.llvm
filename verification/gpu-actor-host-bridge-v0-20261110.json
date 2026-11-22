@@ -1,0 +1,61 @@
+{
+  "schema": "attolang.gpu-actor-host-bridge-evidence/0",
+  "recordedAt": "2026-11-10",
+  "scope": "native host-control and reference provider-seam tests only; NOT physical GPU, compiled guest or authenticated provider",
+  "sourceRepo": "ores-truffle-oreslang/oreslang-source.llvm",
+  "branch": "feat/gpu-actor-host-bridge-v0-20261110",
+  "sourceBlobs": {
+    "src/main/cpp/oreslang/runtime/GpuActorHostTurnBridgeV0.hpp": "e2787e95da1dff46e7abb36793436e55d183df97",
+    "src/main/cpp/oreslang/runtime/GpuBufferFence.hpp": "1316dc2be8c19ef23a19dcb7e907455bba633afc",
+    "src/main/cpp/oreslang/runtime/NativeActorTurnCredits.hpp": "ad47b278fc74d1bfcdc5554a102cd01531c374b1",
+    "src/main/cpp/oreslang/runtime/SupervisorFailureLane.hpp": "f2e0557c938285886f5dfeb5b3c5448336a8bbd8",
+    "tests/gpu_actor_host_turn_bridge_v0_test.cpp": "ba1d9e52270fbcd4f9fb50b005df3796618fbd75"
+  },
+  "runnerRepo": "scintilla-run/scintilla-run-e2e",
+  "carrierBranch": "carrier/gpu-actor-host-bridge-v0-20261110",
+  "carrierHead": "304bad400196b7dd1281f28a96da9659a07d9d53",
+  "runId": 42916949277,
+  "runUrl": "https://github.com/scintilla-run/scintilla-run-e2e/actions/runs/42916949277",
+  "jobId": 130181729435,
+  "steps": {
+    "gitBlobVerification": "success",
+    "gccStrictAsanUbsan": "success",
+    "clangStrict": "success"
+  },
+  "executed": {
+    "gccChecks": 6257,
+    "clangChecks": 6257,
+    "logicalActors": 1024,
+    "hostSimulatedTurns": 4096,
+    "gracefulRetirements": 1024
+  },
+  "safetyCovered": [
+    "single-actor-admission",
+    "checked-scalar-state",
+    "stale-or-forged-turn-id",
+    "explicit-enqueue-window",
+    "cancel-during-enqueue",
+    "submitted-command-cannot-abort",
+    "cancellation-requires-event-quiescence",
+    "early-release-denied",
+    "definitive-enqueue-failure",
+    "cohort-device-loss-to-CONTROL",
+    "graceful-retirement",
+    "fail-stop-unresolved-lifecycle",
+    "supervisor-reservations-released"
+  ],
+  "claims": {
+    "productionGpuActorImplementation": false,
+    "realPhysicalGpu": false,
+    "deviceEventAuthenticated": false,
+    "deviceDriverObserved": false,
+    "deviceBufferAllocated": false,
+    "physicalKernelExecuted": false,
+    "compiledAttoGuestExecuted": false,
+    "fullLLVMBuild": false,
+    "repositoryCTestRun": false,
+    "fiveBackendParity": false
+  },
+  "nextGate": "Bind native host-only event seam to provider-owned opaque authenticated event handle, enable typed actor MIR with ownership/effect checking, and run on real GPU device",
+  "releaseReady": false
+}

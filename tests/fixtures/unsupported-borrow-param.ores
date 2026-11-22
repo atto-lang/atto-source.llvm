@@ -1,0 +1,6 @@
+// Modern ownership admission requires an explicit call-scoped loan.
+pub fnc inspect(borrow int item): int { return item; }
+pub fnc main(): int {
+  const value: int = 42;
+  return inspect(rt borrow value);
+}

@@ -1,0 +1,24 @@
+{
+  "schema": "atto.telemetry.source-ids.v1",
+  "source_unit": "examples/telemetry/log-info-verified.atto",
+  "routines": [
+    {
+      "symbol": "main():int",
+      "id": "rid_d5f8e146ba97430dac6bf17430477e2a"
+    }
+  ],
+  "sites": [
+    {
+      "symbol": "main():int",
+      "message": "hammer.started",
+      "routine_id": "rid_d5f8e146ba97430dac6bf17430477e2a",
+      "id": "sid_652e1632e7464fdb936fc40fe24f1c7b"
+    },
+    {
+      "symbol": "main():int",
+      "message": "hammer.finished",
+      "routine_id": "rid_d5f8e146ba97430dac6bf17430477e2a",
+      "id": "sid_77777777777777777777777777777777"
+    }
+  ]
+}

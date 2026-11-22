@@ -1375,8 +1375,26 @@ void restart_stress() {
     std::printf("  %llu turns failed and restarted, across 240 VMs ended in every way\n", static_cast<unsigned long long>(restarted.load()));
 }
 
+void confidential_compute_request_never_falls_back_to_plain_vm() {
+    TenantVmHost host;
+    auto request = spec("confidential");
+    request.require_confidential_compute = true;
+    CHECK_STATUS(host.open(request).status, Status::ConfidentialComputeUnavailable);
+    CHECK_EQ(host.stats().live_vms, std::size_t{0});
+    CHECK_EQ(host.stats().admitted_heap_bytes, std::uint64_t{0});
+    CHECK(std::strcmp(to_string(Status::ConfidentialComputeUnavailable),
+                      "ConfidentialComputeUnavailable") == 0);
+    // The explicit trusted-only path is independent and still usable.
+    auto trusted = host.open(spec("trusted"));
+    REQUIRE_OK(trusted);
+    CHECK_STATUS(host.kill(trusted.handle), Status::Ok);
+    host.wait_closed(trusted.handle);
+}
+
 struct Case { const char* name; void (*run)(); };
 const Case cases[] = {
+    {"confidential_compute_request_never_falls_back_to_plain_vm",
+     confidential_compute_request_never_falls_back_to_plain_vm},
     {"equal_offsets_are_different_memory", equal_offsets_are_different_memory},
     {"messaging_stays_inside_the_vm", messaging_stays_inside_the_vm},
     {"faults_end_only_that_vm", faults_end_only_that_vm},

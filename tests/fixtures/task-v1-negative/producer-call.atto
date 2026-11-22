@@ -1,0 +1,6 @@
+fnc helper(): int { return 41; }
+pub fnc main(): int {
+  let Task<int> w = task { return helper(); };
+  let int v = await w;
+  return v;
+}

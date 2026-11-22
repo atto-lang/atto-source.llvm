@@ -1,0 +1,6 @@
+pub routine main(): int {
+  for (let i = 0; i < 5; i = i + 1) do
+    return i;
+  done
+  return 0;
+}

@@ -28,6 +28,8 @@ pub enum Tok {
     Colon,
     ColonColon,
     Arrow,
+    /// Exact U+2022 BULLET for return-first callable declarations.
+    Bullet,
     Dot,
     Assign,
     EqEq,
@@ -50,6 +52,8 @@ pub enum Tok {
     Pipe,
     PipeGt,
     Amp,
+    /// Contextual return alias at the beginning of a statement.
+    Caret,
     At,
     Eof,
 }
@@ -289,6 +293,7 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
             (',', _) => (Tok::Comma, 1),
             (':', Some(':')) => (Tok::ColonColon, 2),
             (':', _) => (Tok::Colon, 1),
+            ('•', _) => (Tok::Bullet, 1),
             ('-', Some('>')) => (Tok::Arrow, 2),
             ('-', Some('-')) => (Tok::MinusMinus, 2),
             ('-', _) => (Tok::Minus, 1),
@@ -306,7 +311,7 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
             ('>', _) => (Tok::Gt, 1),
             ('*', _) => (Tok::Star, 1),
             ('/', _) => (Tok::Slash, 1),
-            ('%', _) | ('^', _) => {
+            ('%', _) => {
                 return Err(Diagnostic::new(
                     pos,
                     "E_UNSUPPORTED",
@@ -317,6 +322,7 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
             ('|', Some('>')) => (Tok::PipeGt, 2),
             ('|', _) => (Tok::Pipe, 1),
             ('&', _) => (Tok::Amp, 1),
+            ('^', _) => (Tok::Caret, 1),
             ('@', _) => (Tok::At, 1),
             ('`', _) => {
                 return Err(Diagnostic::new(

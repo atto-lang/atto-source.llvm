@@ -1,0 +1,4 @@
+pub fnc main(): int {
+  const value: owned int = 43;
+  try { throw value; } catch (err) { return err; } finally { }
+}

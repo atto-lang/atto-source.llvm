@@ -1,0 +1,116 @@
+name: LLVM conformance contract
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  conformance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact PR head without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact-head provenance before running any conformance test
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          actual="$(git rev-parse --verify HEAD)"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "Wrong conformance source commit: expected $expected, actual $actual" >&2
+            exit 65
+          fi
+          printf 'source_commit=%s\nsource_tree=%s\n' "$actual" "$(git rev-parse 'HEAD^{tree}')"
+          # github.sha may be a synthetic merge SHA on pull_request events.
+          # Downstream source receipts must identify the actual checked-out head.
+          printf 'ORESLANG_SOURCE_SHA=%s\n' "$actual" >> "$GITHUB_ENV"
+      - name: Verify Java/LLVM strict parity gate fail-closed shell admissions
+        run: bash tests/java_llvm_parity_gate_admission.sh
+      - name: Reject forged Java/LLVM parity receipts without a real compiler
+        run: bash tests/java_llvm_parity_receipt_admission.sh
+      - name: Verify Java/LLVM strict parity receipt admission (Rust)
+        run: |
+          rustc --edition=2021 -D warnings --test tests/native_class_string_parity.rs -o /tmp/oreslang-parity-admission-tests
+          /tmp/oreslang-parity-admission-tests
+      - name: Verify AI smoke admission unit tests
+        run: python3 scripts/test_ai_conformance_smoke.py
+      - name: Prepare Python schema validator
+        run: python3 -m pip install --break-system-packages 'jsonschema>=4.20,<5'
+      - name: Verify conformance runner failure handling
+        run: |
+          python3 contracts/v1/test_runner.py -v
+          python3 contracts/v1/semantics/test_runner.py -v
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # pinned v4
+        with:
+          node-version: '22'
+      - name: Verify TypeSpec models
+        run: npm --prefix contracts/v1 install --no-audit --no-fund && npm --prefix contracts/v1 run build && ./contracts/v1/node_modules/.bin/tsp compile contracts/v1/semantics && ./contracts/v1/node_modules/.bin/tsp compile contracts/v1/semantics/traces
+      - name: Verify metamorphic generator and adversarial actor trace contracts
+        run: |
+          python3 contracts/v1/semantics/metamorphic.py --self-test --count 512 --seed 20261009
+          python3 contracts/v1/semantics/test_metamorphic.py -v
+          python3 contracts/v1/semantics/traces/validate.py --schema-only
+          python3 contracts/v1/semantics/traces/test_trace.py -v
+      - name: Validate suite schema and fixture inventory
+        run: |
+          python3 contracts/v1/run.py --validate
+          python3 contracts/v1/semantics/run.py --validate
+      - name: Install LLVM
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang llvm-dev
+      - name: Compile Oreslang
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --parallel 2
+          ctest --test-dir build --output-on-failure
+      - name: Verify canonical six native Oreslang scalar fixtures on exact PR head
+        shell: bash
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+          export ORESLANG_LLVMC="$PWD/build/oreslang-llvmc"
+          export ORESLANG_LLVM_COMPILER_SHA256="$(sha256sum "$ORESLANG_LLVMC" | cut -d ' ' -f 1)"
+          bash -n scripts/verify-portable-scalar.sh
+          bash scripts/verify-portable-scalar.sh
+      - name: Check REAL carrier admission and handler traces
+        run: python3 contracts/v1/semantics/traces/native_probe.py --binary ./build/oreslang-actor-trace-test --repeat 12 --timeout 15
+      - name: Check normative LLVM admissions
+        run: python3 contracts/v1/run.py --backend llvm --command './build/oreslang-llvmc {source}' --report build/conformance-llvm.json
+      - name: Real LLVM compiler AI smoke (source acceptance, rejection, executed native result)
+        run: |
+          python3 scripts/ai-conformance-smoke.py \
+            --backend llvm \
+            --compiler "$(realpath build/oreslang-llvmc)" \
+            --clang "$(command -v clang)" \
+            --source-sha "$ORESLANG_SOURCE_SHA" \
+            --report build/ai-conformance-llvm.json
+      - name: Check compiled native results and diagnostic semantics
+        run: python3 contracts/v1/semantics/run.py --backend llvm --command './build/oreslang-llvmc {source}' --clang clang --revision "$ORESLANG_SOURCE_SHA" --report build/semantics-llvm.json
+      - name: Verify seeded native metamorphic arithmetic
+        run: |
+          python3 contracts/v1/semantics/metamorphic.py --command './build/oreslang-llvmc {source}' --clang clang --count 32 --seed 20261008 --report build/metamorphic-llvm.json
+      - name: Expanded multi-seed native metamorphic execution
+        run: |
+          python3 contracts/v1/semantics/metamorphic.py --command './build/oreslang-llvmc {source}' --clang clang --count 64 --seed 20261009 --report build/metamorphic-llvm-seed-20261009.json
+          python3 contracts/v1/semantics/metamorphic.py --command './build/oreslang-llvmc {source}' --clang clang --count 64 --seed 314159 --report build/metamorphic-llvm-seed-314159.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # pinned v4
+        if: always()
+        with:
+          name: llvm-conformance-report
+          path: |
+            build/conformance-llvm.json
+            build/semantics-llvm.json
+            build/ai-conformance-llvm.json
+            build/metamorphic-llvm.json
+            build/metamorphic-llvm-seed-20261009.json
+            build/metamorphic-llvm-seed-314159.json
+          if-no-files-found: ignore
