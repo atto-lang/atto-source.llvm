@@ -9,6 +9,7 @@ on:
       - 'tests/fixtures/stdlib_alias_identity_v1.atto'
       - 'tests/fixtures/stdlib_pure_policy_parity_v1.atto'
       - 'tests/native_borrow_alias_matrix.rs'
+      - 'tests/native_task_borrow_rejection.rs'
       - '.github/workflows/atto-stdlib-path-telemetry-sync-guest.yml'
   workflow_dispatch:
 permissions:
@@ -38,7 +39,8 @@ jobs:
             tests/fixtures/stdlib_path_telemetry_sync_v1.atto \
             tests/fixtures/stdlib_alias_identity_v1.atto \
             tests/fixtures/stdlib_pure_policy_parity_v1.atto \
-            tests/native_borrow_alias_matrix.rs; do
+            tests/native_borrow_alias_matrix.rs \
+            tests/native_task_borrow_rejection.rs; do
             sha="$(git hash-object --no-filters -- "$path")"
             test "$sha" = "$(git rev-parse "HEAD:$path")"
             echo "LLVM_ATTO_STD_SOURCE_BLOB=$path:$sha"
@@ -202,6 +204,21 @@ jobs:
             'PASS borrow contract: accepted=60, rejected=84, Java=0, sanitized=false' \
             "$RUNNER_TEMP/std-borrow-alias-matrix.log"
           echo "ATTO_LLVM_CORE_BORROW_ALIAS_144=EXECUTED"
+      - name: Fail closed for eight borrowed Task/suspension forms
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc -O --edition=2021 tests/native_task_borrow_rejection.rs \
+            -o "$RUNNER_TEMP/std-native-task-borrow"
+          "$RUNNER_TEMP/std-native-task-borrow" \
+            "$RUNNER_TEMP/std-backend/oreslang-llvmc" \
+            --source-ext=atto \
+            | tee "$RUNNER_TEMP/std-native-task-borrow.log"
+          grep -Fq \
+            'PASS: 8 borrowed Task forms rejected before LLVM IR emission' \
+            "$RUNNER_TEMP/std-native-task-borrow.log"
+          echo "ATTO_LLVM_CORE_TASK_BORROW_NEGATIVE=EXECUTED"
+
       - name: Preserve the evidence boundary
         if: always()
         run: |
