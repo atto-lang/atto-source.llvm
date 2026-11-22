@@ -45,6 +45,8 @@ test("Zorde varuint and frame admission reject ambiguity before exposure", () =>
   for (const invariant of [
     "NonCanonicalVaruint", "VaruintOverflow", "TruncatedVaruint",
     "checked_reader", "checked_writer",
+    "value > 2147483647", "schema_id > 2147483647",
+    "encoded = (-value - 1) * 2 + 1;",
     "write_length_delimited", "read_length_delimited",
     "self.position = start", "InvalidWireByte", "WrongSchema",
     "UnsupportedSchemaVersion", "length != r.remaining()",
@@ -60,6 +62,7 @@ test("Metrics counters and histograms explicitly reject unsafe updates", () => {
     "self.samples == 2147483647", "2147483647 - self.total",
     "self.rejected < 2147483647", "bounds.size > 64",
     "value <= bounds.get(i - 1)", "bucket_count",
+    "CounterSnapshot", "HistogramSnapshot", "copied_counts",
   ]) assert.ok(m.includes(invariant), "metrics safeguard missing: " + invariant);
 });
 
@@ -71,7 +74,7 @@ test("Java compiler-owned registry and test-vector counts, when present", () => 
     assert.ok(registry.includes('"' + name + '.atto"'));
   }
   const suite = read("src/test/java/dev/oreslang/runtime/NativeAttoMetricsJsonZordeTest.java");
-  const cases = { metrics: 30, json: 36, zorde: 45 };
+  const cases = { metrics: 30, json: 36, zorde: 55 };
   for (const [name, count] of Object.entries(cases)) {
     const fixture = read("src/test/resources/stdlib-parity/metrics-json-zorde/" + name + ".atto");
     const actual = (fixture.match(/stdio\.println\(/g) || []).length;
