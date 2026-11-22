@@ -2215,7 +2215,7 @@ private:
         return next_lexer.next();
     }
 
-    enum class MacroKind { ConstIntQuote, SyntaxExprIdentity };
+    enum class MacroKind { ConstIntQuote, SyntaxExprIdentity, SyntaxExprLiteralTwice };
     static constexpr std::size_t kMaxNativeMacroDefinitions = 8;
     static constexpr std::size_t kMaxNativeMacroExpansions = 128;
 
@@ -2225,15 +2225,28 @@ private:
                  std::string(token) + "'; runtime fallback is forbidden");
     }
 
-    // Only two syntactically closed typed AST forms may cross this boundary.
+    // Keep compiler-only tags and ownership spellings out of macro bindings.
+    // Diagnose these before identifier(), including tokens classified as
+    // keywords, so unused invalid declarations fail with the macro category.
+    static bool reserved_macro_binding(std::string_view name) {
+        return name == "quote" || name == "unquote" || name == "eval" ||
+               name == "const" || name == "syntax" || name == "expr" ||
+               name == "Const" || name == "Syntax" || name == "Expr" ||
+               name == "int" || name == "rt" || name == "define" ||
+               name == "pub" || name == "macro" || name == "return" ||
+               name == "fnc" || name == "main";
+    }
+
+    // Only three syntactically closed typed AST forms may cross this boundary.
     // Macro bodies are checked at declaration even when never invoked.
     void macro_declaration() {
         if (macros_.size() >= kMaxNativeMacroDefinitions)
             fail("NATIVE_MACRO_BUDGET: declaration budget exceeded; runtime fallback is forbidden");
+        if (reserved_macro_binding(token_.text))
+            fail("NATIVE_MACRO_EXPANDER_REQUIRED: reserved macro declaration name; runtime fallback is forbidden");
         const std::string name = identifier();
-        if (name == "quote" || name == "unquote" || name == "eval" ||
-                !macros_.emplace(name, MacroKind::ConstIntQuote).second)
-            fail("NATIVE_MACRO_EXPANDER_REQUIRED: reserved or duplicate macro declaration; runtime fallback is forbidden");
+        if (!macros_.emplace(name, MacroKind::ConstIntQuote).second)
+            fail("NATIVE_MACRO_EXPANDER_REQUIRED: duplicate macro declaration; runtime fallback is forbidden");
         require_macro("(");
         MacroKind kind;
         if (accept("Const")) {
@@ -2245,9 +2258,9 @@ private:
         } else {
             fail("NATIVE_MACRO_EXPANDER_REQUIRED: only Const<int> or Syntax<Expr> accepted before LLVM IR; runtime fallback is forbidden");
         }
-        const std::string parameter = identifier();
-        if (parameter == "quote" || parameter == "unquote" || parameter == "eval")
+        if (reserved_macro_binding(token_.text))
             fail("NATIVE_MACRO_EXPANDER_REQUIRED: reserved macro parameter; runtime fallback is forbidden");
+        const std::string parameter = identifier();
         require_macro(")"); require_macro("->");
         require_macro("Syntax"); require_macro("<"); require_macro("Expr"); require_macro(">");
         require_macro("{"); require_macro("return");
@@ -2256,6 +2269,22 @@ private:
             if (identifier() != parameter)
                 fail("NATIVE_MACRO_EXPANDER_REQUIRED: Const<int> quote must use exact parameter; runtime fallback is forbidden");
             require_macro(")");
+        } else if (accept("quote")) {
+            // Conservative Java/Graal typed-template parity: quote of two
+            // direct, same-parameter unquote slots with exactly one '+'.
+            // This cannot introduce identifiers, calls, generated names or
+            // runtime authority. Duplicating non-literal syntax is refused
+            // at invocation until ownership/copyability can be proven.
+            require_macro("(");
+            require_macro("unquote"); require_macro("(");
+            if (identifier() != parameter)
+                fail("NATIVE_MACRO_EXPANDER_REQUIRED: first unquote must use the declared Syntax<Expr> parameter; runtime fallback is forbidden");
+            require_macro(")"); require_macro("+");
+            require_macro("unquote"); require_macro("(");
+            if (identifier() != parameter)
+                fail("NATIVE_MACRO_EXPANDER_REQUIRED: second unquote must use the same Syntax<Expr> parameter; runtime fallback is forbidden");
+            require_macro(")"); require_macro(")");
+            kind = MacroKind::SyntaxExprLiteralTwice;
         } else if (identifier() != parameter) {
             fail("NATIVE_MACRO_EXPANDER_REQUIRED: Syntax<Expr> identity must use exact parameter; runtime fallback is forbidden");
         }
@@ -2333,6 +2362,26 @@ private:
         require_macro("syntax"); require_macro("expr");
         auto argument = expression();
         require_macro(")");
+        if (kind == MacroKind::SyntaxExprLiteralTwice) {
+            // A pre-typecheck expander cannot know if a name is copyable,
+            // actor-owned, effectful or move-only. Only a single closed
+            // integer literal may be used twice, with fresh AST identities
+            // for BOTH emitted occurrences (no shared or reused Expr*).
+            if (!argument || argument->kind != Expression::Kind::Integer)
+                fail("NATIVE_MACRO_EXPANDER_REQUIRED: repeated unquote requires a closed integer literal; no ownership/effect duplication is permitted; runtime fallback is forbidden");
+            // LLVM's ordinary i64 add wraps unless separately checked. Do
+            // not introduce a silently wrapping expression when statically
+            // duplicating a proven constant: reject overflow before IR.
+            std::int64_t checked_sum = 0;
+            if (__builtin_add_overflow(argument->integer, argument->integer, &checked_sum))
+                fail("NATIVE_MACRO_CONST_OVERFLOW: repeated literal quote exceeds signed i64; runtime fallback is forbidden");
+            auto result = make_expression(Expression::Kind::Add, offset);
+            result->left = make_expression(Expression::Kind::Integer, argument->offset);
+            result->right = make_expression(Expression::Kind::Integer, argument->offset);
+            result->left->integer = argument->integer;
+            result->right->integer = argument->integer;
+            return result;
+        }
         // Single-use forwarding preserves the caller's AST and ownership
         // semantics; no new identifier, duplicate, capture, or runtime JIT.
         return argument;
