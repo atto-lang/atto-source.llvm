@@ -3239,6 +3239,8 @@ private:
         if (value.foreign_import && value.exported)
             fail("foreign FFI declaration must remain private");
         value.async_source_i64 = source_async;
+        if (token_.text == "structural")
+            fail("native structural callable requires verified shape constraints and ABI lowering");
         if (token_.text == "pure") {
             fail("native pure modifier awaits transitive observable-effect verification");
         }
@@ -3364,6 +3366,8 @@ private:
                 if (token_.text == "@")
                     fail("native @Default parameter annotation requires checked literal, Option and ownership ABI lowering");
                 Parameter parameter;
+                if (token_.text == "structural")
+                    fail("native structural parameter requires verified structural shape and ABI lowering");
                 bool name_first = false;
                 if (token_.kind == Kind::Identifier) {
                     const Token next = peek_next();
@@ -4567,6 +4571,8 @@ private:
                         continue;
                     }
                     require("on");
+                    if (token_.text == "structural" || token_.text == "struct")
+                        fail("native structural match expression requires verified shape-pattern lowering");
                     if (accept("default"))
                         fail("native do match fallback must use 'default ->' without 'on'");
                     if (token_.text == "structural") {
@@ -5873,6 +5879,8 @@ private:
                 continue;
             }
             require("on");
+            if (token_.text == "structural" || token_.text == "struct")
+                fail("native structural match expression requires verified shape-pattern lowering");
             if (accept("default"))
                 fail("native value match fallback must use 'default ->' without 'on'");
             if (token_.text == "structural") {
