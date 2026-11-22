@@ -9,7 +9,7 @@ and no byte-for-byte source identity with other compilers is mandated.
 - `stdlib/core/byte_budget.atto` is freestanding, pure and allocation-free.
 - `stdlib/alloc/capacity_plan.atto` is a pure policy helper for an explicit
   allocator. Actual allocation and ownership are NOT implemented by this file.
-- `stdlib/std/stream_watermarks.atto` provides stream backpressure decisions.
+- `stdlib/alloc/arena_plan.atto` adds overflow-safe reservation and conservative\n  rewind/tail-release/close/generation policy. A trusted runtime must enforce\n  true ownership, live-loan state, alignment, destructor completion, scrubbing\n  and actor incarnation. No heap or arena allocator is exposed by this file.\n- `stdlib/std/stream_watermarks.atto` provides stream backpressure decisions.
   Channel admission, actor scheduling, permission checks and I/O are still
   enforced by the runtime.
 
@@ -21,7 +21,7 @@ across compilers without changing safe ownership or streaming contracts.
 
 ## Verification state
 
-`contracts/atto-library-policy-v1.json` records 23 proposed behavior cases.
+`contracts/atto-library-policy-v1.json` records 23 proposed behavior cases.\n`contracts/atto-arena-policy-v1.json` pins 38 additional arena-policy vectors,\nincluding exact i64 boundaries encoded as decimal strings, and its Git blob.\nThe source-only interpreter gate can be run with:\n\n```sh\nnode --test tests/atto-arena-policy-source.test.mjs\n```\n\nIt deliberately accepts only straight-line arithmetic Atto statements. A pass\nproves the pinned policy source against those vectors, **not** native guest\ncompilation, heap allocation, memory-safe destruction or backend parity.
 These are source-only fixtures, **not evidence of compiler guest execution**.
 Integration requires verified native Atto parsing, local import resolution,
 guest execution, and platform/AOT tests before claiming implemented library
