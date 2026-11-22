@@ -111,6 +111,20 @@ define module zorde as
       return Ok(value);
     }
 
+    // Detach bytes while the reader exclusively owns its input.
+    // A failed bounded read leaves the cursor unchanged.
+    pub read_bytes(mut self)(int count): Result<Array<int>, String> {
+      if count < 0 || count > self.remaining(); do
+        return Err("TruncatedPayload");
+      fi
+      let mut Array<int> out = new Array<int>();
+      for (let int i = 0; i < count; i = i + 1) {
+        out.add(self.content.get(self.position + i));
+      }
+      self.position = self.position + count;
+      return Ok(out);
+    }
+
     // Failed/truncated/noncanonical varuint leaves cursor unchanged.
     pub read_varuint(mut self)(): Result<int, String> {
       let int value = 0;
@@ -167,12 +181,13 @@ define module zorde as
     if wire.size < 8 || wire.size > 1048576; do
       return Err("InvalidFrameSize");
     fi
-    let mut Reader r = new Reader(wire);
+    // Check the source before transferring it into the detached Reader.
     if wire.get(0) != 90 || wire.get(1) != 79 ||
        wire.get(2) != 82 || wire.get(3) != 68 ||
        wire.get(4) != 1; do
       return Err("InvalidMagicOrVersion");
     fi
+    let mut Reader r = new Reader(wire);
     // Reader cursor is private; consume exact five-byte header.
     for (let int i = 0; i < 5; i = i + 1) {
       let ignored = r.read_byte();
@@ -189,10 +204,8 @@ define module zorde as
        length > 1048540 || length != r.remaining(); do
       return Err("InvalidSchemaOrLength");
     fi
-    let mut Array<int> payload = new Array<int>();
-    for (let int i = 0; i < length; i = i + 1) {
-      payload.add(wire.get(wire.size - length + i));
-    }
-    return Ok(new Frame(schema_id, schema_version, payload));
+    let payload_result = r.read_bytes(length);
+    if payload_result.is_err(); do return Err("TruncatedPayload"); fi
+    return Ok(new Frame(schema_id, schema_version, payload_result.unwrap()));
   }
 end
