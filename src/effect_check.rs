@@ -161,7 +161,8 @@ impl Walker {
 /// generator/runtime/actor-lifecycle contracts require future verified models.
 pub fn infer(program: &TProgram) -> Result<Vec<Summary>, String> {
     if !program.imports.is_empty() || !program.generators.is_empty()
-        || !program.actors.is_empty() {
+        || !program.actors.is_empty() || program.heap || program.strings
+        || program.guest_eh || !program.data.is_empty() {
         return Err("E_EFFECT_UNKNOWN: imported or asynchronous runtime closure".into());
     }
     if program.funcs.is_empty() || program.funcs.len() > 4096 {
@@ -304,9 +305,10 @@ mod tests {
     #[test]
     fn unverified_runtime_lifecycle_fails_closed() {
         let mut p = program(vec![vec![TStmt::Return(Some(e(TExpr::I64(1))))]]);
-        p.heap = true; // heap alone is not a provable allocation on each call
-        assert!(admit(&p, Profile::NoAlloc).is_ok());
-        p.guest_eh = true; // not proof of an exceptional effect by itself
-        assert!(admit(&p, Profile::NoAlloc).is_ok());
+        p.heap = true; // hidden constructors/allocator initialization unmodeled
+        assert!(admit(&p, Profile::NoAlloc).unwrap_err().contains("E_EFFECT_UNKNOWN"));
+        p.heap = false;
+        p.guest_eh = true; // hidden throw/unwind/drop closure unmodeled
+        assert!(admit(&p, Profile::Pure).unwrap_err().contains("E_EFFECT_UNKNOWN"));
     }
 }
