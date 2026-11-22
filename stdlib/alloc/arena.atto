@@ -8,19 +8,15 @@ pub fnc arena_aligned_start(int cursor, int bytes, int alignment, int quota) -> 
   if (alignment & (alignment - 1)) != 0 then return -1; fi
   if bytes == 0 then return cursor; fi
   val int remainder = cursor - (cursor / alignment) * alignment;
-  val int padding = 0;
-  if remainder != 0 then
-    return arena_aligned_start_with_padding(cursor, bytes, alignment - remainder, quota);
+  if remainder == 0 then
+    if bytes > quota - cursor then return -1; fi
+    return cursor;
   fi
-  return arena_aligned_start_with_padding(cursor, bytes, padding, quota);
-}
-
-pub fnc arena_aligned_start_with_padding(int cursor, int bytes, int padding, int quota) -> int {
-  if cursor < 0 || bytes < 0 || padding < 0 || quota < 0 then return -1; fi
-  if cursor > quota || padding > quota - cursor then return -1; fi
-  val int aligned = cursor + padding;
-  if bytes > quota - aligned then return -1; fi
-  return aligned;
+  val int padding = alignment - remainder;
+  if padding > quota - cursor then return -1; fi
+  val int start = cursor + padding;
+  if bytes > quota - start then return -1; fi
+  return start;
 }
 
 pub fnc arena_end(int cursor, int bytes, int alignment, int quota) -> int {
