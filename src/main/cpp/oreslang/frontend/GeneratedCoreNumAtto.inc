@@ -1,0 +1,185 @@
+R"ATTO_CORE4(// LLVM-owned Atto source; independent of other compiler repository implementations.
+// Signed 64-bit integer arithmetic independent of host-language overflow mode.
+// Result<int,String> never returns a partial value on overflow or divide by zero.
+// Signed division is truncated toward zero. No allocations except error values.
+define module num as
+  pub fnc can_add(int left, int right): bool {
+    if right > 0 && left > 9223372036854775807 - right; do
+      return false;
+    fi
+    if right < 0 && left < -9223372036854775808 - right; do
+      return false;
+    fi
+    return true;
+  }
+  pub fnc can_sub(int left, int right): bool {
+    if right < 0 && left > 9223372036854775807 + right; do
+      return false;
+    fi
+    if right > 0 && left < -9223372036854775808 + right; do
+      return false;
+    fi
+    return true;
+  }
+  pub fnc can_mul(int left, int right): bool {
+    if left == 0 || right == 0; do
+      return true;
+    fi
+    if left > 0; do
+      if right > 0; do
+        return left <= 9223372036854775807 / right;
+      fi
+      return right >= -9223372036854775808 / left;
+    fi
+    if right > 0; do
+      return left >= -9223372036854775808 / right;
+    fi
+    return left >= 9223372036854775807 / right;
+  }
+  pub fnc can_div(int left, int right): bool {
+    if right == 0; do
+      return false;
+    fi
+    return !(left == -9223372036854775808 && right == -1);
+  }
+  pub fnc checked_add(int left, int right): Result<int, String> {
+    if !can_add(left, right); do
+      return Err("num: addition overflow");
+    fi
+    return Ok(left + right);
+  }
+  pub fnc checked_sub(int left, int right): Result<int, String> {
+    if !can_sub(left, right); do
+      return Err("num: subtraction overflow");
+    fi
+    return Ok(left - right);
+  }
+  pub fnc checked_mul(int left, int right): Result<int, String> {
+    if !can_mul(left, right); do
+      return Err("num: multiplication overflow");
+    fi
+    return Ok(left * right);
+  }
+  pub fnc checked_div(int left, int right): Result<int, String> {
+    if !can_div(left, right); do
+      return Err("num: division by zero or overflow");
+    fi
+    return Ok(left / right);
+  }
+  pub fnc checked_rem(int left, int right): Result<int, String> {
+    if !can_div(left, right); do
+      return Err("num: remainder by zero or overflow");
+    fi
+    return Ok(left % right);
+  }
+  pub fnc checked_neg(int value): Result<int, String> {
+    if value == -9223372036854775808; do
+      return Err("num: negation overflow");
+    fi
+    return Ok(-value);
+  }
+  pub fnc checked_abs(int value): Result<int, String> {
+    if value == -9223372036854775808; do
+      return Err("num: absolute-value overflow");
+    fi
+    if value < 0; do
+      return Ok(-value);
+    fi
+    return Ok(value);
+  }
+  pub fnc saturating_add(int left, int right): int {
+    if !can_add(left, right); do
+      if right > 0; do
+        return 9223372036854775807;
+      fi
+      return -9223372036854775808;
+    fi
+    return left + right;
+  }
+  pub fnc saturating_sub(int left, int right): int {
+    if !can_sub(left, right); do
+      if right < 0; do
+        return 9223372036854775807;
+      fi
+      return -9223372036854775808;
+    fi
+    return left - right;
+  }
+  pub fnc saturating_mul(int left, int right): int {
+    if !can_mul(left, right); do
+      if (left > 0 && right > 0) || (left < 0 && right < 0); do
+        return 9223372036854775807;
+      fi
+      return -9223372036854775808;
+    fi
+    return left * right;
+  }
+  // Perform signed wrapping without requiring overflowing host arithmetic.
+  pub fnc wrapping_add(int left, int right): int {
+    if right > 0 && left > 9223372036854775807 - right; do
+      return -9223372036854775808 + (left - (9223372036854775807 - right) - 1);
+    fi
+    if right < 0 && left < -9223372036854775808 - right; do
+      return 9223372036854775807 + right - (-9223372036854775808 - left) + 1;
+    fi
+    return left + right;
+  }
+  pub fnc wrapping_sub(int left, int right): int {
+    if right < 0 && left > 9223372036854775807 + right; do
+      return -9223372036854775808 + left - (9223372036854775807 + right) - 1;
+    fi
+    if right > 0 && left < -9223372036854775808 + right; do
+      return 9223372036854775807 + left - (-9223372036854775808 + right) + 1;
+    fi
+    return left - right;
+  }
+  // 63-bit shift-and-add using checked modular additions. MIN multiplier
+  // is handled separately so negating the multiplier cannot overflow.
+  pub fnc wrapping_mul(int left, int right): int {
+    if right == -9223372036854775808; do
+      if left % 2 != 0; do
+        return -9223372036854775808;
+      fi
+      return 0;
+    fi
+    let int factor = right;
+    let bool negative = false;
+    if factor < 0; do
+      factor = -factor;
+      negative = true;
+    fi
+    let int product = 0;
+    let int term = left;
+    for (let int i = 0; i < 63; i = i + 1) {
+      if factor % 2 != 0; do
+        product = wrapping_add(product, term);
+      fi
+      factor = factor / 2;
+      term = wrapping_add(term, term);
+    }
+    if negative; do
+      return wrapping_sub(0, product);
+    fi
+    return product;
+  }
+
+  pub fnc saturating_neg(int value): int {
+    if value == -9223372036854775808; do
+      return 9223372036854775807;
+    fi
+    return -value;
+  }
+  pub fnc saturating_abs(int value): int {
+    if value == -9223372036854775808; do
+      return 9223372036854775807;
+    fi
+    if value < 0; do
+      return -value;
+    fi
+    return value;
+  }
+  pub fnc wrapping_neg(int value): int {
+    return wrapping_sub(0, value);
+  }
+end
+)ATTO_CORE4"
