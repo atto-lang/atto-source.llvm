@@ -9,7 +9,11 @@ and no byte-for-byte source identity with other compilers is mandated.
 - `stdlib/core/byte_budget.atto` is freestanding, pure and allocation-free.
 - `stdlib/alloc/capacity_plan.atto` is a pure policy helper for an explicit
   allocator. Actual allocation and ownership are NOT implemented by this file.
-- `stdlib/alloc/arena_plan.atto` adds overflow-safe reservation and conservative\n  rewind/tail-release/close/generation policy. A trusted runtime must enforce\n  true ownership, live-loan state, alignment, destructor completion, scrubbing\n  and actor incarnation. No heap or arena allocator is exposed by this file.\n- `stdlib/std/stream_watermarks.atto` provides stream backpressure decisions.
+- `stdlib/alloc/arena_plan.atto` adds overflow-safe reservation and conservative
+  rewind/tail-release/close/generation policy. A trusted runtime must enforce
+  true ownership, live-loan state, alignment, destructor completion, scrubbing
+  and actor incarnation. No heap or arena allocator is exposed by this file.
+- `stdlib/std/stream_watermarks.atto` provides stream backpressure decisions.
   Channel admission, actor scheduling, permission checks and I/O are still
   enforced by the runtime.
 
@@ -19,9 +23,27 @@ and `next_capacity` returns -1. Max budgets are inclusive. Growth uses a
 backend-local initial capacity floor of 4 items; this value may vary
 across compilers without changing safe ownership or streaming contracts.
 
+The LLVM-local `stdlib/alloc/arena_lifecycle.atto` separately checks sealed
+admission, completed drops, active turns, continuations, I/O and producer
+leases before physical reclamation. `arena_can_close` in `arena_plan.atto`
+is **not** an alias for that stronger `arena_can_free` gate. Existing
+`arena_limits.atto` validates alignment; arena reservation planning cannot
+replace the runtime's aligned placement checks.
+
 ## Verification state
 
-`contracts/atto-library-policy-v1.json` records 23 proposed behavior cases.\n`contracts/atto-arena-policy-v1.json` pins 38 additional arena-policy vectors,\nincluding exact i64 boundaries encoded as decimal strings, and its Git blob.\nThe source-only interpreter gate can be run with:\n\n```sh\nnode --test tests/atto-arena-policy-source.test.mjs\n```\n\nIt deliberately accepts only straight-line arithmetic Atto statements. A pass\nproves the pinned policy source against those vectors, **not** native guest\ncompilation, heap allocation, memory-safe destruction or backend parity.
+`contracts/atto-library-policy-v1.json` records 23 proposed behavior cases.
+`contracts/atto-arena-policy-v1.json` pins 38 additional arena-policy vectors,
+including exact i64 boundaries encoded as decimal strings, and its Git blob.
+The source-only interpreter gate can be run with:
+
+```sh
+node --test tests/atto-arena-policy-source.test.mjs
+```
+
+It deliberately accepts only straight-line arithmetic Atto statements. A pass
+proves the pinned policy source against those vectors, **not** native guest
+compilation, heap allocation, memory-safe destruction or backend parity.
 These are source-only fixtures, **not evidence of compiler guest execution**.
 Integration requires verified native Atto parsing, local import resolution,
 guest execution, and platform/AOT tests before claiming implemented library
