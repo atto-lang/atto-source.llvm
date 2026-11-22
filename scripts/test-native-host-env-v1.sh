@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 cc_bin="${CC:-cc}"
-"$cc_bin" -std=c11 -O2 -Wall -Wextra -Werror -pedantic \
+"$cc_bin" -std=c11 ${CFLAGS:--O2} -Wall -Wextra -Werror -pedantic \
     -I native/include \
     native/src/host_env_snapshot_v1.c \
     native/tests/host_env_snapshot_v1_test.c \
