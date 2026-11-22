@@ -1,0 +1,14 @@
+// LLVM-local hosted telemetry policy. Pure; does not trigger a GC or a thread.
+// Runtime reads counters from its already-authenticated arena capability.
+pub fnc arena_near_quota(int used, int quota, int headroom) -> bool {
+  if used < 0 || quota < 0 || headroom < 0 then return true; fi
+  if used > quota then return true; fi
+  if headroom > quota then return true; fi
+  return used >= quota - headroom;
+}
+
+pub fnc arena_can_fit_request(int used, int request, int quota) -> bool {
+  if used < 0 || request < 0 || quota < 0 then return false; fi
+  if used > quota then return false; fi
+  return request <= quota - used;
+}
