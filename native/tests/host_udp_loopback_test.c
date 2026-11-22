@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 #include "atto/host_udp_loopback.h"
 #include <assert.h>
 #include <errno.h>
