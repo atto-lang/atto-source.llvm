@@ -41,8 +41,37 @@ int main() {
     assert(is_reserved_compiler_library_import("alloc/int_buffer"));
     assert(!is_reserved_alloc_import("./alloc/int_buffer"));
     assert(!is_reserved_alloc_import("./atto.alloc/int_buffer"));
-    assert(!is_reserved_compiler_library_import("atto.std/fs"));
-    assert(!is_reserved_compiler_library_import("ores.std/testing"));
+    // core/alloc/std are all reserved roots (core-alloc-std-libraries-v1).
+    assert(is_reserved_compiler_library_import("atto.std/fs"));
+    assert(is_reserved_compiler_library_import("ores.std/testing"));
+    assert(is_reserved_compiler_library_import("core/num"));
+    assert(is_reserved_compiler_library_import("std/path"));
+    assert(!is_reserved_compiler_library_import("./core/num"));
+    assert(!is_reserved_compiler_library_import("std.fs"));
+    assert(compiler_library_dependency_allowed(
+        CompilerLibraryTier::Std, CompilerLibraryTier::Alloc));
+    assert(!compiler_library_dependency_allowed(
+        CompilerLibraryTier::Alloc, CompilerLibraryTier::Std));
+    assert(!compiler_library_dependency_allowed(
+        CompilerLibraryTier::Core, CompilerLibraryTier::Std));
+    {
+        const auto* num = find_compiler_library_source("core/num");
+        assert(num != nullptr && num->tier == CompilerLibraryTier::Core);
+        assert(num == find_compiler_library_source("atto.core/num.atto"));
+        assert(num == find_compiler_library_source("ores.core/num"));
+        assert(find_compiler_library_source("core/../num") == nullptr);
+        assert(find_compiler_library_source("core/Num") == nullptr);
+        assert(find_compiler_library_source("core/x/num") == nullptr);
+        const auto* arena = find_compiler_library_source("alloc/arena");
+        assert(arena != nullptr && arena->tier == CompilerLibraryTier::Alloc);
+        assert(arena->admitted_provider_bits == bit(CoreProviderRequirement::Allocator));
+        const auto* posix = find_compiler_library_source("std/path", LibraryTargetOs::Posix);
+        const auto* windows = find_compiler_library_source("std/path", LibraryTargetOs::Windows);
+        assert(posix && windows && posix != windows);
+        assert(posix->tier == CompilerLibraryTier::Std && posix->module_name == "path");
+        assert(posix->source.find("return 47;") != std::string_view::npos);
+        assert(windows->source.find("return 92;") != std::string_view::npos);
+    }
     assert(compiler_library_dependency_allowed(
         CompilerLibraryTier::Core, CompilerLibraryTier::Core));
     assert(!compiler_library_dependency_allowed(

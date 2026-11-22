@@ -8639,7 +8639,7 @@ private:
             // binding must retain the nominal type and ownership contract.
             std::function<void(const Expression&, std::size_t)> check_inferred_scalar_shape;
             check_inferred_scalar_shape = [&](const Expression& expr, std::size_t depth) {
-                require_expression_depth(depth, expr.offset);
+                require_expression_depth(depth, expr);
                 using K = Expression::Kind;
                 if (expr.kind == K::SumConstruct || expr.kind == K::SumAccess ||
                         expr.kind == K::RecordConstruct || expr.kind == K::ArrayCall ||
@@ -8701,7 +8701,7 @@ private:
 
             std::function<void(const Expression&, std::size_t)> check_scalar_cast_sources;
             check_scalar_cast_sources = [&](const Expression& expr, std::size_t depth) {
-                require_expression_depth(depth, expr.offset);
+                require_expression_depth(depth, expr);
                 if (expr.kind == Expression::Kind::Cast)
                     check_inferred_scalar_shape(*expr.left, depth + 1);
                 auto child = [&](const std::unique_ptr<Expression>& value) {
@@ -8799,9 +8799,9 @@ private:
                     return;
                 }
                 if (stmt.kind == Statement::Kind::Loop) {
-                    TypeMap body = env;
+                    TypeMap body = env; AssignableMap body_assignable = assignable;
                     for (const auto& action : stmt.then_statements)
-                        check_statement_types(action, body);
+                        check_statement_types(action, body, body_assignable);
                     return;
                 }
                 if (stmt.kind == Statement::Kind::Break ||
