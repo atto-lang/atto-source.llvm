@@ -6,6 +6,7 @@ on:
       - 'stdlib/json.atto'
       - 'stdlib/zorde.atto'
       - 'tests/std-metrics-json-zorde-source-contract.test.mjs'
+      - 'contracts/std-metrics-json-zorde-source-v1.json'
       - '.github/workflows/atto-metrics-json-zorde-source.yml'
   workflow_dispatch:
 permissions:
