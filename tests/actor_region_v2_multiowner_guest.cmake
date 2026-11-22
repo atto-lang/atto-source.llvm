@@ -1,5 +1,6 @@
 # Real checked .atto -> LLVM IR -> native Clang -> ActorRegionV1 runtime.
-# Independent CTest: 2 lexical owners, one guarded early return, 2 drops.
+# Independent CTest: 2-3 lexical owners, one guarded early return,
+# one exact-owner atomic finish intrinsic in the compiler-generated CFG.
 # A green runner is a restricted guest result, not process-wide zero GC.
 cmake_minimum_required(VERSION 3.20)
 if(NOT DEFINED ROOT OR NOT DEFINED BUILD OR NOT DEFINED CLANG OR
@@ -59,13 +60,15 @@ foreach(case IN ITEMS early normal three)
     message(SEND_ERROR "${case}: frontend failed to produce verified native guest IR: ${status}, ${err}")
   else()
     string(REGEX MATCHALL "call void @ores_actor_region_v1_compiler_alloc\\(" allocations "${ir}")
-    string(REGEX MATCHALL "call void @ores_actor_region_v1_compiler_drop\\(" drops "${ir}")
+    string(REGEX MATCHALL "call void @ores_actor_region_v1_compiler_finish\\(" finishes "${ir}")
     list(LENGTH allocations alloc_count)
-    list(LENGTH drops drop_count)
+    list(LENGTH finishes finish_count)
     if(NOT alloc_count EQUAL ${expected_owners} OR
-       NOT drop_count EQUAL ${expected_owners} OR
-       NOT ir MATCHES "shared.owner.cleanup")
-      message(SEND_ERROR "${case}: expected ${expected_owners} allocations and drops in one CFG cleanup, got ${alloc_count}/${drop_count}")
+       NOT finish_count EQUAL 1 OR
+       ir MATCHES "call void @ores_actor_region_v1_compiler_drop\\(" OR
+       NOT ir MATCHES "shared.owner.cleanup" OR
+       NOT ir MATCHES "lexical.cleanup.owners")
+      message(SEND_ERROR "${case}: expected ${expected_owners} allocations and exactly one checked terminal finish, got ${alloc_count} allocations/${finish_count} finishes")
     else()
       file(WRITE "${dir}/program.ll" "${ir}")
       execute_process(COMMAND "${BUILD}/oreslang-no-gc-ir-audit"
