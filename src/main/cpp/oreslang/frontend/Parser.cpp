@@ -5376,9 +5376,10 @@ private:
             ~DepthGuard() { --depth; }
         } depth_guard{expression_depth_};
 
-        if (token_.text == "&" || token_.text == "*") {
+        if (token_.kind == Kind::Symbol && (token_.text == "&" || token_.text == "*")) {
             // '&' address-of and unary '*' dereference are never AttoLang
             // pointer syntax. Preserve binary '*' multiplication and '&&'.
+            // Symbol tokens only: the string literal "*" lexes as text `*`.
             fail("native pointer syntax forbids unary '&' address-of and "
                  "unary '*' dereference; use checked Pointer<T> methods");
         }
