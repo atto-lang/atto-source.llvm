@@ -80,3 +80,31 @@ pub fnc http_frame_range_allowed(int offset, int length, int buffer_bytes,
   if length > frame_limit then return false; fi
   return length <= buffer_bytes - offset;
 }
+
+// Strict framing admission based on *raw* field counts from the transport.
+// Duplicate Content-Length or Transfer-Encoding, TE+CL, unsupported codings,
+// and a TE field without final chunked all fail closed. This function does not
+// parse wire headers or grant network authority.
+pub fnc http_request_framing_fields_allowed(
+    int content_length_fields, int transfer_encoding_fields,
+    bool final_chunked, bool unsupported_transfer_coding): bool {
+  if content_length_fields < 0 then return false; fi
+  if content_length_fields > 1 then return false; fi
+  if transfer_encoding_fields < 0 then return false; fi
+  if transfer_encoding_fields > 1 then return false; fi
+  if content_length_fields > 0 && transfer_encoding_fields > 0 then return false; fi
+  if unsupported_transfer_coding then return false; fi
+  if transfer_encoding_fields == 0 then return !final_chunked; fi
+  return final_chunked;
+}
+
+// Subtraction-first chunk accounting. No attacker-controlled addition is
+// performed before bounds admission, and limits above 1GiB are rejected.
+pub fnc http_body_chunk_allowed(int consumed, int next_bytes, int max_bytes): bool {
+  if consumed < 0 then return false; fi
+  if next_bytes < 0 then return false; fi
+  if max_bytes < 0 then return false; fi
+  if max_bytes > 1073741824 then return false; fi
+  if consumed > max_bytes then return false; fi
+  return next_bytes <= max_bytes - consumed;
+}
