@@ -27,7 +27,7 @@ if [ -n "$llvm_major" ]; then
 fi
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-for name in main-int main-int-default; do
+for name in main-int main-int-default main-sub; do
   "$compiler" "tests/atto-atomic-main-v1/$name.atto" >"$tmp/$name.ll"
   grep -q 'load atomic i64' "$tmp/$name.ll"
   grep -q 'store atomic i64' "$tmp/$name.ll"
@@ -36,22 +36,28 @@ for name in main-int main-int-default; do
   test "$status" -eq 42 || { echo "main AOT $name returned $status"; exit 1; }
 done
 grep -q 'llvm.sadd.with.overflow.i64' "$tmp/main-int.ll"
+grep -q 'llvm.ssub.with.overflow.i64' "$tmp/main-sub.ll"
+grep -q 'cmpxchg' "$tmp/main-sub.ll"
 grep -q 'cmpxchg' "$tmp/main-int.ll"
 if grep -q 'atomicrmw add' "$tmp/main-int.ll"; then
   echo "main compiler emitted wrapping Atomic<int>.fetch_add" >&2; exit 1
 fi
-# A checked signed-i64 fetch_add must trap rather than wrapping to MIN.
-"$compiler" "tests/atto-atomic-main-v1/overflow-add.atto" >"$tmp/overflow-add.ll"
-grep -q 'llvm.sadd.with.overflow.i64' "$tmp/overflow-add.ll"
-"$clang_bin" -x ir -Wno-override-module "$tmp/overflow-add.ll" -o "$tmp/overflow-add"
+# Checked signed fetch_add and fetch_sub both trap on overflow without
+# publishing wrapped values. A normal return is a safety failure.
 ulimit -c 0 || true
-set +e
-"$tmp/overflow-add" >/dev/null 2>&1
-overflow_status=$?
-set -e
-if [ "$overflow_status" -lt 128 ]; then
-  echo "main compiler overflow failed to trap: exit $overflow_status" >&2; exit 1
-fi
+for name in overflow-add underflow-sub; do
+  "$compiler" "tests/atto-atomic-main-v1/$name.atto" >"$tmp/$name.ll"
+  grep -q 'llvm.trap' "$tmp/$name.ll"
+  grep -q 'cmpxchg' "$tmp/$name.ll"
+  "$clang_bin" -x ir -Wno-override-module "$tmp/$name.ll" -o "$tmp/$name"
+  set +e
+  "$tmp/$name" >/dev/null 2>&1
+  status=$?
+  set -e
+  if [ "$status" -lt 128 ]; then
+    echo "main compiler $name failed to trap: exit $status" >&2; exit 1
+  fi
+done
 for f in tests/atto-atomic-main-v1/reject-*.atto; do
   if "$compiler" "$f" >"$tmp/reject.ll" 2>"$tmp/reject.err"; then
     echo "unsafe native Atomic fixture compiled: $f" >&2; exit 1
