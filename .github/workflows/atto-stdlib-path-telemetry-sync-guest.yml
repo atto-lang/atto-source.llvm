@@ -1,0 +1,87 @@
+name: LLVM native Atto std path/telemetry/sync executable guest gate
+on:
+  pull_request:
+    paths:
+      - 'stdlib/std/path.atto'
+      - 'stdlib/std/telemetry.atto'
+      - 'stdlib/std/sync.atto'
+      - 'tests/fixtures/stdlib_path_telemetry_sync_v1.atto'
+      - '.github/workflows/atto-stdlib-path-telemetry-sync-guest.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-import-guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout source repo exact head, never cross-org
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify source SHA, entire root tree and component blobs
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          echo "LLVM_ATTO_STD_HEAD=$EXPECTED_SHA"
+          echo "LLVM_ATTO_STD_TREE=$(git rev-parse 'HEAD^{tree}')"
+          for path in \
+            stdlib/std/path.atto stdlib/std/telemetry.atto stdlib/std/sync.atto \
+            tests/fixtures/stdlib_path_telemetry_sync_v1.atto; do
+            sha="$(git hash-object --no-filters -- "$path")"
+            test "$sha" = "$(git rev-parse "HEAD:$path")"
+            echo "LLVM_ATTO_STD_SOURCE_BLOB=$path:$sha"
+          done
+      - name: Provision native toolchain
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang llvm-dev cmake ninja-build
+      - name: Compile exact-head LLVM native Atto compiler
+        run: |
+          set -euo pipefail
+          cmake -G Ninja -S . -B "$RUNNER_TEMP/std-backend" \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
+            -DLLVM_DIR="$(llvm-config --cmakedir)"
+          cmake --build "$RUNNER_TEMP/std-backend" --target oreslang-llvmc --parallel 2
+          test -x "$RUNNER_TEMP/std-backend/oreslang-llvmc"
+          sha256sum "$RUNNER_TEMP/std-backend/oreslang-llvmc"
+      - name: Compile original Atto std imports and run guest at O0 and O2
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/std-backend/oreslang-llvmc" --target=host \
+            tests/fixtures/stdlib_path_telemetry_sync_v1.atto \
+            > "$RUNNER_TEMP/std-guest.ll"
+          test -s "$RUNNER_TEMP/std-guest.ll"
+          grep -Eq '^define i64 @__oreslang_guest_main\(' "$RUNNER_TEMP/std-guest.ll"
+          grep -Eq '^define i32 @main\(' "$RUNNER_TEMP/std-guest.ll"
+          for opt in 0 2; do
+            clang "-O$opt" -x ir "$RUNNER_TEMP/std-guest.ll" \
+              -o "$RUNNER_TEMP/std-guest-O$opt"
+            "$RUNNER_TEMP/std-guest-O$opt"
+            echo "LLVM_ATTO_STD_REAL_GUEST=EXECUTED opt=$opt"
+          done
+      - name: Compile sanitized native guest and run actual instrumentation
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euo pipefail
+          clang -O1 -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -x ir "$RUNNER_TEMP/std-guest.ll" \
+            -o "$RUNNER_TEMP/std-guest-sanitized"
+          "$RUNNER_TEMP/std-guest-sanitized"
+          echo "LLVM_ATTO_STD_ASAN_UBSAN_GUEST=EXECUTED"
+      - name: Preserve the evidence boundary
+        if: always()
+        run: |
+          echo 'No private source was exported to any other organization.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'A compiler rejection, missing library import or 0-step queue is NOT a native guest pass.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Passing this workflow does not prove thread/actor locking, OTLP or native FS provider support.' >> "$GITHUB_STEP_SUMMARY"
