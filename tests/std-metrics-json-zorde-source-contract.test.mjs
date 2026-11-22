@@ -22,8 +22,8 @@ test("three independent native Atto hosted modules, no host interop", () => {
   for (const [name, content] of Object.entries(modules)) {
     assert.match(content, new RegExp("define module " + name + " as"));
     const source = stripComments(content);
-    assert.doesNotMatch(source, /\\bjava:|\\bSystem\\.|\\bHostInterop\\.|\\bffi\\.|\\bNativeIo\\./);
-    assert.doesNotMatch(source, /\\bawait\\s|\\bstdio\\.|\\bnetwork\\.|\\bprocess\\./);
+    assert.doesNotMatch(source, /\bjava:|\bSystem\.|\bHostInterop\.|\bffi\.|\bNativeIo\./);
+    assert.doesNotMatch(source, /\bawait\s|\bstdio\.|\bnetwork\.|\bprocess\./);
     assert.ok(content.length > 100);
   }
 });
@@ -73,7 +73,7 @@ test("Java compiler-owned registry and test-vector counts, when present", () => 
   const cases = { metrics: 18, json: 33, zorde: 29 };
   for (const [name, count] of Object.entries(cases)) {
     const fixture = read("src/test/resources/stdlib-parity/metrics-json-zorde/" + name + ".atto");
-    const actual = (fixture.match(/stdio\\.println\\(/g) || []).length;
+    const actual = (fixture.match(/stdio\.println\(/g) || []).length;
     assert.equal(actual, count, name + " guest fixture output count");
     const pattern = new RegExp('assertGuest\\("' + name + '",([\\s\\S]*?)\\);');
     const match = suite.match(pattern);
