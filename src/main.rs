@@ -453,6 +453,31 @@ fn compile_ir_with_profile(source: &str, profile: LibraryProfile) -> Result<Stri
         return Err("E_SOURCE_LIMIT: native Atto input exceeds 64 KiB".into());
     }
     let toks = atto_compiler::lexer::lex(source).map_err(|e|e.to_string())?;
+    // Capability gate for the new first-class Entry/Map target. This only
+    // inspects real lexer tokens; strings and comments cannot impersonate a
+    // type name. Do not emit a scalar stub or silently reinterpret Map as
+    // Record or an unsupported host-side hash table.
+    if toks.iter().any(|token| matches!(
+        &token.tok, atto_compiler::lexer::Tok::Ident(word)
+            if word == "Map" || word == "Entry"
+    )) {
+        return Err("E_UNSUPPORTED_MAP_ENTRY: native Map/Entry ownership, allocation and typed lowering are not implemented".into());
+    }
+    // A closed Record key is a statically checked slot, never a dynamic
+    // Map hash key. This native scalar compiler has no Record field ABI yet.
+    if toks.iter().any(|token| matches!(
+        &token.tok, atto_compiler::lexer::Tok::Ident(word) if word == "Record"
+    )) {
+        return Err("E_UNSUPPORTED_RECORD: native closed Record field typing and mutable slot lowering are not implemented".into());
+    }
+    // Preserve the no-index-for-nominal-Struct boundary until the compiler
+    // can prove the receiver type. Do not fabricate a generic indexer or
+    // treat bracket assignment as a global name lookup.
+    if toks.iter().any(|token| matches!(
+        &token.tok, atto_compiler::lexer::Tok::LBracket
+    )) {
+        return Err("E_UNSUPPORTED_INDEX_WRITE: checked bracket indexing requires a typed Map or closed Record receiver; nominal Struct indexing is forbidden".into());
+    }
     if profile == LibraryProfile::FreestandingCore {
         admit_freestanding_tokens(&toks)?;
     }
@@ -765,6 +790,23 @@ fn main() {
 mod tests {
     use super::*;
     #[test]
+    fn typed_record_write_and_nominal_struct_brackets_never_lower_as_native_scalar() {
+        let cases = [
+            ("pub fnc main(): int { let mut Record r = {foo: 1}; r[\"foo\"] = 3; return 0; }",
+             "E_UNSUPPORTED_RECORD"),
+            ("define struct Point as int foo; end pub fnc main(): int { p[\"foo\"] = 3; return 0; }",
+             "E_UNSUPPORTED_INDEX_WRITE"),
+        ];
+        for (source, expected) in cases {
+            let error = compile_ir(source).expect_err("guest index write is unlowered");
+            assert!(error.contains(expected), "{source}: {error}");
+        }
+        let scalar = compile_ir("// Record x[\"foo\"] = 3; Entry => Map\npub fnc main(): int { return 42; }")
+            .expect("comments are not compiler tokens");
+        assert!(scalar.contains("ret i64 42"));
+    }
+
+    #[test]
     fn native_main_is_direct_i64_call() {
         let ir = compile_ir("pub fnc main(): int { return 42; }").unwrap();
         assert!(ir.contains("define i32 @main()"));
@@ -815,5 +857,38 @@ mod tests {
             let err = compile_ir_with_profile(source, LibraryProfile::FreestandingCore).unwrap_err();
             assert!(err.contains(code), "{code} got {err}");
         }
+    }
+}
+
+#[cfg(test)]
+mod map_entry_feature_admission_tests {
+    use super::compile_ir;
+
+    #[test]
+    fn first_class_dual_ascriptions_fail_closed_until_real_guest_lowering() {
+        let source = include_str!("../tests/fixtures/map-entry/dual-entry-add.atto");
+        let error = compile_ir(source).expect_err("no native Map/Entry guest lowering exists");
+        assert!(error.contains("E_UNSUPPORTED_MAP_ENTRY"), "{error}");
+    }
+
+    #[test]
+    fn empty_typed_map_fails_closed_instead_of_emitting_scalar_stub() {
+        let source = include_str!("../tests/fixtures/map-entry/empty-map.atto");
+        let error = compile_ir(source).expect_err("typed Map cannot be lowered as scalar");
+        assert!(error.contains("E_UNSUPPORTED_MAP_ENTRY"), "{error}");
+    }
+
+    #[test]
+    fn quoted_operator_text_does_not_impersonate_entry_tokens() {
+        let source = include_str!("../tests/fixtures/map-entry/string-pseudocode.atto");
+        let error = compile_ir(source).expect_err("string guest runtime is unsupported here");
+        assert!(!error.contains("E_UNSUPPORTED_MAP_ENTRY"), "{error}");
+    }
+
+    #[test]
+    fn comments_do_not_impersonate_map_or_entry_tokens() {
+        let source = include_str!("../tests/fixtures/map-entry/comment-pseudocode.atto");
+        let ir = compile_ir(source).expect("ordinary scalar guest should remain executable");
+        assert!(ir.contains("define i32 @main"), "{ir}");
     }
 }

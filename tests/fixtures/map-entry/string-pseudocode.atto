@@ -1,0 +1,2 @@
+// The lexer must treat => in quotes as data, not as Entry syntax.
+pub fnc main(): int { return "=> Map Entry Record [foo]"; }

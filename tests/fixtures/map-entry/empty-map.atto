@@ -1,0 +1,5 @@
+// Target semantics: contextual empty Map with typed key and value.
+pub fnc main(): int {
+    let mut Map<string, int> x = {};
+    return 0;
+}
