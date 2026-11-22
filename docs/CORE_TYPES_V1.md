@@ -1,0 +1,13 @@
+# core/types v1 — LLVM native/AOT
+
+This is this backend's independently maintained `core/types.atto` source, not an import of the Java, LLVM or common-source implementation.
+
+**Scope:** signed-64-bit `int` scalar value width/min/max, logical bool/byte value widths, and signed/unsigned narrowing *admission predicates* over an existing signed `int`. This does not implement sized integer representations, narrow casts, native ABI layouts, runtime reflection, or compiler-minted type identity.
+
+`void` remains a valueless return marker. A first-class `Unit` requires a proven singleton aggregate representation; compiler `TypeId` and `TypeInfo<T>` require closed-world metadata provenance, not host reflection or user-supplied type names. Unsupported features must diagnose, not silently fall back.
+
+**Conformance fixtures:** `tests/fixtures/core-types-v1/edge-positive.atto` must import and link this exact source and execute as a compiled guest with exit 0; `void-value-negative.atto` must be rejected before artifact emission. Repeat across relevant native/AOT/wasm modes where supported. Report unsupported separately from failure.
+
+**Status:** staged source and fixture only. No successful exact-head guest run or negative diagnostic has been established. No source tree exported to another org. This PR is draft until executed CI evidence and importer/linker behavior are verified.
+
+**Independence:** preserve API/behavioral compatibility; implementation is backend-owned and can diverge physically.
