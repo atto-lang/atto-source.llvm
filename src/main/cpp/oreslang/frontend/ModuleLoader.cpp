@@ -170,6 +170,12 @@ private:
             if (!index) throw;
             fail(*unit, error.what());
         }
+        // `const_imports` is syntax-only metadata, not an ordinary module
+        // or function import. A source dependency must not disappear from the
+        // module import loop and produce a seemingly valid native artifact.
+        if (!unit->program.const_imports.empty())
+            fail(*unit, "CONST_LINKER_UNSUPPORTED: native typed constant imports "
+                 "need checked export kinds and startup-capable value linkage");
         if (unit->compiler_owned_library) {
             unit->core_closure =
                 frontend::infer_core_closure_requirements(unit->program);
