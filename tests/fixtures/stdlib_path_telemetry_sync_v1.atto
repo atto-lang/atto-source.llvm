@@ -28,5 +28,6 @@ pub fnc main(): int {
   if sync.sem_return_admissible(4, 2, 5, false) then return 21; fi
   if !sync.barrier_last_arrival(3, 4, false) then return 22; fi
   if sync.next_epoch_admissible(2147483647, 0) then return 23; fi
+  if !sync.sem_return_admissible(3, 2, 5, true) then return 24; fi
   return 0;
 }
