@@ -1947,6 +1947,17 @@ if(BUILD_TESTING)
     add_test(NAME native_int_array_region_security
         COMMAND oreslang-native-int-array-region-test)
 
+    # Compiler executable pre-admission gate only. Proves the supported
+    # scalar Array.get still emits IR, while candidate get_copy/get_mut
+    # cannot produce IR before typed Option/loan lowering is implemented.
+    # A parser/unsupported rejection is NOT semantic guest parity.
+    add_test(NAME native_array_option_pre_admission_fail_closed
+        COMMAND "${CMAKE_COMMAND}"
+            "-DORES_COMPILER=$<TARGET_FILE:oreslang-llvmc>"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_array_option_pre_admission.cmake")
+    set_tests_properties(native_array_option_pre_admission_fail_closed
+        PROPERTIES TIMEOUT 95)
+
     # Checked, recoverable internal allocation/resize + staged prepare/commit.
     # Failpoint injection only exists in this test executable; existing
     # compiler-generated abort ABI and production runtime remain unchanged.
