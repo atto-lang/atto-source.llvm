@@ -29,6 +29,22 @@ Opt-in **host-only** test runner:
 sh tests/crypto-aead-host-v1.sh
 ```
 
+An optional ASan/UBSan execution is now supported by the same exact
+shell runner:
+
+```sh
+ATTO_CRYPTO_SANITIZERS=1 sh tests/crypto-aead-host-v1.sh
+```
+
+The committed script blob
+`82219e908851a051c20e51cc4bbd40177b89701c`
+was reconstructed byte-for-byte locally and **executed successfully**
+in both ordinary and ASan/UBSan modes on the exact C++ source blob
+`2c48d62ad8d23e029799f315861d7728ab2daafd`.
+These were isolated C++17/OpenSSL 3.5.5 host checks; full LLVM
+source compiler, guest linking, cancellation, and hard-real-time
+conformance remain untested.
+
 This builds a small OpenSSL-linked C++17 test independently of the
 full LLVM SDK. It includes the NIST AES-256-GCM empty-message
 known-answer vector, nonce uniqueness, tamper, wrong key/AAD/nonce,
