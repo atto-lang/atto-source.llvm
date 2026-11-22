@@ -1,0 +1,66 @@
+# Runs only within the LLVM source repository. Rust-hosted frontend target,
+# not C++ LLVM native AOT, not runtime supervisor CONTROL or nine-backend parity.
+name: Atto LLVM-repo Rust frontend typed receives (bounded Wasm)
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/typed-actor-receives-frontend.yml'
+      - 'frontend/src/parser.rs'
+      - 'frontend/src/ast.rs'
+      - 'frontend/src/check.rs'
+      - 'frontend/src/lib.rs'
+      - 'frontend/src/actor_send_effect_graph.rs'
+      - 'frontend/tests/fixtures/actor-bool-never-parity-v1.atto'
+      - 'frontend/src/bin/attoc.rs'
+      - 'frontend/tests/typed_actor_receives.rs'
+  push:
+    paths:
+      - '.github/workflows/typed-actor-receives-frontend.yml'
+      - 'frontend/src/parser.rs'
+      - 'frontend/src/ast.rs'
+      - 'frontend/src/check.rs'
+      - 'frontend/src/lib.rs'
+      - 'frontend/src/actor_send_effect_graph.rs'
+      - 'frontend/tests/fixtures/actor-bool-never-parity-v1.atto'
+      - 'frontend/src/bin/attoc.rs'
+      - 'frontend/tests/typed_actor_receives.rs'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  checked-rust-frontend-wasm:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      CARGO_NET_OFFLINE: 'true'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Fail on wrong checkout and report exact source tree
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          echo "ATTO_LLVM_RUST_FRONTEND_HEAD=$EXPECTED_HEAD"
+          echo "ATTO_LLVM_RUST_FRONTEND_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Compile byte-identical actor DATA effect graph and tests
+        run: |
+          set -euo pipefail
+          rustc --version
+          rustc --edition=2021 --test -D warnings frontend/src/actor_send_effect_graph.rs -o "$RUNNER_TEMP/actor-effect-tests"
+          "$RUNNER_TEMP/actor-effect-tests"
+      - name: Compile real typed-actor frontend tests and verify produced Wasm
+        run: |
+          cargo --version
+          cargo test --offline --locked --manifest-path frontend/Cargo.toml --test typed_actor_receives
+          cargo build --offline --locked --manifest-path frontend/Cargo.toml --bin attoc
+      - name: Do not count frontend Wasm as native LLVM or actor runtime parity
+        run: |
+          echo 'RUST_FRONTEND_TYPED_RECEIVES_SOURCE_WASM=TESTED'
+          echo 'LLVM_CPP_NATIVE_AOT=NOT_EXECUTED'
+          echo 'ACTOR_CONTROL_DATA_RUNTIME=NOT_EXECUTED'
