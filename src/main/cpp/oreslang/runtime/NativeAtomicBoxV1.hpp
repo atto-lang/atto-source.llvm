@@ -17,7 +17,7 @@ enum class Ordering : std::uint8_t {
     Relaxed, Acquire, Release, AcqRel, SeqCst
 };
 enum class AtomicStatus : std::uint8_t {
-    Ok, InvalidOrder, InvalidOutput, Mismatch
+    Ok, InvalidOrder, InvalidOutput, Mismatch, Overflow
 };
 
 inline constexpr bool is_load_order(Ordering order) noexcept {
@@ -106,23 +106,46 @@ public:
         return matched ? AtomicStatus::Ok : AtomicStatus::Mismatch;
     }
 
-    // All integer fetch arithmetic is the explicitly wrapping two's-complement
-    // atomic operation, distinct from checked scalar arithmetic.
+    // Checked arithmetic is required by the guest Atomic<int> contract.
+    // An overflow return is linearized at an observed atomic value and does
+    // not mutate the cell or the caller's previous-value output. Every failed
+    // CAS retries arithmetic from the latest atomically observed value.
+    // LLVM/Clang/GCC support the builtins for signed and unsigned scalars.
     AtomicStatus fetch_add(T delta, T* previous,
                            Ordering order = Ordering::SeqCst) noexcept
         requires (!std::is_same_v<T, bool>) {
         if (!previous) return AtomicStatus::InvalidOutput;
         if (!is_rmw_order(order)) return AtomicStatus::InvalidOrder;
-        *previous = value_.fetch_add(delta, native_order(order));
-        return AtomicStatus::Ok;
+        T observed = value_.load(std::memory_order_relaxed);
+        for (;;) {
+            T next = 0;
+            if (__builtin_add_overflow(observed, delta, &next))
+                return AtomicStatus::Overflow;
+            if (value_.compare_exchange_weak(
+                    observed, next, native_order(order),
+                    std::memory_order_relaxed)) {
+                *previous = observed;
+                return AtomicStatus::Ok;
+            }
+        }
     }
     AtomicStatus fetch_sub(T delta, T* previous,
                            Ordering order = Ordering::SeqCst) noexcept
         requires (!std::is_same_v<T, bool>) {
         if (!previous) return AtomicStatus::InvalidOutput;
         if (!is_rmw_order(order)) return AtomicStatus::InvalidOrder;
-        *previous = value_.fetch_sub(delta, native_order(order));
-        return AtomicStatus::Ok;
+        T observed = value_.load(std::memory_order_relaxed);
+        for (;;) {
+            T next = 0;
+            if (__builtin_sub_overflow(observed, delta, &next))
+                return AtomicStatus::Overflow;
+            if (value_.compare_exchange_weak(
+                    observed, next, native_order(order),
+                    std::memory_order_relaxed)) {
+                *previous = observed;
+                return AtomicStatus::Ok;
+            }
+        }
     }
     AtomicStatus fetch_and(T mask, T* previous,
                            Ordering order = Ordering::SeqCst) noexcept
