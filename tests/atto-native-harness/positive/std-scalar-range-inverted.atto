@@ -1,0 +1,2 @@
+import module Scalar from "ores.std/testing_scalar";
+pub fnc main(): int { return Scalar.in_range_int(41, 42, 40); }
