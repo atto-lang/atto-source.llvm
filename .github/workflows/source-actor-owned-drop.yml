@@ -10,6 +10,7 @@ on:
       - 'tests/source_actor_e2e.py'
       - 'tests/test_source_actor_receipts.py'
       - 'tests/fixtures/source-actor-*.ores'
+      - 'tests/fixtures/source-actor-*.atto'
       - '.github/workflows/source-actor-owned-drop.yml'
   workflow_dispatch:
 
@@ -67,6 +68,8 @@ jobs:
             "$RUNNER_TEMP/source-actor-owned-drop-release.log"
           grep -F 'PASS native source actor: source-actor-two-owned-heaps.ores actors 2' \
             "$RUNNER_TEMP/source-actor-owned-drop-release.log"
+          grep -F 'PASS native source actor: source-actor-lazy-first-carrier.atto actors 1' \
+            "$RUNNER_TEMP/source-actor-owned-drop-release.log"
           grep -F 'PASS current-source actor lowering and physical heap reclamation' \
             "$RUNNER_TEMP/source-actor-owned-drop-release.log"
 
@@ -84,6 +87,8 @@ jobs:
           grep -F 'PASS native source actor: source-actor-scoped-owned-i64.ores actors 1' \
             "$RUNNER_TEMP/source-actor-owned-drop-sanitized.log"
           grep -F 'PASS native source actor: source-actor-two-owned-heaps.ores actors 2' \
+            "$RUNNER_TEMP/source-actor-owned-drop-sanitized.log"
+          grep -F 'PASS native source actor: source-actor-lazy-first-carrier.atto actors 1' \
             "$RUNNER_TEMP/source-actor-owned-drop-sanitized.log"
           grep -F 'PASS current-source actor lowering and physical heap reclamation' \
             "$RUNNER_TEMP/source-actor-owned-drop-sanitized.log"
@@ -110,10 +115,12 @@ jobs:
           ]
           marker = "PASS native source actor: source-actor-scoped-owned-i64.ores actors 1"
           isolation_marker = "PASS native source actor: source-actor-two-owned-heaps.ores actors 2"
+          first_carrier_marker = "PASS native source actor: source-actor-lazy-first-carrier.atto actors 1"
           final = "PASS current-source actor lowering and physical heap reclamation"
           for path in logs:
               output = path.read_text()
               if (output.count(marker) != 1 or output.count(isolation_marker) != 1
+                      or output.count(first_carrier_marker) != 1
                       or output.count(final) != 1):
                   raise SystemExit("source actor native execution marker missing or duplicated")
           sha = git("rev-parse", "HEAD")
@@ -124,7 +131,13 @@ jobs:
               "src/main/cpp/oreslang/backend/LlvmCodegen.cpp",
               "src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c",
               "src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h",
+              "src/main/cpp/oreslang/runtime/NativeActorScheduler.c",
+              "src/main/cpp/oreslang/runtime/NativeActorScheduler.h",
+              "src/main/cpp/oreslang/runtime/NativeOresVM.c",
+              "src/main/cpp/oreslang/runtime/NativeOresVM.h",
+              "src/main/cpp/oreslang/runtime/SourceActorBootstrap.c",
               "tests/source_actor_e2e.py",
+              "tests/fixtures/source-actor-lazy-first-carrier.atto",
               "tests/fixtures/source-actor-scoped-owned-i64.ores",
               "tests/fixtures/source-actor-two-owned-heaps.ores",
           ]
@@ -139,6 +152,7 @@ jobs:
               "release_native_execution_verified": True,
               "asan_ubsan_native_execution_verified": True,
               "two_actor_owned_heaps_native_execution_verified": True,
+              "compiled_atto_first_carrier_verified": True,
               "ffi_await_unwind_ownership_verified": False,
               "java_net_backend_verified": False,
               "zero_gc_full_backend_verified": False,
