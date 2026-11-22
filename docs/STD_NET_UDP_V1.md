@@ -1,6 +1,6 @@
 # std.net.udp — datagram module, stage 1
 
-**Status:** native `.atto` policy implementation and guest regression fixture; **socket API not linked or claimed executable**. Keep this repository's implementation independently owned. There is no requirement to import the module source from `atto-common-source` or match another compiler byte-for-byte.
+**Status:** native `.atto` admission and queue-budget sources; a backend-specific host socket candidate exists, but **guest `std.net.udp` binding is still unlinked and unverified**. Keep this repository's implementation independently owned. There is no requirement to import the module source from `atto-common-source` or match another compiler byte-for-byte.
 
 ## Public application API target
 
@@ -43,3 +43,9 @@ One actor owns a mutable `UdpSocket` handle. A datagram's `OwnedBytes` may be mo
 2. Execute genuine `.atto` IPv4/IPv6 loopback send/receive, zero-length payload, back-to-back message framing, truncation and timeout; negative tests for permission, invalid endpoints, close/cancel races, buffer/queue exhaustion.
 3. Verify native AOT and target-specific support independently. For browser Wasm, raw UDP is **unsupported** unless an explicit authorized host bridge exists. Node and WASI capabilities must be tested separately; do not simulate UDP with WebSocket/WebRTC.
 4. Capture exact head/tree/compiler artifact and stepful CI evidence before claiming conformance. Do not mirror private source across organizations without independent authorization.
+
+## Stage-2 LLVM Linux host implementation (2026-11-22)
+
+`native/include/atto/host_udp_loopback.h`, `native/src/host_udp_loopback.c`, and `native/tests/host_udp_loopback_test.c` implement a real, nonblocking, numeric IPv4 127.0.0.1 UDP host adapter. Operations recheck a trusted host authorization callback by bind/local/source/peer; no guest may provide that callback. `recvmsg(MSG_TRUNC)` rejects oversize packets before publishing any bytes; a nonblocking `pthread_mutex_trylock` gate avoids carrier parking; close is idempotent. The host must separately fence every operation and physically retire references before `destroy`; this is **not** an actor lease protocol or a guest-exposed C ABI.
+
+The adapter and test are in `native/CMakeLists.txt` as `linux_udp_datagram_host_loopback`. Local Linux GCC and Clang C11 builds both passed real loopback test execution; all three local tested source blob SHAs were independently checked against GitHub. This is **host-only** validation. Actual Atto guest linking, actor loan generations, and native AOT emission remain unverified.
