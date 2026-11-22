@@ -48,6 +48,10 @@ pub fnc main(): int {
   if cell.may_borrow_shared(9223372036854775807); do
     return 14;
   fi
+  // Saturation prevents a NEW shared loan but does not revoke existing owner read.
+  if !cell.may_owner_read(9223372036854775807); do
+    return 24;
+  fi
   if cell.may_borrow_shared(-2) || cell.may_destroy(-1); do
     return 15;
   fi
