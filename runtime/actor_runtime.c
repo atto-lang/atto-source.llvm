@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include "actor_send_result_v1.h"
 
 #define ATTO_MAX_ACTORS 32u
 #define ATTO_MAILBOX_CAP 128u
@@ -163,6 +164,29 @@ int32_t atto_actor_send(int32_t ref, int64_t value) {
     pthread_mutex_unlock(&actor->lock);
     pthread_mutex_unlock(&registry_lock);
     return result;
+}
+
+/* Host-only fixed-width Result<Ack,SendError> *admission* ABI. This wrapper
+ * delegates to the existing linearizable enqueue path and never changes the
+ * legacy source guest ABI. An unknown raw status is a runtime integrity fault.
+ * A rejected scalar remains caller-owned and may be retried unchanged. */
+AttoActorSendResultV1 atto_actor_send_result_v1(int32_t ref, int64_t value) {
+    const int32_t status = atto_actor_send(ref, value);
+    switch (status) {
+        case 0:
+            return (AttoActorSendResultV1){ATTO_SEND_ADMITTED_V1,
+                                           ATTO_SEND_ERROR_NONE_V1};
+        case -1:
+            return (AttoActorSendResultV1){ATTO_SEND_REJECTED_V1,
+                                           ATTO_SEND_ERROR_UNAVAILABLE_V1};
+        case -2:
+            return (AttoActorSendResultV1){ATTO_SEND_REJECTED_V1,
+                                           ATTO_SEND_ERROR_FULL_V1};
+        default:
+            hard_abort();
+            return (AttoActorSendResultV1){ATTO_SEND_REJECTED_V1,
+                                           ATTO_SEND_ERROR_UNAVAILABLE_V1};
+    }
 }
 
 /* Main closes admission after its last send and drains all queued messages.
