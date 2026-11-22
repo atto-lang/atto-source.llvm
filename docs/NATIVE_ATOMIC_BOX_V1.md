@@ -375,3 +375,21 @@ Outstanding: compile and verify exact source with matching LLVM/Clang 22,
 prove no artifact for invalid orders and guest pointer escape, reconcile
 the standalone vs production atomic frontend, and complete Box<T> guest
 allocation/drop and actor concurrency semantics independently.
+
+
+### Main compiler checked subtraction extension
+
+The current integration branch additionally admits the same narrow
+`Atomic<int>.fetch_sub(int [, #order])` syntax and lowering as checked
+addition, without relaxing actor, pointer, Box, shadowed-owner or unsupported
+target gates. Both operations execute an overflow check before a strong CAS,
+retry after contention and trap on a signed-i64 arithmetic overflow. The
+new `tests/atto-atomic-main-v1/main-sub.atto` returns 42 when executed
+and `underflow-sub.atto` must trap without publishing. A separate local
+Clang 17 LLVM IR prototype returned 42 on subtraction and trapped with
+status 132 on underflow; it is NOT a compiled-guest pass for the actual
+LLVM 22 source branch.
+
+The exact latest-head LLVM 22 compiler build, source fixture execution,
+TSan and complete native AOT evidence remain NOT_EXECUTED. The PR stays
+Draft until those gates and base-branch reconciliation pass.
