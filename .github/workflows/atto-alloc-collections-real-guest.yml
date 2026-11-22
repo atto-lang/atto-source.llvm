@@ -1,0 +1,68 @@
+name: Atto LLVM alloc collections real guest execution
+on:
+  pull_request:
+    paths:
+      - 'stdlib/alloc/bitset.atto'
+      - 'stdlib/alloc/linked_list.atto'
+      - 'stdlib/alloc/map.atto'
+      - 'src/main/cpp/oreslang/frontend/CoreLibrarySources.hpp'
+      - 'src/main/cpp/oreslang/frontend/Generated*Atto.inc'
+      - 'tests/alloc_collections_native_guest.py'
+      - 'tests/fixtures/alloc-collections-v1/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/atto-alloc-collections-real-guest.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-compiler-guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout immutable actual PR head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Prove exact head, clean tree and SHA-pinned guest source
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet --exit-code
+          git diff --cached --quiet --exit-code
+          echo "ATTO_ALLOC_LLVM_GUEST_HEAD=$EXPECTED_HEAD"
+          echo "ATTO_ALLOC_LLVM_GUEST_TREE=$(git rev-parse 'HEAD^{tree}')"
+          test "$(git hash-object stdlib/alloc/bitset.atto)" = dc7618c14a28b416ae7c3e96b5db0b0fc47bf314
+          test "$(git hash-object stdlib/alloc/linked_list.atto)" = f70cb1ac77efcef1734a526055655bfb2b1169bd
+          test "$(git hash-object stdlib/alloc/map.atto)" = 3aeb43f429b33e66bf5145a0444a6f686dff3969
+      - name: Install LLVM native compiler dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y clang llvm-dev cmake build-essential
+          clang --version
+          llvm-config --version
+      - name: Build production LLVM Atto compiler
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --target oreslang-llvmc --parallel 2
+      - name: Execute real compiler-to-IR-to-native guest and negative cases
+        run: |
+          set -euo pipefail
+          ctest --test-dir build --output-on-failure -V -R '^native_alloc_collections_real_guest$' | tee /tmp/atto-alloc-native.log
+          for module in bitset linked_list map; do
+            grep -F "ATTO_LLVM_ALLOC_GUEST|$module|executed=1|exit=42" /tmp/atto-alloc-native.log
+          done
+          grep -F 'ATTO_LLVM_ALLOC_ADMISSION|negative=4|executed=1' /tmp/atto-alloc-native.log
+          echo 'ATTO_LLVM_ALLOC_REAL_GUEST=PASS'
+      - name: Note evidence limits
+        if: always()
+        run: |
+          echo 'Queued/zero-step is NOT_EXECUTED, not success.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'This is LLVM native Linux execution, not Java, Wasm, .NET or embedded parity.' >> "$GITHUB_STEP_SUMMARY"
