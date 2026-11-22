@@ -78,3 +78,18 @@ The protected `main` private-source export allowlist does not approve the
 previous `sonus-auris-test/atto-ci` carrier. Any listed carrier still
 requires separate authenticated exact source/destination export approval,
 reader/retention review and complete tree verification before mirroring.
+
+### Core ownership / scaled-duration hardening (pending exact-head guest execution)
+
+The five scaled constructors now classify negative inputs as
+`NegativeDuration`, distinct from positive signed-i64
+`DurationOverflow`. Together with `nanoseconds`, all six factories use
+the same negative-input policy; the conformance registry has 28 vectors.
+
+The native AOT guest-admission script now also rejects writes to the fixed
+`Duration.nanos` and `Instant.ticks_ns` fields with an ownership-specific
+diagnostic and **no artifact**. It independently validates `val` as
+`const mut` for writable receivers and `const` as immutable. All
+compiler and guest statuses remain `NOT_EXECUTED` until an actual,
+stepful current-head compiler job runs; native queue host checks cannot
+replace these results.
