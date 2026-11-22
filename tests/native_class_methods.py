@@ -131,7 +131,13 @@ def main():
           pub fnc main():int{return 0;}''',{},'duplicate native method name/arity'),
         ('double-method-introducer', '''define class Box as let int value=40;
           pub mtd method read():int{return self.value;}end
-          pub fnc main():int{return 0;}''',{},'expected'),
+          pub fnc main():int{return 0;}''',{},'native duplicate instance method introducer'),
+        ('double-fnc-introducer', '''define class Box as let int value=40;
+          pub fnc mtd read():int{return self.value;}end
+          pub fnc main():int{return 0;}''',{},'native duplicate instance method introducer'),
+        ('double-legacy-introducer', '''define class Box as let int value=40;
+          pub method fnc read():int{return self.value;}end
+          pub fnc main():int{return 0;}''',{},'native duplicate instance method introducer'),
 
         # Equal receiver-erased slots always conflict, regardless of mutability,
         # declaration order, parameter type, or inline/split self spelling.
