@@ -1,5 +1,6 @@
 #pragma once
 
+#include "oreslang/runtime/ActorGuestFrameStack.hpp"
 #include <array>
 #include <condition_variable>
 #include <cstddef>
@@ -24,6 +25,7 @@ public:
         std::uint32_t slot = 0; // slots are 1-based; zero is never valid
         std::uint64_t generation = 0;
     };
+    using GuestFrameToken = ActorGuestFrameStack::FrameToken;
     struct Message {
         std::uint64_t sequence = 0;
         std::int64_t payload = 0;
@@ -78,6 +80,18 @@ public:
     // caller-owned state must outlive join(). Slots are never reused.
     ActorToken register_actor(void* state, Slice slice, Cancel cancel);
     Producer producer() const noexcept;
+    // These APIs work ONLY within the owning actor's worker callback or
+    // cleanup turn. No guest-visible native pointers escape the frame store.
+    static bool guest_frame_push(ActorToken owner, std::size_t bytes,
+                                 GuestFrameToken& out) noexcept;
+    static bool guest_frame_read(ActorToken owner, GuestFrameToken frame,
+                                 std::size_t offset, void* destination,
+                                 std::size_t bytes) noexcept;
+    static bool guest_frame_write(ActorToken owner, GuestFrameToken frame,
+                                  std::size_t offset, const void* source,
+                                  std::size_t bytes) noexcept;
+    static bool guest_frame_pop(ActorToken owner, GuestFrameToken frame) noexcept;
+    static std::size_t guest_frame_depth(ActorToken owner) noexcept;
     void start();
     void request_stop() noexcept; // reserved CONTROL; independent of user mail
     void join() noexcept;         // external lifecycle owner, only one joiner
@@ -90,6 +104,7 @@ private:
         Slice slice = nullptr;
         Cancel cancel = nullptr;
         std::uint64_t generation = 0;
+        ActorGuestFrameStack guest_stack{};
         std::array<Message, mailbox_capacity> mailbox{};
         std::size_t head = 0, size = 0;
         bool active = false, queued = false, cancel_requested = false;

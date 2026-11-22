@@ -197,7 +197,7 @@ public:
     bool try_feed_input(const ActorIoAuthority& authority,
                         const void* bytes, std::size_t length) {
         require(authority);
-        return input_.try_push(bytes, length);
+        return !input_closed_ && input_.try_push(bytes, length);
     }
 
     bool try_read_input(const ActorIoAuthority& authority,
@@ -210,7 +210,7 @@ public:
     bool try_write_output(const ActorIoAuthority& authority,
                           const void* bytes, std::size_t length) {
         require(authority);
-        return output_.try_push(bytes, length);
+        return !output_closed_ && output_.try_push(bytes, length);
     }
 
     bool try_read_output(const ActorIoAuthority& authority,
@@ -218,6 +218,33 @@ public:
                          std::size_t& length) {
         require(authority);
         return output_.try_pop(out, capacity, length);
+    }
+
+    // Directional close is idempotent: a zero-length frame still counts as
+    // queued DATA, and EOF is visible only after every frame is drained.
+    // Logical close never closes the actor mailbox or error/event lanes.
+    bool close_input(const ActorIoAuthority& authority) {
+        require(authority);
+        if (input_closed_) return false;
+        input_closed_ = true;
+        return true;
+    }
+
+    bool input_at_eof(const ActorIoAuthority& authority) const {
+        require(authority);
+        return input_closed_ && input_.size() == 0;
+    }
+
+    bool close_output(const ActorIoAuthority& authority) {
+        require(authority);
+        if (output_closed_) return false;
+        output_closed_ = true;
+        return true;
+    }
+
+    bool output_at_eof(const ActorIoAuthority& authority) const {
+        require(authority);
+        return output_closed_ && output_.size() == 0;
     }
 
     bool try_emit_error(const ActorIoAuthority& authority,
@@ -309,6 +336,8 @@ public:
         output_.clear();
         errors_.clear();
         events_.clear();
+        input_closed_ = false;
+        output_closed_ = false;
         clear_metadata();
         metadata_version_ = 1;
         authority_.generation = new_generation;
@@ -346,6 +375,8 @@ private:
     ActorIoByteQueue<MaxRecords, MaxRecordBytes> output_;
     ActorIoPairQueue<MaxRecords, MaxTextBytes> errors_;
     ActorIoPairQueue<MaxRecords, MaxTextBytes> events_;
+    bool input_closed_ = false;
+    bool output_closed_ = false;
     std::array<MetadataSlot, MaxMetadataEntries> metadata_{};
     std::uint64_t metadata_version_ = 1;
 };

@@ -84,41 +84,8 @@ inline const CoreLibrarySource* find_compiler_library_source(std::string_view ra
     // Canonical Atto imports and legacy Ores imports must share one immutable
     // compiler-owned unit identity; no spelling may duplicate modules.
     static constexpr std::string_view kNumericSource =
-R"ORES_CORE(// Compiler-owned atto.core source (legacy ores.core alias).
-// This module has no OS, Java, filesystem, network, process, actor-scheduler,
-// or ambient project dependency.
-
-define module numeric as
-
-  pub fnc min_int(int left, int right): int {
-    if left < right; do
-      return left;
-    fi
-    return right;
-  }
-
-  pub fnc max_int(int left, int right): int {
-    if left > right; do
-      return left;
-    fi
-    return right;
-  }
-
-  pub fnc clamp_int(int value, int lower, int upper): int {
-    if lower > upper; do
-      return lower;
-    fi
-    if value < lower; do
-      return lower;
-    fi
-    if value > upper; do
-      return upper;
-    fi
-    return value;
-  }
-
-end
-)ORES_CORE";
+#include "oreslang/frontend/GeneratedNumericAtto.inc"
+    ;
     static constexpr CoreLibrarySource kNumeric{
         CompilerLibraryTier::Core,
         "atto.core/numeric",
@@ -129,21 +96,8 @@ end
     };
 
     static constexpr std::string_view kIntBufferSource =
-R"ORES_ALLOC(// Compiler-owned alloc tier source.
-// This module requires an allocator provider but no OS, filesystem, network,
-// process, actor scheduler, or ambient project dependency.
-
-define module int_buffer as
-
-  pub fnc sum_pair(int left, int right): int {
-    let mut Array<int> values = new Array<int>();
-    values.add(left);
-    values.add(right);
-    return values.get(0) + values.get(1);
-  }
-
-end
-)ORES_ALLOC";
+#include "oreslang/frontend/GeneratedIntBufferAtto.inc"
+    ;
     static constexpr CoreLibrarySource kIntBuffer{
         CompilerLibraryTier::Alloc,
         "atto.alloc/int_buffer",
@@ -154,20 +108,8 @@ end
     };
 
     static constexpr std::string_view kIntBufferBundleSource =
-R"ORES_ALLOC(// Compiler-owned alloc tier transitive-closure probe.
-// The local body is allocation-free, but linking this module brings in the
-// allocator-bearing int_buffer dependency and therefore requires Allocator.
-
-import module int_buffer from "atto.alloc/int_buffer";
-
-define module int_buffer_bundle as
-
-  pub fnc marker(): int {
-    return 42;
-  }
-
-end
-)ORES_ALLOC";
+#include "oreslang/frontend/GeneratedIntBufferBundleAtto.inc"
+    ;
     static constexpr CoreLibrarySource kIntBufferBundle{
         CompilerLibraryTier::Alloc,
         "atto.alloc/int_buffer_bundle",

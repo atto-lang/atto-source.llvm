@@ -2,6 +2,7 @@
 #include "oreslang/runtime/NativeActorScheduler.h"
 
 #include <assert.h>
+#include <pthread.h>
 #include <sched.h>
 #include <stdatomic.h>
 #include <stdint.h>
@@ -22,7 +23,25 @@ typedef struct {
     atomic_int nested_admissions;
     atomic_int task_running;
     atomic_int release_task;
+    /* Each actor's physical-turn claim serializes updates to its own slot. */
+    pthread_t last_carrier[2];
+    int seen_carrier[2];
+    atomic_uint carrier_migrations;
+    atomic_uint continuation_migrations;
 } State;
+
+static void record_carrier(State* s, size_t index, int continuation) {
+    /* Independent callback-side accounting: not a scheduler counter read. */
+    assert(index < 2);
+    pthread_t self = pthread_self();
+    if (s->seen_carrier[index] && !pthread_equal(s->last_carrier[index], self)) {
+        atomic_fetch_add(&s->carrier_migrations, 1);
+        if (continuation) atomic_fetch_add(&s->continuation_migrations, 1);
+    }
+    s->last_carrier[index] = self;
+    s->seen_carrier[index] = 1;
+}
+
 
 static void assert_actor_turn(State* s, size_t index) {
     assert(index < 2);
@@ -42,6 +61,7 @@ static void assert_actor_turn(State* s, size_t index) {
 static void on_task(void* opaque, size_t index, uint64_t handle) {
     State* s = (State*)opaque;
     assert_actor_turn(s, index);
+    record_carrier(s, index, 1);
     assert(index == 0);
     assert(atomic_load_explicit(&s->control_callbacks, memory_order_acquire) == 1);
     assert((handle >= 1 && handle <= 8) || handle == 101 || handle == 102);
@@ -71,6 +91,7 @@ static void on_task_cancel(void* opaque, size_t index, uint64_t handle) {
     State* s = (State*)opaque;
     assert(index == 1 && handle == 200);
     assert(ores_native_actor_scheduler_is_current_carrier(s->scheduler));
+    record_carrier(s, index, 1);
     assert(ores_native_actor_scheduler_in_any_actor_turn());
     /* STOP only executes a runtime cleanup callback; it may not run guest
      * on_task or admit additional source continuations. */
@@ -84,6 +105,7 @@ static void on_task_cancel(void* opaque, size_t index, uint64_t handle) {
 static void on_data(void* opaque, size_t index, uint64_t payload) {
     State* s = (State*)opaque;
     assert_actor_turn(s, index);
+    record_carrier(s, index, 0);
     assert(atomic_fetch_add(&s->active[index], 1) == 0);
     uint64_t sequence = 0;
     assert(ores_native_actor_scheduler_current_data_mail_sequence(
@@ -133,6 +155,7 @@ static void on_control(void* opaque, size_t index, uint64_t payload) {
     State* s = (State*)opaque;
     assert(index == 0 && payload == 99);
     assert_actor_turn(s, index);
+    record_carrier(s, index, 0);
     /* CONTROL callbacks have actor identity but NO guest Task admission
      * authority; they must not bypass ordinary actor queue scheduling. */
     assert(ores_native_actor_scheduler_try_schedule_task(
@@ -213,6 +236,13 @@ int main(void) {
         state.scheduler, state.actor[0]));
     assert(atomic_load(&state.normal_tasks) == 10);
     assert(!ores_native_actor_scheduler_in_any_actor_turn());
+    /* DATA/CONTROL moves count globally, while only TASK/WAKE moves count
+     * toward continuation locality. Do not assert a particular migration
+     * count: placement depends on host CPU scheduling and load. */
+    assert(ores_native_actor_scheduler_carrier_migrations(state.scheduler)
+        == atomic_load(&state.carrier_migrations));
+    assert(ores_native_actor_scheduler_continuation_migrations(state.scheduler)
+        == atomic_load(&state.continuation_migrations));
     ores_native_actor_scheduler_retire(state.scheduler);
     assert(ores_native_actor_scheduler_try_destroy(state.scheduler));
     printf("NATIVE_ACTOR_TASK_POOL_PASS normal=10 cancel=1 nested=1 control=1\n");

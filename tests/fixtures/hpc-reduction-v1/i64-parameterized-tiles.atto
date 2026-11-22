@@ -1,0 +1,13 @@
+// Parameterized, full-width i64 HPC differential fixture.
+// Pure scalar guest arithmetic uses canonical left-folded four-value tiles.
+// A native C ABI observer supplies runtime values; no host computation replaces this fnc.
+fnc tile4(int a, int b, int c, int d): int {
+  return ((a + b) + c) + d;
+}
+pub fnc tile_reduce8(int a, int b, int c, int d,
+                     int e, int f, int g, int h): int {
+  return tile4(a, b, c, d) + tile4(e, f, g, h);
+}
+pub fnc main(): int {
+  return 42;
+}

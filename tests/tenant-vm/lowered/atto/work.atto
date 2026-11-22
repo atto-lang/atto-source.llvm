@@ -1,0 +1,15 @@
+// A real computation in a helper function, run from an actor's turn.
+fnc triangle(int n, int total): int {
+  if (n eq 0) { return total; } fi
+  return triangle(n - 1, total + n);
+}
+define actor Worker as {
+  let turns: int = 0;
+  pub fnc on_message(int n): int {
+    turns = turns + 1;
+    return triangle(n, 0);
+  }
+}
+pub fnc main(): int {
+  return 0;
+}

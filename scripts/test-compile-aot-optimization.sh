@@ -90,6 +90,24 @@ if ATTO_AUDITOR_REJECT=1 "$root/scripts/compile-aot.sh" "$source" "$tmp/bin/pres
 fi
 grep -Fq 'synthetic no-GC auditor rejected IR' "$tmp/audit-refused.err" || { echo 'audit negative failed for another reason' >&2; exit 1; }
 [[ "$(sha256sum "$tmp/bin/preserved" | cut -d' ' -f1)" == "$preserved_sha" ]] || { echo 'audit rejection clobbered previous executable' >&2; exit 1; }
+# Link screening must run BEFORE publication, preserving a previous native binary
+# even if the ELF symbol inspection tool is unavailable or returns failure.
+mkdir -p "$tmp/unavailable-link-auditor"
+cat > "$tmp/unavailable-link-auditor/readelf" <<'READELF'
+#!/usr/bin/env bash
+exit 88
+READELF
+chmod 700 "$tmp/unavailable-link-auditor/readelf"
+if PATH="$tmp/unavailable-link-auditor:$PATH" "$root/scripts/compile-aot.sh" "$source" "$tmp/bin/preserved" > "$tmp/link-refused.out" 2> "$tmp/link-refused.err"; then
+    echo 'linked-image admission failure was bypassed' >&2; exit 1
+fi
+grep -Fq 'LINKED_GC_AUDIT_UNSUPPORTED_FORMAT' "$tmp/link-refused.err" || {
+    cat "$tmp/link-refused.err" >&2
+    echo 'linked-image rejection failed for another reason' >&2; exit 1
+}
+[[ "$(sha256sum "$tmp/bin/preserved" | cut -d' ' -f1)" == "$preserved_sha" ]] || {
+    echo 'linked-image admission failure clobbered existing executable' >&2; exit 1
+}
 if ORES_NO_GC_IR_AUDIT="$tmp/missing-auditor" "$root/scripts/compile-aot.sh" "$source" "$tmp/bin/missing-auditor-result" > /dev/null 2>&1; then
     echo 'missing native no-GC auditor was accepted' >&2; exit 1
 fi

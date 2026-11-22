@@ -107,7 +107,33 @@ struct ActorSourceSetReceipt {
     std::size_t source_bytes = 0;
 };
 
-inline ActorSourceSetReceipt verify_actor_source_set_only(
+// Authenticated per-unit bytes are owned inside one compilation transaction.
+// Never reopen a source path after verification to construct a guest AST.
+struct ActorVerifiedSourceUnit {
+    std::string role;
+    std::string path;
+    std::string git_blob_sha;
+    std::string source;
+};
+
+class ActorVerifiedSourceSet {
+public:
+    const ActorSourceSetReceipt& receipt() const noexcept { return receipt_; }
+    const ActorVerifiedSourceUnit& unit(std::string_view role) const {
+        for (const auto& entry : units_)
+            if (entry.role == role) return entry;
+        throw std::runtime_error("ACTOR_SOURCE_SET_REJECT: unverified source role");
+    }
+private:
+    friend ActorVerifiedSourceSet load_verified_actor_source_set(
+        const std::filesystem::path&, std::string_view);
+    ActorSourceSetReceipt receipt_;
+    std::array<ActorVerifiedSourceUnit, 7> units_{};
+};
+
+// This returns the only authenticated snapshot; callers MUST consume its
+// captured source bytes, not reread paths from the manifest.
+inline ActorVerifiedSourceSet load_verified_actor_source_set(
         const std::filesystem::path& manifest_path, std::string_view expected_git_sha) {
     namespace fs = std::filesystem;
     if (!source_set_hex_sha(expected_git_sha))
@@ -131,7 +157,8 @@ inline ActorSourceSetReceipt verify_actor_source_set_only(
     next();
     if (line != "atto-declared-actor-source-set-v1")
         throw std::runtime_error("ACTOR_SOURCE_SET_REJECT: unsupported manifest schema");
-    ActorSourceSetReceipt receipt;
+    ActorVerifiedSourceSet verified;
+    auto& receipt = verified.receipt_;
     next();
     if (line.rfind("namespace ", 0) != 0 || !source_set_identifier(line.substr(10)))
         throw std::runtime_error("ACTOR_SOURCE_SET_REJECT: namespace identity");
@@ -179,12 +206,21 @@ inline ActorSourceSetReceipt verify_actor_source_set_only(
             throw std::runtime_error("ACTOR_SOURCE_SET_REJECT: source Git blob mismatch");
         if (receipt.source_bytes > 1048576u - data.size())
             throw std::runtime_error("ACTOR_SOURCE_SET_REJECT: aggregate byte budget");
+        if (receipt.unit_count >= verified.units_.size())
+            throw std::runtime_error("ACTOR_SOURCE_SET_REJECT: unit count budget");
+        verified.units_[receipt.unit_count] =
+            ActorVerifiedSourceUnit{role, relative, sha, data};
         receipt.source_bytes += data.size();
         ++receipt.unit_count;
     }
     if (seen_roles.size() != roles.size())
         throw std::runtime_error("ACTOR_SOURCE_SET_REJECT: incomplete seven-unit source set");
-    return receipt; // NO AST, LLVM IR, or actor runtime authority.
+    return verified; // No AST, IR, or actor runtime authority.
+}
+
+inline ActorSourceSetReceipt verify_actor_source_set_only(
+        const std::filesystem::path& manifest_path, std::string_view expected_git_sha) {
+    return load_verified_actor_source_set(manifest_path, expected_git_sha).receipt();
 }
 
 } // namespace oreslang::frontend

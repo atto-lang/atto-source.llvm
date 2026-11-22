@@ -1,0 +1,102 @@
+name: AttoLang eight compiler-negative semantic gates (LLVM)
+on:
+  pull_request:
+    paths:
+      - 'contracts/atto-scalar-v1/**'
+      - 'tests/formal-policy-atto/negative/**'
+      - 'tests/atto_negative_semantic_gate.rs'
+      - 'scripts/verify-atto-negative-aot-artifacts.sh'
+      - '.github/workflows/atto-eight-negative-llvm.yml'
+      - 'src/main/cpp/oreslang/**'
+      - 'CMakeLists.txt'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  llvm-compiler-negatives:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact source head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Bind exact compiler source head and clean tree
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          echo "ATTO_LLVM_NEGATIVE_HEAD=$EXPECTED_HEAD"
+          echo "ATTO_LLVM_NEGATIVE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Install LLVM and Rust compiler tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends cmake ninja-build clang llvm-dev rustc
+          rustc --version
+          llvm-config --version
+      - name: Compile Rust negative-test harness and execute unit mutations
+        run: |
+          set -euo pipefail
+          rustc --edition=2021 -D warnings --test tests/atto_negative_semantic_gate.rs -o "$RUNNER_TEMP/atto-negative-unit"
+          "$RUNNER_TEMP/atto-negative-unit"
+          rustc --edition=2021 -D warnings -O tests/atto_negative_semantic_gate.rs -o "$RUNNER_TEMP/atto-negative-gate"
+      - name: Build the real exact-head LLVM source compiler
+        run: |
+          set -euo pipefail
+          cmake -G Ninja -S . -B "$RUNNER_TEMP/atto-negative-build" -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DLLVM_DIR="$(llvm-config --cmakedir)"
+          cmake --build "$RUNNER_TEMP/atto-negative-build" --target oreslang-llvmc oreslang-no-gc-ir-audit-build --parallel 2
+          test -x "$RUNNER_TEMP/atto-negative-build/oreslang-no-gc-ir-audit"
+          test -x "$RUNNER_TEMP/atto-negative-build/oreslang-llvmc"
+          sha256sum "$RUNNER_TEMP/atto-negative-build/oreslang-llvmc"
+      - name: Reject all eight canonical AttoLang sources before LLVM IR
+        env:
+          ATTO_NEGATIVE_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          ORESLANG_LLVMC: ${{ runner.temp }}/atto-negative-build/oreslang-llvmc
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/atto-negative-gate"
+          echo 'ATTO_LLVM_NEGATIVE_SOURCE_ONLY; native guest execution not proven'
+      - name: Mutation-test timeout, symlink and sidecar rejection logic
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/verify-atto-negative-aot-artifacts.sh --self-test
+      - name: Reject all eight canonical sources without publishing any AOT artifact
+        shell: bash
+        env:
+          ATTO_NEGATIVE_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          ORESLANG_LLVMC: ${{ runner.temp }}/atto-negative-build/oreslang-llvmc
+          ORES_NO_GC_IR_AUDIT: ${{ runner.temp }}/atto-negative-build/oreslang-no-gc-ir-audit
+          CLANG: clang
+        run: |
+          set -euo pipefail
+          bash scripts/verify-atto-negative-aot-artifacts.sh
+          echo 'ATTO_NATIVE_AOT_NEGATIVES=8; this does not certify zero-GC or guest positives'
+      - name: Positive controls with canonical native guest execution
+        env:
+          ORESLANG_LLVMC: ${{ runner.temp }}/atto-negative-build/oreslang-llvmc
+          CLANG: clang
+          ATTO_RECEIPT_PATH: ${{ runner.temp }}/atto-negative-positive-controls.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v node
+          node --version
+          node tests/atto_scalar_v1_execution.mjs
+          test -s "$ATTO_RECEIPT_PATH"
+          node --input-type=module -e '
+            import {readFileSync} from "node:fs";
+            const r=JSON.parse(readFileSync(process.env.ATTO_RECEIPT_PATH, "utf8"));
+            const positive=r.cases.filter(c=>c.kind==="positive");
+            if(r.cases.length!==19 || positive.length!==10 ||
+              positive.some(c=>c.executed!==true || c.result_i64!==c.expected_i64 ||
+                !/^[a-f0-9]{64}$/.test(c.artifact_sha256)))process.exit(1);
+            console.log("ATTO_LLVM_POSITIVE_CONTROL_GUESTS=10");
+          '
+          echo 'Receipt is internal evidence, not independent GitHub step attestation.'
+
