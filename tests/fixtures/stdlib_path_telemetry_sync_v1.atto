@@ -1,0 +1,32 @@
+// Native guest candidate; fail closed if std/* imports are not linked.
+// This is NOT an executed proof of LLVM stdlib support.
+import module path from "std/path";
+import module telemetry from "std/telemetry";
+import module sync from "std/sync";
+
+pub fnc main(): int {
+  if !path.is_separator(47, false) then return 1; fi
+  if path.is_separator(92, false) then return 2; fi
+  if !path.is_separator(92, true) then return 3; fi
+  if path.component_kind(2, 46, 46) != 2 then return 4; fi
+  if path.advance_relative_depth(0, 2) != -1 then return 5; fi
+  if path.advance_relative_depth(2, 2) != 1 then return 6; fi
+  if path.advance_relative_depth(256, 0) != -1 then return 7; fi
+  if !path.is_windows_drive_prefix(67, 58) then return 8; fi
+  if telemetry.traceparent_v00_fields_valid(0, 0, 0, 1, 1) then return 9; fi
+  if !telemetry.traceparent_v00_fields_valid(0, 1, 0, 1, 255) then return 10; fi
+  if !telemetry.sampled_flag(3) then return 11; fi
+  if telemetry.sampling_decision(3, false) != 0 then return 12; fi
+  if !telemetry.dormant_probe_admissible(3, 2, true) then return 13; fi
+  if telemetry.dormant_probe_admissible(0, 1, true) then return 14; fi
+  if telemetry.queue_admissible(8, 8, 0, 0) then return 15; fi
+  if !sync.mutex_take_admissible(false, false, 0) then return 16; fi
+  if sync.mutex_take_admissible(false, false, 1) then return 17; fi
+  if !sync.read_take_admissible(0, false, 0, 10) then return 18; fi
+  if sync.read_take_admissible(0, false, 1, 10) then return 19; fi
+  if !sync.sem_return_admissible(3, 2, 5, false) then return 20; fi
+  if sync.sem_return_admissible(4, 2, 5, false) then return 21; fi
+  if !sync.barrier_last_arrival(3, 4, false) then return 22; fi
+  if sync.next_epoch_admissible(2147483647, 0) then return 23; fi
+  return 0;
+}
