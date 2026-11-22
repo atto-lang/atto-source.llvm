@@ -314,27 +314,48 @@ define module json as
   }
   pub fnc encode_null(): String { return "null"; }
 
-  // Strict bounded scalar decoder, for canonical integer-only inputs.
-  // Not a general JSON number decoder; decimals/exponents stay in raw form.
+  // JSON is a strict UTF-8/Unicode scalar document, not a numeric cast.
+  // These aliases deliberately share exactly one admission and emit policy.
+  pub fnc parse(String text): Result<Document, String> { return decode(text); }
+  pub fnc stringify(Document document): String { return encode(document); }
+  pub fnc valid(String text): bool { return decode(text).is_ok(); }
+
+  // Strict 64-bit integer-only JSON scalar decoding, with negative
+  // accumulation to admit INT64_MIN without overflowing on magnitude.
+  // Fractions/exponents have no implicit conversion or precision loss.
   pub fnc decode_int(String text): Result<int, String> {
     let chars = text.codepoints();
-    if chars.size < 1 || chars.size > 11; do return Err("IntegerRange"); fi
-    let int i = 0;
+    if chars.size < 1 || chars.size > 20; do return Err("IntegerRange"); fi
+    let int start = 0;
     let bool negative = chars.get(0) == 45;
-    if negative; do i = 1; fi
-    if i >= chars.size; do return Err("InvalidInteger"); fi
-    if chars.get(i) == 48 && chars.size - i > 1; do
+    if negative; do start = 1; fi
+    if start >= chars.size; do return Err("InvalidInteger"); fi
+    if chars.get(start) == 48 && chars.size - start > 1; do
       return Err("LeadingZero");
     fi
-    let int limit = 2147483647;
+    let int floor = -9223372036854775807;
+    if negative; do floor = floor - 1; fi
+    let int threshold = floor / 10;
     let int value = 0;
-    for (let int j = i; j < chars.size; j = j + 1) {
+    for (let int j = start; j < chars.size; j = j + 1) {
       let int digit = chars.get(j) - 48;
       if digit < 0 || digit > 9; do return Err("InvalidInteger"); fi
-      if value > (limit - digit) / 10; do return Err("IntegerRange"); fi
-      value = value * 10 + digit;
+      if value < threshold; do return Err("IntegerRange"); fi
+      value = value * 10;
+      if value < floor + digit; do return Err("IntegerRange"); fi
+      value = value - digit;
     }
-    if negative; do value = -value; fi
+    if negative; do return Ok(value); fi
+    return Ok(-value);
+  }
+
+  pub fnc decode_i32(String text): Result<int, String> {
+    let parsed = decode_int(text);
+    if parsed.is_err(); do return Err("InvalidI32"); fi
+    let int value = parsed.unwrap();
+    if value < -2147483647 - 1 || value > 2147483647; do
+      return Err("I32Range");
+    fi
     return Ok(value);
   }
   pub fnc decode_bool(String text): Result<bool, String> {
