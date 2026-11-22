@@ -90,12 +90,29 @@ static void ordering_and_failure_checks() {
     bool previous = true;
     REQUIRE(flag.swap(true, &previous) == AtomicStatus::Ok && !previous);
     REQUIRE(flag.load(&previous) == AtomicStatus::Ok && previous);
-    // Explicitly wrapping atomic integer arithmetic, even for signed i64.
-    AtomicScalar<std::int64_t> wrapping(std::numeric_limits<std::int64_t>::max());
-    REQUIRE(wrapping.fetch_add(1, &result) == AtomicStatus::Ok);
-    REQUIRE(result == std::numeric_limits<std::int64_t>::max());
-    REQUIRE(wrapping.load(&result) == AtomicStatus::Ok &&
-            result == std::numeric_limits<std::int64_t>::min());
+    // Source-facing integer atomics must never publish a wrapped result.
+    const auto limit_max = std::numeric_limits<std::int64_t>::max();
+    const auto limit_min = std::numeric_limits<std::int64_t>::min();
+    AtomicScalar<std::int64_t> checked_max(limit_max);
+    result = 17;
+    REQUIRE(checked_max.fetch_add(1, &result) == AtomicStatus::Overflow);
+    REQUIRE(result == 17); // rejected operation cannot write output either
+    REQUIRE(checked_max.load(&result) == AtomicStatus::Ok && result == limit_max);
+    AtomicScalar<std::int64_t> checked_min(limit_min);
+    result = 19;
+    REQUIRE(checked_min.fetch_sub(1, &result, Ordering::AcqRel)
+            == AtomicStatus::Overflow);
+    REQUIRE(result == 19);
+    REQUIRE(checked_min.load(&result) == AtomicStatus::Ok && result == limit_min);
+    // Negative delta can also overflow signed subtraction.
+    REQUIRE(checked_max.fetch_sub(-1, &result) == AtomicStatus::Overflow);
+    REQUIRE(checked_max.load(&result) == AtomicStatus::Ok && result == limit_max);
+    AtomicScalar<std::uint8_t> checked_byte(255);
+    std::uint8_t previous_byte = 7;
+    REQUIRE(checked_byte.fetch_add(1, &previous_byte) == AtomicStatus::Overflow);
+    REQUIRE(previous_byte == 7);
+    REQUIRE(checked_byte.load(&previous_byte) == AtomicStatus::Ok &&
+            previous_byte == 255);
 }
 
 static void concurrent_atomic_contention() {
