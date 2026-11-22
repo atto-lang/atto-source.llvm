@@ -588,10 +588,27 @@ if(BUILD_TESTING AND UNIX)
             "$<TARGET_FILE:oreslang-llvmc>"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
     set_tests_properties(native_frontend_check_effects_boundary PROPERTIES TIMEOUT 30)
+    # Source-grammar parity with the WASM backend's pinned LLVM compiler.
+    # Successful IR emission is not proof of Wasm guest execution.
+    add_test(NAME native_return_first_begin_parser
+        COMMAND sh "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_return_first_begin_contract.sh"
+            "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_return_first_begin_parser PROPERTIES TIMEOUT 90)
 endif()
 if(BUILD_TESTING)
     # Real compiler / Clang native guest lane for file-level exports.
     find_program(ORESLANG_EXPORT_CLANG NAMES clang)
+    if(ORESLANG_EXPORT_CLANG AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        # Real production compiler -> host LLVM IR -> Clang -> executable.
+        # Distinct from frontend-only IR admission and from wasm32 guests.
+        add_test(NAME native_return_first_host_guest_execution
+            COMMAND sh
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_return_first_host_guest_contract.sh"
+                "$<TARGET_FILE:oreslang-llvmc>"
+                "${ORESLANG_EXPORT_CLANG}")
+        set_tests_properties(native_return_first_host_guest_execution PROPERTIES
+            TIMEOUT 240)
+    endif()
     if(ORESLANG_EXPORT_CLANG)
         add_test(NAME oreslang-declarative-exports-native
             COMMAND bash

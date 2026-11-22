@@ -414,6 +414,12 @@ public:
             at_ += 3;
             return {Kind::Symbol, source_.substr(start, 3), start};
         }
+        // Return-first bullet is an indivisible UTF-8 source declaration
+        // marker. Ordinary '<' and '-' stay separate for expressions.
+        if (source_.substr(at_, 3) == "\xE2\x80\xA2") {
+            at_ += 3;
+            return {Kind::Symbol, source_.substr(start, 3), start};
+        }
         // Contiguous comparison/logical operators are single tokens, matching
         // the Java/Graal precedence grammar.
         for (std::string_view op : {"->", "::", "|>", "==", "!=", "<=", ">=", "&&", "||", "^^"}) {
@@ -2831,11 +2837,38 @@ private:
                 fail("NATIVE_PRIVATE_ABSTRACT_UNSUPPORTED: abstract method slots cannot lower as scalar fields or methods; no IR emitted");
             // Formatter may insert 'mtd', but method identity and receiver
             // erasure must remain unchanged. Never consume it as a class field.
-            const bool method_marker = accept("mtd");
-            const bool method_ahead = token_.kind == Kind::Identifier && token_.text != "constructor" && (!reserved(token_.text) || token_.text == "pattern")
-                && [&] { Lexer look = lexer_; const auto next = look.next().text; return next == "(" || next == "<"; }();
+            // The formatter canonicalizes a legacy instance 'fnc' marker
+            // to 'mtd'; both are accepted, but neither creates a static
+            // function or escapes the class's checked receiver ABI.
+            const bool method_marker = accept("mtd") || accept("fnc");
+            const bool ordinary_method = token_.kind == Kind::Identifier &&
+                token_.text != "constructor" &&
+                (!reserved(token_.text) || token_.text == "pattern") &&
+                [&] { Lexer look = lexer_; const auto next = look.next().text;
+                    return next == "(" || next == "<"; }();
+            const bool return_first_method = [&] {
+                if (token_.text != "int" && token_.text != "bool" &&
+                        token_.text != "void" && token_.text != "string" &&
+                        token_.text != "String") return false;
+                Lexer look = lexer_;
+                const Token marker = look.next();
+                if (marker.text == "<") {
+                    const Token minus = look.next();
+                    if (minus.text != "-" ||
+                            minus.offset != marker.offset + marker.text.size())
+                        return false;
+                } else if (marker.text != "•") {
+                    return false;
+                }
+                const Token name = look.next();
+                const Token opening = look.next();
+                return name.kind == Kind::Identifier &&
+                    (!reserved(name.text) || name.text == "pattern") &&
+                    opening.text == "(";
+            }();
+            const bool method_ahead = ordinary_method || return_first_method;
             if (method_marker && !method_ahead)
-                fail("native mtd marker must precede a method signature");
+                fail("native mtd/fnc marker must precede a method signature");
             if (method_ahead) {
                 auto method = function(result.name, publicly_visible);
                 ClassMethod signature;
@@ -3324,6 +3357,10 @@ private:
         class_literal_locals_.clear();
         Function value;
         value.method_owner = owner;
+        // Return-first header state outlives the non-extension header block.
+        ScalarType prefix_return_type = ScalarType::I64;
+        bool prefix_returns_void = false;
+        bool return_first = false;
         const bool alias_extension = extension_header_active_;
         value.offset = alias_extension ? extension_offset_ : token_.offset;
         if (alias_extension) {
@@ -3373,8 +3410,41 @@ private:
                 fail("native async gen* requires scheduler-owned async iterator continuation lowering");
             if (!accept("fnc"))
                 fail("native first async Future<int> producer requires async fnc");
-        } else if (owner.empty() && !accept("fnc") && !accept("routine")) {
-            fail("expected fnc or routine");
+        } else if (owner.empty()) {
+            // Both explicit fnc and unmarked return-first file/module
+            // declarations lower to the same native Function AST.
+            if (!accept("fnc") && !accept("routine") &&
+                    token_.text != "int" && token_.text != "bool" &&
+                    token_.text != "void" && token_.text != "string" &&
+                    token_.text != "String")
+                fail("expected fnc, routine or return-first callable");
+        }
+        // Only a complete type immediately followed by <- or • opens
+        // this declaration. The split < and - remain ordinary expression
+        // operators elsewhere in the language.
+        if (token_.text == "int" || token_.text == "bool" ||
+                token_.text == "void" || token_.text == "string" ||
+                token_.text == "String") {
+            const Token mark = peek_next();
+            bool bullet = mark.text == "•";
+            bool arrow = false;
+            if (mark.text == "<") {
+                Lexer look = lexer_;
+                look.next(); // <
+                const Token minus = look.next();
+                arrow = minus.text == "-" &&
+                    minus.offset == mark.offset + mark.text.size();
+            }
+            if (bullet || arrow) {
+                prefix_returns_void = token_.text == "void";
+                if (token_.text == "bool") prefix_return_type = ScalarType::Bool;
+                else if (token_.text == "string" || token_.text == "String")
+                    prefix_return_type = ScalarType::String;
+                advance();
+                if (bullet) require("•");
+                else { require("<"); require("-"); }
+                return_first = true;
+            }
         }
         // Compatibility spellings remain fail-closed in this first native
         // slice. Canonical bare sync gen* is handled by scalar_generator().
@@ -3535,10 +3605,11 @@ private:
         }
         for (const auto& parameter : value.parameters)
             if (!parameter.class_name.empty()) class_receivers_.insert(parameter.name);
-        const bool arrow_return_type = !accept(":");
-        if (arrow_return_type) require("->");
-        value.returns_void = accept("void");
-        if (!value.returns_void) {
+        const bool arrow_return_type = !return_first && !accept(":");
+        if (!return_first && arrow_return_type) require("->");
+        value.returns_void = return_first ? prefix_returns_void : accept("void");
+        if (return_first) value.return_type = prefix_return_type;
+        if (!value.returns_void && !return_first) {
             if (accept("int")) {
                 value.return_type = ScalarType::I64;
             } else if (accept("bool")) {
@@ -3618,22 +3689,43 @@ private:
         // Java parity: a free/module callable may omit '::' only if the first
         // body token begins on a later physical source line than its complete
         // return type; the body is then the same expression sequence.
-        const bool explicit_end_body = token_.text == "::";
-        const bool newline_end_body = owner.empty() && arrow_return_type &&
+        // Return-first callables accept exactly the same three explicit-body
+        // spellings as the Java parser: braces, begin/end, or bare return/end.
+        // Do not interpret a brace as a compact expression sequence.
+        const bool explicit_end_body = token_.text == "::" ||
+            (return_first && token_.text != "{");
+        const bool newline_end_body = !return_first && owner.empty() && arrow_return_type &&
             token_.text != "{" && last_token_end_ <= token_.offset &&
             source_.substr(last_token_end_, token_.offset - last_token_end_)
                 .find_first_of("\r\n") != std::string_view::npos;
         if (explicit_end_body || newline_end_body) {
-            if (!arrow_return_type)
+            if (!arrow_return_type && !return_first)
                 fail("native '::' body requires '->' return syntax");
-            if (explicit_end_body) require("::");
+            if (return_first) {
+                if (token_.text == "::")
+                    fail("return-first callable does not take a second '::' body marker");
+                // Effects need an unambiguous boundary. A pure body can use
+                // 'begin' on the same line, a later line, or bare return/end.
+                if (value.has_declared_effects && token_.text != "begin")
+                    fail("return-first using-effects callable requires begin");
+                accept("begin");
+                // No implicit final-expression returns for named Atto functions.
+                if (token_.text != "return" && token_.text != "end" &&
+                        token_.text != "int" && token_.text != "bool" &&
+                        token_.text != "string" && token_.text != "String" &&
+                        token_.text != "const" && token_.text != "val" &&
+                        token_.text != "let")
+                    fail("return-first body requires an explicit return or checked local");
+            } else if (explicit_end_body) require("::");
             bool terminal = false;
+            bool explicit_return = false;
             while (token_.text != "end") {
                 if (token_.kind == Kind::End)
                     fail("unterminated native comma expression body");
                 if (token_.text == ",")
                     fail("native comma expression body contains an empty item");
                 if (accept_return_marker()) {
+                    explicit_return = true;
                     if (value.returns_void) {
                         if (token_.text != "end") require(";");
                     } else {
@@ -3691,9 +3783,10 @@ private:
                 if (token_.text != "end")
                     fail("native comma expression body requires a single terminal result");
             }
-            if (!value.returns_void && !terminal)
-                fail("native non-void comma expression body requires a result");
+            if (!value.returns_void && (!terminal || (return_first && !explicit_return)))
+                fail("RETURN_EXPLICIT_REQUIRED: non-void return-first callable needs explicit return");
             require("end");
+            if (return_first && !accept(".")) accept(";");
             return value;
         }
         if (owner.empty() && arrow_return_type && token_.text == "return")
