@@ -54,7 +54,8 @@ struct CoreLibrarySource {
 };
 
 inline bool is_reserved_core_import(std::string_view raw) noexcept {
-    return raw == "atto.core" || raw.rfind("atto.core/", 0) == 0 ||
+    return raw == "core" || raw.rfind("core/", 0) == 0 ||
+        raw == "atto.core" || raw.rfind("atto.core/", 0) == 0 ||
         raw == "ores.core" || raw.rfind("ores.core/", 0) == 0;
 }
 
@@ -95,6 +96,54 @@ inline const CoreLibrarySource* find_compiler_library_source(std::string_view ra
         0u
     };
 
+    static constexpr std::string_view kRangeSource =
+#include "oreslang/frontend/GeneratedCoreRangeAtto.inc"
+    ;
+    static constexpr CoreLibrarySource kRange{
+        CompilerLibraryTier::Core,
+        "atto.core/range",
+        "range",
+        "@atto.core/range.atto",
+        kRangeSource,
+        0u
+    };
+
+    static constexpr std::string_view kCellSource =
+#include "oreslang/frontend/GeneratedCoreCellAtto.inc"
+    ;
+    static constexpr CoreLibrarySource kCell{
+        CompilerLibraryTier::Core,
+        "atto.core/cell",
+        "cell",
+        "@atto.core/cell.atto",
+        kCellSource,
+        0u
+    };
+
+    static constexpr std::string_view kContractsSource =
+#include "oreslang/frontend/GeneratedCoreContractsAtto.inc"
+    ;
+    static constexpr CoreLibrarySource kContracts{
+        CompilerLibraryTier::Core,
+        "atto.core/contracts",
+        "contracts",
+        "@atto.core/contracts.atto",
+        kContractsSource,
+        0u
+    };
+
+    static constexpr std::string_view kNumSource =
+#include "oreslang/frontend/GeneratedCoreNumAtto.inc"
+    ;
+    static constexpr CoreLibrarySource kNum{
+        CompilerLibraryTier::Core,
+        "atto.core/num",
+        "num",
+        "@atto.core/num.atto",
+        kNumSource,
+        0u
+    };
+
     static constexpr std::string_view kIntBufferSource =
 #include "oreslang/frontend/GeneratedIntBufferAtto.inc"
     ;
@@ -122,6 +171,22 @@ inline const CoreLibrarySource* find_compiler_library_source(std::string_view ra
     if (raw == "atto.core/numeric" || raw == "atto.core/numeric.atto" ||
             raw == "ores.core/numeric" || raw == "ores.core/numeric.ores")
         return &kNumeric;
+    if (raw == "core/range" || raw == "core/range.atto" ||
+            raw == "atto.core/range" || raw == "atto.core/range.atto" ||
+            raw == "ores.core/range" || raw == "ores.core/range.atto")
+        return &kRange;
+    if (raw == "core/cell" || raw == "core/cell.atto" ||
+            raw == "atto.core/cell" || raw == "atto.core/cell.atto" ||
+            raw == "ores.core/cell" || raw == "ores.core/cell.atto")
+        return &kCell;
+    if (raw == "core/contracts" || raw == "core/contracts.atto" ||
+            raw == "atto.core/contracts" || raw == "atto.core/contracts.atto" ||
+            raw == "ores.core/contracts" || raw == "ores.core/contracts.atto")
+        return &kContracts;
+    if (raw == "core/num" || raw == "core/num.atto" ||
+            raw == "atto.core/num" || raw == "atto.core/num.atto" ||
+            raw == "ores.core/num" || raw == "ores.core/num.atto")
+        return &kNum;
     if (raw == "atto.alloc/int_buffer" || raw == "atto.alloc/int_buffer.atto" ||
             raw == "alloc/int_buffer" || raw == "alloc/int_buffer.ores")
         return &kIntBuffer;
