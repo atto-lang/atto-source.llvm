@@ -119,6 +119,54 @@ inline const CoreLibrarySource* find_compiler_library_source(std::string_view ra
         core_provider_bit(CoreProviderRequirement::Allocator)
     };
 
+    static constexpr std::string_view kHeapSource =
+#include "oreslang/frontend/GeneratedHeapAtto.inc"
+    ;
+    static constexpr CoreLibrarySource kHeap{
+        CompilerLibraryTier::Alloc,
+        "atto.alloc/heap",
+        "heap",
+        "@atto.alloc/heap.atto",
+        kHeapSource,
+        0u  // Pure policies only. No physical allocation authority.
+    };
+
+    static constexpr std::string_view kArenaSource =
+#include "oreslang/frontend/GeneratedArenaAtto.inc"
+    ;
+    static constexpr CoreLibrarySource kArena{
+        CompilerLibraryTier::Alloc,
+        "atto.alloc/arena",
+        "arena",
+        "@atto.alloc/arena.atto",
+        kArenaSource,
+        0u  // Pure policies only. No physical allocation authority.
+    };
+
+    static constexpr std::string_view kRegionSource =
+#include "oreslang/frontend/GeneratedRegionAtto.inc"
+    ;
+    static constexpr CoreLibrarySource kRegion{
+        CompilerLibraryTier::Alloc,
+        "atto.alloc/region",
+        "region",
+        "@atto.alloc/region.atto",
+        kRegionSource,
+        0u  // Pure policies only. No physical allocation authority.
+    };
+
+    if (raw == "atto.alloc/heap" || raw == "atto.alloc/heap.atto" ||
+            raw == "alloc/heap" || raw == "alloc/heap.ores" ||
+            raw == "alloc/heap.atto")
+        return &kHeap;
+    if (raw == "atto.alloc/arena" || raw == "atto.alloc/arena.atto" ||
+            raw == "alloc/arena" || raw == "alloc/arena.ores" ||
+            raw == "alloc/arena.atto")
+        return &kArena;
+    if (raw == "atto.alloc/region" || raw == "atto.alloc/region.atto" ||
+            raw == "alloc/region" || raw == "alloc/region.ores" ||
+            raw == "alloc/region.atto")
+        return &kRegion;
     if (raw == "atto.core/numeric" || raw == "atto.core/numeric.atto" ||
             raw == "ores.core/numeric" || raw == "ores.core/numeric.ores")
         return &kNumeric;
