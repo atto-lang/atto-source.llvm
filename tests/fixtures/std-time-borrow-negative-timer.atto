@@ -1,0 +1,10 @@
+// NEGATIVE: immutable const cannot satisfy Timer.poll(mut self).
+// The compiler must reject the receiver borrow, not silently copy the timer.
+import module time from "std/time";
+pub routine main(): void {
+  val now = time.instant(7, 0);
+  val due = time.deadline_after(now, time.nanoseconds(1).expect("one")).expect("due");
+  const timer = time.one_shot(due);
+  timer.poll(now);
+  return;
+}
