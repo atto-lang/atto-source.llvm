@@ -63,6 +63,23 @@ define module metrics as
     }
   end
 
+  // Immutable copy of a gauge measurement, independent of later sets.
+  pub define class GaugeSnapshot as
+    let int sampled_value;
+    let int allowed_minimum;
+    let int allowed_maximum;
+
+    pub constructor(int sampled_value, int allowed_minimum,
+                    int allowed_maximum) {
+      self.sampled_value = sampled_value;
+      self.allowed_minimum = allowed_minimum;
+      self.allowed_maximum = allowed_maximum;
+    }
+    pub value(): int { return self.sampled_value; }
+    pub minimum(): int { return self.allowed_minimum; }
+    pub maximum(): int { return self.allowed_maximum; }
+  end
+
   pub define class Gauge as
     let int lower;
     let int upper;
@@ -86,6 +103,9 @@ define module metrics as
     pub value(): int { return self.current; }
     pub minimum(): int { return self.lower; }
     pub maximum(): int { return self.upper; }
+    pub snapshot(): GaugeSnapshot {
+      return new GaugeSnapshot(self.current, self.lower, self.upper);
+    }
   end
 
   // A snapshot cannot mutate or borrow its originating histogram.
