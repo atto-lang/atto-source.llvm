@@ -74,6 +74,7 @@ jobs:
           grep -F 'CORE_FOUR_LLVM_LOCAL_MATRIX_PASS' "$RUNNER_TEMP/core-four-llvm-native-receipt.txt"
           grep -F 'CORE_FOUR_LLVM_BORROW_COMPILER_NEGATIVE' "$RUNNER_TEMP/core-four-llvm-native-receipt.txt" | grep -F 'borrow-use-after-take' | grep -F 'IR=NONE'
           grep -F 'CORE_FOUR_LLVM_BORROW_COMPILER_NEGATIVE' "$RUNNER_TEMP/core-four-llvm-native-receipt.txt" | grep -F 'borrow-escape' | grep -F 'IR=NONE'
+          grep -F 'CORE_FOUR_LLVM_BORROW_COMPILER_NEGATIVE' "$RUNNER_TEMP/core-four-llvm-native-receipt.txt" | grep -F 'borrow-conflicting-loans' | grep -F 'IR=NONE'
       - name: Mark limits of evidence
         if: always()
         run: |
