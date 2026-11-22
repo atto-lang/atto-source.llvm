@@ -95,6 +95,8 @@ const RESERVED: &[&str] = &[
     "shared",
     "untrusted",
     "spawn",
+    "pipe",
+    "rpipe",
     "stop",
     "rt",
     "await",
@@ -523,6 +525,47 @@ impl Parser {
     fn parse_actor(&mut self, defined: bool) -> R<ActorDecl> {
         let (name, pos) = self.ident("an actor name")?;
         self.decl_head("actor")?;
+        // The existing executable ActorMail<T> handler determines the actual
+        // mailbox type. A v1 receives T header may only make that fact
+        // explicit, never widen it or create an unverified second ingress.
+        let declared_receives = if self.eat_word("receives") {
+            if self.is_word("never") {
+                return Err(Diagnostic::new(
+                    self.pos(), "E_UNSUPPORTED",
+                    "receives never requires a separately authenticated CONTROL-only runtime",
+                ));
+            }
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+        // The sends type is an upper bound on outbound DATA payloads; the
+        // typed checker audits all reachable statically resolved send sites.
+        // Never is a distinct application-DATA effect, NOT Type::Void.
+        // An omitted clause still means inferred effect, not Any.
+        let sends = if self.eat_word("sends") {
+            if self.eat_word("never") {
+                Some(ActorSendEffect::Never)
+            } else {
+                let ty = self.parse_type()?;
+                if ty == Type::Void {
+                    return Err(Diagnostic::new(self.pos(), "E_ACTOR_SEND_CONTRACT",
+                        "sends void is invalid; use sends never for an empty application effect"));
+                }
+                Some(ActorSendEffect::Payload(ty))
+            }
+        } else {
+            None
+        };
+        if self.is_word("receives") || self.is_word("sends") {
+            return Err(Diagnostic::new(self.pos(), "E_ACTOR_CONTRACT",
+                "duplicate or out-of-order actor contract clause"));
+        }
+        // Pipeline emits is a different effect and has no checked lowering.
+        if self.is_word("emits") {
+            return Err(Diagnostic::new(self.pos(), "E_UNSUPPORTED",
+                "actor emits pipeline effect has no checked lowering"));
+        }
         let close = if defined {
             self.expect_word("as")?;
             "end"
@@ -532,9 +575,22 @@ impl Parser {
             "end"
         };
         let m = self.parse_members(&name, true, close)?;
+        if let Some(expected) = declared_receives {
+            match &m.receive {
+                Some(handler) if handler.payload == expected => {}
+                Some(_) => return Err(Diagnostic::new(
+                    pos, "E_ACTOR_RECEIVES", "actor receives header disagrees with concrete ActorMail<T>",
+                )),
+                None => return Err(Diagnostic::new(
+                    pos, "E_ACTOR_RECEIVES", "typed actor requires a matching receive(ActorMail<T>) handler",
+                )),
+            }
+        }
         Ok(ActorDecl {
             name,
             pos,
+            receives: declared_receives,
+            sends,
             fields: m.fields,
             receive: m.receive,
             methods: m.methods,
@@ -631,6 +687,13 @@ impl Parser {
                 self.eat_word("private");
                 false
             };
+            // Admit the inert susp marker on an actor's attached receive
+            // entrypoint. Any actually suspended body must still be rejected.
+            if actor && self.is_word("susp") && self.word_at(1) == Some("receive")
+                && *self.peek_at(2) == Tok::LParen
+            {
+                self.advance();
+            }
             let word = self.word_at(0).map(str::to_owned);
             match word.as_deref() {
                 Some("static") => {
@@ -970,6 +1033,8 @@ impl Parser {
         }
         let start = self.pos();
         self.eat_word("pub");
+        // Header-level susp does not make unsupported await/resume code legal.
+        let _susp = self.eat_word("susp");
         if self.is_word("private") {
             return Err(unsupported(self.pos(), "'private' visibility"));
         }

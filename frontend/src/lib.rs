@@ -7,8 +7,11 @@
 //! rejected with a diagnostic and never produces an artifact. See README.md.
 
 pub mod ast;
+/// Pure bounded typed-IR DATA send-effect closure, shared with peer frontend.
+pub mod actor_send_effect_graph;
 pub mod check;
 pub mod diag;
+pub mod directed_pipe;
 pub mod generator_cfg;
 pub mod generator_frame;
 pub mod lexer;
@@ -33,6 +36,10 @@ pub fn compile(source: &str) -> Result<Vec<u8>, Diagnostic> {
         ));
     }
     let toks = lexer::lex(source)?;
+    if let Some(pos) = directed_pipe::unlowered_pos(&toks) {
+        return Err(Diagnostic::new(pos, "E_UNSUPPORTED_CONTINUOUS_PIPE",
+            "typed pipe/rpipe DATA graph is planned but no guest transport or PipeHandle exists"));
+    }
     // Detect target declarations at any file-scope position, not only at
     // source byte zero. Ignore comments/strings (the lexer already tokenizes
     // them) and ignore nested brace bodies so a string or local expression
@@ -195,5 +202,51 @@ mod abi {
                 Err(d) => fail(&mut st, d),
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod directional_pipe_guest_gate_tests {
+    use super::*;
+    #[test]
+    fn rejects_continuous_pipe_and_rpipe_without_guest_runtime() {
+        let samples = [
+            "pub fnc main(): int { val c = producer pipe consumer; return 0; }",
+            "pub fnc main(): int { val c = consumer rpipe producer; return 0; }",
+            "define actor Producer as end pub fnc main(): int { val c = spawn Producer() pipe spawn Producer(); return 0; }",
+        ];
+        for source in samples {
+            let d = compile(source).expect_err("continuous graph cannot reach wasm codegen");
+            assert_eq!(d.code, "E_UNSUPPORTED_CONTINUOUS_PIPE", "{source}");
+        }
+    }
+    #[test]
+    fn all_twelve_exact_canonical_pipeline_guests_fail_before_wasm_codegen() {
+        // These are byte-identical atto-platform-conformance #102 fixtures.
+        // This backend has no actual typed continuous guest runtime yet.
+        for (name, source) in [
+            ("actor-forward", include_str!("../../fixtures/pipe-rpipe-v1/actor-forward.atto")),
+            ("actor-reverse", include_str!("../../fixtures/pipe-rpipe-v1/actor-reverse.atto")),
+            ("actor-missing-emits", include_str!("../../fixtures/pipe-rpipe-v1/actor-missing-emits.atto")),
+            ("actor-wrong-direction", include_str!("../../fixtures/pipe-rpipe-v1/actor-wrong-direction.atto")),
+            ("mixed-channel-stream-forward", include_str!("../../fixtures/pipe-rpipe-v1/mixed-channel-stream-forward.atto")),
+            ("mixed-channel-stream-reverse", include_str!("../../fixtures/pipe-rpipe-v1/mixed-channel-stream-reverse.atto")),
+            ("actor-duplicate-direction", include_str!("../../fixtures/pipe-rpipe-v1/actor-duplicate-direction.atto")),
+            ("actor-mixed-directions", include_str!("../../fixtures/pipe-rpipe-v1/actor-mixed-directions.atto")),
+            ("stopped-source", include_str!("../../fixtures/pipe-rpipe-v1/stopped-source.atto")),
+            ("closed-channel", include_str!("../../fixtures/pipe-rpipe-v1/closed-channel.atto")),
+            ("stopped-consumer", include_str!("../../fixtures/pipe-rpipe-v1/stopped-consumer.atto")),
+            ("stopped-actor-sink", include_str!("../../fixtures/pipe-rpipe-v1/stopped-actor-sink.atto")),
+        ] {
+            let d=compile(source).expect_err("unsupported pipeline cannot emit Wasm");
+            assert_eq!(d.code,"E_UNSUPPORTED_CONTINUOUS_PIPE",
+                "{name}: must reject without accepting untyped DATA graphs");
+        }
+    }
+
+    #[test]
+    fn commented_words_are_not_continuous_pipeline_tokens() {
+        let source = "// pipe rpipe\npub fnc main(): int { return 42; }";
+        assert!(compile(source).is_ok());
     }
 }

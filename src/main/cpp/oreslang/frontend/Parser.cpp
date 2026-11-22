@@ -1,6 +1,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/SHA256.h"
 #include "oreslang/frontend/CallableSelector.hpp"
+#include "oreslang/frontend/ChannelGuestGate.hpp"
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/PointerIntSyntax.hpp"
 #include "oreslang/frontend/NativeTelemetryLiteralV1.hpp"
@@ -272,6 +273,20 @@ public:
             // Existing nb-select recognition is intentionally unchanged
             // until native select lowering supports that grammar.
             const auto first = source_.substr(start, at_ - start);
+            // Channel<int> has a distinct result/EOF/cancellation/ownership
+            // representation. Reject the exact nominal type before any
+            // scalar i64 LLVM lowering can reinterpret it as integers or
+            // accidentally make a typed receive/send appear supported.
+            // This is the canonical tokenizing path: quoted literals and
+            // comments cannot manufacture this check.
+            if (first == "Channel" &&
+                    frontend::looks_like_channel_int(source_, at_)) {
+                throw std::runtime_error(
+                    "CHANNEL_GUEST_UNSUPPORTED: native LLVM requires checked "
+                    "Channel<int> Result<Option<int>,IoError> transport, "
+                    "nonparking suspension, bounded writes and ownership "
+                    "before guest IR (at byte " + std::to_string(start) + ")");
+            }
             // Pointer is a compiler-known nominal builtin, not a user class
             // or scalar name. Do not erase <T>, silently treat it as i64, or
             // emit LLVM before region/provenance and drop checks exist.

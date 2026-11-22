@@ -8,11 +8,14 @@
 #endif
 #include <assert.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
 #include <sys/resource.h>
 #include <time.h>
 #include <unistd.h>
@@ -44,6 +47,18 @@ int main(int argc, char **argv) {
         if (!strcmp(argv[1], "clean")) return 0;
         if (!strcmp(argv[1], "code17")) return 17;
         if (!strcmp(argv[1], "segv")) { raise(SIGSEGV); return 90; }
+        if (!strcmp(argv[1], "pagefault")) {
+            /* A real protected-memory access, not merely raise(SIGSEGV).
+             * Works with the POSIX /dev/zero mapping on Linux and macOS. */
+            int zero = open("/dev/zero", O_RDONLY);
+            if (zero < 0) return 92;
+            void *page = mmap(NULL, 4096, PROT_NONE, MAP_PRIVATE, zero, 0);
+            (void)close(zero);
+            if (page == MAP_FAILED) return 93;
+            volatile unsigned char observed = *(volatile unsigned char *)page;
+            (void)observed;
+            return 94;
+        }
         if (!strcmp(argv[1], "abort")) { abort(); return 90; }
         if (!strcmp(argv[1], "bus")) { raise(SIGBUS); return 90; }
         if (!strcmp(argv[1], "illegal")) { raise(SIGILL); return 90; }
@@ -60,11 +75,27 @@ int main(int argc, char **argv) {
             return 90;
         }
         if (!strcmp(argv[1], "environment")) return getenv("TEST_SECRET_MUST_NOT_LEAK") ? 99 : 0;
+        if (!strcmp(argv[1], "fd-closed")) {
+            errno = 0;
+            return fcntl(123, F_GETFD) == -1 && errno == EBADF ? 0 : 88;
+        }
+        if (!strcmp(argv[1], "stdio-null")) {
+            struct stat devnull, actual;
+            if (stat("/dev/null", &devnull) != 0) return 85;
+            for (int fd = 0; fd <= 2; ++fd) {
+                if (fstat(fd, &actual) != 0 ||
+                    !S_ISCHR(actual.st_mode) ||
+                    actual.st_rdev != devnull.st_rdev) return 86;
+            }
+            return 0;
+        }
+        if (!strcmp(argv[1], "term")) { raise(SIGTERM); return 87; }
+        if (!strcmp(argv[1], "pipe")) { raise(SIGPIPE); return 87; }
         return 91;
     }
     assert(argc >= 1 && argv[0][0] == '/');
     const char *exe = argv[0];
-    atto_actor_exit_notice n = run(exe, "segv", 5000);
+    atto_actor_exit_notice n = run(exe, "pagefault", 5000);
     assert(n.kind == ATTO_ACTOR_EXIT_SIGNAL && n.signal_number == SIGSEGV);
     /* The process supervising this worker is still alive and can launch
      * another actor after a fatal child SIGSEGV. */
@@ -72,10 +103,12 @@ int main(int argc, char **argv) {
     pthread_t sibling_thread;
     assert(pthread_create(&sibling_thread, NULL, run_healthy_sibling, &sibling) == 0);
     /* The healthy sibling remains alive while an independent actor crashes. */
-    n = run(exe, "segv", 5000);
+    n = run(exe, "pagefault", 5000);
     assert(n.kind == ATTO_ACTOR_EXIT_SIGNAL && n.signal_number == SIGSEGV);
     assert(pthread_join(sibling_thread, NULL) == 0);
     assert(sibling.result.kind == ATTO_ACTOR_EXIT_CLEAN);
+    n = run(exe, "segv", 5000);
+    assert(n.kind == ATTO_ACTOR_EXIT_SIGNAL && n.signal_number == SIGSEGV);
     n = run(exe, "clean", 5000);
     assert(n.kind == ATTO_ACTOR_EXIT_CLEAN && n.exit_code == 0);
     n = run(exe, "code17", 5000);
@@ -96,6 +129,35 @@ int main(int argc, char **argv) {
     n = run(exe, "environment", 5000);
     assert(n.kind == ATTO_ACTOR_EXIT_CLEAN);
     assert(unsetenv("TEST_SECRET_MUST_NOT_LEAK") == 0);
+
+    /* An actual open non-CLOEXEC descriptor in the parent must never reach
+     * the isolated child, even if the parent is multi-threaded. */
+    int fd = open("/dev/null", O_RDONLY);
+    assert(fd >= 0);
+    assert(dup2(fd, 123) == 123);
+    if (fd != 123) assert(close(fd) == 0);
+    n = run(exe, "fd-closed", 5000);
+    assert(n.kind == ATTO_ACTOR_EXIT_CLEAN);
+    assert(close(123) == 0);
+    n = run(exe, "stdio-null", 5000);
+    assert(n.kind == ATTO_ACTOR_EXIT_CLEAN);
+
+    /* Child signal state must be independent of the supervisor's state. */
+    sigset_t block, old_mask;
+    assert(sigemptyset(&block) == 0);
+    assert(sigaddset(&block, SIGTERM) == 0);
+    assert(pthread_sigmask(SIG_BLOCK, &block, &old_mask) == 0);
+    n = run(exe, "term", 5000);
+    assert(n.kind == ATTO_ACTOR_EXIT_SIGNAL && n.signal_number == SIGTERM);
+    assert(pthread_sigmask(SIG_SETMASK, &old_mask, NULL) == 0);
+
+    struct sigaction ignored = {0}, old_action;
+    ignored.sa_handler = SIG_IGN;
+    assert(sigemptyset(&ignored.sa_mask) == 0);
+    assert(sigaction(SIGPIPE, &ignored, &old_action) == 0);
+    n = run(exe, "pipe", 5000);
+    assert(n.kind == ATTO_ACTOR_EXIT_SIGNAL && n.signal_number == SIGPIPE);
+    assert(sigaction(SIGPIPE, &old_action, NULL) == 0);
     n = run("/definitely/no/such/atto-worker", "clean", 100);
     assert(n.kind == ATTO_ACTOR_EXIT_SPAWN_ERROR && n.os_error != 0);
     const char *a[] = {exe, "clean", NULL};
