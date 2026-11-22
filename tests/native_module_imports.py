@@ -627,6 +627,48 @@ def main():
                                       'unexpected compiler artifacts', sorted(artifacts)))
             passed += 1
 
+        # Typed constant imports retain distinct AST identity and may not
+        # reuse module/function import lowering. Until the verified const
+        # linker and environment startup gate are implemented, reject before
+        # LLVM IR/object publication (including unreferenced imported values).
+        constant_cases = [
+            ('relative-public-not-linked',
+             'import const status_valid from "./config.atto"; pub fnc main():int{return status_valid;}',
+             'CONST_LINKER_UNSUPPORTED'),
+            ('dotted-package-not-linked',
+             'import const status_valid from "std.http"; pub fnc main():int{return 0;}',
+             'CONST_LINKER_UNSUPPORTED'),
+            ('explicit-pkg-not-linked',
+             'import const status_valid as ok from pkg "std.http"; pub fnc main():int{return 0;}',
+             'CONST_LINKER_UNSUPPORTED'),
+            ('env-startup-not-baked',
+             'import const status_valid from "./config.atto"; pub fnc main():int{return 0;}',
+             'CONST_LINKER_UNSUPPORTED'),
+            ('const-duplicate-alias',
+             'import const status_valid as ok, status_invalid as ok from "./config.atto"; '
+             'pub fnc main():int{return 0;}',
+             'duplicate imported constant binding'),
+            ('const-wildcard-rejected',
+             'import const * as config from "./config.atto"; pub fnc main():int{return 0;}',
+             'native import const requires named selections'),
+        ]
+        compiler = os.path.abspath(shutil.which(a.compiler) or a.compiler)
+        for name, consumer, diagnostic in constant_cases:
+            directory = root/('atto-const-import-' + name)
+            directory.mkdir()
+            (directory/'config.atto').write_text(
+                'define pub const int status_valid = 200; '
+                'define pub const string status_invalid = std.env.read_env("STATUS");')
+            (directory/'main.atto').write_text(consumer)
+            before = {p.name for p in directory.iterdir()}
+            result = run([compiler, str(directory/'main.atto')], cwd=directory)
+            produced = {p.name for p in directory.iterdir()} - before
+            if not result.returncode or result.stdout or diagnostic not in result.stderr or produced:
+                raise AssertionError(('native const import safety', name,
+                                      result.returncode, result.stdout[:150],
+                                      result.stderr, sorted(produced)))
+            passed += 1
+
         # The first expansion beyond the shared portable limit must fail
         # before writing LLVM IR, object files or a native executable.
         directory = root/'atto-linked-syntax-budget-129'; directory.mkdir()
