@@ -7757,6 +7757,15 @@ if(BUILD_TESTING)
             --clang "${ORE_RT_AOT_CLANG}")
     set_tests_properties(native_alloc_library_import_resolution
         PROPERTIES TIMEOUT 120)
+    # This is a real compiler -> LLVM IR -> linked binary -> guest execution gate.
+    # It deliberately stays red until classes/Option/Result/ownership lower.
+    add_test(NAME native_alloc_collections_real_guest
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/alloc_collections_native_guest.py"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_RT_AOT_CLANG}")
+    set_tests_properties(native_alloc_collections_real_guest
+        PROPERTIES TIMEOUT 180)
     add_executable(oreslang-allocator-provider-v1-test
         tests/allocator_provider_v1_test.c
         src/main/cpp/oreslang/runtime/AllocatorProviderV1.c)
