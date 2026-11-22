@@ -416,7 +416,7 @@ public:
         }
         // Contiguous comparison/logical operators are single tokens, matching
         // the Java/Graal precedence grammar.
-        for (std::string_view op : {"->", "::", "|>", "==", "!=", "<=", ">=", "&&", "||", "^^"}) {
+        for (std::string_view op : {"->", "::", "|>", "<|", "==", "!=", "<=", ">=", "&&", "||", "^^"}) {
             if (source_.substr(at_, 2) == op) {
                 at_ += 2;
                 return {Kind::Symbol, source_.substr(start, 2), start};
@@ -4290,6 +4290,8 @@ private:
                     // a partial chain as an ordinary actor spawn.
                     if (token_.text == "pipe")
                         fail("NATIVE_ACTOR_PIPE_UNSUPPORTED: typed actor pipe requires guest port, mailbox and supervisor lowering");
+                    if (token_.text == "rpipe")
+                        fail("E_ACTOR_PIPE_BACKEND_UNSUPPORTED: 'rpipe' requires reversed typed roles, authenticated guest ports and native mailbox lowering");
                     require(";");
                     value.actor_spawns.push_back(std::move(spawned));
                     continue;
@@ -5445,29 +5447,61 @@ private:
         return value;
     }
 
-    // Eager scalar |> pipelines desugar to ordinary checked calls.
-    // Infix actor 'pipe' is a different, unimplemented transport operation.
+    // Eager scalar |> and reverse <| lower to the SAME checked call AST.
+    // Reverse stages are right-associative: f <| g <| x means f(g(x)).
+    // Continuous actor pipe/rpipe remain distinct, fail-closed operations.
     std::unique_ptr<Expression> expression() {
         auto value = conditional();
         std::size_t stages = 0;
-        while (accept("|>")) {
-            if (++stages > kMaxNativePipelineStages)
-                fail("pipeline exceeds 128 stages");
-            auto stage = primary();
-            if (stage->kind != Expression::Kind::Variable &&
-                    stage->kind != Expression::Kind::Call)
-                fail("native scalar pipeline stage must be a named function");
-            // Existing function validation checks arity, names, types,
-            // generics and effects. Evaluate the incoming value once.
-            stage->kind = Expression::Kind::Call;
-            stage->pipeline_stage = true;
-            stage->arguments.insert(stage->arguments.begin(), std::move(value));
-            stage->argument_names.insert(stage->argument_names.begin(), "");
-            value = std::move(stage);
+        if (accept("<|")) {
+            // Right-associative reverse application lowers to the same
+            // checked Call AST as eager |>, with main's 128-stage limit.
+            std::vector<std::unique_ptr<Expression>> reverse;
+            reverse.push_back(std::move(value));
+            do {
+                if (++stages > kMaxNativePipelineStages)
+                    fail("pipeline exceeds 128 stages");
+                reverse.push_back(conditional());
+            } while (accept("<|"));
+            if (token_.text == "|>")
+                fail("E_VALUE_PIPE_DIRECTION: parenthesize mixed |> and <| applications");
+            value = std::move(reverse.back());
+            for (std::size_t i = reverse.size() - 1; i > 0; --i) {
+                auto stage = std::move(reverse[i - 1]);
+                if (stage->kind != Expression::Kind::Variable &&
+                        stage->kind != Expression::Kind::Call)
+                    fail("native scalar pipeline stage must be a named function");
+                stage->kind = Expression::Kind::Call;
+                stage->pipeline_stage = true;
+                stage->arguments.insert(stage->arguments.begin(), std::move(value));
+                stage->argument_names.insert(stage->argument_names.begin(), "");
+                value = std::move(stage);
+            }
+        } else {
+            while (accept("|>")) {
+                if (++stages > kMaxNativePipelineStages)
+                    fail("pipeline exceeds 128 stages");
+                auto stage = primary();
+                if (stage->kind != Expression::Kind::Variable &&
+                        stage->kind != Expression::Kind::Call)
+                    fail("native scalar pipeline stage must be a named function");
+                // Existing function validation checks arity, names, types,
+                // generics and effects. Evaluate the incoming value once.
+                stage->kind = Expression::Kind::Call;
+                stage->pipeline_stage = true;
+                stage->arguments.insert(stage->arguments.begin(), std::move(value));
+                stage->argument_names.insert(stage->argument_names.begin(), "");
+                value = std::move(stage);
+            }
+            if (token_.text == "<|")
+                fail("E_VALUE_PIPE_DIRECTION: parenthesize mixed |> and <| applications");
         }
         if (token_.text == "pipe")
             fail("actor pipe expressions require typed roles, supervisor "
                  "exclusion, bounded edge transport and ownership lowering");
+        if (token_.text == "rpipe")
+            fail("E_ACTOR_PIPE_BACKEND_UNSUPPORTED: 'rpipe' requires reversed typed roles, "
+                 "supervisor isolation, bounded edge transport and ownership lowering");
         // '^' is lexed only for the statement-level caret return. After a
         // complete expression it would be infix XOR, which this backend does
         // not lower: keep legacy's reserved-token diagnostic.
