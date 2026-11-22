@@ -67,7 +67,7 @@ unknown members, direct unqualified builtin symbols, namespace alias
 shadowing, freestanding import attempts, and unsupported `import module`
 syntax reject before native code emission. The dedicated
 `tests/http_stdlib/namespace_import_canary.atto` has **17** compiled-guest checks;
-`ci/test_http_namespace_import.sh` includes **eight** negative cases and an
+`ci/test_http_namespace_import.sh` includes **nine** negative cases and an
 ambient shadow-file canary.
 
 **Limits:** this is not a generic import graph and does not yet implement
@@ -86,3 +86,34 @@ workflow step compiles/executes the real importer guest.
 All these cases are **AUTHORED / NOT_EXECUTED** until an exact-head Actions
 job has actual executed steps and passing guest receipts. See
 atto-platform-conformance#101 for 11-backend conformance tracking.
+
+## Core import borrow and Copy-only ABI gate (2026-11-22)
+
+The compiler-owned `std.http` module linker now invokes
+`validate_http_core_copy_boundary` on the **independently parsed Atto AST**
+before it can enter the typed compiler. Every imported function must accept
+only `int` or `bool` arguments and return `int` or `bool`; generator,
+class, borrowed/non-Copy, heap and other stateful signatures reject with
+`E_NATIVE_IMPORT_BORROW`. A Rust test mutates the parsed library AST to
+try non-Copy returns, non-scalar parameters, generator effects and class
+declarations. All are authored but await actual Rust execution.
+
+The browser/LLVM frontend already rejects `self` as an ordinary owned value.
+Its existing class move checker rejects a use after transfer. Three additional
+compiler-front-end test cases are staged in
+`frontend/tests/core_ownership_boundary.rs` and corresponding `.atto`
+fixtures to prove moved-owner denial, transferred-owner access and Copy scalar
+reuse. The same-unit HTTP policy script now executes this frontend test before
+the native policy guest.
+
+`ores.core.collections` contains generic APIs whose `Copy` bounds cannot
+yet be proven by this scalar compiler. Its source is **not** admitted into
+the native import registry; the ninth negative import case verifies
+`E_NATIVE_IMPORT_UNREGISTERED` rather than silently importing an unverified
+borrow/ownership API.
+
+This is **scalar Copy ABI enforcement only**, not a general borrow checker
+for imported generic collections, suspension lifetimes or actors. The
+11-backend core ownership obligations are in atto-platform-conformance#101
+and atto-compilers-parity-testing#19; all real guest receipts remain
+`NOT_EXECUTED`.
