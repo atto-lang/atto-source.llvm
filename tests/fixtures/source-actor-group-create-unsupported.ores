@@ -1,0 +1,5 @@
+// Reach the unsupported native ActorGroup expression, rather than failing
+// earlier on a missing scalar-local ': int' declaration.
+pub fnc main(): int {
+  return ActorGroup.new();
+}

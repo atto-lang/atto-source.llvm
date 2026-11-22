@@ -95,6 +95,24 @@ for case in tests/actors/fail/*.atto; do
     echo "PASS fail-closed actor negative $name"
 done
 
+# Tagged local Result<Ack,SendError> host ABI: deterministic 128-full queue,
+# stale/forged generation, no-drop and exact physical drain. Not guest Result.
+for cc in gcc clang; do
+    "$cc" -std=c11 -O2 -pthread -Wall -Wextra -Werror -Wpedantic \
+        runtime/actor_runtime.c tests/native_actor_send_result_v1.c \
+        -o "$work/send_result_$cc.exe"
+    timeout 20s "$work/send_result_$cc.exe" > "$work/send_result_$cc.out"
+    grep -q 'PASS tagged native actor send: full/stale/no-loss/drain' "$work/send_result_$cc.out"
+done
+clang -std=c11 -O1 -g -pthread -Wall -Wextra -Werror -Wpedantic \
+    -fsanitize=address,undefined -fno-omit-frame-pointer \
+    runtime/actor_runtime.c tests/native_actor_send_result_v1.c \
+    -o "$work/send_result_sanitized.exe"
+ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+    timeout 20s "$work/send_result_sanitized.exe" > "$work/send_result_sanitized.out"
+grep -q 'PASS tagged native actor send: full/stale/no-loss/drain' "$work/send_result_sanitized.out"
+echo 'PASS native actor tagged send ABI (GCC/Clang + ASan/UBSan)'
+
 # Independent C ABI contention gate: the same real runtime, with C mock
 # callbacks, is stressed by four producer threads and eight actor workers.
 # This complements (does not replace) compiled .atto guest execution above.

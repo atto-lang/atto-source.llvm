@@ -1,0 +1,6 @@
+import fnc is_even from "./math";
+
+pub fnc is_odd(int n): int {
+  if n == 0 then return 0; fi
+  return is_even(n - 1);
+}
