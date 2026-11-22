@@ -71,7 +71,7 @@ test("Java compiler-owned registry and test-vector counts, when present", () => 
     assert.ok(registry.includes('"' + name + '.atto"'));
   }
   const suite = read("src/test/java/dev/oreslang/runtime/NativeAttoMetricsJsonZordeTest.java");
-  const cases = { metrics: 18, json: 36, zorde: 40 };
+  const cases = { metrics: 30, json: 36, zorde: 40 };
   for (const [name, count] of Object.entries(cases)) {
     const fixture = read("src/test/resources/stdlib-parity/metrics-json-zorde/" + name + ".atto");
     const actual = (fixture.match(/stdio\.println\(/g) || []).length;
