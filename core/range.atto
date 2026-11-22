@@ -68,4 +68,25 @@ define module range as
     fi
     return current - step >= end;
   }
+
+  // Checked scalar advancement for clients not using the range iterator syntax.
+  // This operation does not validate that the result lies inside any interval.
+  pub fnc next_forward(int current, int step): Result<int, String> {
+    if step <= 0; do
+      return Err("range: forward step must be positive");
+    fi
+    if current > 0 && current > 9223372036854775807 - step; do
+      return Err("range: forward step overflow");
+    fi
+    return Ok(current + step);
+  }
+  pub fnc next_backward(int current, int step): Result<int, String> {
+    if step <= 0; do
+      return Err("range: backward step must be positive");
+    fi
+    if current < 0 && current < -9223372036854775808 + step; do
+      return Err("range: backward step overflow");
+    fi
+    return Ok(current - step);
+  }
 end
