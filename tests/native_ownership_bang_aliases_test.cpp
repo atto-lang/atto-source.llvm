@@ -35,6 +35,7 @@ static std::string git_blob_sha(const std::string& bytes) {
 static std::string read_fixture(const std::string& root, const std::string& filename) {
     static const std::map<std::string, std::string_view> reviewed_pins{
         {"borrow-call-accept.atto", "8cf245cbd24dc158f50bb010cbdcf09e1e826c10"},
+        {"rt-borrow-mut-native.atto", "e7b2cb178c266262a94df18dd88c46ae9d32632b"},
         {"take-after-use-reject.atto", "7757036e704fc334842cac8254863139d85d2935"},
         {"borrow-escape-reject.atto", "0c5d993b9c95d586ac2cb4018ce0df24856a36ae"},
         {"share-class-reject.atto", "3368f59e356003118e281fa73461e4185936e849"},
@@ -169,6 +170,7 @@ int main(int argc, char** argv) {
     // Git blob in this compiler-owned checker: ordinary CTest source reads
     // alone are not a provenance assertion.
     for (const char* name : {"borrow-call-accept.atto",
+                             "rt-borrow-mut-native.atto",
                              "take-after-use-reject.atto",
                              "borrow-escape-reject.atto",
                              "share-class-reject.atto",
@@ -197,9 +199,15 @@ int main(int argc, char** argv) {
                Expression::Kind::BorrowMut);
     equivalent("rt mut borrow foo", "borrow! mut foo", "borrow!mut foo",
                Expression::Kind::BorrowMut);
+    equivalent("rt borrow mut foo", "borrow! mut foo", "borrow!mut foo",
+               Expression::Kind::BorrowMut);
     equivalent("rt mut borrow(foo)", "borrow! mut (foo)", "borrow!mut(foo)",
                Expression::Kind::BorrowMut);
+    equivalent("rt borrow mut(foo)", "borrow! mut (foo)", "borrow!mut(foo)",
+               Expression::Kind::BorrowMut);
     equivalent("rt mut borrow foo.bar", "borrow! mut foo.bar", "borrow!mut foo.bar",
+               Expression::Kind::BorrowMut);
+    equivalent("rt borrow mut foo.bar", "borrow! mut foo.bar", "borrow!mut foo.bar",
                Expression::Kind::BorrowMut);
     equivalent("rt copy(foo + 1)", "copy! (foo + 1)", "copy!(foo + 1)",
                Expression::Kind::Copy);
@@ -216,14 +224,13 @@ int main(int argc, char** argv) {
     for (std::string_view invalid : {"borrow! mut mut foo",
                                      "borrow!mut mut foo",
                                      "mut borrow! mut foo",
-                                     "rt mut borrow mut foo"}) {
+                                     "rt mut borrow mut foo",
+                                     "rt borrow mut mut foo"}) {
         reject_with_diagnostic(invalid, "duplicate mutable borrow qualifier");
     }
-    // Parity with java main: the historical postfix spelling stays rejected;
-    // the bang aliases do not reopen it.
-    for (std::string_view legacy : {"rt borrow mut foo", "rt borrow mut mut foo"}) {
-        reject_with_diagnostic(legacy, "legacy 'rt borrow mut value' is not accepted");
-    }
+    // Keep mutfoo an ordinary identifier: a separate mut keyword is required.
+    equivalent("rt borrow mutfoo", "borrow! mutfoo", "borrow!mutfoo",
+               Expression::Kind::Borrow);
     // Production parser+ownership checker against exact checked-in .atto
     // fixtures. CTest must execute this; source-only fixture presence is not
     // itself an executable guest or native AOT claim.
@@ -232,6 +239,10 @@ int main(int argc, char** argv) {
             read_fixture(root, "borrow-call-accept.atto"));
         if (program.functions.size() != 3)
             throw std::runtime_error("native borrowed-argument admission missing");
+        const auto mutable_program = oreslang::parse_program(
+            read_fixture(root, "rt-borrow-mut-native.atto"));
+        if (mutable_program.functions.size() != 3)
+            throw std::runtime_error("native rt borrow mut argument admission missing");
     }
     auto semantic_reject = [](std::string_view source, std::string_view expected) {
         try {

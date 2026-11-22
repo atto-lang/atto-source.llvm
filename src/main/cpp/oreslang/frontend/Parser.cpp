@@ -5545,9 +5545,12 @@ private:
                 fail("unsupported native rt operation; suspension/ownership lowering is unavailable");
             }
             advance();
+            // Preserve both historical rt orders as checked BorrowMut.
+            // Canonical source is borrow! mut; the alias does not add rights.
             if (!mutable_borrow && operation == "borrow" &&
                     token_.text == "mut") {
-                fail("legacy 'rt borrow mut value' is not accepted; use 'rt mut borrow value'");
+                mutable_borrow = true;
+                advance();
             }
             if (mutable_borrow && token_.text == "mut")
                 fail("duplicate mutable borrow qualifier");
