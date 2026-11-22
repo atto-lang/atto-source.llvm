@@ -257,13 +257,11 @@ inline std::string emit_actor_region_v2_guest_ir(const Program& program) {
         {ptr, ptr, ptr, i32, i64});
     const auto read = native("ores_actor_region_v1_compiler_read_i64", i64,
         {ptr, ptr, ptr, i32});
-    const auto drop = native("ores_actor_region_v1_compiler_drop", void_type,
-        {ptr, ptr, ptr});
-    const auto leave = native("ores_actor_region_v1_compiler_leave", void_type,
-        {ptr, ptr});
-    const auto retire = native("ores_actor_region_v1_retire", void_type, {ptr});
-    const auto destroy = native("ores_actor_region_v1_try_destroy", i32, {ptr});
-    const auto abort_fn = native("abort", void_type, {});
+    // The validated finalizer preflights the entire original owner set under
+    // one actor-arena lock before it runs any destructor. No separate
+    // drop/leave/retire calls may be interleaved after the PHI snapshot.
+    const auto finish = native("ores_actor_region_v1_compiler_finish", void_type,
+        {ptr, ptr, ptr, i32});
 
     auto* entry = llvm::Function::Create(
         llvm::FunctionType::get(i32, false),
@@ -328,22 +326,21 @@ inline std::string emit_actor_region_v2_guest_ir(const Program& program) {
     auto* result = builder.CreatePHI(i64, 2, "return.snapshot");
     result->addIncoming(early_result, early);
     result->addIncoming(normal_result, normal);
-    // Both return paths converge here: drop in reverse lexical ownership
-    // order, exactly once each, AFTER the scalar return value is snapshotted.
-    // This does not cover throw/suspend/cancel; those are rejected above.
-    for (const std::size_t owner_index : cleanup_plan.cleanup_order)
-        builder.CreateCall(drop, {region, turn_storage, refs[owner_index]});
-    builder.CreateCall(leave, {region, turn_storage});
-    builder.CreateCall(retire, {region});
-    auto* freed = builder.CreateCall(destroy, {region}, "region.reclaimed");
-    auto* released = builder.CreateICmpEQ(freed, builder.getInt32(1));
-    auto* completed = llvm::BasicBlock::Create(context, "cleanup.complete", entry);
-    auto* failed = llvm::BasicBlock::Create(context, "cleanup.failed", entry);
-    builder.CreateCondBr(released, completed, failed);
-    builder.SetInsertPoint(failed);
-    builder.CreateCall(abort_fn);
-    builder.CreateUnreachable();
-    builder.SetInsertPoint(completed);
+    // Both return paths converge here after the scalar return snapshot.
+    // Emit the dataflow-verified reverse lexical owner list as trusted native
+    // stack metadata. The physical runtime validates the COMPLETE owner set
+    // and retires it in one checked terminal operation.
+    const auto owner_count =
+        static_cast<std::uint32_t>(cleanup_plan.cleanup_order.size());
+    auto* ordered_refs = builder.CreateAlloca(ptr, builder.getInt32(owner_count),
+                                              "lexical.cleanup.owners");
+    for (std::uint32_t index = 0; index < owner_count; ++index) {
+        auto* slot = builder.CreateInBoundsGEP(ptr, ordered_refs,
+                                               builder.getInt32(index));
+        builder.CreateStore(refs[cleanup_plan.cleanup_order[index]], slot);
+    }
+    builder.CreateCall(finish, {region, turn_storage, ordered_refs,
+                                builder.getInt32(owner_count)});
     builder.CreateRet(builder.CreateTrunc(result, i32));
 
     std::string errors;
