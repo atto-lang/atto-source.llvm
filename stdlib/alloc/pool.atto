@@ -102,4 +102,29 @@ define module pool as
     return new SlotPool(capacity);
   }
 
+
+  // Backend guest smoke: execute this through the real compiler/linker.
+  pub fnc self_test(): bool {
+    let mut SlotPool slots = new SlotPool(1);
+    let PoolLease first = slots.acquire();
+    if !first.valid() || first.slot != 0 || first.generation != 1; do
+      return false;
+    fi
+    if slots.acquire().valid() || slots.available() != 0; do
+      return false;
+    fi
+    if !slots.release(first) || slots.release(first); do
+      return false;
+    fi
+    let PoolLease second = slots.acquire();
+    if !second.valid() || second.generation != 2 ||
+       slots.release(first) || slots.close(); do
+      return false;
+    fi
+    if !slots.release(second) || !slots.close(); do
+      return false;
+    fi
+    return !slots.acquire().valid() && slots.active() == 0;
+  }
+
 end
