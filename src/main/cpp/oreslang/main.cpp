@@ -730,6 +730,9 @@ int main(int argc, char** argv) {
     BuildProfile build_profile = BuildProfile::Dev;
     bool build_profile_seen = false;
     bool freestanding = false;
+    // 0 = historical native behavior, 1/2 = explicit Atto callable grammar.
+    int language_version = 0;
+    bool language_version_seen = false;
     bool native_hard_rt_profile = false;
     bool profile_seen = false;
     std::optional<oreslang::frontend::LibraryProfile> library_profile;
@@ -784,7 +787,28 @@ int main(int argc, char** argv) {
         }
         if (!arg.empty() && arg[0] == '-' && arg != "--gpu-g1-kernel-ir")
             gpu_g1_other_option = true;
-        if (arg.rfind("--allocator-provider=", 0) == 0) {
+        if (arg == "--language-version" || arg.rfind("--language-version=", 0) == 0) {
+            if (language_version_seen) {
+                std::cerr << "E_LANGUAGE_VERSION: duplicate version selector\n";
+                return 2;
+            }
+            language_version_seen = true;
+            std::string value;
+            if (arg == "--language-version") {
+                if (i + 1 >= argc) {
+                    std::cerr << "E_LANGUAGE_VERSION: expected 1 or 2\n";
+                    return 2;
+                }
+                value = argv[++i];
+            } else {
+                value = arg.substr(std::string_view("--language-version=").size());
+            }
+            if (value != "1" && value != "2") {
+                std::cerr << "E_LANGUAGE_VERSION: expected 1 or 2\n";
+                return 2;
+            }
+            language_version = value == "1" ? 1 : 2;
+        } else if (arg.rfind("--allocator-provider=", 0) == 0) {
             if (allocator_provider_seen) {
                 std::cerr << "duplicate allocator-provider option\n";
                 return 2;
@@ -1284,7 +1308,7 @@ int main(int argc, char** argv) {
         auto ast = oreslang::load_native_program(
             path, text, source_identity, experimental_owned_int,
             experimental_rt_scalar_loop, !wasm32_target && !cortex_m_target,
-            admitted_provider_bits, static_ffi_i64_capability);
+            admitted_provider_bits, static_ffi_i64_capability, language_version);
         source_module = ast.module;
         source_namespace = ast.namespace_name;
         // A lexical scalar loop has valid native CFG continuation semantics,

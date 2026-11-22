@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -621,13 +622,15 @@ struct Program {
 // direct/typed get_ready readiness or explicit ActorRef.get_done().
 Program parse_program(std::string_view source, bool experimental_owned_int = false,
                       bool experimental_rt_scalar_loop = false,
-                      bool experimental_pointer_int_aot = false);
+                      bool experimental_pointer_int_aot = false,
+                      int language_version = 0);
 
 // Internal module-linking stages: syntax trees are NOT admitted for codegen.
 // resolve_and_validate_program must run after all module names are resolved.
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int = false,
                                  bool experimental_rt_scalar_loop = false,
-                                 bool experimental_pointer_int_aot = false);
+                                 bool experimental_pointer_int_aot = false,
+                                 int language_version = 0);
 // HOST-ONLY preparatory AST: caller must supply already authenticated frozen
 // source bytes, and only the verified package graph may consume the result.
 // Unlike parse_program(), this must never authorize IR or guest execution.
