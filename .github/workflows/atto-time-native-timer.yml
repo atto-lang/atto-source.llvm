@@ -10,6 +10,8 @@ on:
       - 'src/main/cpp/oreslang/runtime/NativeTimerQueue.hpp'
       - 'tests/native_timer_queue_test.cpp'
       - 'ci/test_std_time_guest_admission.sh'
+      - 'tests/fixtures/std-time-borrow-*.atto'
+      - 'tests/fixtures/std-time-core-negative-*.atto'
       - 'examples/atto-time-contract.atto'
       - '.github/workflows/atto-time-native-timer.yml'
   workflow_dispatch:
@@ -52,6 +54,24 @@ jobs:
           set -euo pipefail
           /tmp/atto-native-timer-test
           echo "EXECUTED_NATIVE_ATTO_TIME_TIMER_TEST=PASS"
+      - name: GCC and Clang ASan+UBSan native timer boundary tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          for compiler in g++ clang++; do
+            command -v "$compiler"
+            compiler_label="${compiler//+/x}"
+            artifact="/tmp/atto-native-time-${compiler_label}-sanitized"
+            "$compiler" -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror \
+              -fsanitize=address,undefined -fno-omit-frame-pointer \
+              -pthread -I src/main/cpp \
+              tests/native_timer_queue_test.cpp -o "$artifact"
+            test -x "$artifact"
+            ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+            UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+              timeout 75s "$artifact"
+            echo "EXECUTED_NATIVE_ATTO_TIME_SANITIZERS=PASS compiler=$compiler"
+          done
 
   native-time-guest-aot:
     runs-on: ubuntu-24.04
