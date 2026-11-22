@@ -212,7 +212,9 @@ private:
                         fail(current,
                             (raw.rfind("atto.core", 0) == 0
                                 ? "unknown compiler-owned atto.core module '" :
-                                  "unknown compiler-owned ores.core module '") + raw + "'");
+                                  raw.rfind("core", 0) == 0
+                                    ? "unknown compiler-owned core module '" :
+                                      "unknown compiler-owned ores.core module '") + raw + "'");
                     fail(current,
                         (raw.rfind("atto.alloc", 0) == 0
                             ? "unknown compiler-owned atto.alloc module '" :
