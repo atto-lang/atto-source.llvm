@@ -66,9 +66,9 @@ define module json as
       return scalar;
     }
 
-    // Decoded scalars are retained only long enough to detect object-key
-    // ambiguity. Non-key strings need no host conversion or normalization.
-    read_string(mut self)(): bool {
+    // Decode scalars only for object keys, not arbitrary string values.
+    // This avoids retaining a copy of a large JSON string payload.
+    read_string(mut self)(bool capture): bool {
       if self.index >= self.length || self.source.get(self.index) != 34; do
         return false;
       fi
@@ -82,23 +82,23 @@ define module json as
         if ch < 32 || (ch >= 55296 && ch <= 57343) ||
            ch > 1114111; do return false; fi
         if ch != 92; do
-          self.decoded.add(ch);
+          if capture; do self.decoded.add(ch); fi
         else
           if self.index >= self.length; do return false; fi
           let int escaped = self.source.get(self.index);
           self.index = self.index + 1;
           if escaped == 34 || escaped == 92 || escaped == 47; do
-            self.decoded.add(escaped);
+            if capture; do self.decoded.add(escaped); fi
           elif escaped == 98; do
-            self.decoded.add(8);
+            if capture; do self.decoded.add(8); fi
           elif escaped == 102; do
-            self.decoded.add(12);
+            if capture; do self.decoded.add(12); fi
           elif escaped == 110; do
-            self.decoded.add(10);
+            if capture; do self.decoded.add(10); fi
           elif escaped == 114; do
-            self.decoded.add(13);
+            if capture; do self.decoded.add(13); fi
           elif escaped == 116; do
-            self.decoded.add(9);
+            if capture; do self.decoded.add(9); fi
           elif escaped == 117; do
             let int unicode = self.hex4();
             if unicode < 0; do return false; fi
@@ -117,7 +117,7 @@ define module json as
             elif unicode >= 56320 && unicode <= 57343; do
               return false;
             fi
-            self.decoded.add(unicode);
+            if capture; do self.decoded.add(unicode); fi
           else
             return false;
           fi
@@ -222,7 +222,7 @@ define module json as
       fi
       let mut Array<Array<int>> keys = new Array<Array<int>>();
       while self.index < self.length; do
-        if keys.size >= 128 || !self.read_string(); do return false; fi
+        if keys.size >= 128 || !self.read_string(true); do return false; fi
         if self.decoded.size > 256; do return false; fi
         for (let int i = 0; i < keys.size; i = i + 1) {
           if self.keys_equal(keys.get(i), self.decoded); do
@@ -257,7 +257,7 @@ define module json as
       if self.index >= self.length; do return false; fi
       self.nodes = self.nodes + 1;
       let int ch = self.source.get(self.index);
-      if ch == 34; do return self.read_string(); fi
+      if ch == 34; do return self.read_string(false); fi
       if ch == 123; do return self.read_object(depth); fi
       if ch == 91; do return self.read_array(depth); fi
       if ch == 116; do return self.read_keyword("true"); fi
