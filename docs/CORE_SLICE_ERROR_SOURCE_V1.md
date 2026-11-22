@@ -23,3 +23,27 @@ negative end, one-past-end zero length, reverse stride, crossing await,
 actors and use-after-free. Reconcile existing LLVM Error PRs #327/#328,
 Atto spec PR #31, and Java paired source PR #1768. Source-only parity is
 not runtime/compiler parity.
+
+## Follow-up milestone (2026-11-22)
+
+The independent source is now extended to match the *public semantic
+contracts* of the Java companion PR #1768:
+
+- `valid_range(offset,count,length)` is a logical window, never a pair of
+  endpoints. `valid_endpoints(start,end,length)` has distinct semantics.
+- `get_copy_int`, `first_copy_int`, `last_copy_int` and
+  `subslice_offset` return `Option<int>` and do not expose pointer-backed
+  values. **Native guest support for Array<int>.get_copy is not verified.**
+- `valid_reverse_window` preflights negative strides including MIN_INT, but
+  does not create reverse views or grant borrow permissions.
+- `error.code_group` maps known catalog codes to *numeric* groups only.
+  This must never be used for trusted nominal type or catch admission.
+
+The proposed `tests/fixtures/core-slice-error-v2/main.atto` is deliberately
+**unadmitted** until native import resolution and guest O0/O2 execution pass.
+No synthesized success or source-free CI outcome counts as implementation.
+
+The sibling LLVM PR #872 introduces `core/slice.atto` with integer-array
+algorithms and `valid_range(offset,count,length)`; reconcile its algorithm
+contents rather than creating competing semantics or requiring shared source
+bytes between backends.

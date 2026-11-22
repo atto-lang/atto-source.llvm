@@ -1,0 +1,21 @@
+// Candidate LLVM guest-execution fixture; status PENDING / NOT_VERIFIED.
+// These imports remain unresolved until the native LLVM source module loader
+// supports the core/ and atto.core/ aliases with path-sealing.
+import module slice from "core/slice";
+import module error from "atto.core/error";
+
+pub fnc main(): int {
+  let mut Array<int> values = new Array<int>();
+  values.add(0);
+  values.add(22);
+  values.add(42);
+  if !slice.valid_range(1, 2, 3); do return 1; fi
+  if !slice.valid_endpoints(-3, 3, 3); do return 2; fi
+  if slice.get_copy_int(values, 1, 2, -1).unwrap_or(-1) != 42; do return 3; fi
+  if !slice.get_copy_int(values, 1, 2, -3).is_none(); do return 4; fi
+  if !slice.valid_reverse_window(2, -1, 3, 3); do return 5; fi
+  if slice.valid_reverse_window(2, -2, 3, 3); do return 6; fi
+  if !error.is_bounds_code(1008); do return 7; fi
+  if error.code_group(5001).unwrap_or(-1) != 5000; do return 8; fi
+  return 42;
+}

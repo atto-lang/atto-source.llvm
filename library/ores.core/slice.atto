@@ -1,7 +1,7 @@
 // Freestanding checked scalar arithmetic for contiguous borrowed slices.
 // This is a pure preflight library: no allocation, backing pointer, owner token,
 // or borrow authority is created by importing it.
-// Native LLVM must prove Slice<T> provenance, mutability and suspension gates.
+// The compiler must enforce Slice<T> provenance, mutability and suspension gates.
 define module slice as
 
   // -1 means invalid. Every successful index is in [0, length).
@@ -17,8 +17,7 @@ define module slice as
   }
 
   pub fnc valid_index(int index, int length): bool {
-    val int resolved = normalize_index(index, length);
-    return resolved >= 0;
+    return normalize_index(index, length) >= 0;
   }
 
   // Explicit half-open endpoints permit [0,length], including an empty
@@ -33,9 +32,14 @@ define module slice as
     return length + bound;
   }
 
-  pub fnc valid_range(int start, int end, int length): bool {
+  pub fnc valid_endpoints(int start, int end, int length): bool {
     return normalize_bound(start, length) >= 0 &&
            normalize_bound(end, length) >= 0;
+  }
+
+  // Canonical logical window meaning, aligned with sibling core/slice PR.
+  pub fnc valid_range(int offset, int count, int length): bool {
+    return valid_window(offset, count, length);
   }
 
   // Positive-step range element count, 0 for a valid empty/reversed interval,
@@ -63,6 +67,55 @@ define module slice as
     if count == 0; do return true; fi
     if offset >= length; do return false; fi
     return count - 1 <= (length - 1 - offset) / stride;
+  }
+
+  // Source candidate only: LLVM Array<int>.get_copy()
+  // must independently implement named-owner and Copy<int> checks.
+  // None never carries a borrowed element or a pointer to backing storage.
+  pub fnc get_copy_int(Array<int> values, int offset,
+                       int count, int index): Option<int> {
+    if !valid_window(offset, count, values.size); do
+      return None;
+    fi
+    val int relative = normalize_index(index, count);
+    if relative < 0; do return None; fi
+    return values.get_copy(offset + relative);
+  }
+
+  pub fnc first_copy_int(Array<int> values, int offset,
+                         int count): Option<int> {
+    return get_copy_int(values, offset, count, 0);
+  }
+
+  pub fnc last_copy_int(Array<int> values, int offset,
+                        int count): Option<int> {
+    if count <= 0; do return None; fi
+    return get_copy_int(values, offset, count, count - 1);
+  }
+
+  // Validated nested window origin; invalid ranges never compute offset + sub.
+  // This arithmetic receipt cannot be used after the backing array is moved,
+  // deallocated or mutated without separately proving its current lifetime.
+  pub fnc subslice_offset(int offset, int count, int length,
+                          int relative_offset, int relative_count): Option<int> {
+    if !valid_window(offset, count, length); do return None; fi
+    if !valid_window(relative_offset, relative_count, count); do return None; fi
+    return Some(offset + relative_offset);
+  }
+
+  // Negative-stride arithmetic preflight. MIN_INT is treated specially so
+  // negating the signed stride never overflows. A zero-count window is legal
+  // only when its offset is in [0,length]; this helper is not a view ctor.
+  pub fnc valid_reverse_window(int offset, int stride,
+                               int count, int length): bool {
+    if stride >= 0 || count < 0; do return false; fi
+    if !valid_window(offset, 0, length); do return false; fi
+    if count == 0; do return true; fi
+    if offset >= length; do return false; fi
+    if stride == -9223372036854775808; do
+      return count == 1;
+    fi
+    return count - 1 <= offset / -stride;
   }
 
 end
