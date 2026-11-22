@@ -65,7 +65,8 @@ for id in std-scalar-equal-pass std-scalar-equal-fail \
           std-scalar-greater-pass std-scalar-greater-fail \
           std-scalar-less-pass std-scalar-less-fail \
           std-scalar-range-lower std-scalar-range-upper \
-          std-scalar-range-inverted std-scalar-range-outside; do
+          std-scalar-range-inverted std-scalar-range-outside \
+          std-scalar-greater-equal std-scalar-less-equal; do
   [[ "$(grep -Ec "^$id\\|positive/[^|]+\\.atto\\|[01]$" "$cases")" -eq 1 ]] ||
     die "missing or duplicate native .atto scalar case: $id"
 done
