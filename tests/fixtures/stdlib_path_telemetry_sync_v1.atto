@@ -39,5 +39,11 @@ pub fnc main(): int {
   if !path.windows_device_4(99, 111, 109, 50) then return 32; fi
   if path.windows_device_4(99, 111, 109, 48) then return 33; fi
   if path.windows_device_3(97, 98, 99) then return 34; fi
+  if !sync.mutex_release_receipt_admissible(true, 8, 8, 3, 3, false) then return 35; fi
+  if sync.mutex_release_receipt_admissible(true, 8, 9, 3, 3, false) then return 36; fi
+  if sync.mutex_release_receipt_admissible(true, 8, 8, 3, 2, false) then return 37; fi
+  if sync.mutex_release_receipt_admissible(true, 8, 8, 3, 3, true) then return 38; fi
+  if !sync.rw_upgrade_admissible(1, false, 0, true) then return 39; fi
+  if sync.rw_upgrade_admissible(2, false, 0, true) then return 40; fi
   return 0;
 }
