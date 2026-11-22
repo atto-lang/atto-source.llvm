@@ -107,4 +107,31 @@ define module arc as
 
   pub fnc ledger(): ArcLedger { return new ArcLedger(); }
 
+
+  // Backend guest smoke: execute through the real compiler/linker, not a
+  // source-only host model. This exercises SERIAL ledger behavior only.
+  pub fnc self_test(): bool {
+    let mut ArcLedger counts = new ArcLedger();
+    if !counts.try_clone_strong() || !counts.try_downgrade() ||
+       counts.strong_count() != 2 || counts.external_weak_count() != 1; do
+      return false;
+    fi
+    if counts.release_strong() != 1 || !counts.try_upgrade() ||
+       counts.strong_count() != 2; do
+      return false;
+    fi
+    if counts.release_strong() != 1 || counts.release_strong() != 2 ||
+       !counts.drop_required() || counts.try_upgrade(); do
+      return false;
+    fi
+    if !counts.release_weak() || counts.try_clone_weak() ||
+       !counts.finish_drop() || counts.finish_drop(); do
+      return false;
+    fi
+    return counts.is_payload_dropped() &&
+           counts.can_reclaim_control() &&
+           counts.strong_count() == 0 &&
+           counts.external_weak_count() == 0;
+  }
+
 end
