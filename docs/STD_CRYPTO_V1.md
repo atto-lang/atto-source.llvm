@@ -37,10 +37,14 @@ committed files under C++17 with OpenSSL 3.5.5:
 `CryptoAeadHostV1.h` blob
 `9f766489f3f01d3a5ff921ff9b6cb7aa5c5bc508`,
 `CryptoAeadHostV1.cpp` blob
-`9aec3197a8251f5b93e5ca6814fc6863ec8d555c`,
+`2c48d62ad8d23e029799f315861d7728ab2daafd`,
 and `crypto_aead_host_v1_test.cpp` blob
 `716d80248c2f31d55811def90104d1d935335df7`.
-The isolated output was `ATTO_CRYPTO_AEAD_OPENSSL_HOST_ONLY_PASS`.
+The hardened implementation now scrubs prior plaintext in the caller-provided
+`open()` output buffer before any new authentication outcome; a
+`std::vector::clear()` alone does not erase memory. It was rebuilt and
+executed with C++17 and OpenSSL 3.5.5; the exact new blob SHA above
+passed. The isolated output was `ATTO_CRYPTO_AEAD_OPENSSL_HOST_ONLY_PASS`.
 It was not the GitHub Actions runner or the complete LLVM compiler.
 These code additions are not
 a working `std.crypto` import, actor capability, or hard-real-time
