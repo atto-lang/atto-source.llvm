@@ -22,12 +22,12 @@ fn only_the_new_class_owner_can_access_the_transferred_value() {
     let ast = Parser::new(tokens).parse_program().expect("source parses");
     check::check(&ast).expect("transferred owner retains exclusive access");
     let wasm = compile(OWNER_AFTER_MOVE).expect("valid ownership emits Wasm");
-    assert!(wasm.starts_with(b"\\0asm"), "must produce real Wasm, not host shim");
+    assert!(wasm.starts_with(b"\0asm"), "must produce real Wasm, not host shim");
 }
 
 #[test]
 fn scalar_values_remain_copyable_through_core_checks() {
     let source = "pub fnc main(): int { val int x = 21; val int y = x; return x + y; }";
     let wasm = compile(source).expect("scalar copies require no borrow");
-    assert!(wasm.starts_with(b"\\0asm"));
+    assert!(wasm.starts_with(b"\0asm"));
 }
