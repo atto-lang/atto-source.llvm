@@ -156,6 +156,14 @@ if (( ${#runtime_sources[@]} )); then
 else
   "$clang" "-O${opt_level}" -x ir "$work/program.ll" -o "$work/program"
 fi
+# This is a Linux ELF *known collector/linkage* screen, not a proof of
+# process-wide zero GC. It must run before publishing the executable so
+# failed admission cannot replace a previously working artifact.
+if [[ "$(uname -s)" == Linux ]]; then
+  bash "$root/scripts/audit-aot-linked-image.sh" "$work/program"
+else
+  echo 'LINKED_AOT_GC_SCREEN_NOT_RUN: non-Linux target; only the IR gate ran' >&2
+fi
 # Fail closed before publishing. A successful subprocess exit is not proof that
 # the output is a native executable: a broken wrapper can emit IR, a shell script,
 # a library or nothing. The native ABI is verified again by the Rust CTest.

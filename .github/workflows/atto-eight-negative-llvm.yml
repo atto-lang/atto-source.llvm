@@ -5,6 +5,7 @@ on:
       - 'contracts/atto-scalar-v1/**'
       - 'tests/formal-policy-atto/negative/**'
       - 'tests/atto_negative_semantic_gate.rs'
+      - 'scripts/verify-atto-negative-aot-artifacts.sh'
       - '.github/workflows/atto-eight-negative-llvm.yml'
       - 'src/main/cpp/oreslang/**'
       - 'CMakeLists.txt'
@@ -60,38 +61,22 @@ jobs:
           set -euo pipefail
           "$RUNNER_TEMP/atto-negative-gate"
           echo 'ATTO_LLVM_NEGATIVE_SOURCE_ONLY; native guest execution not proven'
-      - name: Reject executable publication through the actual AOT linker route
-        env:
-          ORESLANG_LLVMC: ${{ runner.temp }}/atto-negative-build/oreslang-llvmc
-          ORES_NO_GC_IR_AUDIT: ${{ runner.temp }}/atto-negative-build/oreslang-no-gc-ir-audit
-          CLANG: clang
+      - name: Mutation-test timeout, symlink and sidecar rejection logic
         shell: bash
         run: |
           set -euo pipefail
-          reject_dir="$RUNNER_TEMP/atto-negative-artifacts"
-          mkdir -p "$reject_dir"
-          for id in removed-modulo removed-caret removed-double-caret type-first-reassignment typed-const-reassignment; do
-            source="contracts/atto-scalar-v1/negative/$id.atto"
-            target="$reject_dir/$id"
-            status=0
-            timeout 30s bash scripts/compile-aot.sh "$source" "$target" > "$target.out" 2> "$target.err" || status=$?
-            test "$status" -gt 0
-            test "$status" -lt 128
-            test ! -e "$target"
-            test -s "$target.err"
-            echo "ATTO_LLVM_AOT_ARTIFACT_DENIED|case=$id|status=$status|artifact=no"
-          done
-          for id in legacy-async-modifier critical-suspends-modifier suspends-critical-modifier; do
-            source="tests/formal-policy-atto/negative/$id.atto"
-            target="$reject_dir/$id"
-            status=0
-            timeout 30s bash scripts/compile-aot.sh "$source" "$target" > "$target.out" 2> "$target.err" || status=$?
-            test "$status" -gt 0
-            test "$status" -lt 128
-            test ! -e "$target"
-            test -s "$target.err"
-            echo "ATTO_LLVM_AOT_ARTIFACT_DENIED|case=$id|status=$status|artifact=no"
-          done
+          bash scripts/verify-atto-negative-aot-artifacts.sh --self-test
+      - name: Reject all eight canonical sources without publishing any AOT artifact
+        shell: bash
+        env:
+          ATTO_NEGATIVE_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          ORESLANG_LLVMC: ${{ runner.temp }}/atto-negative-build/oreslang-llvmc
+          ORES_NO_GC_IR_AUDIT: ${{ runner.temp }}/atto-negative-build/oreslang-no-gc-ir-audit
+          CLANG: clang
+        run: |
+          set -euo pipefail
+          bash scripts/verify-atto-negative-aot-artifacts.sh
+          echo 'ATTO_NATIVE_AOT_NEGATIVES=8; this does not certify zero-GC or guest positives'
       - name: Positive controls with canonical native guest execution
         env:
           ORESLANG_LLVMC: ${{ runner.temp }}/atto-negative-build/oreslang-llvmc

@@ -33,6 +33,7 @@ struct HeapTest {
 const TESTS: &[HeapTest] = &[
     HeapTest { name: "actor_heap", sources: &["tests/actor_heap_test.cpp"], link_wrap: false },
     HeapTest { name: "actor_owned_heap", sources: &["tests/actor_owned_heap_test.cpp"], link_wrap: false },
+    HeapTest { name: "actor_slab_heap", sources: &["tests/actor_slab_heap_test.cpp"], link_wrap: false },
     HeapTest {
         name: "actor_owned_i64_heap",
         sources: &["tests/actor_owned_heap_lifecycle_test.cpp", "@/ActorOwnedI64Heap.c"],

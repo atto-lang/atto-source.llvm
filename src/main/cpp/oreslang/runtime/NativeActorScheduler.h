@@ -312,6 +312,12 @@ int ores_native_actor_scheduler_set_affinity_window(
         OresNativeActorScheduler* s, uint32_t window);
 /* Turns taken ahead of their queue head because of carrier affinity. */
 uint64_t ores_native_actor_scheduler_affine_picks(OresNativeActorScheduler* s);
+/* Number of turns changing physical carriers since their actor's previous
+ * turn; WAKE/TASK-only count isolates resumed continuation migrations.
+ * These are cache-locality PROXIES, not hardware L1/L2 miss measurements.
+ * Counter reads are lock-protected; NULL returns zero. */
+uint64_t ores_native_actor_scheduler_carrier_migrations(OresNativeActorScheduler* s);
+uint64_t ores_native_actor_scheduler_continuation_migrations(OresNativeActorScheduler* s);
 uint64_t ores_native_actor_scheduler_control_completed(
     OresNativeActorScheduler* scheduler);
 OresNativeActorScheduler* ores_native_actor_scheduler_open(
