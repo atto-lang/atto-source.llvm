@@ -104,3 +104,25 @@ test('guest runner fails closed without configured real compiler',()=>{
   assert.equal(report.passed,0);
   assert.ok(report.failed>0);
 });
+
+test('LLVM canonical imports are closed, aliases preserve one identity, source embeds are exact',()=>{
+  const registry=read('../src/main/cpp/oreslang/frontend/CoreLibrarySources.hpp');
+  const loader=read('../src/main/cpp/oreslang/frontend/ModuleLoader.cpp');
+  const cmake=read('../CMakeLists.txt');
+  for(const [name,cap] of [['range','Range'],['cell','Cell'],['contracts','Contracts'],['num','Num']]) {
+    for(const prefix of ['core/','atto.core/','ores.core/'])
+      assert.ok(registry.includes('"'+prefix+name+'"'),prefix+name);
+    const original=read('../core/'+name+'.atto');
+    const literal=read('../src/main/cpp/oreslang/frontend/GeneratedCore'+cap+'Atto.inc');
+    assert.equal(literal, 'R"ATCHANGE_CORE4('+original+')ATCHANGE_CORE4"\\n'
+      .replaceAll('ATCHANGE_CORE4','ATTO_CORE4'));
+  }
+  assert.ok(registry.includes('is_reserved_core_import'));
+  assert.ok(loader.includes('unknown compiler-owned core module'));
+  assert.ok(cmake.includes('core-four .atto source/embed mismatch'));
+  for(const fixture of ['smoke.atto','contract-failure.atto']) {
+    const src=read('../tests/fixtures/core-four-v1/'+fixture);
+    assert.match(src,/"core\/contracts"/);
+    assert.doesNotMatch(src,/"std\/core\//);
+  }
+});
