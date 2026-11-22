@@ -11,7 +11,7 @@ struct Source {
     delimiter: &'static str,
     blob: &'static str,
 }
-const SOURCES: [Source; 3] = [
+const SOURCES: [Source; 6] = [
     Source { file: "stdlib/numeric.atto",
         output: "src/main/cpp/oreslang/frontend/GeneratedNumericAtto.inc",
         delimiter: "ATTO_NUMERIC", blob: "5ced991f1d49b3c2a60fdd72b9003c0a4d18cd72" },
@@ -21,6 +21,15 @@ const SOURCES: [Source; 3] = [
     Source { file: "stdlib/alloc/int_buffer_bundle.atto",
         output: "src/main/cpp/oreslang/frontend/GeneratedIntBufferBundleAtto.inc",
         delimiter: "ATTO_INT_BUNDLE", blob: "07c7083e099a18f1db7097f9639efc677070eb95" },
+    Source { file: "stdlib/std/path.atto",
+        output: "src/main/cpp/oreslang/frontend/GeneratedStdPathAtto.inc",
+        delimiter: "ATTO_STD_PATH", blob: "adde8472c218d9a5a6d0644fd9ccefc80cf3d8f6" },
+    Source { file: "stdlib/std/telemetry.atto",
+        output: "src/main/cpp/oreslang/frontend/GeneratedStdTelemetryAtto.inc",
+        delimiter: "ATTO_STD_TELEMETRY", blob: "2a339892995922e0064fc903fd264d9efd5e9b26" },
+    Source { file: "stdlib/std/sync.atto",
+        output: "src/main/cpp/oreslang/frontend/GeneratedStdSyncAtto.inc",
+        delimiter: "ATTO_STD_SYNC", blob: "8805fd7ac43200102e08c95a367419e6e201c1d6" },
 ];
 const MAX_BYTES: usize = 1024 * 1024;
 
