@@ -23,9 +23,11 @@ int atto_udp_loopback_send(atto_udp_loopback *socket, unsigned peer_port,
 int atto_udp_loopback_receive(atto_udp_loopback *socket, uint8_t *owned_output,
         size_t capacity, size_t *received, unsigned *source_port);
 /* Close is idempotent. If another syscall holds the gate returns -EAGAIN.
- * Destroy only from trusted host lifecycle after physical call retirement. */
+ * Destroy ONLY after the host fences new entrants and callers have stopped.
+ * Return -EAGAIN without freeing if the lock is still held, allowing a safe
+ * retry instead of freeing a live mutex/descriptor. */
 int atto_udp_loopback_close(atto_udp_loopback *socket);
-void atto_udp_loopback_destroy(atto_udp_loopback *socket);
+int atto_udp_loopback_destroy(atto_udp_loopback *socket);
 #ifdef __cplusplus
 }
 #endif
