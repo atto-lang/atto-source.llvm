@@ -18,7 +18,7 @@ scheduler wakeups or actual semaphore/barrier scheduling. The necessary trusted
 compiler/runtime backends must be implemented and tested independently.
 No blocking APIs were added. No host language code was placed in these `.atto` files.
 
-`tests/fixtures/stdlib_path_telemetry_sync_v1.atto` is a 24-branch
+`tests/fixtures/stdlib_path_telemetry_sync_v1.atto` is a 44-branch
 proposed guest behavior oracle. It is not a PASS until an exact-source
 LLVM compiler imports all three modules and runs the guest. Unsupported
 imports should fail explicitly rather than fall through to host behavior.
@@ -26,3 +26,8 @@ imports should fail explicitly rather than fall through to host behavior.
 Related independent implementations: Java
 `atto-source.java#1756` and .NET `atto-source.net#209`. No
 byte-identity or cross-backend guest-parity claim is made.
+
+## Follow-up audit and exact-source runner status (2026-11-22)
+A new source audit verified that every fixture method exists in its backend-owned `.atto` module and no host-language source islands occur in those modules. Path scans reject unpaired Unicode surrogate scalars and values outside Unicode's maximum scalar range. The Java/.NET path views now scan one bounded Unicode snapshot per call and avoid temporary component arrays. Sync release and upgrade policy require an authenticated, unconsumed owner/generation receipt from a trusted runtime, not guest-created boolean authority.
+
+**Verification boundary:** Guest fixtures are authored, not executed. Exact-current-head Actions jobs were queued or pending with no recorded runner steps when checked. Private-source export is not permitted merely by naming a carrier: Java has no active reviewed destination; .NET's candidate remains inactive; LLVM's stale StreemPilot allowlist entry is explicitly under the source-security hold described by LLVM #726/#736/#778. No private-source mirror was performed. Existing draft PRs must remain draft until stepful native guest results and all required reviews are available.
