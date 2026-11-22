@@ -27,6 +27,7 @@ define module json as
     let int length;
     let mut int index = 0;
     let mut int nodes = 0;
+    let mut int key_comparisons = 0;
     let mut Array<int> decoded = new Array<int>();
 
     constructor(String raw) {
@@ -122,6 +123,9 @@ define module json as
             return false;
           fi
         fi
+        // Prevent a hostile object key from allocating an unbounded scalar
+        // copy before the object-level quota check runs.
+        if capture && self.decoded.size > 256; do return false; fi
       done
       return false;
     }
@@ -225,6 +229,8 @@ define module json as
         if keys.size >= 128 || !self.read_string(true); do return false; fi
         if self.decoded.size > 256; do return false; fi
         for (let int i = 0; i < keys.size; i = i + 1) {
+          if self.key_comparisons >= 65536; do return false; fi
+          self.key_comparisons = self.key_comparisons + 1;
           if self.keys_equal(keys.get(i), self.decoded); do
             return false;
           fi
@@ -289,7 +295,8 @@ define module json as
   end
 
   // Quotas: <=1,048,576 Unicode scalars, 64 levels, 262,144 values,
-  // 128 keys/object, 256 decoded scalars/key. Duplicate keys reject even
+  // 128 keys/object, 256 decoded scalars/key and 65536 global key comparisons.
+  // Duplicate keys reject even
   // if one spelling uses \u escapes and the other uses literal characters.
   pub fnc decode(String text): Result<Document, String> {
     let mut Scanner scanner = new Scanner(text);
