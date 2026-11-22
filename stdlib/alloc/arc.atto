@@ -1,0 +1,109 @@
+// AttoLang alloc/arc: checked single-owner reference-count TRANSITION MODEL.
+// This is NOT Arc<T>, not a pointer, and NOT a thread-safe implementation.
+// Real Arc<T> requires compiler-authenticated atomic CAS, deep frozen ownership,
+// exactly-once destructor/drop glue, control-block reclamation and domain checks.
+// Do not expose this mutable ledger as a shared or actor-transportable capability.
+define module arc as
+
+  pub define class ArcLedger as
+    let mut int strong = 1;
+    // Includes one implicit weak sentinel while payload exists / drop pending.
+    let mut int weak = 1;
+    let mut bool pending_drop = false;
+    let mut bool payload_dropped = false;
+
+    // The maximum includes the implicit weak sentinel; reject overflow.
+    pub try_clone_strong(mut self)(): bool {
+      if self.strong < 1 || self.strong >= 1048576 ||
+         self.pending_drop || self.payload_dropped; do
+        return false;
+      fi
+      self.strong = self.strong + 1;
+      return true;
+    }
+
+    pub try_downgrade(mut self)(): bool {
+      if self.strong < 1 || self.weak >= 1048576 ||
+         self.pending_drop || self.payload_dropped; do
+        return false;
+      fi
+      self.weak = self.weak + 1;
+      return true;
+    }
+
+    // Existing weak owners may duplicate their weak interest after strong=0;
+    // they must never resurrect the already-dropped payload.
+    pub try_clone_weak(mut self)(): bool {
+      if self.weak < 1 || self.weak >= 1048576; do
+        return false;
+      fi
+      self.weak = self.weak + 1;
+      return true;
+    }
+
+    // SERIAL MODEL ONLY: the native runtime must use atomic increment-if-nonzero
+    // with acquire/release ordering and independently proven provenance.
+    pub try_upgrade(mut self)(): bool {
+      return self.try_clone_strong();
+    }
+
+    // 0=invalid/double release; 1=one strong released; 2=last strong,
+    // caller MUST execute the payload destructor exactly once, then finish_drop.
+    // The implicit weak sentinel holds the control block during destruction.
+    pub release_strong(mut self)(): int {
+      if self.strong < 1 || self.pending_drop; do
+        return 0;
+      fi
+      self.strong = self.strong - 1;
+      if self.strong == 0; do
+        self.pending_drop = true;
+        return 2;
+      fi
+      return 1;
+    }
+
+    // Only trusted drop glue may invoke this, after actual payload destruction.
+    pub finish_drop(mut self)(): bool {
+      if !self.pending_drop || self.strong != 0 ||
+         self.weak < 1 || self.payload_dropped; do
+        return false;
+      fi
+      self.pending_drop = false;
+      self.payload_dropped = true;
+      self.weak = self.weak - 1;
+      return true;
+    }
+
+    // Forbid consuming the implicit weak sentinel before payload drop.
+    pub release_weak(mut self)(): bool {
+      if self.weak < 1; do
+        return false;
+      fi
+      if (self.strong > 0 || self.pending_drop) && self.weak == 1; do
+        return false;
+      fi
+      self.weak = self.weak - 1;
+      return true;
+    }
+
+    pub strong_count(): int { return self.strong; }
+
+    pub external_weak_count(): int {
+      if self.strong > 0 || self.pending_drop; do
+        return self.weak - 1;
+      fi
+      return self.weak;
+    }
+
+    pub drop_required(): bool { return self.pending_drop; }
+    pub is_payload_dropped(): bool { return self.payload_dropped; }
+
+    pub can_reclaim_control(): bool {
+      return self.strong == 0 && self.weak == 0 &&
+             self.payload_dropped && !self.pending_drop;
+    }
+  end
+
+  pub fnc ledger(): ArcLedger { return new ArcLedger(); }
+
+end

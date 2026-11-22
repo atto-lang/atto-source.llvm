@@ -1,0 +1,54 @@
+// AttoLang alloc/weak: non-owning weak-reference admission policy.
+// The numeric key is NOT a capability. Actual Weak<T>.upgrade() must validate
+// an authenticated control-block identity and increment a nonzero strong count
+// atomically, with generation/domain checks before publishing the strong owner.
+// No GC weak references or unchecked host-pointer fallback is authorized.
+define module weak as
+
+  pub define class WeakKey as
+    pub val int domain;
+    pub val int slot;
+    pub val int generation;
+
+    pub constructor(int domain, int slot, int generation) {
+      if domain < 1 || slot < 0 || generation < 1; do
+        rt fail("alloc/weak: invalid weak key");
+      fi
+      self.domain = domain;
+      self.slot = slot;
+      self.generation = generation;
+    }
+
+    pub matches(int actual_domain, int actual_slot,
+                int actual_generation): bool {
+      return actual_domain == self.domain &&
+             actual_slot == self.slot &&
+             actual_generation == self.generation;
+    }
+  end
+
+  // Admission check only; not an upgrade and does not create a strong owner.
+  // Runtime must synchronize identity validation with its increment-if-nonzero.
+  pub fnc may_upgrade(WeakKey key, int actual_domain,
+                      int actual_slot, int actual_generation,
+                      int strong, bool drop_pending): bool {
+    return key.matches(actual_domain, actual_slot, actual_generation) &&
+           strong > 0 && strong < 1048576 && !drop_pending;
+  }
+
+  // Prevent accidental recycling of a control block while either counts or
+  // the last-strong destructor transaction still has obligations outstanding.
+  pub fnc may_reclaim_control(int strong, int weak,
+                              bool drop_pending, bool payload_dropped): bool {
+    return strong == 0 && weak == 0 &&
+           !drop_pending && payload_dropped;
+  }
+
+  pub fnc next_generation(int current): int {
+    if current < 1 || current >= 2147483647; do
+      return 0;
+    fi
+    return current + 1;
+  }
+
+end
