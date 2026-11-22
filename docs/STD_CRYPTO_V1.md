@@ -9,6 +9,34 @@ A module path of `"std.crypto"` is the intended core import (never
 need implementation and an executed compiler-backed test**. Do not promote
 the fixture or this PR as proof of functioning encryption.
 
+## LLVM / OpenSSL trusted-host prototype
+
+This branch adds C++17 files
+`src/main/cpp/oreslang/runtime/CryptoAeadHostV1.{h,cpp}`.
+They call OpenSSL EVP `EVP_aes_256_gcm` and
+`EVP_chacha20_poly1305` (no handwritten cipher), generate 256-bit
+keys with `RAND_bytes`, use a random 4-byte nonce prefix and a
+synchronized 64-bit counter capped at 2^32 encryptions per key,
+and scrub key arrays on explicit close/destruction. Keys cannot be
+copied or moved. `open` returns authenticated plaintext only
+after EVP final tag verification; failed outputs are blanked.
+Only a trusted host caller may acquire these handles; this does
+not create Atto guest cryptographic authority.
+
+Opt-in **host-only** test runner:
+
+```sh
+sh tests/crypto-aead-host-v1.sh
+```
+
+This builds a small OpenSSL-linked C++17 test independently of the
+full LLVM SDK. It includes the NIST AES-256-GCM empty-message
+known-answer vector, nonce uniqueness, tamper, wrong key/AAD/nonce,
+zero-length messages, and key retirement. **This runner has not
+been executed yet on the PR head.** These code additions are not
+a working `std.crypto` import, actor capability, or hard-real-time
+compiler proof. Fail closed until these are independently tested.
+
 ## Public API to implement
 
 - `hash.sha256(bytes) -> Bytes` and `mac.hmac_sha256(secret, bytes) -> Bytes`.
