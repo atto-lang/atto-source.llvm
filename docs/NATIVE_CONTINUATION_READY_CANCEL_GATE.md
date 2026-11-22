@@ -52,6 +52,44 @@ carriers on the final completion condition variable. This does not establish
 `Future<T>`, `Task`, arbitrary values across suspension, or guest
 `select` support.
 
+## Actor-owned NIO wake handoff
+
+The native VM now has an **opt-in**, ABI-separate wake-capable constructor.
+The original `OresNativeVMConfig` layout and `ores_native_vm_open()`
+semantics remain unchanged; hosts that need continuation wake escrow supply
+`OresNativeVMWakeConfig` to `ores_native_vm_open_with_wakes()`.
+
+For an actor-owned one-shot readiness wait, the VM-NIO bridge uses this
+physical ownership sequence:
+
+1. reserve one generation-fenced scheduler wake for the exact producer actor;
+2. retain one exact ActorRef external-resource loan;
+3. admit the bounded epoll watch;
+4. consume READY/CANCELLED/STOPPED into the bounded actor NIO claim;
+5. TRANSFER the scheduler wake, which is the irreversible ownership handoff;
+6. release/free the NIO resource and FD claim, then drop the NIO claim mutex;
+7. PUBLISH READY/CANCELLED/FAILED so the continuation becomes runnable only
+   after the old FD claim is gone.
+
+A TRANSFERRED wake itself fences physical actor DONE, so step 6 introduces no
+lifetime gap. Publishing after the NIO claim is released is required: the actor
+wake may run immediately on another carrier and must be able to re-arm the same
+FD without racing the previous one-shot claim.
+
+If STOP wins before TRANSFER, transfer fails, the still-RESERVED wake is
+cancelled, the NIO resource loan is released, and no actor wake callback runs.
+If STOP wins after TRANSFER, scheduler publication consumes the transferred
+wake as `PRODUCER_RETIRED` without executing guest code. VM close joins the
+reactor first, cancels or aborts every remaining await wake, releases the NIO
+loans, and only then drains schedulers.
+
+This is **runtime suspension framing**, not source-level async I/O parity.
+Actor source handlers remain synchronous and the compiler still rejects general
+`async`/`suspends` I/O lowering. A later compiler slice must allocate and
+authenticate the continuation descriptors/code generations supplied to this
+bridge before a standard-library I/O operation may be admitted from Oreslang
+source.
+
 ## Test
 
 `native_continuation_ready_cancel_resume_race` verifies:
@@ -84,3 +122,35 @@ Native `select` additionally needs a single winner across *all* registered
 channel/timeout/cancel arms and losing-arm detachment; independently claiming
 one continuation per arm is not select correctness. Java/GraalVM ↔ LLVM
 source-execution fixtures and exact-head sanitizer evidence remain mandatory.
+
+
+## CLAIMED physical-pin retention and exact finish identity
+
+The native continuation store must not release the **last** pin of a
+`CLAIMED` continuation while its physical guest execution is active.
+When releasing a nested child cascades into a CLAIMED parent with just
+the protected physical pin remaining, child release succeeds without
+retiring that parent. The parent may release its final pin only after
+`finish_resume()` completes.
+
+`ores_native_await_trace_resume_finish()` also verifies that the passed
+suspension link's parent handle (including generation) and logical
+source ExecutionId match the persisted continuation record before
+transitioning CLAIMED to COMPLETED. A forged or stale link is not a
+completion authority; this bridge remains a runtime-internal API.
+
+The C11 regression `native_continuation_ready_cancel_resume_race`
+now checks an explicit last-pin refusal, a nested child release that
+preserves CLAIMED ancestry, forged parent-generation and ExecutionId
+completion rejection, successful original-link completion, and
+one-shot physical finish. These changes are forward-ported onto current
+LLVM main and do **not** replace the newer wake-commit or actor scheduler
+behavior already on main.
+
+**Evidence boundary:** This forward-port requires newly executed
+normal and ASan/UBSan native tests on its own exact commit. Prior green
+tests from a different branch/commit are not proof of these fixes.
+At authoring time, source-org Actions ran no job steps and
+`docs/security/CI_PRIVATE_SOURCE_MIRRORING.md` authorized no external
+private source destination. Do not substitute a cross-org mirror without
+the repository's protected-main security approvals.
