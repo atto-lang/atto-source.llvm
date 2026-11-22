@@ -1,0 +1,46 @@
+// A three-stage pipeline: main feeds the head, each stage owns the next, and the last checks it saw
+// everything in order. Stopping the head stops the rest, once each has drained.
+fnc next_in_order(int seen, int n): int {
+  if (n eq seen + 1) { return n; } fi
+  return 9223372036854775807 + n;
+}
+define actor Sink as {
+  let seen: int = 0;
+  pub fnc on_message(int n): int {
+    seen = next_in_order(seen, n);
+    return seen;
+  }
+}
+define actor Middle as {
+  const sink = spawn Sink();
+  let forwarded: int = 0;
+  pub fnc on_message(int n): int {
+    sink.send(n);
+    forwarded = forwarded + 1;
+    return forwarded;
+  }
+}
+define actor Head as {
+  const next: ActorRef<Middle> = spawn Middle();
+  let forwarded: int = 0;
+  pub fnc on_message(int n): int {
+    next.send(n);
+    forwarded = forwarded + 1;
+    return forwarded;
+  }
+}
+pub fnc main(): int {
+  const head = spawn Head();
+  head.send(1);
+  head.send(2);
+  head.send(3);
+  head.send(4);
+  head.send(5);
+  head.send(6);
+  head.send(7);
+  head.send(8);
+  head.send(9);
+  head.send(10);
+  stop head;
+  return 43;
+}

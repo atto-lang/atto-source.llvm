@@ -1,0 +1,11 @@
+// Java-compatible named function imports: single, list, alias, and a
+// mutually recursive cycle between two imported files.
+import fnc square from "./math";
+import fnc twice, is_even from "./math";
+import fnc is_odd as odd from "./parity";
+
+fnc main(): void {
+  stdio.stdout.println(square(6) + twice(3));
+  stdio.stdout.println(is_even(10) * 10 + odd(7));
+  return;
+}

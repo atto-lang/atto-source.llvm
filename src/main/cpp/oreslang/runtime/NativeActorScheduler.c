@@ -1,3 +1,7 @@
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+/* cpu_set_t, pthread_attr_setaffinity_np and sched_getcpu. */
+#define _GNU_SOURCE
+#endif
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
 #endif
@@ -11,6 +15,8 @@
 #include <stdlib.h>
 #include <limits.h>
 #include <stdatomic.h>
+#include <string.h>
+#include <time.h>
 #include <unistd.h>
 #ifdef ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE
 #include <errno.h>
@@ -31,9 +37,13 @@ typedef struct {
     OresNativeWakeOutcome outcome;
     WakeState state;
     uint64_t generation; /* never recycled at UINT64_MAX */
+    /* Runtime-authenticated source DATA-mail at WAKE reservation, 0 for
+     * outside-DATA and generic callback reservations. Never guest supplied. */
+    uint64_t originating_data_mail;
 } WakeCredit;
 typedef struct {
     uint64_t* messages; /* fixed ring, assigned at scheduler startup */
+    uint64_t* mail_sequences; /* monotonic admission ordinal per ring entry */
     size_t head, tail, queued;
     unsigned active;
     pthread_t carrier_owner; /* owning physical worker while active */
@@ -46,6 +56,7 @@ typedef struct {
     unsigned control_is_failure;
     unsigned spawned, retired;
     uint64_t generation;
+    uint64_t resource_loans; /* exact-incarnation external physical resources */
     uint64_t accepted_user_messages;
     uint64_t processed_user_messages;
     uint64_t abandoned_user_messages;
@@ -55,21 +66,54 @@ typedef struct {
     /* Stable actor-lifetime allocation capability, independent of turn ids. */
     OresNativeAllocationDomainRef allocation_domain;
     OresNativeExecutionAuthority authority;
+    /* Intrusive ready-queue links, one per turn class (see TURN_*). A lane is
+     * linked into class k exactly when it is idle and has class-k work, so a
+     * carrier finds its next turn in O(1) instead of scanning every lane. */
+    uint32_t rq_next[3], rq_prev[3];
+    unsigned char rq_in[3];
 } ActorLane;
+/* Turn classes double as the dispatch `kind` and as ready-queue indexes.
+ * Supervisor CONTROL outranks WAKE which outranks DATA. */
+enum { TURN_DATA = 0, TURN_WAKE = 1, TURN_CONTROL = 2, TURN_CLASSES = 3 };
+#define RQ_NIL UINT32_MAX
+enum { MAX_CARRIERS = 128, MAX_IDLE_SPIN_NS = 1000000 };
+typedef struct {
+    OresNativeActorScheduler* scheduler;
+    size_t index;
+    /* Set by the carrier itself after reading back its OS affinity. */
+    int affinity_observed;
+} CarrierSlot;
 struct OresNativeActorScheduler {
     pthread_mutex_t lock;
     pthread_cond_t ready;
     pthread_cond_t drained;
     ActorLane* actors;
     uint64_t* slots;
+    uint64_t* sequence_slots;
     WakeCredit* wake_slots;
     pthread_t* threads;
+    CarrierSlot* carrier_slots;
     size_t actor_count, per_actor_capacity, worker_count, started_workers;
-    size_t next_actor, outstanding, runnable_lanes;
+    size_t outstanding, runnable_lanes;
+    uint32_t rq_head[TURN_CLASSES], rq_tail[TURN_CLASSES];
+    /* Carriers parked in pthread_cond_wait(ready) / busy-polling work_epoch.
+     * Both change only under `lock`, which is what makes skipping a signal
+     * safe: a producer that sees a spinner knows it will re-check under the
+     * lock before it can park. */
+    size_t idle_waiters, spinners;
+    size_t carriers_checked_in; /* carriers that reached their run loop */
+    /* Bumped (under lock) whenever new work or a lifecycle change may need a
+     * carrier. Spinning carriers read it without the lock. */
+    _Atomic uint64_t work_epoch;
+    uint32_t idle_spin_ns; /* bootstrap-only; 0 = park immediately */
+    int cpu_affinity_configured;
+    size_t cpu_count;
+    uint32_t cpus[MAX_CARRIERS];
     uint64_t domain;
     uint64_t next_execution;
     uint64_t reserved_executions;
     uint64_t reserved_wakes; /* future accepted/execution credits */
+    uint64_t resource_loans; /* external resources across all actor lanes */
     uint64_t accepted, rejected, completed, control_completed, wakes_completed;
     int retired;
     int priority_inheritance_enabled;
@@ -86,8 +130,10 @@ struct OresNativeActorScheduler {
 static _Thread_local OresNativeActorScheduler* executing;
 static _Thread_local OresNativeActorRef executing_actor;
 static _Thread_local OresExecutionClaim executing_claim;
+static _Thread_local uint64_t executing_data_mail_sequence;
 static _Thread_local OresNativeExecutionContext executing_context;
 static _Thread_local OresNativeWakeTicket executing_wake;
+static _Thread_local OresNativeWakeOutcome executing_wake_outcome;
 static _Thread_local int executing_wake_valid;
 static _Thread_local int carrier_identity;
 static _Atomic(uint64_t) next_scheduler_domain = 1;
@@ -114,9 +160,20 @@ void ores_native_actor_scheduler_test_set_next_domain(uint64_t value) {
 }
 #endif
 
-static int init_scheduler_mutex(OresNativeActorScheduler* s) {
+static int init_scheduler_mutex(OresNativeActorScheduler* s,
+        OresNativeSchedulerLockProtocol protocol) {
     pthread_mutexattr_t attr;
     int attr_ready = pthread_mutexattr_init(&attr) == 0;
+    if (attr_ready && protocol == ORES_NATIVE_SCHEDULER_LOCK_THROUGHPUT) {
+        /* Explicitly no PI: a contended PI mutex always enters the kernel. */
+#if defined(__GLIBC__) && defined(PTHREAD_ADAPTIVE_MUTEX_INITIALIZER_NP)
+        (void)pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_ADAPTIVE_NP);
+#endif
+        s->priority_inheritance_enabled = 0;
+        const int ok = pthread_mutex_init(&s->lock, &attr) == 0;
+        if (pthread_mutexattr_destroy(&attr) != 0) abort();
+        return ok;
+    }
     if (attr_ready) {
 #if defined(_POSIX_THREAD_PRIO_INHERIT) && _POSIX_THREAD_PRIO_INHERIT >= 0
         if (pthread_mutexattr_setprotocol(&attr, PTHREAD_PRIO_INHERIT) == 0
@@ -144,7 +201,7 @@ static void publish_terminal_locked(
     ActorLane* lane = &s->actors[actor_index];
     if (!lane->spawned || lane->terminal_valid
             || !lane->retired || lane->active || lane->queued || lane->has_control
-            || lane->wake_live || lane->wake_ready)
+            || lane->wake_live || lane->wake_ready || lane->resource_loans)
         return;
     if (ores_execution_phase(&lane->authority) != ORES_EXEC_TERMINATED)
         return;
@@ -181,46 +238,155 @@ int ores_native_actor_scheduler_test_set_next_execution(
     return ok;
 }
 #endif
-/* Supervisor CONTROL outranks WAKE which outranks DATA. */
+static int lane_has_work(const ActorLane* lane) {
+    return lane->queued || lane->has_control || lane->wake_ready;
+}
+static int lane_wants_class(const ActorLane* lane, int k) {
+    if (lane->active) return 0;
+    return k == TURN_CONTROL ? lane->has_control != 0
+         : k == TURN_WAKE ? lane->wake_ready != 0
+         : lane->queued != 0;
+}
+static void rq_push_locked(OresNativeActorScheduler* s, size_t i, int k) {
+    ActorLane* lane = &s->actors[i];
+    if (lane->rq_in[k]) abort();
+    lane->rq_next[k] = RQ_NIL;
+    lane->rq_prev[k] = s->rq_tail[k];
+    if (s->rq_tail[k] == RQ_NIL) s->rq_head[k] = (uint32_t)i;
+    else s->actors[s->rq_tail[k]].rq_next[k] = (uint32_t)i;
+    s->rq_tail[k] = (uint32_t)i;
+    lane->rq_in[k] = 1;
+}
+static void rq_remove_locked(OresNativeActorScheduler* s, size_t i, int k) {
+    ActorLane* lane = &s->actors[i];
+    if (!lane->rq_in[k]) abort();
+    if (lane->rq_prev[k] == RQ_NIL) s->rq_head[k] = lane->rq_next[k];
+    else s->actors[lane->rq_prev[k]].rq_next[k] = lane->rq_next[k];
+    if (lane->rq_next[k] == RQ_NIL) s->rq_tail[k] = lane->rq_prev[k];
+    else s->actors[lane->rq_next[k]].rq_prev[k] = lane->rq_prev[k];
+    lane->rq_next[k] = lane->rq_prev[k] = RQ_NIL;
+    lane->rq_in[k] = 0;
+}
+/* Re-derive lane i's ready-queue membership from its state. Call after any
+ * change to active/queued/has_control/wake_ready. Returns 1 when the lane
+ * became newly runnable in some class (a carrier may need waking). Newly
+ * runnable lanes join at the tail, which gives round-robin fairness. */
+static int rq_sync_locked(OresNativeActorScheduler* s, size_t i) {
+    ActorLane* lane = &s->actors[i];
+    int added = 0;
+    for (int k = 0; k < TURN_CLASSES; ++k) {
+        const int want = lane_wants_class(lane, k);
+        if (want && !lane->rq_in[k]) {
+            rq_push_locked(s, i, k);
+            added = 1;
+        } else if (!want && lane->rq_in[k]) {
+            rq_remove_locked(s, i, k);
+        }
+    }
+    return added;
+}
+static int rq_any_locked(const OresNativeActorScheduler* s) {
+    return s->rq_head[TURN_CONTROL] != RQ_NIL
+        || s->rq_head[TURN_WAKE] != RQ_NIL
+        || s->rq_head[TURN_DATA] != RQ_NIL;
+}
+#ifdef ORESLANG_NATIVE_SCHED_VALIDATE
+/* Test-only O(N) cross-check that every queue matches lane state exactly. */
+static void rq_validate_locked(OresNativeActorScheduler* s) {
+    for (int k = 0; k < TURN_CLASSES; ++k) {
+        size_t linked = 0;
+        uint32_t prev = RQ_NIL;
+        for (uint32_t i = s->rq_head[k]; i != RQ_NIL; i = s->actors[i].rq_next[k]) {
+            if (i >= s->actor_count || !s->actors[i].rq_in[k]
+                    || s->actors[i].rq_prev[k] != prev
+                    || ++linked > s->actor_count)
+                abort();
+            prev = i;
+        }
+        if (s->rq_tail[k] != prev) abort();
+        size_t wanted = 0;
+        for (size_t i = 0; i < s->actor_count; ++i) {
+            const ActorLane* lane = &s->actors[i];
+            if (!!lane->active != !!lane->carrier_owner_valid) abort();
+            if (lane_wants_class(lane, k) != lane->rq_in[k]) abort();
+            wanted += lane->rq_in[k];
+        }
+        if (wanted != linked) abort();
+    }
+}
+#define RQ_VALIDATE(s) rq_validate_locked(s)
+#else
+#define RQ_VALIDATE(s) ((void)0)
+#endif
+/* Signal at most one parked carrier for new runnable work. A spinning
+ * carrier sees the epoch bump and takes the work without a kernel wake. */
+static void wake_one_locked(OresNativeActorScheduler* s) {
+    atomic_fetch_add_explicit(&s->work_epoch, 1, memory_order_release);
+    if (s->spinners == 0 && s->idle_waiters > 0
+            && pthread_cond_signal(&s->ready) != 0)
+        abort();
+}
+/* Lifecycle/gate changes every carrier must observe. */
+static void wake_all_locked(OresNativeActorScheduler* s) {
+    atomic_fetch_add_explicit(&s->work_epoch, 1, memory_order_release);
+    if (pthread_cond_broadcast(&s->ready) != 0) abort();
+}
+/* O(1): supervisor CONTROL outranks WAKE which outranks DATA. A carrier gets
+ * two consecutive DATA turns on its most recent actor (warm cache) before
+ * the head of the DATA queue gets priority. */
 static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* kind,
         size_t recent_actor, unsigned consecutive) {
-    for (int pass = 2; pass >= 1; --pass) {
-        for (size_t offset = 0; offset < s->actor_count; ++offset) {
-            size_t i = (s->next_actor + offset) % s->actor_count;
-            ActorLane* lane = &s->actors[i];
-            if (!!lane->active != !!lane->carrier_owner_valid) abort();
-            if (!lane->active
-                    && (pass == 2 ? lane->has_control : lane->wake_ready)) {
-                *actor = i;
-                *kind = pass;
-                s->next_actor = (i + 1) % s->actor_count;
-                return 1;
-            }
-        }
+    if (s->rq_head[TURN_CONTROL] != RQ_NIL) {
+        *actor = s->rq_head[TURN_CONTROL]; *kind = TURN_CONTROL;
+        return 1;
+    }
+    if (s->rq_head[TURN_WAKE] != RQ_NIL) {
+        *actor = s->rq_head[TURN_WAKE]; *kind = TURN_WAKE;
+        return 1;
     }
     if (recent_actor < s->actor_count && consecutive < 2
             && !s->actors[recent_actor].active
             && s->actors[recent_actor].queued) {
-        *actor = recent_actor; *kind = 0;
-        s->next_actor = (recent_actor + 1) % s->actor_count;
+        *actor = recent_actor; *kind = TURN_DATA;
         return 1;
     }
-    for (size_t offset = 0; offset < s->actor_count; ++offset) {
-        size_t i = (s->next_actor + offset) % s->actor_count;
-        if (!s->actors[i].active && s->actors[i].queued) {
-            *actor = i; *kind = 0;
-            s->next_actor = (i + 1) % s->actor_count;
-            return 1;
-        }
+    if (s->rq_head[TURN_DATA] != RQ_NIL) {
+        *actor = s->rq_head[TURN_DATA]; *kind = TURN_DATA;
+        return 1;
     }
     return 0;
 }
-static int lane_has_work(const ActorLane* lane) {
-    return lane->queued || lane->has_control || lane->wake_ready;
+static inline void cpu_relax(void) {
+#if defined(__x86_64__) || defined(__i386__)
+    __builtin_ia32_pause();
+#elif defined(__aarch64__)
+    __asm__ __volatile__("yield" ::: "memory");
+#else
+    atomic_signal_fence(memory_order_seq_cst);
+#endif
+}
+static uint64_t monotonic_ns(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) abort();
+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+/* Busy-poll the work epoch for at most budget_ns without holding the lock.
+ * Bounded by construction: a spinning carrier always parks afterwards. */
+static void spin_for_work(OresNativeActorScheduler* s, uint64_t epoch,
+        uint32_t budget_ns) {
+    const uint64_t deadline = monotonic_ns() + budget_ns;
+    for (unsigned n = 1;; ++n) {
+        if (atomic_load_explicit(&s->work_epoch, memory_order_acquire) != epoch)
+            return;
+        cpu_relax();
+        /* Read the clock only every 64 polls; it costs more than a poll. */
+        if ((n & 63u) == 0 && monotonic_ns() >= deadline) return;
+    }
 }
 static void maybe_finish_stopped_locked(OresNativeActorScheduler* s, size_t i) {
     ActorLane* lane = &s->actors[i];
-    if (!lane->retired || lane->active || lane_has_work(lane) || lane->wake_live)
+    if (!lane->retired || lane->active || lane_has_work(lane)
+            || lane->wake_live || lane->resource_loans)
         return;
     if (ores_execution_phase(&lane->authority) == ORES_EXEC_STOPPING
             && !ores_execution_retired(&lane->authority, lane->generation))
@@ -238,17 +404,45 @@ static void release_wake_locked(OresNativeActorScheduler* s,
     --lane->wake_live;
     credit->state = WAKE_EMPTY;
     credit->ticket = (OresNativeWakeTicket){0};
+    credit->originating_data_mail = 0;
     maybe_finish_stopped_locked(s, i);
 }
+/* Read back this carrier's OS affinity: a successful pthread_attr call is
+ * not evidence (docs/HUNGRY_ACTOR_AUDIT.md). True only when the thread is
+ * restricted to exactly its configured CPU and is currently running on it. */
+static int observe_carrier_affinity(const OresNativeActorScheduler* s,
+        size_t index) {
+#if defined(__linux__)
+    if (!s->cpu_affinity_configured || !s->cpu_count) return 0;
+    const uint32_t want = s->cpus[index % s->cpu_count];
+    cpu_set_t actual;
+    CPU_ZERO(&actual);
+    if (pthread_getaffinity_np(pthread_self(), sizeof(actual), &actual) != 0)
+        return 0;
+    return CPU_COUNT(&actual) == 1 && CPU_ISSET(want, &actual)
+        && sched_getcpu() == (int)want;
+#else
+    (void)s; (void)index;
+    return 0;
+#endif
+}
 static void* carrier(void* raw) {
-    OresNativeActorScheduler* s = (OresNativeActorScheduler*)raw;
+    CarrierSlot* slot = (CarrierSlot*)raw;
+    OresNativeActorScheduler* s = slot->scheduler;
     size_t recent_actor = SIZE_MAX;
     unsigned consecutive = 0;
+    const int affinity_observed = observe_carrier_affinity(s, slot->index);
+    /* The lock is held at the top of every iteration: a finished turn's
+     * bookkeeping and the next dispatch share one critical section. */
+    lock(s);
+    slot->affinity_observed = affinity_observed;
+    ++s->carriers_checked_in;
+    pthread_cond_broadcast(&s->drained); /* prestart waits for check-in */
     for (;;) {
-        lock(s);
         size_t i = 0;
         int kind = 0;
         int gate_held = 0;
+        int spun = 0;
         for (;;) {
             int found = find_ready(s, &i, &kind, recent_actor, consecutive);
             if (found && (!s->physical_turn_gate
@@ -269,6 +463,22 @@ static void* carrier(void* raw) {
              * cond_wait has atomically released it. */
             OresNativePhysicalTurnGate* gate = s->physical_turn_gate;
             const int waiting_on_gate = found && gate != NULL;
+            if (!waiting_on_gate && s->idle_spin_ns && !spun) {
+                /* Bounded busy-poll before parking: a handoff that lands
+                 * within the budget costs a cache-line transfer instead of a
+                 * kernel sleep + wake. Producers skip the cond signal while a
+                 * spinner exists, which is safe because every decision below
+                 * is re-made under the lock before this carrier can park. */
+                const uint64_t epoch =
+                    atomic_load_explicit(&s->work_epoch, memory_order_acquire);
+                ++s->spinners;
+                unlock(s);
+                spin_for_work(s, epoch, s->idle_spin_ns);
+                lock(s);
+                --s->spinners;
+                spun = 1;
+                continue;
+            }
             if (waiting_on_gate) {
                 atomic_fetch_add_explicit(&gate->waiting, 1, memory_order_acq_rel);
                 if (ores_native_turn_gate_try_acquire(gate)) {
@@ -277,27 +487,31 @@ static void* carrier(void* raw) {
                     break;
                 }
             }
+            ++s->idle_waiters;
             if (pthread_cond_wait(&s->ready, &s->lock) != 0) abort();
+            --s->idle_waiters;
+            spun = 0;
             if (waiting_on_gate) {
                 atomic_fetch_sub_explicit(&gate->waiting, 1, memory_order_acq_rel);
             }
         }
-        consecutive = (i == recent_actor && kind == 0)
+        consecutive = (i == recent_actor && kind == TURN_DATA)
                 ? (consecutive < 2 ? consecutive + 1 : 2) : 1;
         recent_actor = i;
         ActorLane* lane = &s->actors[i];
         uint64_t payload = 0;
+        uint64_t original_mail_sequence = 0;
         OresNativeActorTerminalFailure failure = {0};
         OresNativeWakeTicket wake_ticket = {0};
         OresNativeWakeOutcome wake_outcome = ORES_NATIVE_WAKE_FAILED;
         WakeCredit* active_wake = NULL;
-        int typed_failure = kind == 2 && lane->control_is_failure;
-        if (kind == 2) {
+        int typed_failure = kind == TURN_CONTROL && lane->control_is_failure;
+        if (kind == TURN_CONTROL) {
             payload = lane->control_payload;
             if (typed_failure) failure = lane->failure;
             lane->control_is_failure = 0;
             lane->has_control = 0;
-        } else if (kind == 1) {
+        } else if (kind == TURN_WAKE) {
             for (size_t offset = 0; offset < ORES_NATIVE_WAKE_CREDITS_PER_ACTOR; ++offset) {
                 size_t w = (lane->wake_cursor + offset)
                     % ORES_NATIVE_WAKE_CREDITS_PER_ACTOR;
@@ -315,7 +529,9 @@ static void* carrier(void* raw) {
             --lane->wake_ready;
         } else {
             payload = lane->messages[lane->head];
-            lane->head = (lane->head + 1) % s->per_actor_capacity;
+            original_mail_sequence = lane->mail_sequences[lane->head];
+            if (!original_mail_sequence) abort();
+            if (++lane->head == s->per_actor_capacity) lane->head = 0;
             lane->queued--;
         }
         if (lane->active || lane->carrier_owner_valid) abort();
@@ -332,11 +548,18 @@ static void* carrier(void* raw) {
         lane->active = 1;
         lane->carrier_owner = pthread_self();
         lane->carrier_owner_valid = 1;
+        /* An active lane leaves every ready queue until its turn completes. */
+        rq_sync_locked(s, i);
+        RQ_VALIDATE(s);
+        /* Chain wake: if other lanes are still runnable, make sure another
+         * carrier is coming for them instead of waiting for this turn. */
+        if (rq_any_locked(s)) wake_one_locked(s);
         unlock(s);
 
         // Actor identity is authorized only by the physical execution claim.
         executing_actor = (OresNativeActorRef){s->domain, (uint64_t)i, lane->generation};
         executing_claim = execution_claim;
+        executing_data_mail_sequence = kind == TURN_DATA ? original_mail_sequence : 0;
         executing_context = (OresNativeExecutionContext){
             .id = {s->domain, execution_id},
             .allocation = lane->allocation_domain,
@@ -344,16 +567,20 @@ static void* carrier(void* raw) {
             .continuation = {0, 0}
         };
         executing = s;
-        executing_wake_valid = kind == 1;
+        executing_wake_valid = kind == TURN_WAKE;
         executing_wake = wake_ticket;
+        executing_wake_outcome = kind == TURN_WAKE
+                ? wake_outcome : ORES_NATIVE_WAKE_FAILED;
         if (typed_failure) s->panic_callback(s->context, i, failure);
         else if (kind == 2) s->control_callback(s->context, i, payload);
         else if (kind == 1) s->wake_callback(s->context, i, wake_ticket, wake_outcome);
         else s->callback(s->context, i, payload);
         executing_wake_valid = 0;
         executing_wake = (OresNativeWakeTicket){0};
+        executing_wake_outcome = ORES_NATIVE_WAKE_FAILED;
         executing_actor = (OresNativeActorRef){0, 0, 0};
         executing_claim = (OresExecutionClaim){0};
+        executing_data_mail_sequence = 0;
         executing_context = (OresNativeExecutionContext){0};
         executing = NULL;
 
@@ -365,14 +592,17 @@ static void* carrier(void* raw) {
          * keep lane.active/outstanding until the gate has completed its
          * cross-domain wakeup. Otherwise drain() may report quiescence and
          * the VM may destroy a scheduler while a gate-release callback is
-         * still trying to signal that scheduler. */
+         * still trying to signal that scheduler. Without a gate there is
+         * nothing to release, so the turn finishes in this same section. */
         if (!ores_execution_leave(&lane->authority, execution_claim, 0)) abort();
-        unlock(s);
-        if (gate_held) ores_native_turn_gate_release(s->physical_turn_gate);
-        lock(s);
-        if (!lane->active || !lane->carrier_owner_valid
-            || !pthread_equal(lane->carrier_owner, pthread_self())
-            || !s->outstanding || s->completed == UINT64_MAX) abort();
+        if (gate_held) {
+            unlock(s);
+            ores_native_turn_gate_release(s->physical_turn_gate);
+            lock(s);
+            if (!lane->active || !lane->carrier_owner_valid
+                || !pthread_equal(lane->carrier_owner, pthread_self())
+                || !s->outstanding || s->completed == UINT64_MAX) abort();
+        }
         lane->active = 0;
         lane->carrier_owner_valid = 0;
         s->outstanding--;
@@ -386,6 +616,7 @@ static void* carrier(void* raw) {
                 abort();
             active_wake->state = WAKE_EMPTY;
             active_wake->ticket = (OresNativeWakeTicket){0};
+            active_wake->originating_data_mail = 0;
             --lane->wake_live;
             ++s->wakes_completed;
         }
@@ -395,14 +626,18 @@ static void* carrier(void* raw) {
             if (!s->runnable_lanes) abort();
             --s->runnable_lanes;
         }
-        if (kind == 2) ++s->control_completed;
-        if (lane_has_work(lane)) pthread_cond_signal(&s->ready);
+        if (kind == TURN_CONTROL) ++s->control_completed;
+        /* Requeue at the tail if the lane still has work. No signal: this
+         * carrier is about to look for its next turn itself, and the chain
+         * wake at dispatch brings in another carrier for anything left. */
+        rq_sync_locked(s, i);
+        RQ_VALIDATE(s);
         maybe_finish_stopped_locked(s, i);
         if (!s->outstanding) {
             pthread_cond_broadcast(&s->drained);
-            if (s->retired) pthread_cond_broadcast(&s->ready);
+            if (s->retired) wake_all_locked(s);
         }
-        unlock(s);
+        /* Keep the lock: loop straight into the next dispatch. */
     }
 }
 OresNativeActorScheduler* ores_native_actor_scheduler_open_with_wakes(
@@ -410,20 +645,53 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_with_wakes(
     OresNativeActorTaskFn callback, OresNativeActorTaskFn control_callback,
     OresNativeActorPanicFn panic_callback, OresNativeActorWakeFn wake_callback,
     void* ctx) {
-    if (!callback || !actors || actors > 1024 || !capacity || capacity > 65536
-        || !workers || workers > 128 || actors > SIZE_MAX / capacity)
+    const OresNativeActorSchedulerOptions options = {
+        .actor_count = actors, .per_actor_capacity = capacity, .workers = workers,
+        .on_message = callback, .on_control = control_callback,
+        .on_panic = panic_callback, .on_wake = wake_callback, .ctx = ctx,
+        .lock_protocol = ORES_NATIVE_SCHEDULER_LOCK_PRIORITY_INHERIT,
+    };
+    return ores_native_actor_scheduler_open_with_options(&options);
+}
+OresNativeActorScheduler* ores_native_actor_scheduler_open_with_options(
+    const OresNativeActorSchedulerOptions* options) {
+    if (!options) return NULL;
+    const size_t actors = options->actor_count;
+    const size_t capacity = options->per_actor_capacity;
+    const size_t workers = options->workers;
+    OresNativeActorTaskFn callback = options->on_message;
+    OresNativeActorTaskFn control_callback = options->on_control;
+    OresNativeActorPanicFn panic_callback = options->on_panic;
+    OresNativeActorWakeFn wake_callback = options->on_wake;
+    void* ctx = options->ctx;
+    const OresNativeSchedulerLockProtocol protocol = options->lock_protocol;
+    if (protocol != ORES_NATIVE_SCHEDULER_LOCK_PRIORITY_INHERIT
+            && protocol != ORES_NATIVE_SCHEDULER_LOCK_THROUGHPUT)
+        return NULL;
+    if (!callback || !actors || actors > ORES_NATIVE_SCHEDULER_MAX_ACTORS
+        || actors > SIZE_MAX / ORES_NATIVE_WAKE_CREDITS_PER_ACTOR
+        || !capacity || capacity > 65536
+        || !workers || workers > MAX_CARRIERS || actors > SIZE_MAX / capacity)
         return NULL;
     OresNativeActorScheduler* s = (OresNativeActorScheduler*)calloc(1, sizeof(*s));
     if (!s) return NULL;
     size_t initialized = 0;
     s->actors = (ActorLane*)calloc(actors, sizeof(ActorLane));
     s->slots = (uint64_t*)calloc(actors * capacity, sizeof(uint64_t));
+    s->sequence_slots = (uint64_t*)calloc(actors * capacity, sizeof(uint64_t));
     if (wake_callback) s->wake_slots = (WakeCredit*)calloc(
         actors * ORES_NATIVE_WAKE_CREDITS_PER_ACTOR, sizeof(WakeCredit));
     s->threads = (pthread_t*)calloc(workers, sizeof(pthread_t));
-    if (!s->actors || !s->slots || (wake_callback && !s->wake_slots)
-            || !s->threads)
+    s->carrier_slots = (CarrierSlot*)calloc(workers, sizeof(CarrierSlot));
+    if (!s->actors || !s->slots || !s->sequence_slots
+            || (wake_callback && !s->wake_slots)
+            || !s->threads || !s->carrier_slots)
         goto allocation_failed;
+    for (size_t w = 0; w < workers; ++w)
+        s->carrier_slots[w] = (CarrierSlot){ .scheduler = s, .index = w };
+    for (int k = 0; k < TURN_CLASSES; ++k)
+        s->rq_head[k] = s->rq_tail[k] = RQ_NIL;
+    atomic_init(&s->work_epoch, 0);
     s->domain = allocate_scheduler_domain();
     if (!s->domain) goto allocation_failed;
     s->actor_count = actors;
@@ -436,13 +704,16 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_with_wakes(
     s->wake_callback = wake_callback;
     s->context = ctx;
     for (size_t i = 0; i < actors; ++i) {
+        for (int k = 0; k < TURN_CLASSES; ++k)
+            s->actors[i].rq_next[k] = s->actors[i].rq_prev[k] = RQ_NIL;
         s->actors[i].messages = s->slots + i * capacity;
+        s->actors[i].mail_sequences = s->sequence_slots + i * capacity;
         s->actors[i].wakes = wake_callback
             ? s->wake_slots + i * ORES_NATIVE_WAKE_CREDITS_PER_ACTOR : NULL;
         if (!ores_execution_init(&s->actors[i].authority)) goto allocation_failed;
         ++initialized;
     }
-    if (!init_scheduler_mutex(s)) goto allocation_failed;
+    if (!init_scheduler_mutex(s, protocol)) goto allocation_failed;
     if (pthread_cond_init(&s->ready, NULL) != 0) {
         pthread_mutex_destroy(&s->lock);
         goto allocation_failed;
@@ -457,8 +728,10 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_with_wakes(
 allocation_failed:
     for (size_t i = 0; i < initialized; ++i)
         if (!ores_execution_destroy(&s->actors[i].authority)) abort();
+    free(s->carrier_slots);
     free(s->threads);
     free(s->slots);
+    free(s->sequence_slots);
     free(s->wake_slots);
     free(s->actors);
     free(s);
@@ -507,20 +780,33 @@ static int create_carrier(pthread_t* tid, void* context) {
             &fail_next_carrier_create, 0, memory_order_relaxed))
         return EAGAIN;
 #endif
-    OresNativeActorScheduler* s = (OresNativeActorScheduler*)context;
-    if (!s->explicit_carrier_policy)
+    CarrierSlot* slot = (CarrierSlot*)context;
+    OresNativeActorScheduler* s = slot->scheduler;
+    if (!s->explicit_carrier_policy && !s->cpu_affinity_configured)
         return pthread_create(tid, NULL, carrier, context);
 
     pthread_attr_t attr;
     int rc = pthread_attr_init(&attr);
     if (rc != 0) return rc;
-    rc = pthread_attr_setinheritsched(&attr, PTHREAD_EXPLICIT_SCHED);
-    if (rc == 0) rc = pthread_attr_setschedpolicy(&attr, s->carrier_policy);
-    if (rc == 0) {
-        struct sched_param param = {0};
-        param.sched_priority = s->carrier_priority;
-        rc = pthread_attr_setschedparam(&attr, &param);
+    if (s->explicit_carrier_policy) {
+        rc = pthread_attr_setinheritsched(&attr, PTHREAD_EXPLICIT_SCHED);
+        if (rc == 0) rc = pthread_attr_setschedpolicy(&attr, s->carrier_policy);
+        if (rc == 0) {
+            struct sched_param param = {0};
+            param.sched_priority = s->carrier_priority;
+            rc = pthread_attr_setschedparam(&attr, &param);
+        }
     }
+#if defined(__linux__)
+    /* Pin in the attributes, not after start: the carrier never executes an
+     * instruction (or takes a turn) on a CPU outside its reservation. */
+    if (rc == 0 && s->cpu_affinity_configured) {
+        cpu_set_t set;
+        CPU_ZERO(&set);
+        CPU_SET(s->cpus[slot->index % s->cpu_count], &set);
+        rc = pthread_attr_setaffinity_np(&attr, sizeof(set), &set);
+    }
+#endif
     if (rc == 0) rc = pthread_create(tid, &attr, carrier, context);
     if (pthread_attr_destroy(&attr) != 0) abort();
     return rc;
@@ -537,7 +823,8 @@ static int execution_slot_available_locked(OresNativeActorScheduler* s) {
 static int ensure_workers_locked(OresNativeActorScheduler* s, size_t required) {
     if (required > s->worker_count) required = s->worker_count;
     while (s->started_workers < required) {
-        if (create_carrier(&s->threads[s->started_workers], s) != 0)
+        if (create_carrier(&s->threads[s->started_workers],
+                &s->carrier_slots[s->started_workers]) != 0)
             break;
         ++s->started_workers;
     }
@@ -565,6 +852,59 @@ int ores_native_actor_scheduler_configure_fifo(
     unlock(s);
     return pristine;
 }
+/* Bootstrap-only knobs share configure_fifo's rule: no carrier and no
+ * admitted work may exist yet, so carriers read them without the lock. */
+static int pristine_locked(const OresNativeActorScheduler* s) {
+    return !s->retired && s->started_workers == 0
+        && s->accepted == 0 && s->outstanding == 0 && s->runnable_lanes == 0;
+}
+int ores_native_actor_scheduler_configure_idle_spin(
+        OresNativeActorScheduler* s, uint32_t spin_ns) {
+    if (!s || executing == s || spin_ns > MAX_IDLE_SPIN_NS) return 0;
+    lock(s);
+    const int ok = pristine_locked(s);
+    if (ok) s->idle_spin_ns = spin_ns;
+    unlock(s);
+    return ok;
+}
+int ores_native_actor_scheduler_configure_cpu_affinity(
+        OresNativeActorScheduler* s, const uint32_t* cpus, size_t count) {
+    if (!s || executing == s || !cpus || !count || count > MAX_CARRIERS)
+        return 0;
+#if defined(__linux__)
+    /* Every CPU must be one this process may already run on; asking for a
+     * CPU outside the cpuset would fail at pthread_create (or worse, be
+     * silently widened by a container runtime). */
+    cpu_set_t allowed;
+    CPU_ZERO(&allowed);
+    if (sched_getaffinity(0, sizeof(allowed), &allowed) != 0) return 0;
+    for (size_t i = 0; i < count; ++i)
+        if (cpus[i] >= CPU_SETSIZE || !CPU_ISSET(cpus[i], &allowed)) return 0;
+    lock(s);
+    const int ok = pristine_locked(s);
+    if (ok) {
+        memcpy(s->cpus, cpus, count * sizeof(*cpus));
+        s->cpu_count = count;
+        s->cpu_affinity_configured = 1;
+    }
+    unlock(s);
+    return ok;
+#else
+    /* No hard thread affinity on this OS: fail closed rather than pretend. */
+    return 0;
+#endif
+}
+int ores_native_actor_scheduler_cpu_affinity_observed(
+        OresNativeActorScheduler* s) {
+    if (!s) return 0;
+    lock(s);
+    int ok = s->cpu_affinity_configured
+        && s->started_workers == s->worker_count;
+    for (size_t w = 0; ok && w < s->started_workers; ++w)
+        ok = s->carrier_slots[w].affinity_observed;
+    unlock(s);
+    return ok;
+}
 int ores_native_actor_scheduler_fifo_carriers_ready(
         OresNativeActorScheduler* s) {
     if (!s) return 0;
@@ -586,6 +926,10 @@ int ores_native_actor_scheduler_prestart_carriers(
     int pristine = !s->retired && s->accepted == 0
         && s->outstanding == 0 && s->runnable_lanes == 0;
     int ok = pristine && ensure_workers_locked(s, s->worker_count);
+    /* Return only once every carrier is in its run loop, so the first
+     * admission never races thread start-up and affinity has been observed. */
+    while (ok && s->carriers_checked_in < s->started_workers)
+        if (pthread_cond_wait(&s->drained, &s->lock) != 0) abort();
     unlock(s);
     return ok;
 }
@@ -615,6 +959,7 @@ int ores_native_actor_scheduler_priority_inheritance_enabled(
 static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payload) {
     if (s->retired || i >= s->actor_count
         || !s->actors[i].spawned || s->actors[i].retired
+        || s->actors[i].accepted_user_messages == UINT64_MAX
         || s->actors[i].queued + s->actors[i].active >= s->per_actor_capacity
         || s->accepted >= UINT64_MAX - s->reserved_wakes
         || !execution_slot_available_locked(s)) {
@@ -628,15 +973,23 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
         return 0;
     }
     if (new_lane) ++s->runnable_lanes;
+    /* The source-mail ordinal is minted at SUCCESSFUL enqueue, not inferred
+     * from payload, carrier, or the number of completed callbacks. The pair
+     * lives in parallel preallocated ring slots and cannot be reassigned by a
+     * producer's Future completion or a guest-supplied token. */
+    const uint64_t admitted_sequence = a->accepted_user_messages + UINT64_C(1);
     a->messages[a->tail] = payload;
-    a->tail = (a->tail + 1) % s->per_actor_capacity;
+    a->mail_sequences[a->tail] = admitted_sequence;
+    if (++a->tail == s->per_actor_capacity) a->tail = 0;
     a->queued++;
-    if (a->accepted_user_messages == UINT64_MAX) abort();
-    ++a->accepted_user_messages;
+    a->accepted_user_messages = admitted_sequence;
     s->reserved_executions++;
     s->accepted++;
     s->outstanding++;
-    pthread_cond_signal(&s->ready);
+    /* Only a lane that just became runnable needs a carrier. Mail for an
+     * active or already-queued lane is picked up by whoever runs it next. */
+    if (rq_sync_locked(s, i)) wake_one_locked(s);
+    RQ_VALIDATE(s);
     return 1;
 }
 int ores_native_actor_scheduler_configure_turn_gate(
@@ -655,7 +1008,7 @@ void ores_native_actor_scheduler_signal_turn_gate(OresNativeActorScheduler* s) {
     lock(s);
     /* Retirement still drains already admitted mail and must receive the
      * last permit-release wake rather than parking its final worker. */
-    pthread_cond_broadcast(&s->ready);
+    wake_all_locked(s);
     unlock(s);
 }
 
@@ -693,7 +1046,8 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send(
         ActorLane* lane = &s->actors[actor.actor_slot];
         if (s->retired || lane->retired) {
             status = ORES_NATIVE_SEND_TERMINATED;
-        } else if (lane->queued + lane->active >= s->per_actor_capacity) {
+        } else if (lane->accepted_user_messages == UINT64_MAX
+                || lane->queued + lane->active >= s->per_actor_capacity) {
             status = ORES_NATIVE_SEND_MAILBOX_FULL;
         } else if (s->accepted >= UINT64_MAX - s->reserved_wakes
                 || !execution_slot_available_locked(s)) {
@@ -796,6 +1150,15 @@ int ores_native_actor_scheduler_reserve_wake(
     }
     if (ok) {
         ++w->generation;
+        /* Scheduler->authority lock order. A producer thread, CONTROL or
+         * WAKE callback cannot forge the original DATA-mail provenance. */
+        w->originating_data_mail =
+            executing == s && executing_data_mail_sequence
+            && executing_actor.scheduler_domain == producer.scheduler_domain
+            && executing_actor.actor_slot == producer.actor_slot
+            && executing_actor.generation == producer.generation
+            && ores_execution_owns_running(&lane->authority, executing_claim)
+            ? executing_data_mail_sequence : 0;
         const size_t slot = (size_t)(w - lane->wakes);
         w->ticket = (OresNativeWakeTicket){
             .producer = producer, .target = target,
@@ -810,6 +1173,28 @@ int ores_native_actor_scheduler_reserve_wake(
         ++lane->wake_live;
         *out = w->ticket;
     }
+    unlock(s);
+    return ok;
+}
+/* Verify a WAKE ticket was genuinely RESERVED during THIS authenticated
+ * originating DATA-mail turn, not constructed from matching actor IDs or a
+ * guest-supplied original-mail integer. No wake-ticket ABI change required:
+ * the proof is in the scheduler-owned WakeCredit slot. */
+int ores_native_actor_scheduler_current_data_issued_wake(
+        OresNativeActorScheduler* s, OresNativeWakeTicket ticket,
+        uint64_t expected_original_mail) {
+    if (!s || !expected_original_mail) return 0;
+    uint64_t authenticated_mail = 0;
+    if (!ores_native_actor_scheduler_current_data_mail_sequence(
+            s, ticket.producer, &authenticated_mail)
+            || authenticated_mail != expected_original_mail)
+        return 0;
+    lock(s);
+    WakeCredit* w = matching_wake_locked(s, ticket);
+    const int ok = w && w->state == WAKE_RESERVED
+        && w->originating_data_mail == expected_original_mail
+        && ores_execution_owns_running(
+            &s->actors[ticket.producer.actor_slot].authority, executing_claim);
     unlock(s);
     return ok;
 }
@@ -884,7 +1269,8 @@ OresNativeWakePublishStatus ores_native_actor_scheduler_publish_wake(
     ++s->reserved_executions;
     ++s->accepted;
     ++s->outstanding;
-    pthread_cond_signal(&s->ready);
+    if (rq_sync_locked(s, (size_t)ticket.producer.actor_slot)) wake_one_locked(s);
+    RQ_VALIDATE(s);
     unlock(s);
     return ORES_NATIVE_WAKE_PUBLISHED;
 }
@@ -903,6 +1289,18 @@ int ores_native_actor_scheduler_is_current_wake(
             || executing_wake.target.generation != ticket.target.generation)
         return 0;
     return ores_native_actor_scheduler_is_current_actor(s, ticket.producer);
+}
+/* Request-local SourceTask resume may access its original scope only on the
+ * exact scheduler-issued continuation WAKE, with a successful READY outcome,
+ * and only while its producer actor remains RUNNING on this physical carrier.
+ * CANCELLED/FAILED, foreign callbacks and STOPPING cleanup fail closed. */
+int ores_native_actor_scheduler_is_current_ready_wake(
+        OresNativeActorScheduler* s, OresNativeWakeTicket ticket) {
+    if (!ores_native_actor_scheduler_is_current_wake(s, ticket)
+            || executing_wake_outcome != ORES_NATIVE_WAKE_READY)
+        return 0;
+    return ores_execution_owns_running(
+        &s->actors[ticket.producer.actor_slot].authority, executing_claim);
 }
 size_t ores_native_actor_scheduler_outstanding_wake_loans(
         OresNativeActorScheduler* s, OresNativeActorRef producer) {
@@ -943,7 +1341,8 @@ int ores_native_actor_scheduler_publish_control(
         ++s->reserved_executions;
         ++s->accepted;
         ++s->outstanding;
-        pthread_cond_signal(&s->ready);
+        if (rq_sync_locked(s, (size_t)parent.actor_slot)) wake_one_locked(s);
+        RQ_VALIDATE(s);
     } else if (s->rejected != UINT64_MAX) ++s->rejected;
     unlock(s);
     return ok;
@@ -977,7 +1376,8 @@ int ores_native_actor_scheduler_publish_failure(
         s->reserved_executions++;
         s->accepted++;
         s->outstanding++;
-        pthread_cond_signal(&s->ready);
+        if (rq_sync_locked(s, (size_t)parent.actor_slot)) wake_one_locked(s);
+        RQ_VALIDATE(s);
     } else if (s->rejected != UINT64_MAX) s->rejected++;
     unlock(s);
     return ok;
@@ -1022,6 +1422,8 @@ static int stop_locked(
         lane->abandoned_user_messages += (uint64_t)abandoned;
         s->reserved_executions -= abandoned;
         s->outstanding -= abandoned;
+        rq_sync_locked(s, (size_t)actor.actor_slot); /* leaves the DATA queue */
+        RQ_VALIDATE(s);
     }
 
     if (!ores_execution_stop(&lane->authority, lane->generation)) abort();
@@ -1052,6 +1454,37 @@ int ores_native_actor_scheduler_stop_sealed(OresNativeActorScheduler* s,
     if (!s) return 0;
     lock(s);
     const int ok = stop_locked(s, actor, 1);
+    unlock(s);
+    return ok;
+}
+int ores_native_actor_scheduler_retain_resource(
+        OresNativeActorScheduler* s, OresNativeActorRef actor) {
+    if (!s) return 0;
+    lock(s);
+    int ok = matching(s, actor) && !s->retired
+        && !s->actors[actor.actor_slot].retired
+        && s->actors[actor.actor_slot].resource_loans != UINT64_MAX
+        && s->resource_loans != UINT64_MAX;
+    if (ok) {
+        ++s->actors[actor.actor_slot].resource_loans;
+        ++s->resource_loans;
+    }
+    unlock(s);
+    return ok;
+}
+int ores_native_actor_scheduler_release_resource(
+        OresNativeActorScheduler* s, OresNativeActorRef actor) {
+    if (!s) return 0;
+    lock(s);
+    int ok = matching(s, actor)
+        && s->actors[actor.actor_slot].resource_loans != 0
+        && s->resource_loans != 0;
+    if (ok) {
+        --s->actors[actor.actor_slot].resource_loans;
+        --s->resource_loans;
+        maybe_finish_stopped_locked(s, (size_t)actor.actor_slot);
+        pthread_cond_broadcast(&s->drained);
+    }
     unlock(s);
     return ok;
 }
@@ -1093,6 +1526,7 @@ int ores_native_actor_scheduler_wait_done(OresNativeActorScheduler* s,
     }
     ActorLane* lane = &s->actors[actor.actor_slot];
     while (lane_has_work(lane) || lane->active || lane->wake_live
+        || lane->resource_loans
         || ores_execution_phase(&lane->authority) != ORES_EXEC_TERMINATED
         || !lane->terminal_valid) {
         if (pthread_cond_wait(&s->drained, &s->lock) != 0) abort();
@@ -1116,7 +1550,7 @@ void ores_native_actor_scheduler_retire(OresNativeActorScheduler* s) {
             maybe_finish_stopped_locked(s, i);
         }
     }
-    pthread_cond_broadcast(&s->ready);
+    wake_all_locked(s);
     unlock(s);
 }
 int ores_native_actor_scheduler_is_current_carrier(OresNativeActorScheduler* s) {
@@ -1136,6 +1570,27 @@ int ores_native_actor_scheduler_is_current_actor(
     // is acquired here, never while an actor callback itself is invoked.
     return ores_execution_owns(&s->actors[actor.actor_slot].authority, executing_claim);
 }
+/* Original user DATA-mail sequence is available only while the authenticated
+ * actor callback is RUNNING on this scheduler's physical carrier. It is not
+ * available to CONTROL, WAKE, detached Tasks or external Future producers.
+ * The sequence was minted at mailbox admission, not recovered from payload. */
+int ores_native_actor_scheduler_current_data_mail_sequence(
+        OresNativeActorScheduler* s, OresNativeActorRef actor,
+        uint64_t* out_sequence) {
+    if (!s || !out_sequence || executing != s
+            || !executing_data_mail_sequence || !actor.scheduler_domain
+            || actor.scheduler_domain != executing_actor.scheduler_domain
+            || actor.actor_slot != executing_actor.actor_slot
+            || actor.generation != executing_actor.generation
+            || !executing_claim.carrier)
+        return 0;
+    if (!ores_execution_owns_running(
+            &s->actors[actor.actor_slot].authority, executing_claim))
+        return 0;
+    *out_sequence = executing_data_mail_sequence;
+    return 1;
+}
+
 int ores_native_actor_scheduler_current_execution_context(
         OresNativeActorScheduler* s, OresNativeExecutionContext* out) {
     if (!s || !out || executing != s || !executing_context.id.runtime_domain
@@ -1150,14 +1605,14 @@ int ores_native_actor_scheduler_signal_control(OresNativeActorScheduler* s) {
     if (!s) return 0;
     lock(s);
     int ok = !s->retired;
-    if (ok && pthread_cond_broadcast(&s->ready) != 0) abort();
+    if (ok) wake_all_locked(s);
     unlock(s);
     return ok;
 }
 int ores_native_actor_scheduler_drain(OresNativeActorScheduler* s) {
     if (!s || executing == s) return 0;
     lock(s);
-    while (s->outstanding)
+    while (s->outstanding || s->resource_loans)
         if (pthread_cond_wait(&s->drained, &s->lock) != 0) abort();
     unlock(s);
     return 1;
@@ -1165,7 +1620,8 @@ int ores_native_actor_scheduler_drain(OresNativeActorScheduler* s) {
 int ores_native_actor_scheduler_try_destroy(OresNativeActorScheduler* s) {
     if (!s || executing == s) return 0;
     lock(s);
-    int ready = s->retired && !s->outstanding && !s->reserved_wakes;
+    int ready = s->retired && !s->outstanding && !s->reserved_wakes
+        && !s->resource_loans;
     if (ready) {
         for (size_t i = 0; i < s->actor_count; ++i) {
             ActorLane* lane = &s->actors[i];
@@ -1177,7 +1633,7 @@ int ores_native_actor_scheduler_try_destroy(OresNativeActorScheduler* s) {
             }
         }
     }
-    if (ready) pthread_cond_broadcast(&s->ready);
+    if (ready) wake_all_locked(s);
     unlock(s);
     if (!ready) return 0;
     /* Caller must externally fence producers; no concurrent API calls now. */
@@ -1188,8 +1644,10 @@ int ores_native_actor_scheduler_try_destroy(OresNativeActorScheduler* s) {
         || pthread_mutex_destroy(&s->lock) != 0) abort();
     for (size_t i = 0; i < s->actor_count; ++i)
         if (!ores_execution_destroy(&s->actors[i].authority)) abort();
+    free(s->carrier_slots);
     free(s->threads);
     free(s->slots);
+    free(s->sequence_slots);
     free(s->wake_slots);
     free(s->actors);
     free(s);

@@ -111,6 +111,7 @@ static int64_t hostile(const OresVmHostApi* h, void* inst, uint8_t* cage, uint64
         case HOSTILE_SEND: value = h->send(a == -1 ? self : (uint64_t)a, (uint32_t)b, (uint32_t)c); break;
         case HOSTILE_FLOOD_SEND: while (h->send((uint64_t)a, in, (uint32_t)b)) ++value; break;
         case HOSTILE_SPAWN: value = (int64_t)h->spawn((uint32_t)a); break;
+        case HOSTILE_STOP: value = h->stop((uint64_t)a); break;
         case HOSTILE_ALLOC: value = h->alloc((uint32_t)a, (uint32_t)b); break;
         case HOSTILE_FREE: value = h->free((uint32_t)a, (uint32_t)b, (uint32_t)c); break;
         case HOSTILE_ALLOC_FREE_LOOP:
@@ -182,7 +183,7 @@ static int64_t instance(const OresVmHostApi* h, void* inst, uint8_t* cage, uint6
 static int64_t restartable(const OresVmHostApi* h, void* inst, uint8_t* cage, uint64_t self, uint32_t state, uint32_t in,
                            uint32_t in_len, uint32_t out, uint32_t cap) {
     (void)self; (void)cap; (void)in_len;
-    int64_t* stored = (int64_t*)((char*)inst + 16);
+    int64_t* stored = (int64_t*)((char*)inst + 16 + 8); /* after the version word's 8 bytes */
     int64_t* ready = (int64_t*)inst;
     if (!*ready) { /* a fresh or restarted actor: load what was committed */
         WRITE_I64(cage, state, *stored);
@@ -194,6 +195,20 @@ static int64_t restartable(const OresVmHostApi* h, void* inst, uint8_t* cage, ui
             WRITE_I64(cage, state, READ_I64(cage, state) + a);
             *stored = READ_I64(cage, state);
             break;
+        case RESTART_SPAWN: { /* a child it will own */
+            WRITE_I64(cage, out, (int64_t)h->spawn((uint32_t)a));
+            return 8;
+        }
+        case RESTART_COMMIT: { /* one turn's effects: a to the state, and three sends to the child in b */
+            const int64_t b = READ_I64(cage, in + 16);
+            /* 1 is RESTART_ADD_THEN_TRAP, so a restartable child fails on each of these. */
+            const OresVmSend sends[3] = {{(uint64_t)b, 1}, {(uint64_t)b, 1}, {(uint64_t)b, 1}};
+            const int64_t total = READ_I64(cage, state) + a;
+            *stored = total;
+            WRITE_I64(cage, out, total);
+            if (!h->commit(sends, 3)) { h->trap(); }
+            return 8;
+        }
         case RESTART_ADD_THEN_TRAP: /* not committed, so a restart must not keep it */
             WRITE_I64(cage, state, READ_I64(cage, state) + a);
             h->trap();
@@ -221,6 +236,18 @@ static int64_t restartable(const OresVmHostApi* h, void* inst, uint8_t* cage, ui
     return 8;
 }
 
+/* KIND_CHAIN: input is how many more to make. Spawns one, and tells it to do the same. */
+static int64_t chain(const OresVmHostApi* h, void* inst, uint8_t* cage, uint64_t self, uint32_t state, uint32_t in,
+                     uint32_t in_len, uint32_t out, uint32_t cap) {
+    (void)inst; (void)self; (void)state; (void)in_len; (void)out; (void)cap;
+    const int64_t depth = READ_I64(cage, in);
+    if (depth <= 0) return 0;
+    const uint64_t next = h->spawn(KIND_CHAIN);
+    if (!next) return -6;
+    WRITE_I64(cage, in, depth - 1);
+    return h->send(next, in, 8) ? 0 : -7;
+}
+
 static const OresVmGuestKind kinds[] = {
     [KIND_COUNTER] = {counter, 16, 0, 64, 0, 0, 0},
     [KIND_MEMORY] = {memory, 64, 4096, 256, 0, 0, 0},
@@ -234,7 +261,8 @@ static const OresVmGuestKind kinds[] = {
     [KIND_TINY_SCRATCH] = {tiny, (2u << 20) - 12, 0, 8, 0, 0, 0},
     [KIND_BURN] = {burn, 16, 0, 64, 0, 0, 0},
     [KIND_INSTANCE] = {instance, 16, 0, 64, 64, 0, 0},
-    [KIND_RESTARTABLE] = {restartable, 16, 8192, 64, 16, 8, ORES_VM_KIND_RESTARTABLE},
-    [KIND_RESTART_UNFLAGGED] = {restartable, 16, 8192, 64, 16, 8, 0},
+    [KIND_RESTARTABLE] = {restartable, 16, 8192, 64, 16, 16, ORES_VM_KIND_RESTARTABLE},
+    [KIND_RESTART_UNFLAGGED] = {restartable, 16, 8192, 64, 16, 16, 0},
+    [KIND_CHAIN] = {chain, 16, 0, 64, 0, 0, 0},
 };
 const OresVmGuestModule ores_vm_test_module = {ORES_VM_GUEST_ABI_VERSION, sizeof kinds / sizeof kinds[0], kinds};

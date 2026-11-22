@@ -1,3 +1,20 @@
+## Actor-owner identity correction (October 25)
+
+`NativeSourceCleanupBinding` now authenticates `NativeSourceCleanupTicket.actor_id`
+against `OresNativeAllocationDomainRef.owner` (the actor allocation owner/slot),
+not against `allocation.domain` (the scheduler/runtime allocation domain).
+It also requires the claimed execution's `runtime_domain` to equal the
+allocation domain.
+
+This closes two inverse failures: legitimate actors whose scheduler domain is
+numerically different from their actor id no longer fail cleanup admission, and
+a continuation owned by actor B can no longer authenticate actor A merely
+because its scheduler domain happens to equal A's numeric actor id. The
+continuation handle, allocation generation, code generation and source token
+remain independently checked. This is still host-side substrate; it does not
+remove the existing requirement for scheduler-owned carrier admission and
+source lowering.
+
 ## Positive cleanup transition access hardened (October 23)
 
 Normal production translation units can no longer call

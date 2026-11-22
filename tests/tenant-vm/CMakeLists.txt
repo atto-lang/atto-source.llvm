@@ -5,6 +5,7 @@ find_package(Threads REQUIRED)
 
 option(TENANT_VM_SANITIZE "ASan+UBSan on the host" OFF)
 option(TENANT_VM_TSAN "TSan on the host" OFF)
+option(TENANT_VM_REQUIRE_FULL_COVERAGE "Fail configuration unless lowered Wasm, admission and real .atto source tests can run" OFF)
 
 set(ROOT "${CMAKE_CURRENT_LIST_DIR}/../..")
 set(CMAKE_C_STANDARD 11)
@@ -48,6 +49,23 @@ set(TENANT_VM_ATTO_IR_DIR "" CACHE PATH "IR already emitted by oreslang-llvmc --
 set(TENANT_VM_WASM_CLANG "${LOWER_CLANG}" CACHE FILEPATH "clang that can target wasm32")
 find_program(TENANT_VM_WASM_LD NAMES wasm-ld wasm-ld-18 wasm-ld-19 wasm-ld-20)
 
+# CI must not report a green core-only build if the lowered guest, admission, or
+# real source toolchain was unavailable. Developer builds remain opt-in.
+if(TENANT_VM_REQUIRE_FULL_COVERAGE)
+    if(NOT WAT2WASM OR NOT WASM2C OR NOT WASM_RT_INCLUDE OR NOT LOWER_CLANG OR NOT Python3_FOUND)
+        message(FATAL_ERROR "Tenant VM full coverage requires wat2wasm, wasm2c, wasm-rt.h, clang and Python3")
+    endif()
+    if(NOT TENANT_VM_WASM_LD OR NOT TENANT_VM_WASM_CLANG)
+        message(FATAL_ERROR "Tenant VM full coverage requires wasm-ld and wasm32 clang")
+    endif()
+    if(NOT TENANT_VM_ATTO_COMPILER OR NOT EXISTS "${TENANT_VM_ATTO_COMPILER}")
+        message(FATAL_ERROR "Tenant VM full coverage requires an existing oreslang-llvmc binary")
+    endif()
+    if(TENANT_VM_ATTO_IR_DIR)
+        message(FATAL_ERROR "Tenant VM full coverage must compile .atto with this checkout's compiler, not prebuilt IR")
+    endif()
+endif()
+
 if(WAT2WASM AND WASM2C AND WASM_RT_INCLUDE AND LOWER_CLANG AND Python3_FOUND)
     set(LOWER "${CMAKE_CURRENT_LIST_DIR}/../../tools/tenant-vm/lower_guest.py")
     set(ADAPTER "${CMAKE_CURRENT_LIST_DIR}/../../tools/tenant-vm/guest_adapter.c")
@@ -68,7 +86,7 @@ if(WAT2WASM AND WASM2C AND WASM_RT_INCLUDE AND LOWER_CLANG AND Python3_FOUND)
     set(ATTO_DEFINITION "")
     if(TENANT_VM_WASM_LD AND (TENANT_VM_ATTO_COMPILER OR TENANT_VM_ATTO_IR_DIR))
         set(ATTO_DEFINITION TENANT_VM_HAVE_ATTO)
-        foreach(fixture counter doubler spin recurse work fleet misordered pair)
+        foreach(fixture counter doubler spin recurse work fleet misordered pair pipeline atomic abort)
             if(TENANT_VM_ATTO_COMPILER)
                 set(input "${CMAKE_CURRENT_LIST_DIR}/lowered/atto/${fixture}.atto")
             else()
@@ -80,6 +98,11 @@ if(WAT2WASM AND WASM2C AND WASM_RT_INCLUDE AND LOWER_CLANG AND Python3_FOUND)
             endif()
             lower_guest(atto_${fixture} "${input}" ${compiler_args}
                 --wasm-clang "${TENANT_VM_WASM_CLANG}" --wasm-ld "${TENANT_VM_WASM_LD}")
+            if(fixture STREQUAL "atomic")
+                lower_guest(atto_atomic_eager "${input}" ${compiler_args}
+                    --wasm-clang "${TENANT_VM_WASM_CLANG}" --wasm-ld "${TENANT_VM_WASM_LD}"
+                    --test-define ORES_VM_TEST_EAGER_SEND=1)
+            endif()
             if(fixture STREQUAL "pair")
                 lower_guest(atto_pair_fault "${input}" ${compiler_args}
                     --wasm-clang "${TENANT_VM_WASM_CLANG}" --wasm-ld "${TENANT_VM_WASM_LD}"
@@ -109,6 +132,10 @@ if(WAT2WASM AND WASM2C AND WASM_RT_INCLUDE AND LOWER_CLANG AND Python3_FOUND)
     endif()
     add_test(NAME tenant_vm_lowered_test COMMAND tenant_vm_lowered_test "${GEN}")
     set_tests_properties(tenant_vm_lowered_test PROPERTIES TIMEOUT 300)
+    if(TENANT_VM_ATTO_COMPILER)
+        add_test(NAME tenant_vm_source_contract_test COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_LIST_DIR}/lowered/source_contract_test.py" "${TENANT_VM_ATTO_COMPILER}")
+    endif()
     add_test(NAME tenant_vm_admission_test COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/lowered/admission_test.py"
         "${LOWER}" --wat2wasm "${WAT2WASM}" --runner "$<TARGET_FILE:tenant_vm_lowered_test>" --hostile "${HOSTILE}"
         --lowered-root "${GEN}" ${LOWER_ARGS})

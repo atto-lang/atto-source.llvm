@@ -1,6 +1,7 @@
 #include "oreslang/runtime/TenantVm.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cerrno>
 #include <chrono>
@@ -53,6 +54,7 @@ const char* to_string(Status s) noexcept {
         case Status::SignalHandlerLost: return "SignalHandlerLost";
         case Status::ActorRestarted: return "ActorRestarted";
         case Status::ActorTerminated: return "ActorTerminated";
+        case Status::PipelineAborted: return "PipelineAborted";
     }
     return "Unknown";
 }
@@ -96,6 +98,7 @@ constexpr std::uint64_t kWallBackstopFactor = 16; // a host that is this oversub
 constexpr int kHeapClasses = 21;                  // 16 B to 16 MiB; larger blocks live until the actor ends
 constexpr std::uint32_t kMinHeapClassBytes = 16;
 constexpr int kCarrierSpins = 200;
+constexpr std::uint32_t kMaxCommitSends = 64;
 
 inline void cpu_relax() {
 #if defined(__aarch64__)
@@ -114,6 +117,22 @@ std::uint64_t now_ns() {
 std::uint64_t align_up(std::uint64_t value, std::uint64_t alignment) {
     return (value + alignment - 1) & ~(alignment - 1);
 }
+
+// Checked arithmetic for actor-restart scheduling: a large user-configured
+// backoff must never wrap into an earlier deadline and accelerate a crash loop.
+constexpr std::uint64_t restart_backoff_deadline_ns(std::uint64_t now, std::uint32_t base_ms,
+                                                     std::size_t failure_count) {
+    const std::size_t exponent = std::min<std::size_t>(failure_count ? failure_count - 1 : 0, 16);
+    const std::uint64_t factor = std::uint64_t{1000000} << exponent;
+    const std::uint64_t remaining = std::numeric_limits<std::uint64_t>::max() - now;
+    return base_ms > remaining / factor ? std::numeric_limits<std::uint64_t>::max()
+                                        : now + std::uint64_t{base_ms} * factor;
+}
+static_assert(restart_backoff_deadline_ns(100, 10, 1) == 10000100, "initial restart backoff");
+static_assert(restart_backoff_deadline_ns(100, 10, 2) == 20000100, "exponential restart backoff");
+static_assert(restart_backoff_deadline_ns(std::numeric_limits<std::uint64_t>::max() - 1,
+                                         300000, 17) == std::numeric_limits<std::uint64_t>::max(),
+              "restart backoff saturates instead of overflowing");
 
 bool valid_tenant_id(const std::string& id) {
     if (id.empty() || id.size() > 128 || id == "." || id == "..") return false;
@@ -151,6 +170,11 @@ struct Actor {
     std::deque<std::uint64_t> recent_failures_ns; // within the restart window, so at most budget + 1
     std::uint64_t backoff_until_ns = 0;           // not schedulable until the watchdog clears this
     std::uint32_t terminated_generation = std::numeric_limits<std::uint32_t>::max();
+    std::vector<std::uint64_t> children; // refs of actors this one spawned; dead ones are pruned
+    std::uint64_t parent = 0;            // the actor that spawned this one, 0 for the host
+    std::uint32_t slot = 0;
+    bool aborted = false;                // stopped because a stage after it ended
+    std::size_t children_live_estimate = 8;
     std::deque<Mail> mailbox;
     bool live = false;
     bool running = false;
@@ -170,6 +194,7 @@ struct Vm {
     std::map<std::uint32_t, std::vector<std::uint32_t>> free_regions;
     std::vector<std::unique_ptr<Actor>> actors;
     std::vector<std::uint32_t> free_slots;
+    std::vector<std::uint64_t> pending_stops; // only while a release holds this VM's lock
     std::size_t live_actors = 0;
     std::deque<std::uint32_t> ready;
     std::size_t inflight = 0;
@@ -180,6 +205,8 @@ struct Vm {
     std::uint64_t mail_lost = 0;
     std::uint64_t actors_terminated = 0;
     std::uint64_t mail_abandoned = 0;
+    std::uint64_t pipelines_aborted = 0;
+    std::uint64_t actors_aborted = 0;
     std::uint32_t running = 0;
     bool enqueued = false;
     bool retired = false;
@@ -522,13 +549,21 @@ struct TenantVmHost::Core {
         bool restarted = false;
         bool terminated = false;
         std::deque<Mail> abandoned;
+        std::deque<Mail> aborted;
         bool over_budget = false;
         bool escalate = trapped && reason != FailReason::HostKill;
         {
             std::lock_guard<std::mutex> lock(vm->mutex);
             const Phase phase = vm->current_phase();
             const bool alive = phase == Phase::Running || phase == Phase::Quiescing;
-            if (trapped && alive && confined_to_actor(*actor, reason, checked)) {
+            if (trapped && alive && actor->aborted && confined_to_actor(*actor, reason, checked)) {
+                // Its pipeline is stopping. A turn that fails now, likely sending to the stage that
+                // ended, needs no restart: the actor is released as soon as it finishes.
+                escalate = false;
+                result = TurnResult{};
+                result.status = Status::PipelineAborted;
+                result.failure = reason;
+            } else if (trapped && alive && confined_to_actor(*actor, reason, checked)) {
                 if (!mail.has_promise) ++vm->mail_lost;
                 escalate = false;
                 if (restart_allowed_locked(vm, *actor, slot)) {
@@ -543,6 +578,7 @@ struct TenantVmHost::Core {
                     actor_restarts.fetch_add(1, std::memory_order_relaxed);
                     restarted = true;
                 } else {
+                    abort_upstream_locked(*vm, *actor, aborted);
                     terminate_actor_locked(*vm, *actor, slot, abandoned);
                     terminated = true;
                 }
@@ -562,6 +598,13 @@ struct TenantVmHost::Core {
                 if (!queued.has_promise) continue;
                 TurnResult r;
                 r.status = Status::ActorTerminated;
+                r.failure = reason;
+                queued.promise.set_value(std::move(r));
+            }
+            for (auto& queued : aborted) {
+                if (!queued.has_promise) continue;
+                TurnResult r;
+                r.status = Status::PipelineAborted;
                 r.failure = reason;
                 queued.promise.set_value(std::move(r));
             }
@@ -613,10 +656,10 @@ struct TenantVmHost::Core {
         const std::size_t failures = actor.recent_failures_ns.size();
         if (failures > limits.restart_budget) return false;
         if (limits.restart_backoff_ms) {
-            // Doubling, but never past the window: open() keeps both small enough that this cannot overflow.
-            const std::uint64_t delay_ns = std::min(
-                (std::uint64_t{limits.restart_backoff_ms} * 1000000) << std::min<std::size_t>(failures - 1, 16), window_ns);
-            actor.backoff_until_ns = now + delay_ns;
+            // Exponential and saturating, but never past the window: open() bounds the window, so now + window_ns
+            // cannot overflow.
+            actor.backoff_until_ns =
+                std::min(restart_backoff_deadline_ns(now, limits.restart_backoff_ms, failures), now + window_ns);
             std::lock_guard<std::mutex> lock(backoff_mutex);
             backoff.push_back(Backoff{actor.backoff_until_ns, vm, slot, actor.generation});
             std::push_heap(backoff.begin(), backoff.end());
@@ -674,6 +717,41 @@ struct TenantVmHost::Core {
         release_actor_locked(vm, actor, slot);
     }
 
+    // The abort barrier of ACTOR_RUNTIME_RESILIENCE_V1 section 9, for a pipeline built as a tree of owners.
+    // Downstream, the stages after the one that ended finish the mail they accepted and stop, through the
+    // ordinary release of its children. Upstream, each owner up to the actor that started the pipeline would
+    // only forward into a stage that is gone, so its queued mail is reported as abandoned and it stops. An
+    // owner that cannot restart, such as main, is where the pipeline began, and it and the rest of the tenant
+    // go on.
+    void abort_upstream_locked(Vm& vm, Actor& ended, std::deque<Mail>& abandoned) {
+        std::uint64_t ref = ended.parent;
+        bool any = false;
+        for (std::size_t hops = 0; ref != 0 && hops < vm.actors.size(); ++hops) {
+            Actor* owner = resolve_actor_locked(vm, ref);
+            if (!owner || owner->aborted || !(owner->kind->flags & ORES_VM_KIND_RESTARTABLE)) break;
+            const std::uint64_t next = owner->parent;
+            owner->aborted = true;
+            owner->stopping = true;
+            for (auto& mail : owner->mailbox) {
+                refund_mail_locked(vm, mail.bytes.size());
+                --vm.inflight;
+                ++vm.mail_abandoned;
+                abandoned.push_back(std::move(mail));
+            }
+            owner->mailbox.clear();
+            if (owner->queued) { // waiting for a carrier, which must not find it with nothing to do
+                vm.ready.erase(std::remove(vm.ready.begin(), vm.ready.end(), owner->slot), vm.ready.end());
+                owner->queued = false;
+            }
+            ++vm.actors_aborted;
+            any = true;
+            owner->terminated_generation = owner->generation;
+            if (!owner->running) release_actor_locked(vm, *owner, owner->slot);
+            ref = next;
+        }
+        if (any) ++vm.pipelines_aborted;
+    }
+
     bool was_terminated_locked(Vm& vm, std::uint64_t ref) const {
         const auto slot = static_cast<std::uint32_t>(ref);
         if (slot >= vm.actors.size()) return false;
@@ -687,6 +765,16 @@ struct TenantVmHost::Core {
         if (actor.kind->instance_bytes) std::memset(actor.instance.get(), 0, actor.kind->instance_bytes);
         actor.heap_used = 0;
         actor.heap_free.reset();
+        // It failed before it first committed, so it will start again from nothing, and spawn again.
+        // What it spawned the first time has no owner any more.
+        if (stored_version(actor) == 0) stop_children_locked(vm, actor);
+    }
+
+    static std::uint32_t stored_version(const Actor& actor) {
+        if (actor.kind->stored_bytes < sizeof(std::uint32_t)) return 0;
+        std::uint32_t version = 0;
+        std::memcpy(&version, actor.instance.get() + actor.kind->instance_bytes, sizeof version);
+        return version;
     }
 
     FailReason classify(const Vm& vm, Carrier* c, std::uint64_t& fault_offset) const {
@@ -868,6 +956,9 @@ struct TenantVmHost::Core {
         }
         Actor& actor = *v.actors[slot];
         actor.kind = kind;
+        actor.slot = slot;
+        actor.parent = 0;
+        actor.aborted = false;
         actor.region = region;
         actor.region_bytes = bytes;
         actor.heap_used = 0;
@@ -883,20 +974,70 @@ struct TenantVmHost::Core {
         return Status::Ok;
     }
 
-    // Scrubs before reuse, so a later actor can never read what this one left behind.
-    void release_actor_locked(Vm& vm, Actor& actor, std::uint32_t slot) {
+    // Scrubs before reuse, so a later actor can never read what this one left behind. What it owned is
+    // stopped after it, so a chain drains from the front. A worklist, since a guest chooses how deep
+    // that chain is, and this runs on a carrier's stack.
+    void release_actor_locked(Vm& vm, Actor& first, std::uint32_t first_slot) {
+        release_one_locked(vm, first, first_slot);
+        std::vector<std::uint64_t> work;
+        work.swap(pending_stops(vm));
+        while (!work.empty()) {
+            const std::uint64_t ref = work.back();
+            work.pop_back();
+            Actor* child = resolve_actor_locked(vm, ref);
+            if (!child || child->stopping) continue;
+            child->stopping = true;
+            if (child->running || !child->mailbox.empty()) continue; // released when its last turn ends
+            release_one_locked(vm, *child, static_cast<std::uint32_t>(ref));
+            auto& more = pending_stops(vm);
+            work.insert(work.end(), more.begin(), more.end());
+            more.clear();
+        }
+    }
+
+    static std::vector<std::uint64_t>& pending_stops(Vm& vm) { return vm.pending_stops; }
+
+    void release_one_locked(Vm& vm, Actor& actor, std::uint32_t slot) {
         std::memset(vm.cage + actor.region, 0, actor.region_bytes);
         vm.free_regions[actor.region_bytes].push_back(actor.region);
         vm.used -= actor.region_bytes;
         vm.instance_bytes -= std::uint64_t{actor.kind->instance_bytes} + actor.kind->stored_bytes;
         actor.instance.reset();
         actor.heap_free.reset();
+        vm.pending_stops.insert(vm.pending_stops.end(), actor.children.begin(), actor.children.end());
+        actor.children.clear();
         actor.live = false;
         actor.stopping = false;
         ++actor.generation;
         // Past the last generation a ref could be reused, so this slot is simply retired.
         if (actor.generation < kMaxGeneration) vm.free_slots.push_back(slot);
         --vm.live_actors;
+    }
+
+    void stop_children_locked(Vm& vm, Actor& actor) {
+        std::vector<std::uint64_t> work;
+        work.swap(actor.children);
+        while (!work.empty()) {
+            const std::uint64_t ref = work.back();
+            work.pop_back();
+            Actor* child = resolve_actor_locked(vm, ref);
+            if (!child || child->stopping) continue;
+            child->stopping = true;
+            if (child->running || !child->mailbox.empty()) continue;
+            release_one_locked(vm, *child, static_cast<std::uint32_t>(ref));
+            work.insert(work.end(), vm.pending_stops.begin(), vm.pending_stops.end());
+            vm.pending_stops.clear();
+        }
+    }
+
+    // A guest can spawn and stop in a loop, so this must not grow with that.
+    void remember_child_locked(Vm& vm, Actor& parent, std::uint64_t ref) {
+        if (parent.children.size() >= 16 && parent.children.size() >= parent.children_live_estimate * 2) {
+            parent.children.erase(std::remove_if(parent.children.begin(), parent.children.end(),
+                [&](std::uint64_t r) { return resolve_actor_locked(vm, r) == nullptr; }), parent.children.end());
+            parent.children_live_estimate = parent.children.size() + 8;
+        }
+        parent.children.push_back(ref);
     }
 
     Actor* resolve_actor_locked(Vm& vm, std::uint64_t ref) {
@@ -1045,12 +1186,20 @@ struct TenantVmHost::Core {
         return result;
     }
 
-    std::uint64_t spawn_impl(const std::shared_ptr<Vm>& shared, std::uint32_t kind) {
+    std::uint64_t spawn_impl(const std::shared_ptr<Vm>& shared, Actor& parent, std::uint32_t kind) {
         std::lock_guard<std::mutex> lock(shared->mutex);
-        if (shared->current_phase() != Phase::Running) return 0;
+        // Allowed while quiescing: an actor whose first turn comes during a drain has to be able to start
+        // its children, or admitted work cannot finish. The actor quota bounds it, and it adds no mail.
+        const Phase phase = shared->current_phase();
+        if (phase != Phase::Running && phase != Phase::Quiescing) return 0;
         std::uint64_t ref = 0;
         if (spawn_locked(shared, kind, ref) != Status::Ok) return 0;
-        return ref | (std::uint64_t{1} << 63); // so slot 0, generation 0 is not the failure value
+        const std::uint64_t reference = ref | (std::uint64_t{1} << 63); // so slot 0, generation 0 is not the failure value
+        remember_child_locked(*shared, parent, reference);
+        // Bit 63 as in any guest-held reference, so that slot 0, generation 0 is not "no parent".
+        shared->actors[static_cast<std::uint32_t>(ref)]->parent =
+            (std::uint64_t{parent.generation} << 32) | parent.slot | (std::uint64_t{1} << 63);
+        return reference;
     }
 
     static std::uint64_t host_spawn(std::uint32_t kind) {
@@ -1061,7 +1210,7 @@ struct TenantVmHost::Core {
             return 0;
         }
         try {
-            result = static_cast<Core*>(c->core)->spawn_impl(*c->vm, kind);
+            result = static_cast<Core*>(c->core)->spawn_impl(*c->vm, *c->actor, kind);
         } catch (...) {
         }
         host_leave(c);
@@ -1085,9 +1234,67 @@ struct TenantVmHost::Core {
             host_leave(c);
             return 0;
         }
-        const int result = static_cast<Core*>(c->core)->stop_impl(*c->vm, target);
+        int result = 0;
+        try {
+            result = static_cast<Core*>(c->core)->stop_impl(*c->vm, target);
+        } catch (...) {
+        }
         host_leave(c);
         return result;
+    }
+
+    // All the sends or none, and then the version, under one lock and out of guest mode, so that no
+    // kill can land between them. Allowed while quiescing: mail a turn makes then is part of the
+    // work being drained, and a tree of actors cannot keep making it for ever.
+    bool commit_impl(const std::shared_ptr<Vm>& shared, Actor& self, const OresVmSend* sends, std::uint32_t count) {
+        Vm& vm = *shared;
+        if (self.kind->stored_bytes < sizeof(std::uint32_t) || count > kMaxCommitSends) return false;
+        std::lock_guard<std::mutex> lock(vm.mutex);
+        const Phase phase = vm.current_phase();
+        if (phase != Phase::Running && phase != Phase::Quiescing) return false;
+        const VmLimits& limits_ = vm.spec.limits;
+        std::array<Actor*, kMaxCommitSends> targets{};
+        if (vm.inflight + count > limits_.max_inflight) return false;
+        for (std::uint32_t i = 0; i < count; ++i) {
+            Actor* target = resolve_actor_locked(vm, sends[i].target);
+            if (!target || target->stopping || sizeof(std::int64_t) > mail_capacity(*target->kind, limits_)) return false;
+            std::size_t queued = target->mailbox.size();
+            for (std::uint32_t j = 0; j < i; ++j)
+                if (targets[j] == target) ++queued;
+            if (queued >= limits_.mailbox_capacity) return false;
+            targets[i] = target;
+        }
+        std::vector<Mail> ready(count);
+        for (std::uint32_t i = 0; i < count; ++i) {
+            ready[i].bytes.resize(sizeof(std::int64_t));
+            std::memcpy(ready[i].bytes.data(), &sends[i].value, sizeof(std::int64_t));
+        }
+        for (std::uint32_t i = 0; i < count; ++i) {
+            if (charge_mail_locked(vm, sizeof(std::int64_t))) continue;
+            while (i-- > 0) refund_mail_locked(vm, sizeof(std::int64_t)); // the quota refused one, so none go
+            return false;
+        }
+        for (std::uint32_t i = 0; i < count; ++i) {
+            targets[i]->mailbox.push_back(std::move(ready[i]));
+            ++vm.inflight;
+            make_ready_locked(shared, static_cast<std::uint32_t>(sends[i].target));
+        }
+        std::uint32_t version = stored_version(self) + 1;
+        if (version == 0) version = 2; // 0 means nothing committed, and the low bit must keep alternating
+        __atomic_store_n(reinterpret_cast<std::uint32_t*>(self.instance.get() + self.kind->instance_bytes), version, __ATOMIC_RELEASE);
+        return true;
+    }
+
+    static int host_commit(const OresVmSend* sends, std::uint32_t count) {
+        Carrier* c = host_enter();
+        bool committed = false;
+        try {
+            committed = static_cast<Core*>(c->core)->commit_impl(*c->vm, *c->actor, sends, count);
+        } catch (...) {
+        }
+        if (committed) return 1; // stays out of guest mode: from here this turn can only finish
+        host_leave(c);
+        return 0;
     }
 
     static std::uint32_t mail_capacity(const OresVmGuestKind& kind, const VmLimits& limits) {
@@ -1166,6 +1373,8 @@ struct TenantVmHost::Core {
             terminal.mail_lost = vm->mail_lost;
             terminal.actors_terminated = vm->actors_terminated;
             terminal.mail_abandoned = vm->mail_abandoned;
+            terminal.pipelines_aborted = vm->pipelines_aborted;
+            terminal.actors_aborted = vm->actors_aborted;
         }
         {
             std::lock_guard<std::mutex> lock(registry_mutex);
@@ -1280,6 +1489,7 @@ TenantVmHost::TenantVmHost(HostLimits limits) : core_(std::make_shared<Core>(lim
     core->api.send = &Core::host_send;
     core->api.spawn = &Core::host_spawn;
     core->api.stop = &Core::host_stop;
+    core->api.commit = &Core::host_commit;
     core->api.trap = &trap_from_guest;
 
     const auto give_up = [core](const char* what) {
@@ -1489,6 +1699,8 @@ VmSnapshot TenantVmHost::snapshot(const VmHandle& handle) const {
     out.mail_lost = vm->mail_lost;
     out.actors_terminated = vm->actors_terminated;
     out.mail_abandoned = vm->mail_abandoned;
+    out.pipelines_aborted = vm->pipelines_aborted;
+    out.actors_aborted = vm->actors_aborted;
     return out;
 }
 

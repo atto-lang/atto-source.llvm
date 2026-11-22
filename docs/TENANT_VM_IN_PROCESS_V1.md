@@ -3,10 +3,25 @@
 One OS process hosts up to 1000 tenants, with one VM per tenant and that tenant's actors inside
 it. On GraalVM a VM is a Graal isolate. On LLVM, Wasm and .NET it is what this document describes.
 
-Status: working runtime with end-to-end evidence, including whole `.atto` programs that spawn, send
-and stop. The language subset is still narrow (see [What `.atto` can do](#what-atto-can-do-in-a-vm)). All
-evidence below is local: no GitHub Actions job has run this code. No backend is certified as a
-production boundary.
+Status: experimental runtime with local end-to-end evidence, including whole `.atto` programs
+that spawn, send and stop. The language subset is still narrow (see
+[What `.atto` can do](#what-atto-can-do-in-a-vm)). All evidence below is local:
+no GitHub Actions job has run this code. No backend is certified as a production boundary.
+
+**Security hold on this implementation:** This is an experimental native in-process
+runtime, **not yet approved to host hostile tenants**. The C guest ABI does not enforce
+the cage-addressing rule, and a caller-provided SHA-256 verifies byte identity, not
+authorized compiler provenance or confinement of arbitrary native instructions.
+Do not admit tenant-supplied native libraries. Keep the existing deployment-level
+hold for this LLVM path until independently reviewed trusted-origin, admission and
+executable-confinement evidence exists; a separately isolated deployment remains
+available as defense in depth.
+
+This hold is **not** a requirement of the cross-backend contract that every tenant
+have its own OS process. Conformance [tenant-isolation-v2](https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/pull/352),
+merged 2026-11-04, permits multiple untrusted **validated-Wasm** VM-isolates in
+one process, accepts shared-process runtime/compiler bugs and excludes side channels.
+It does **not** certify this LLVM loader or replace backend-specific admission gates.
 
 ## What a VM is
 
@@ -128,10 +143,32 @@ flag the browser ABI is unchanged, and `spawn`, `send` and `stop` are still refu
 
 | | |
 |---|---|
-| Works | Several `define actor` types with 1 to 16 integer fields; `on_message(int): int`; a `main` that spawns, sends and stops; checked arithmetic that traps; calls to top-level functions, including recursion and `if` |
-| Refused by the compiler | `await`, tasks, `while` and locals in a handler, class-array fields, heap-owned regions |
-| Language limit, on every backend | `ActorRef` lives only in `main`, so actors cannot message each other, and nothing reads a reply to a `send` |
-| Message ABI | One `i64` in, one `i64` out |
+| Works | Several `define actor` types with 1 to 16 fields; `on_message(int): int`; a `main` that spawns, sends and stops; **actors that own child actors and send to them**; checked arithmetic that traps; calls to top-level functions, including recursion and `if` |
+| Refused by the compiler | `await`, tasks, `while` and locals in a handler, class-array fields, heap-owned regions, references used as values |
+| Message ABI | One `i64` in, one `i64` out. Nothing reads the reply to a `send` |
+
+**Actors messaging actors.** This reuses syntax the language already has, in new places:
+
+```
+define actor Stage as {
+  const next: ActorRef<Sink> = spawn Sink();   // or: const next = spawn Sink();
+  let forwarded: int = 0;
+  pub fnc on_message(int n): int {
+    next.send(n);
+    forwarded = forwarded + 1;
+    return forwarded;
+  }
+}
+```
+
+An actor owns the children in its fields, which are spawned when it starts. References form a tree: one can
+be sent to, and nothing else. It cannot go into arithmetic, a message or a reply, and a type that spawns
+itself, however indirectly, is refused. Stopping an actor stops its children once it has finished, so a
+chain drains from the front. Shutting a VM down finishes all admitted work, including what it sends on.
+
+**This is not ratified language.** The spec calls actor pipeline syntax illustrative, and Java and the other
+backends do not have this. So it is refused without `--guest-abi=tenant-vm`, and a reference cannot yet be
+handed to another actor, so two siblings cannot talk directly, and a child cannot answer its parent.
 
 **Kinds.** Each actor type is a kind, in source order, and `main` is the last one: the manifest records
 them. A host runs a program by spawning the `main` kind and calling it once. A second call is a typed
@@ -141,13 +178,16 @@ guest error.
 module may import, and admission checks each signature, since C linking would not notice a wrong one.
 References are `i64`, and resolve only inside the caller's VM.
 
-**A refused operation ends the VM.** Source has no way to see that a `spawn` or `send` was refused, say
+**A refused operation fails, loudly.** Source has no way to see that a `spawn` or `send` was refused, say
 because a mailbox is full. A turn cannot block, and carrying on would turn a lost message into a wrong
-answer that looks fine. So a program sending faster than its workers drain needs a larger
-`mailbox_capacity`. Whether it should wait instead is a question for the restart and pipeline work.
+answer that looks fine. In `main` that ends the VM. In a handler the turn fails and the actor restarts, so
+the message that caused it is lost and counted. **There is no backpressure:** a stage sending faster than
+the next one drains will fail repeatedly once a mailbox fills, until its restart budget is spent and it ends.
+The spec says `send` must report admission as a `Result`, and that is not done.
 
-Two compiler changes, both only reachable on wasm32: a handler can call functions, where it used to fail
-with an internal `unordered_map::at` error, and the flag above.
+Compiler changes: a wasm32 handler can call functions, where it used to fail with an internal
+`unordered_map::at` error; the flag above; and the parser accepts child fields and handler sends, which
+every other path then refuses.
 
 ## Restart
 
@@ -172,36 +212,62 @@ that failed is not retried, since it would most likely fail again. A caller gets
 the reason. A `send` has no caller, so the VM counts it in `mail_lost`, and a VM that stops cleanly still
 reports `actor_restarts` and `mail_lost`, so a run with failures cannot look like a clean finish.
 
+**A turn commits as a whole.** Sends in a handler are held until the turn ends. Then one host call admits all
+of them or none, and flips the version word, with no kill able to land in between. So a failed turn changed
+no state and sent nothing, and a turn reported as failed really did not happen. One control build that
+sends straight away shows the difference: the failed turn's message reaches the next actor.
+
 **Stored state.** It is host memory outside the cage, so a guest cannot write to it except by finishing a
-turn. A turn writes its fields to the slot not in use, then flips a version word with one store, so a kill
-at any point leaves a complete commit. `atto_a_fault_in_a_commit_cannot_tear_state` faults exactly in a
+turn. A turn writes its fields to the slot not in use before the flip, so a kill at any point leaves a
+complete commit. A restart restores child references from here and does not spawn again. `atto_a_fault_in_a_commit_cannot_tear_state` faults exactly in a
 commit, and a control build without the flip does tear, which shows the test can tell.
 
-Two limits on what this means today:
+Limits on what this means today:
 
 - State is fields only. It survives a restart, not the VM or the process. That is the part of "somewhere
   like an ETS table" this needs now, and nothing here is durable across a crash of the process.
-- A kill after the commit but before the reply reports a failed turn whose effect did stay. A caller who
-  retries could apply it twice.
+- Delivery is at most once. A message whose turn fails is not retried, so it is gone, and counted.
 
 **A crash loop ends the actor, not the VM.** An actor may have `restart_budget` restarts in
 `restart_window_ms`, by default 3 in 10 seconds. Stored state can be what causes the crash, so reloading
 it could otherwise loop forever. A turn that works does not refill the budget; only time does. Between
 tries the actor waits `restart_backoff_ms`, by default 10 ms, doubling with each failure in the window,
 and its mail waits with it. These numbers are starting values, not measurements.
+A zero-length restart window is refused when opening a VM: otherwise every
+failure would expire immediately and the restart budget could be bypassed.
+A zero restart budget is permitted and means the first confined failure
+terminates the actor. Exponential backoff deadlines saturate rather than
+overflowing when configured delays and restart budgets are large.
 
 A restartable turn cannot send, spawn or stop, so that a failed turn has nothing outside its actor to undo. One more failure ends that actor. The failed call and each queued call get `ActorTerminated`, and queued
 sends count in `mail_abandoned`. Its memory and quota go back to the VM, and later calls get
 `ActorTerminated`. The rest of the VM goes on. `actors_terminated` and `mail_abandoned` are reported even
 when the VM stops cleanly.
 
+**A turn commits whole.** A handler's sends are held until its turn commits, as `ACTOR_RUNTIME_RESILIENCE_V1`
+section 9 proposes, so a restart can never resend them. See [Actors messaging actors](#what-atto-can-do-in-a-vm).
+
+**When a stage ends, its pipeline stops.** This is the abort barrier proposed in `ACTOR_RUNTIME_RESILIENCE_V1`
+section 9, for a pipeline built as a tree of owners:
+
+- The stages after it finish the mail they accepted, then stop.
+- Each owner before it, up to the actor that started the pipeline, would only forward into a stage that is
+  gone. So its queued mail is reported as abandoned, its callers get `PipelineAborted`, and it stops.
+- An owner that cannot restart, such as `main`'s actor or one the host spawned with a native kind, is where
+  the pipeline began. It and the rest of the tenant go on.
+- `pipelines_aborted` and `actors_aborted` are reported, even when the VM later stops cleanly.
+
+A pipeline edge is the owner's child field. It names the current incarnation, so a restart of a stage does
+not break it, and a stage that ends is not replaced.
+
 **Not built yet:**
 
-- No pipeline semantics exist here, because source has no way to read a reply and handlers cannot send.
-  The agreed rules are in `ACTOR_RUNTIME_RESILIENCE_V1`: a pipeline stops once a stage ends, and the rest
-  of the tenant keeps running.
-- A turn's sends must be held until it commits, so that a restart cannot resend them. This does not arise
-  yet: restartable kinds are source actors, and their handlers cannot send. It must land with handler sends.
+- An explicit upstream-failed signal to downstream stages. They drain and stop, but source has no way to see
+  why, because nothing in source can observe a stop.
+- `main` sending to a pipeline that has stopped still ends the VM, since `main` cannot restart and cannot
+  see that its send was refused.
+- Stages fail rather than wait when a mailbox is full. The contract proposes reserving capacity during the
+  turn, so that `send` can report admission, and that is not done.
 - A failed actor reports through the VM's counters and the failed call. There is no supervisor to tell yet.
 
 ## Backends
@@ -224,10 +290,17 @@ code. This reasoning rests on documented platform behaviour, not on a CIL experi
 do not run in parallel. Epochs are per Engine, so a targeted kill is a per-Store flag read by its
 epoch callback.
 
-**Not yet reconciled.** `oreslang-source.net` #348, `oreslang-source.wasm` #276 and conformance #332
-describe process workers for untrusted actors, and `oreslang-platform-conformance`
-`contracts/tenant-isolation-v1.json` requires an OS process sandbox for hostile tenants. Both conflict
-with one process for up to 1000 tenants.
+**Cross-backend architecture decision (ratified, not backend proof).**
+[Conformance #352](https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/pull/352)
+merged `tenant-isolation-v2`: an untrusted validated-Wasm guest may run in its own
+VM-isolate within a shared OS process. Process isolation is optional defense in
+depth, not a mandatory v2 prerequisite. Conformance v1 is superseded. Earlier
+process-worker sketches in `oreslang-source.net` #348, `oreslang-source.wasm` #276
+and conformance #332 are historical alternatives, not blockers to this topology.
+The v2 contract's source-free tests cannot establish this backend's safety;
+the compiler/provenance, malicious guest, independent-kill, and exact-head CI
+gates remain open. The separate hold above still applies to this experimental
+native loader.
 
 ## Audit findings
 
@@ -267,6 +340,16 @@ test, but finding 5 means CPU share was not fair until now.
 
 ## Evidence
 
+**Current draft-head gate (2026-11-16):** the CI job now checks the native runner
+architecture, the checked-out full source SHA and tree, compiler binary digest,
+toolchain versions and executed results from all four required suites. The
+source tree statically registers 43 core host cases (including zero-window
+restart-policy and tenant-ID boundary regressions), 21 lowered cases, and
+the source-contract/admission suites. These counts are **test inventory**, not
+a new runtime result: no hosted exact-head full-suite run was available
+when this gate was written. Historical evidence below is tied to the prior
+local checkpoints and must not be attributed to the new head.
+
 Run on 2026-11-03. **All of it is local**, on macOS 26 arm64 (Apple clang, wabt 1.0.42, wasm-ld 23) and
 Ubuntu 24.04 arm64 in a VM (clang 18, wabt 1.0.34). `.atto` went through `oreslang-llvmc` built against
 LLVM 18 in that VM, whose IR the macOS run lowered. x86_64 is under QEMU emulation.
@@ -276,6 +359,14 @@ LLVM 18 in that VM, whose IR the macOS run lowered. x86_64 is under QEMU emulati
 | 1000 tenants, 100,000 **compiled `.atto`** actors, one process | 300,000 correct turns, 0.4-1.4 s including startup | macOS, Linux |
 | Whole `.atto` programs run in a VM | `main` starts workers of 2 types, 23 sends arrive in order (a worker traps otherwise, and a misordered program does trap), all stop and are released. 200 rounds | macOS, Linux, x86_64 under QEMU |
 | 1000 tenants each run that program | To completion in one process, 45-130 ms natively | macOS, Linux, x86_64 under QEMU |
+| Actors message actors in source | Head to middle to sink: 10 messages in order through each stage (the sink traps otherwise), then all stop in turn. 100 rounds | macOS, Linux, x86_64 under QEMU |
+| Shutdown drains a whole pipeline | 40 messages in flight down three stages, including actors whose first turn comes during the drain | macOS, Linux, x86_64 under QEMU |
+| A failed turn sent nothing | Its child never hears of it, and is not spawned twice. **Control** that sends straight away: the message escapes, and the child traps too | macOS, Linux, x86_64 under QEMU |
+| Commit is all or nothing | Three sends to a mailbox with room for two: none go. Unknown target: none go, and state does not move | macOS, Linux, x86_64 under QEMU |
+| A tenant cannot overflow the host's stack by nesting | A chain 25,000 actors deep, stopped from the front | macOS, Linux, x86_64 under QEMU |
+| Wrong uses of references | 13 refused by the compiler, with no IR emitted | Linux |
+| A stage that ends stops its pipeline only | Two pipelines in one tenant. One stage spends its restart budget: its pipeline stops, its queued mail is reported, and the other pipeline delivers all 41 messages in order | macOS, Linux, x86_64 under QEMU |
+| An owner stops when its child ends | Its 18 queued calls are told `PipelineAborted`, deterministic across plain, ASan, TSan and gcc builds | macOS, Linux, x86_64 under QEMU |
 | A failed actor restarts alone | From its last finished turn, with queued mail in order and siblings unaffected: trap, stack overflow and CPU deadline, in test guests and real `.atto` | macOS, Linux, x86_64 under QEMU |
 | A spinning actor does not stop its siblings | 2000 sibling turns complete alongside it in one VM | macOS, Linux, x86_64 under QEMU |
 | Kills cannot tear stored state | Deterministic fault in a commit keeps fields consistent; **control** without the flip tears. Also 300 kills at random points | macOS, Linux, x86_64 under QEMU |
@@ -289,7 +380,7 @@ LLVM 18 in that VM, whose IR the macOS run lowered. x86_64 is under QEMU emulati
 | Hostile Wasm stays in its cage | 64 attacks in each mode, including host pointer halves and maximum displacement: 12 in its own memory, 52 stopped, 0 left. Guard mode: all 52 fault inside its own cage | macOS, Linux |
 | Admission refuses hostile modules | 29 hand-written cases, 0 accepted | macOS, Linux |
 | Mutated modules cannot crash the pipeline | 1000 mutations: 995 refused, 5 accepted, 0 crashed | Linux |
-| Mutants that pass admission stay in the cage when run | 7,699 code mutations biased to memory and call instructions, in a module that imports the host calls: 400 accepted, half in each mode, and all 400 run with hostile inputs. No process death, no fault outside the cage, witness tenant unaffected | Linux |
+| Mutants that pass admission stay in the cage when run | 7,895 code mutations biased to memory and call instructions, in a module that imports the host calls: 400 accepted, half in each mode, and all 400 run with hostile inputs. No process death, no fault outside the cage, witness tenant unaffected | Linux |
 | Hostile host calls cannot fault the host | 640,000 random boundary-biased calls in 400 VMs, under ASan+UBSan, with a witness tenant unaffected | Linux |
 | Heap free reuses memory, tolerates abuse | 100,000 alloc/free cycles on a 64 KiB heap; poisoned free lists, double and wild frees | macOS, Linux |
 | Loader admits exact bytes only | Wrong digest, tampered copy, symlink, directory all refused; 200 reloads | macOS, Linux |
@@ -298,14 +389,14 @@ LLVM 18 in that VM, whose IR the macOS run lowered. x86_64 is under QEMU emulati
 | Mail quota holds | Per VM and host; a dead VM returns all of it | macOS, Linux |
 | 1000 VMs, 100,000 test actors | About 20 ms to create, 300,000 turns in 0.5-0.7 s; RSS +100 MiB on Linux, +440 MiB on macOS (larger pages) | macOS, Linux |
 | Kill spinning code without cooperation | Under 1 ms | macOS, Linux |
-| ASan+UBSan on host | Clean, core and lowered, 37 + 16 cases | Linux |
-| TSan on host | No races in 37 cases and in real spawn, send, stop and restart programs, but it cannot cover pure-spin kills: it defers async signals to its next interceptor | Linux |
-| Host built with gcc | 37 + 16 cases | Linux |
-| Existing wasm32 and rejection tests | 171 of 172 pass. `native_exit_reject_unsupported_async_root` fails the same way without this change | Linux |
+| ASan+UBSan on host | Clean, core and lowered, 42 + 21 cases | Linux |
+| TSan on host | No races in 39 cases and in real programs, including pipelines, but it cannot cover pure-spin kills: it defers async signals to its next interceptor | Linux |
+| Host built with gcc | 42 + 21 cases | Linux |
+| The compiler's whole suite, against `main` | 783 tests on an idle 14-vCPU Linux VM with g++ and LLVM 19, built with keep-going: the same 24 do not pass on `main` at `0ee037ca3` and on this branch merged with it, and none only here. Both builds hit the same 209 compile errors from `main` | Linux |
 | Wasmtime targeted kill | 6 spinning tenants ended one at a time, none early, worst about 2 ms | macOS |
 | Wasmtime: 1000 Stores | 200,000 turns at about 1.3M/s, contained faults and memory bomb | macOS |
 | .NET hosts 1000 VMs through the loader | 30,000 correct turns under CoreCLR JIT and NativeAOT, while the CLR forced 706 and 981 GCs and caught 1.4M and 2.0M null faults; wrong digest refused | Linux |
-| x86_64 under emulation | 37 of 37 core cases, 16 of 16 lowered, including `.atto` lowered from IR. Timings mean nothing here | QEMU TCG, Ubuntu 24.04 |
+| x86_64 under emulation | 42 of 42 core cases, 21 of 21 lowered, including `.atto` lowered from IR. Timings mean nothing here | QEMU TCG, Ubuntu 24.04 |
 | Real x86_64 hardware, other kernels, PKU | **Not run** | |
 | Wasmtime on Linux, .NET on macOS | **Not run** | |
 | GitHub Actions | **Not run**: source-org jobs fail to start on billing, and `.github/workflows/tenant-vm.yml` is ready for when that is resolved. Private source was deliberately not mirrored to another org | |
@@ -362,8 +453,8 @@ In priority order. Done since the first version: `.atto` to a VM, code loading, 
 targeted Wasmtime kill, actor restart, and the audit, which found what most needed doing first.
 
 1. **Actor-to-actor messaging, loops and locals in handlers, richer messages.** Language and compiler work,
-   on every backend. The host calls this needs already exist. Handler sends must commit with the turn, and
-   pipeline failure can then be built. See [Restart](#restart).
+   on every backend. Child fields and handler sends exist under `--guest-abi=tenant-vm` only, and are not
+   ratified language. `send` reporting admission, backpressure, passing references and replies are open.
 2. **Reconcile with the process-worker direction and `tenant-isolation-v1.json`.** A decision, not code.
 3. **Durable heap for real programs.** `alloc` and `free` exist with size classes, and memory persists.
    Nothing compiled calls them yet, nothing suspends across `await`, and zero-GC for real programs

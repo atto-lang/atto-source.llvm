@@ -1,7 +1,12 @@
 #pragma once
-// Loads a lowered guest library for one or more tenant VMs. The digest is the admission: only the
-// output of the lowering pipeline should ever be named here, and the bytes that get mapped are
-// the bytes that were hashed. Tenants never supply these files.
+// Loads a lowered guest library for one or more tenant VMs.
+// The caller-supplied digest checks byte integrity only: it does NOT authenticate
+// trusted-compiler provenance, source identity or permission to execute native code.
+// Dynamic libraries execute in the host OS process with its native authority.
+// Do not accept tenant-supplied libraries OR caller-supplied expected hashes as
+// sufficient authorization for hostile/untrusted execution. A separately trusted,
+// immutable compiler/attestation policy must authorize the exact artifact first.
+// Tenant VM ABI addressing restrictions are not enforced by this loader.
 #include "oreslang/runtime/TenantVmGuestAbi.h"
 
 #include <memory>

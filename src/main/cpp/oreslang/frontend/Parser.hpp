@@ -44,7 +44,8 @@ struct Expression {
         Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
         LogicalAnd, LogicalOr, LogicalXor,
         Conditional,
-        Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field
+        Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field,
+        ShiftLeft, ShiftRight, ShiftUnsignedRight
     };
     Kind kind;
     std::size_t offset = 0;
@@ -111,6 +112,8 @@ struct LocalBinding {
     // binding receives the result of exactly one scheduler-owned Future await.
     std::string future_await_name;
     bool assignable = false; // mutable lexical slot, distinct from referent capability
+    // Actor fields only: spawned when the actor starts, and owned by it. Never a scalar value.
+    std::string actor_ref_type;
 };
 
 struct ClassField {
@@ -260,6 +263,7 @@ struct ActorSend {
     std::string reference;
     std::unique_ptr<Expression> payload;
     std::size_t offset = 0;
+    std::size_t after_writes = 0; // in a handler: field writes that precede it in source order
 };
 // Preserve the sequence of source-visible actor effects. Separating sends
 // from stops changes program behavior and can hide use-after-stop errors.
@@ -368,6 +372,9 @@ struct Function {
     bool exported = false;
     std::string method_owner; // compiler-owned class method privilege, never source syntax
     bool native_internal = false; // linker-owned private imported implementation
+    // Explicit compiler-owned host C u32 trampoline, never the guest i64 ABI.
+    // Only the browser v1 ABI version symbol is admitted in the first slice.
+    std::string c_export_u32_symbol;
     FunctionEffects declared_effects{};
     bool has_declared_effects = false;
     std::string return_sum;
@@ -444,6 +451,8 @@ struct ScalarGenerator {
 
 struct ModuleImport {
     bool selected_class = false;
+    // `import fnc name [as alias] from "path";` binds one pub function by name.
+    bool selected_function = false;
     std::string selected_module;
     std::string local_name;
     std::string path;

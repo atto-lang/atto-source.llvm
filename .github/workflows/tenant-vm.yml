@@ -3,7 +3,10 @@ on:
   pull_request:
     paths:
       - 'src/main/cpp/oreslang/runtime/TenantVm*'
-      - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
+      - 'src/main/cpp/oreslang/backend/LlvmCodegen.*'
+      - 'src/main/cpp/oreslang/frontend/Parser.*'
+      - 'src/main/cpp/oreslang/main.cpp'
+      - 'CMakeLists.txt'
       - 'tests/tenant-vm/**'
       - 'tools/tenant-vm/**'
       - '.github/workflows/tenant-vm.yml'
@@ -23,6 +26,28 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify checkout identity and native runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$expected" || { echo "Wrong checkout: expected $expected, got $actual" >&2; exit 1; }
+          printf 'Source commit: %s\nSource tree: %s\n' "$actual" "$(git rev-parse HEAD^{tree})"
+          printf 'Runner architecture: %s\n' "$(uname -m)"
+          case "${{ matrix.os }}:$(uname -m):${{ runner.arch }}" in
+            ubuntu-24.04:x86_64:X64|ubuntu-24.04-arm:aarch64:ARM64) ;;
+            *) echo "Wrong native runner architecture for ${{ matrix.os }}: $(uname -m) / ${{ runner.arch }}" >&2; exit 1 ;;
+          esac
+          uname -a
+          lscpu | head -n 25 || true
+          {
+            echo "### Tenant VM exact-checkout evidence"
+            echo "- Source commit: \`$actual\`"
+            echo "- Git tree: \`$(git rev-parse HEAD^{tree})\`"
+            echo "- Runner: \`${{ runner.os }} / ${{ runner.arch }}\`"
+            echo "- Kernel architecture: \`$(uname -m)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Install toolchain
         shell: bash
         run: |
@@ -37,20 +62,48 @@ jobs:
           set -euo pipefail
           cmake -S . -B build/compiler -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm
           cmake --build build/compiler --target oreslang-llvmc -j4
+          test -x build/compiler/oreslang-llvmc
+          {
+            echo "### Toolchain and compiled guest source"
+            echo "- Compiler binary SHA256: \`$(sha256sum build/compiler/oreslang-llvmc | awk '{print $1}')\`"
+            for cmd in clang clang++ cmake wat2wasm wasm2c python3 llvm-config-18 wasm-ld-18; do
+              echo "- $cmd: \`$($cmd --version 2>&1 | sed -n '1p')\`"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Plain build and all tenant VM tests
         shell: bash
         run: |
           set -euo pipefail
           cmake -S tests/tenant-vm -B build/tv -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-            -DTENANT_VM_ATTO_COMPILER="$PWD/build/compiler/oreslang-llvmc"
+            -DTENANT_VM_REQUIRE_FULL_COVERAGE=ON -DTENANT_VM_ATTO_COMPILER="$PWD/build/compiler/oreslang-llvmc"
           cmake --build build/tv -j4
-          ctest --test-dir build/tv --output-on-failure
+          ctest --test-dir build/tv -N | tee build/tv/test-inventory.txt
+          for suite in tenant_vm_test tenant_vm_lowered_test tenant_vm_source_contract_test tenant_vm_admission_test; do
+            if ! grep -Eq "Test +#[0-9]+: ${suite}$" build/tv/test-inventory.txt; then
+              echo "Missing required tenant VM suite: ${suite}" >&2
+              exit 1
+            fi
+          done
+          # -V preserves the per-executable case totals, including the real
+          # compiler-generated guest cases. Missing cases are a failed gate.
+          ctest --test-dir build/tv --verbose --output-on-failure | tee build/tv/test-execution.log
+          grep -Fq '43 cases, 0 failed' build/tv/test-execution.log || { echo "Native host case total or result mismatch" >&2; exit 1; }
+          grep -Fq '21 cases, 0 failed' build/tv/test-execution.log || { echo "Lowered guest case total or result mismatch" >&2; exit 1; }
+          grep -Fq 'SOURCE_CONTRACT_PASS' build/tv/test-execution.log || { echo "Missing source contract execution proof" >&2; exit 1; }
+          grep -Fq 'ADMISSION_PASS' build/tv/test-execution.log || { echo "Missing admission execution proof" >&2; exit 1; }
+          {
+            echo "### Required executable gate totals"
+            echo "- Native host: 43/43 cases passed"
+            echo "- Lowered guests: 21/21 cases passed"
+            echo "- Source-contract and admission: pass markers present"
+            echo "- Plain suite: all four registered CTest tests ran"
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: ASan and UBSan
         shell: bash
         run: |
           set -euo pipefail
           cmake -S tests/tenant-vm -B build/tv-asan -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-            -DTENANT_VM_SANITIZE=ON -DTENANT_VM_ATTO_COMPILER="$PWD/build/compiler/oreslang-llvmc"
+            -DTENANT_VM_SANITIZE=ON -DTENANT_VM_REQUIRE_FULL_COVERAGE=ON -DTENANT_VM_ATTO_COMPILER="$PWD/build/compiler/oreslang-llvmc"
           cmake --build build/tv-asan -j4
           TENANT_VM_FUZZ_ROUNDS=400 UBSAN_OPTIONS=halt_on_error=1 ctest --test-dir build/tv-asan --output-on-failure -E admission
       - name: TSan

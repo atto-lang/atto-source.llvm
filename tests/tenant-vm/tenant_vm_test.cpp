@@ -520,6 +520,17 @@ void authority_is_bound_to_host_and_generation() {
         bad.tenant_id = id;
         CHECK_STATUS(one.open(bad).status, Status::InvalidArgument);
     }
+    // v2 tenant IDs are ASCII, <=128 bytes; embedded NUL/non-ASCII must not be
+    // silently normalized or accepted as alternate host-root identities.
+    for (const std::string& id : {std::string(129, 'x'), std::string("x\0y", 3),
+                                  std::string(1, static_cast<char>(0x80))}) {
+        auto bad = spec(id);
+        CHECK_STATUS(one.open(bad).status, Status::InvalidArgument);
+    }
+    auto edge = one.open(spec(std::string(128, 'x')));
+    REQUIRE_OK(edge);
+    CHECK_STATUS(one.kill(edge.handle), Status::Ok);
+    one.wait_closed(edge.handle);
     auto no_module = spec("x");
     no_module.module = nullptr;
     CHECK_STATUS(one.open(no_module).status, Status::InvalidArgument);
@@ -1224,6 +1235,44 @@ void repeated_failures_end_only_that_actor() {
     CHECK_EQ(terminal.mail_abandoned, std::uint64_t{1});
 }
 
+// A zero-length window would discard each failure before the next one, so the
+// restart budget would never be exhausted. Reject it at VM admission. A zero
+// restart *budget*, however, is valid: the first failed turn ends only its actor.
+void zero_restart_window_is_rejected_and_zero_budget_is_bounded() {
+    TenantVmHost host;
+    VmSpec invalid = spec("zero-window");
+    invalid.limits.restart_window_ms = 0;
+    CHECK_STATUS(host.open(invalid).status, Status::InvalidArgument);
+    CHECK_EQ(host.stats().live_vms, std::size_t{0});
+
+    VmSpec no_restarts = spec("zero-budget");
+    no_restarts.limits.restart_budget = 0;
+    no_restarts.limits.restart_backoff_ms = 0;
+    auto vm = host.open(no_restarts);
+    REQUIRE_OK(vm);
+    auto failing = host.spawn_actor(vm.handle, KIND_RESTARTABLE);
+    auto sibling = host.spawn_actor(vm.handle, KIND_RESTARTABLE);
+    REQUIRE_OK(failing);
+    REQUIRE_OK(sibling);
+
+    const TurnResult failed = host.call(failing.actor, words({RESTART_ADD_THEN_TRAP, 1})).get();
+    CHECK_STATUS(failed.status, Status::ActorTerminated);
+    CHECK_REASON(failed.failure, FailReason::Trap);
+    CHECK_STATUS(host.call(failing.actor, words({RESTART_ADD, 1})).get().status, Status::ActorTerminated);
+    CHECK_EQ(word(host.call(sibling.actor, words({RESTART_ADD, 7})).get().payload), std::int64_t{7});
+    const VmSnapshot snapshot = host.snapshot(vm.handle);
+    CHECK(snapshot.phase == Phase::Running);
+    CHECK_EQ(snapshot.live_actors, std::size_t{1});
+    CHECK_EQ(snapshot.actor_restarts, std::uint64_t{0});
+    CHECK_EQ(snapshot.actors_terminated, std::uint64_t{1});
+
+    CHECK_STATUS(host.begin_shutdown(vm.handle), Status::Ok);
+    const VmTerminal terminal = host.wait_closed(vm.handle);
+    CHECK(terminal.phase == Phase::Stopped);
+    CHECK_EQ(terminal.actor_restarts, std::uint64_t{0});
+    CHECK_EQ(terminal.actors_terminated, std::uint64_t{1});
+}
+
 // The budget counts failures in a window, so old failures stop counting.
 void the_restart_budget_refills_with_time() {
     TenantVmHost host;
@@ -1231,6 +1280,7 @@ void the_restart_budget_refills_with_time() {
     s.limits.restart_budget = 1;
     s.limits.restart_window_ms = 50;
     s.limits.restart_backoff_ms = 0;
+    s.limits.turn_deadline_ms = 30000;
     auto v = host.open(s);
     REQUIRE_OK(v);
     auto a = host.spawn_actor(v.handle, KIND_RESTARTABLE);
@@ -1370,6 +1420,127 @@ void a_clean_stop_still_reports_failures() {
     CHECK_EQ(host.snapshot(w.handle).live_actors, std::size_t{0});
 }
 
+// One turn's state and sends happen together, or not at all, and a kill cannot split them.
+void a_commit_is_all_or_nothing() {
+    TenantVmHost host;
+    VmSpec s = spec("t");
+    s.limits.max_parallel_turns = 1;
+    s.limits.mailbox_capacity = 4;
+    auto v = host.open(s);
+    REQUIRE_OK(v);
+    auto a = host.spawn_actor(v.handle, KIND_RESTARTABLE);
+    REQUIRE_OK(a);
+    const auto child = word(host.call(a.actor, words({RESTART_SPAWN, KIND_COUNTER})).get().payload);
+    CHECK(child != 0);
+    const auto turns_before = host.snapshot(v.handle).turns;
+    // Three sends to a mailbox with room: state moves, and all three arrive.
+    CHECK_EQ(word(host.call(a.actor, words({RESTART_COMMIT, 10, child})).get().payload), 10);
+    for (int i = 0; i < 2000 && host.snapshot(v.handle).inflight != 0; ++i) std::this_thread::sleep_for(Ms(1));
+    CHECK_EQ(host.snapshot(v.handle).turns, turns_before + 4);
+    // A target that does not exist: nothing is sent, the version does not move, and the turn fails.
+    auto refused = host.call(a.actor, words({RESTART_COMMIT, 1000, 0x7FFFFFF0})).get();
+    CHECK_STATUS(refused.status, Status::ActorRestarted);
+    CHECK_EQ(host.snapshot(v.handle).inflight, std::size_t{0});
+    // Not enough room for all three is refused as a whole: a mailbox of 4 holding 2, with the child's
+    // turns held up behind this one, because only one turn runs at a time.
+    VmSpec tight = spec("tight");
+    tight.limits.max_parallel_turns = 1;
+    tight.limits.mailbox_capacity = 2;
+    auto w = host.open(tight);
+    REQUIRE_OK(w);
+    auto b = host.spawn_actor(w.handle, KIND_RESTARTABLE);
+    REQUIRE_OK(b);
+    const auto small = word(host.call(b.actor, words({RESTART_SPAWN, KIND_COUNTER})).get().payload);
+    auto full = host.call(b.actor, words({RESTART_COMMIT, 5, small})).get();
+    CHECK_STATUS(full.status, Status::ActorRestarted);
+    CHECK_EQ(host.snapshot(w.handle).inflight, std::size_t{0}); // not even the two that fit
+    // Under a mail quota too. It gives back what it charged.
+    CHECK_EQ(host.stats().queued_bytes, std::uint64_t{0});
+}
+
+// A chain as deep as a guest cares to make it, stopped from the front. This runs on a carrier's stack,
+// so recursion here would be a way for a tenant to end the process.
+void stopping_an_owner_stops_what_it_owns() {
+    TenantVmHost host;
+    VmSpec s = spec("chain");
+    s.limits.max_actors = 30000;
+    s.limits.heap_bytes = std::uint64_t{64} << 20;
+    auto v = host.open(s);
+    REQUIRE_OK(v);
+    auto head = host.spawn_actor(v.handle, KIND_CHAIN);
+    REQUIRE_OK(head);
+    constexpr int kDepth = 25000;
+    CHECK_STATUS(host.call(head.actor, words({kDepth})).get().status, Status::Ok);
+    for (int i = 0; i < 20000 && (host.snapshot(v.handle).live_actors != kDepth + 1 || host.snapshot(v.handle).inflight != 0); ++i)
+        std::this_thread::sleep_for(Ms(1));
+    CHECK_EQ(host.snapshot(v.handle).live_actors, std::size_t{kDepth + 1});
+    CHECK_STATUS(host.stop_actor(head.actor), Status::Ok);
+    for (int i = 0; i < 20000 && host.snapshot(v.handle).live_actors != 0; ++i) std::this_thread::sleep_for(Ms(1));
+    CHECK_EQ(host.snapshot(v.handle).live_actors, std::size_t{0});
+
+    // A guest that spawns and stops in a loop must not grow its list of children for ever. Each of these
+    // is a host call in one turn, so memory would show it: run far more than any bound on live actors.
+    VmSpec churn = spec("churn");
+    churn.limits.max_actors = 4;
+    auto w = host.open(churn);
+    REQUIRE_OK(w);
+    auto parent = host.spawn_actor(w.handle, KIND_HOSTILE);
+    REQUIRE_OK(parent);
+    for (int i = 0; i < 20000; ++i) {
+        const auto child = word(host.call(parent.actor, words({HOSTILE_SPAWN, KIND_COUNTER})).get().payload);
+        CHECK(child != 0);
+        CHECK_EQ(word(host.call(parent.actor, words({HOSTILE_STOP, child})).get().payload), 1);
+    }
+    CHECK_EQ(host.snapshot(w.handle).live_actors, std::size_t{1});
+    CHECK_STATUS(host.stop_actor(parent.actor), Status::Ok);
+}
+
+// The abort barrier, upstream: an owner whose child ends still has mail queued. That mail would only be
+// forwarded into a stage that is gone, so it is reported, and the owner stops. Its caller is told why.
+void an_owner_stops_when_its_child_ends() {
+    TenantVmHost host;
+    VmSpec s = spec("t");
+    s.limits.max_parallel_turns = 1; // owner and child take turns, so the owner still has mail queued
+    s.limits.restart_budget = 2;
+    s.limits.restart_backoff_ms = 0;
+    auto v = host.open(s);
+    REQUIRE_OK(v);
+    auto owner = host.spawn_actor(v.handle, KIND_RESTARTABLE);
+    auto bystander = host.spawn_actor(v.handle, KIND_RESTARTABLE);
+    REQUIRE_OK(owner);
+    REQUIRE_OK(bystander);
+    const auto child = word(host.call(owner.actor, words({RESTART_SPAWN, KIND_RESTARTABLE})).get().payload);
+    CHECK(child != 0);
+    // Hold the VM's one turn while every call queues, so all of them are admitted before the child runs,
+    // however slowly this thread submits them (as under a sanitizer).
+    auto burner = host.spawn_actor(v.handle, KIND_BURN);
+    REQUIRE_OK(burner);
+    auto holding = host.call(burner.actor, words({300000000}));
+    std::this_thread::sleep_for(Ms(20));
+    // Three sends the child will fail on, which spends a budget of 2, then plenty queued behind them.
+    std::vector<std::future<TurnResult>> calls;
+    calls.push_back(host.call(owner.actor, words({RESTART_COMMIT, 1, child})));
+    for (int i = 0; i < 20; ++i) calls.push_back(host.call(owner.actor, words({RESTART_ADD, 1})));
+    CHECK_STATUS(holding.get().status, Status::Ok);
+    int ok = 0, aborted = 0;
+    for (auto& f : calls) {
+        const Status status = f.get().status;
+        if (status == Status::Ok) ++ok;
+        else if (status == Status::PipelineAborted) ++aborted;
+        else CHECK_STATUS(status, Status::Ok);
+    }
+    CHECK(aborted > 0);
+    const auto snapshot = host.snapshot(v.handle);
+    CHECK_EQ(snapshot.actors_terminated, std::uint64_t{1});
+    CHECK_EQ(snapshot.pipelines_aborted, std::uint64_t{1});
+    CHECK_EQ(snapshot.actors_aborted, std::uint64_t{1});
+    CHECK(snapshot.mail_abandoned >= static_cast<std::uint64_t>(aborted));
+    CHECK(snapshot.phase == Phase::Running);
+    CHECK_STATUS(host.call(owner.actor, words({RESTART_ADD, 1})).get().status, Status::ActorTerminated);
+    CHECK_EQ(word(host.call(bystander.actor, words({RESTART_ADD, 5})).get().payload), 5); // the rest of the tenant goes on
+    std::printf("  owner served %d calls, then %d were reported as aborted when its child ended\n", ok, aborted);
+}
+
 // Many actors failing, stopping and being killed at once, for the sanitizers to look at.
 void restart_stress() {
     TenantVmHost host;
@@ -1449,12 +1620,16 @@ const Case cases[] = {
     {"a_confined_fault_restarts_only_that_actor", a_confined_fault_restarts_only_that_actor},
     {"a_deadline_stops_one_turn_not_its_siblings", a_deadline_stops_one_turn_not_its_siblings},
     {"repeated_failures_end_only_that_actor", repeated_failures_end_only_that_actor},
+    {"zero_restart_window_is_rejected_and_zero_budget_is_bounded", zero_restart_window_is_rejected_and_zero_budget_is_bounded},
     {"the_restart_budget_refills_with_time", the_restart_budget_refills_with_time},
     {"a_failed_turn_leaves_nothing_outside_its_actor", a_failed_turn_leaves_nothing_outside_its_actor},
     {"restart_limits_are_checked", restart_limits_are_checked},
     {"a_restart_waits_before_the_next_turn", a_restart_waits_before_the_next_turn},
     {"an_unconfined_fault_still_fails_the_vm", an_unconfined_fault_still_fails_the_vm},
     {"a_clean_stop_still_reports_failures", a_clean_stop_still_reports_failures},
+    {"a_commit_is_all_or_nothing", a_commit_is_all_or_nothing},
+    {"stopping_an_owner_stops_what_it_owns", stopping_an_owner_stops_what_it_owns},
+    {"an_owner_stops_when_its_child_ends", an_owner_stops_when_its_child_ends},
     {"restart_stress", restart_stress},
     {"thousand_vms_in_one_process", thousand_vms_in_one_process},
 };

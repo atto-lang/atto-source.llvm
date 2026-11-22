@@ -1,0 +1,9 @@
+// Independent reset-to-zero LLVM guest fixture.
+define module attoxp_counter_reset as
+  pub fnc reset(int current): int {
+    return current - current;
+  }
+  pub fnc main(): int {
+    return reset(500);
+  }
+end

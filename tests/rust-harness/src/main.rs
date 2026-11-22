@@ -350,6 +350,93 @@ fn aot_driver(driver: &Path, compiler: &Path, clang: &Path) -> Result<(), String
     )?;
 
     let original = fs::read(&output).map_err(|e| e.to_string())?;
+    // A host-side trampoline that always returns 42 can pass one smoke test.
+    // Distinct guest programs must produce distinct, independently runnable
+    // linked artifacts, with the compiler and PATH unavailable at execution.
+    // These tests establish only the currently implemented scalar guest slice,
+    // not full language/actor AOT parity.
+    for (label, program, expected_exit) in [
+        ("zero", "pub routine main(): int { return 0; }\n", 0),
+        ("one", "pub routine main(): int { return 1; }\n", 1),
+        ("module", "define module demo as\n  pub fnc main(): int { return 7; }\nend\n", 7),
+        ("forward-call", "pub fnc main(): int { return add(40, 2); }\nfnc add(int a, int b): int { return a + b; }\n", 42),
+    ] {
+        fs::write(&source, program).map_err(|e| format!("{label}: write guest: {e}"))?;
+        let built = Command::new(driver)
+            .arg(&source).arg(&output)
+            .env("ORESLANG_LLVMC", compiler).env("CLANG", clang)
+            .output().map_err(|e| format!("{label}: AOT driver: {e}"))?;
+        require(built.status.success(),
+            format!("{label}: native link failed: {}", stderr(&built)))?;
+        let executed = Command::new(&output)
+            .env_clear().env("PATH", "/nonexistent")
+            .output().map_err(|e| format!("{label}: native entrypoint: {e}"))?;
+        require(executed.status.code() == Some(expected_exit),
+            format!("{label}: native guest returned {:?} instead of {expected_exit}: {}",
+                executed.status.code(), stderr(&executed)))?;
+        require(executed.stdout.is_empty() && executed.stderr.is_empty(),
+            format!("{label}: unexpected guest I/O or host interpreter diagnostics"))?;
+        if expected_exit != 42 {
+            require(fs::read(&output).map_err(|e| e.to_string())? != original,
+                format!("{label}: artifact identical to baseline despite distinct guest return"))?;
+        }
+    }
+    // Source actors through the same driver: the IR declares the native actor
+    // runtime, so the driver must link the scheduler/VM/actor heap itself.
+    // Two distinct returns prove the exit code comes from the guest.
+    let actor_source = temp.path.join("actor.atto");
+    for (label, done_await, expected_exit) in [("actor-ready", false, 44), ("actor-done", true, 45)] {
+        let program = format!(
+            "define actor Worker as {{\n  let total: int = 0;\n  pub fnc on_message(int n): int {{\n    total = total + n;\n    return total;\n  }}\n}}\n\
+             pub fnc main(): int {{\n  const worker: ActorRef<Worker> = spawn Worker();\n{}  stop worker;\n{}  return {expected_exit};\n}}\n",
+            if done_await { "" } else {
+                "  const Future<void> ready = worker.get_ready();\n  await ready;\n  worker.send(1);\n  worker.send(2);\n"
+            },
+            if done_await { "  await worker.get_done();\n" } else { "" });
+        fs::write(&actor_source, program).map_err(|e| format!("{label}: write guest: {e}"))?;
+        let built = Command::new(driver)
+            .arg(&actor_source).arg(&output)
+            .env("ORESLANG_LLVMC", compiler).env("CLANG", clang)
+            .output().map_err(|e| format!("{label}: AOT driver: {e}"))?;
+        require(built.status.success(),
+            format!("{label}: actor runtime link failed: {}", stderr(&built)))?;
+        let executed = Command::new(&output)
+            .env_clear().env("PATH", "/nonexistent")
+            .output().map_err(|e| format!("{label}: native entrypoint: {e}"))?;
+        require(executed.status.code() == Some(expected_exit),
+            format!("{label}: native actor guest returned {:?} instead of {expected_exit}: {}",
+                executed.status.code(), stderr(&executed)))?;
+    }
+
+    // Canonical spelling shared with the Java frontend: `as ... end`, a
+    // type-first field, `self.field`, a bare method and `worker.stop()`.
+    // The same bytes must run on both backends.
+    fs::write(&actor_source, "define actor Worker as\n  let int total = 0;\n  pub on_message(int n): int {\n    self.total = self.total + n;\n    return self.total;\n  }\nend\n\
+pub fnc main(): int {\n  const worker: ActorRef<Worker> = spawn Worker();\n  worker.stop();\n  await worker.get_done();\n  return 46;\n}\n")
+        .map_err(|e| format!("canonical actor: write guest: {e}"))?;
+    let built = Command::new(driver)
+        .arg(&actor_source).arg(&output)
+        .env("ORESLANG_LLVMC", compiler).env("CLANG", clang)
+        .output().map_err(|e| format!("canonical actor: AOT driver: {e}"))?;
+    require(built.status.success(),
+        format!("canonical actor: compile/link failed: {}", stderr(&built)))?;
+    let executed = Command::new(&output)
+        .env_clear().env("PATH", "/nonexistent")
+        .output().map_err(|e| format!("canonical actor: native entrypoint: {e}"))?;
+    require(executed.status.code() == Some(46),
+        format!("canonical actor guest returned {:?} instead of 46", executed.status.code()))?;
+
+    // Rebuild the original image before negative cases: they must preserve
+    // exactly these published bytes and never publish a partial executable.
+    fs::write(&source, "fnc main(): int { return 42; }\n")
+        .map_err(|e| e.to_string())?;
+    let restored = Command::new(driver)
+        .arg(&source).arg(&output)
+        .env("ORESLANG_LLVMC", compiler).env("CLANG", clang)
+        .output().map_err(|e| format!("restore linked guest: {e}"))?;
+    require(restored.status.success(),
+        format!("restore linked guest failed: {}", stderr(&restored)))?;
+    let original = fs::read(&output).map_err(|e| e.to_string())?;
     for text in [
         "import module spin from \"spin\";\n",
         "this is not Oreslang\n",
@@ -369,6 +456,43 @@ fn aot_driver(driver: &Path, compiler: &Path, clang: &Path) -> Result<(), String
             "failed compile changed existing native output",
         )?;
     }
+
+    // The IR screen is a release gate, not linked-image certification. A compiler
+    // emitting collector IR must be stopped before Clang, by this specific gate.
+    fs::write(&source, "fnc main(): int { return 42; }\n").map_err(|e| e.to_string())?;
+    let fake = temp.path.join("fake-ir-compiler.sh");
+    for ir in [
+        r#"define void @guest() gc "shadow-stack" { ret void }"#,
+        r#"define void @"safe;label"() gc "shadow-stack" { ret void }"#,
+        "declare void @llvm.gcroot(ptr, ptr)",
+        "declare token @llvm.gc.statepoint.p0(i64, i32, ptr, i32, i32, ...)",
+        "declare ptr @GC_malloc(i64)",
+        "declare void @gc_collect()",
+        r#"declare void @"llvm.g\63root"(ptr, ptr)"#,
+    ] {
+        fs::write(&fake, format!("#!/bin/sh\ncat <<'IR'\n{ir}\nIR\n")).map_err(|e| e.to_string())?;
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
+        }
+        let out = Command::new(driver)
+            .arg(&source)
+            .arg(&output)
+            .env("ORESLANG_LLVMC", &fake)
+            .env("CLANG", clang)
+            .output()
+            .map_err(|e| format!("run collector IR case: {e}"))?;
+        require(!out.status.success(), format!("collector IR admitted: {ir}"))?;
+        require(
+            stderr(&out).contains("STRICT_NO_GC_IR_REJECTED"),
+            format!("{ir}: rejected by something other than the gate: {}", stderr(&out)),
+        )?;
+        require(
+            fs::read(&output).map_err(|e| e.to_string())? == original,
+            "collector IR changed existing native output",
+        )?;
+    }
+    fs::remove_file(&fake).map_err(|e| e.to_string())?;
 
     for entry in fs::read_dir(&temp.path).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
@@ -451,38 +575,131 @@ fn tagged_message_wire(binary: &Path, vectors: &Path) -> Result<(), String> {
 fn native_async_io_boundary(compiler: &Path) -> Result<(), String> {
     let temp = TempDir::new("ores-async-io-boundary-").map_err(|e| e.to_string())?;
     let fixture = temp.path.join("probe.ores");
-    // These names must remain rejected until typed effects, native continuation
-    // lowering, and nonblocking transports are implemented together.
+
+    // Concrete standard-I/O spellings named by the native async-only contract.
+    // Until registry/effect/continuation lowering lands together, each spelling
+    // must be unavailable as a call and impossible to impersonate as a user
+    // global function or method.
     let operations = [
-        ("read blocking", "read_text_blocking(1)"),
-        ("read async", "read_text_async(1)"),
-        ("write blocking", "write_text_blocking(1)"),
-        ("write async", "write_text_async(1)"),
-        ("TCP connect blocking", "connect_blocking(1)"),
-        ("TCP connect async", "connect_async(1)"),
-        ("TCP read blocking", "read_line_blocking(1)"),
-        ("TCP read async", "read_line_async(1)"),
-        ("TCP write blocking", "socket_write_text_blocking(1)"),
-        ("TCP write async", "socket_write_text_async(1)"),
-        ("HTTP GET blocking", "http_get_text_blocking(1)"),
-        ("HTTP GET async", "http_get_text_async(1)"),
-        ("HTTP POST blocking", "http_post_text_blocking(1)"),
-        ("HTTP POST async", "http_post_text_async(1)"),
-        ("stdio blocking", "println_blocking(1)"),
-        ("stdio async", "println_async(1)"),
+        ("legacy read", "read_text"),
+        ("legacy write", "write_text"),
+        ("read blocking", "read_text_blocking"),
+        ("read async", "read_text_async"),
+        ("write blocking", "write_text_blocking"),
+        ("write async", "write_text_async"),
+        ("TCP connect blocking", "connect_blocking"),
+        ("TCP connect async", "connect_async"),
+        ("TCP read blocking", "read_line_blocking"),
+        ("TCP read async", "read_line_async"),
+        ("TCP write blocking", "socket_write_text_blocking"),
+        ("TCP write async", "socket_write_text_async"),
+        ("HTTP GET blocking", "http_get_text_blocking"),
+        ("HTTP GET async", "http_get_text_async"),
+        ("HTTP POST blocking", "http_post_text_blocking"),
+        ("HTTP POST async", "http_post_text_async"),
+        ("stdio blocking", "println_blocking"),
+        ("stdio async", "println_async"),
     ];
-    for (name, operation) in operations {
-        fs::write(&fixture, format!("pub fnc main(): int {{ return {operation}; }}\n"))
-            .map_err(|e| format!("{name}: write fixture: {e}"))?;
+
+    for (name, symbol) in operations {
+        let undefined_call = format!(
+            r#"pub fnc main(): int {{ return {symbol}(1); }}
+"#
+        );
+        fs::write(&fixture, undefined_call)
+            .map_err(|e| format!("{name}: write undefined-call fixture: {e}"))?;
         let out = run(compiler, [fixture.as_os_str()])?;
-        require(!out.status.success(),
-            format!("{name}: unsupported native I/O compiled: {}", stdout(&out)))?;
-        require(stdout(&out).trim().is_empty(),
-            format!("{name}: unsupported native I/O emitted LLVM IR: {}", stdout(&out)))?;
-        require(stderr(&out).contains("unknown function or wrong call arity"),
-            format!("{name}: missing explicit rejection diagnostic: {}", stderr(&out)))?;
+        require(
+            !out.status.success(),
+            format!("{name}: unsupported native I/O compiled: {}", stdout(&out)),
+        )?;
+        require(
+            stdout(&out).trim().is_empty(),
+            format!("{name}: unsupported native I/O emitted LLVM IR: {}", stdout(&out)),
+        )?;
+        require(
+            stderr(&out).contains("unknown function or wrong call arity"),
+            format!("{name}: missing undefined-call rejection diagnostic: {}", stderr(&out)),
+        )?;
+
+        let global_launder = format!(
+            r#"fnc {symbol}(int n): int {{ return n; }}
+pub fnc main(): int {{ return {symbol}(1); }}
+"#
+        );
+        fs::write(&fixture, global_launder)
+            .map_err(|e| format!("{name}: write declaration-laundering fixture: {e}"))?;
+        let out = run(compiler, [fixture.as_os_str()])?;
+        require(
+            !out.status.success()
+                && stdout(&out).trim().is_empty()
+                && stderr(&out).contains("native I/O callable name is compiler-owned"),
+            format!(
+                "{name}: global declaration laundered reserved I/O identity; status={:?}, stdout={}, stderr={}",
+                out.status.code(),
+                stdout(&out),
+                stderr(&out)
+            ),
+        )?;
+
+        let method_launder = format!(
+            r#"define class SocketFacade as
+  pub {symbol}(self, int n): int {{ return n; }}
+end
+pub fnc main(): int {{
+  let SocketFacade s = new SocketFacade();
+  return s.{symbol}(1);
+}}
+"#
+        );
+        fs::write(&fixture, method_launder)
+            .map_err(|e| format!("{name}: write method-laundering fixture: {e}"))?;
+        let out = run(compiler, [fixture.as_os_str()])?;
+        require(
+            !out.status.success()
+                && stdout(&out).trim().is_empty()
+                && stderr(&out).contains("native I/O callable name is compiler-owned"),
+            format!(
+                "{name}: method declaration laundered reserved I/O identity; status={:?}, stdout={}, stderr={}",
+                out.status.code(),
+                stdout(&out),
+                stderr(&out)
+            ),
+        )?;
     }
-    println!("Native async-only I/O boundary: {} unsupported native bindings fail closed", operations.len());
+
+    // The reservation is identity-based, not suffix-based. Preserve ordinary
+    // synchronous user functions that happen to end in _async/_blocking.
+    let positives = [
+        ("blocking suffix", "pure_math_blocking"),
+        ("async suffix", "checksum_async"),
+        ("similar I/O-looking suffix", "read_textish_async"),
+    ];
+    for (name, symbol) in positives {
+        let program = format!(
+            r#"fnc {symbol}(int n): int {{ return n + 1; }}
+pub fnc main(): int {{ return {symbol}(41); }}
+"#
+        );
+        fs::write(&fixture, program)
+            .map_err(|e| format!("{name}: write positive fixture: {e}"))?;
+        let out = run(compiler, [fixture.as_os_str()])?;
+        require(
+            out.status.success() && stdout(&out).starts_with("; ModuleID"),
+            format!(
+                "{name}: ordinary user suffix was over-reserved; status={:?}, stdout={}, stderr={}",
+                out.status.code(),
+                stdout(&out),
+                stderr(&out)
+            ),
+        )?;
+    }
+
+    println!(
+        "Native async-only I/O boundary: {} reserved standard spellings reject undefined/global/method laundering; {} user suffix controls compile",
+        operations.len(),
+        positives.len()
+    );
     Ok(())
 }
 

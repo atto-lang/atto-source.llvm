@@ -1,0 +1,31 @@
+// A turn that sends, then traps, must not have sent. Stage and Sink both trap on 3, so if the send got
+// out anyway there are two failures, not one.
+fnc poison(int n): int {
+  if (n eq 3) { return 9223372036854775807 + n; } fi
+  return n;
+}
+define actor Sink as {
+  let seen: int = 0;
+  pub fnc on_message(int n): int {
+    seen = poison(n);
+    return seen;
+  }
+}
+define actor Stage as {
+  const sink = spawn Sink();
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    sink.send(n);
+    total = total + poison(n);
+    return total;
+  }
+}
+pub fnc main(): int {
+  const stage = spawn Stage();
+  stage.send(1);
+  stage.send(2);
+  stage.send(3);
+  stage.send(4);
+  stop stage;
+  return 43;
+}

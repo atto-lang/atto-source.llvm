@@ -150,7 +150,7 @@ void attack_matrix(const char* library, bool bounded) {
     // Host calls with references it made up. Each is refused, and a refusal ends only this VM.
     for (const std::int64_t bad : {std::int64_t{-1}, std::int64_t{1} << 40, std::int64_t{999},
                                    static_cast<std::int64_t>(secret_address)}) {
-        for (const std::int64_t op : {std::int64_t{OP_VM_SEND}, std::int64_t{OP_VM_STOP}, std::int64_t{OP_VM_SPAWN}}) {
+        for (const std::int64_t op : {std::int64_t{OP_VM_SEND}, std::int64_t{OP_VM_STOP}, std::int64_t{OP_VM_SPAWN}, std::int64_t{OP_VM_SEND_ON_COMMIT}}) {
             auto v = host.open(spec("forger", guest));
             REQUIRE_OK(v);
             auto a = host.spawn_actor(v.handle, 0);
@@ -629,6 +629,140 @@ void atto_thousand_tenants_run_programs() {
     CHECK(host.stats().wild_accesses == 0);
 }
 
+// Actors messaging actors, in source. Sink traps on anything out of order, so a lost or reordered message
+// shows up as a restart. Stopping the head has to drain and stop the stages behind it.
+void atto_pipeline_of_actors() {
+    const LoadedGuest pipeline = load("atto_pipeline");
+    if (!pipeline.module) return;
+    CHECK(pipeline.module->kind_count == 4); // Sink, Middle, Head, main
+    TenantVmHost host;
+    for (int round = 0; round < 100; ++round) {
+        auto v = host.open(spec("pipeline", pipeline));
+        REQUIRE_OK(v);
+        run_main(host, v.handle, 3, 43);
+        for (int i = 0; i < 5000 && host.snapshot(v.handle).live_actors != 1; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        const auto s = host.snapshot(v.handle);
+        CHECK(s.live_actors == 1); // only main's actor: all three stages stopped themselves down the line
+        CHECK(s.inflight == 0);
+        CHECK(s.turns == 1 + 1 + 30); // main, main again, and 10 turns in each stage
+        CHECK_STATUS(host.begin_shutdown(v.handle), Status::Ok);
+        const VmTerminal terminal = host.wait_closed(v.handle);
+        CHECK(terminal.phase == Phase::Stopped);
+        CHECK(terminal.actor_restarts == 0);
+        CHECK(terminal.mail_lost == 0);
+    }
+    std::printf("  head to middle to sink: 10 messages in order through each, 100 rounds, stages stop in turn\n");
+}
+
+// Shutdown is a promise to finish the work already admitted, including what that work sends on.
+void atto_shutdown_drains_the_whole_pipeline() {
+    const LoadedGuest pipeline = load("atto_pipeline");
+    if (!pipeline.module) return;
+    TenantVmHost host;
+    auto v = host.open(spec("draining", pipeline));
+    REQUIRE_OK(v);
+    auto head = host.spawn_actor(v.handle, 2);
+    REQUIRE_OK(head);
+    std::vector<std::future<TurnResult>> pending;
+    for (int i = 1; i <= 40; ++i) pending.push_back(host.call(head.actor, one(i)));
+    CHECK_STATUS(host.begin_shutdown(v.handle), Status::Ok); // with mail still moving down the line
+    for (auto& f : pending) CHECK_STATUS(f.get().status, Status::Ok);
+    const VmTerminal terminal = host.wait_closed(v.handle);
+    CHECK(terminal.phase == Phase::Stopped);
+    CHECK(terminal.actor_restarts == 0); // Sink would have trapped on any gap
+}
+
+// A turn's state and its sends happen together. A failing turn sent nothing, and its child, restored from
+// stored state rather than spawned again, carries on. Then the same in a build that sends straight away.
+void atto_a_failed_turn_sent_nothing() {
+    const LoadedGuest atomic = load("atto_atomic");
+    const LoadedGuest eager = load("atto_atomic_eager");
+    if (!atomic.module || !eager.module) return;
+    TenantVmHost host;
+    auto v = host.open(spec("atomic", atomic));
+    REQUIRE_OK(v);
+    auto stage = host.spawn_actor(v.handle, 1);
+    REQUIRE_OK(stage);
+    CHECK(word(host.call(stage.actor, one(1)).get().payload) == 1);
+    CHECK(host.snapshot(v.handle).live_actors == 2); // the stage, and the sink it spawned
+    CHECK(word(host.call(stage.actor, one(2)).get().payload) == 3);
+    CHECK_STATUS(host.call(stage.actor, one(3)).get().status, Status::ActorRestarted);
+    CHECK(host.snapshot(v.handle).live_actors == 2); // not a second sink
+    CHECK(word(host.call(stage.actor, one(4)).get().payload) == 7);
+    CHECK_STATUS(host.begin_shutdown(v.handle), Status::Ok);
+    VmTerminal terminal = host.wait_closed(v.handle);
+    CHECK(terminal.actor_restarts == 1); // the stage. The sink never heard about 3.
+    CHECK(terminal.mail_lost == 0);
+
+    const auto run_main_of = [&](const LoadedGuest& guest, const char* id) {
+        auto w = host.open(spec(id, guest));
+        auto entry = host.spawn_actor(w.handle, 2);
+        CHECK(word(host.call(entry.actor, {}).get().payload) == 43);
+        for (int i = 0; i < 5000 && host.snapshot(w.handle).live_actors != 1; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        CHECK_STATUS(host.begin_shutdown(w.handle), Status::Ok);
+        return host.wait_closed(w.handle);
+    };
+    terminal = run_main_of(atomic, "whole");
+    CHECK(terminal.actor_restarts == 1);
+    CHECK(terminal.mail_lost == 1);
+    terminal = run_main_of(eager, "eager");
+    CHECK(terminal.actor_restarts == 2); // the send escaped the failed turn, so the sink trapped as well
+    std::printf("  a failed turn reaches no one; with sends made straight away, it reaches the next actor\n");
+}
+
+// A stage that spends its restart budget ends, and its pipeline stops around it: the stage after it finishes
+// what it had accepted, and the one feeding it stops with its queued mail reported. Another pipeline in the
+// same tenant carries on, in order. Kinds: Sink 0, Fragile 1, Healthy 2, FragileHead 3, HealthyHead 4.
+void atto_a_stage_that_ends_stops_its_pipeline_only() {
+    const LoadedGuest guest = load("atto_abort");
+    if (!guest.module) return;
+    TenantVmHost host;
+    VmSpec s = spec("two-pipelines", guest);
+    s.limits.restart_backoff_ms = 1;
+    auto v = host.open(s);
+    REQUIRE_OK(v);
+    auto fragile = host.spawn_actor(v.handle, 3);
+    auto healthy = host.spawn_actor(v.handle, 4);
+    REQUIRE_OK(fragile);
+    REQUIRE_OK(healthy);
+    std::vector<std::future<TurnResult>> fragile_calls, healthy_calls;
+    for (int i = 1; i <= 40; ++i) {
+        fragile_calls.push_back(host.call(fragile.actor, one(i)));
+        healthy_calls.push_back(host.call(healthy.actor, one(i)));
+    }
+    int fragile_ok = 0, fragile_aborted = 0;
+    for (auto& f : fragile_calls) {
+        const Status status = f.get().status;
+        if (status == Status::Ok) ++fragile_ok;
+        else if (status == Status::PipelineAborted) ++fragile_aborted;
+        else CHECK_STATUS(status, Status::Ok);
+    }
+    for (auto& f : healthy_calls) CHECK_STATUS(f.get().status, Status::Ok);
+    for (int i = 0; i < 5000 && host.snapshot(v.handle).live_actors != 3; ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    const auto snapshot = host.snapshot(v.handle);
+    CHECK(snapshot.phase == Phase::Running);          // the rest of the tenant goes on
+    CHECK(snapshot.live_actors == 3);                  // HealthyHead, Healthy and its Sink; all of the other pipeline gone
+    CHECK(snapshot.actors_terminated == 1);            // Fragile
+    CHECK(snapshot.pipelines_aborted == 1);
+    CHECK(snapshot.actors_aborted == 1);               // FragileHead
+    CHECK(snapshot.actor_restarts == 3);               // Fragile's budget, and no one else's
+    CHECK(fragile_ok + fragile_aborted == 40); // the head may have forwarded everything before the stage ended
+    CHECK(snapshot.mail_abandoned > 0);        // then the stage's own queued mail is what gets reported
+    // Later calls to the stopped head are refused, not queued.
+    CHECK_STATUS(host.call(fragile.actor, one(1)).get().status, Status::ActorTerminated);
+    // The healthy pipeline still works, in order, after all of that.
+    CHECK(word(host.call(healthy.actor, one(41)).get().payload) == 41);
+    CHECK_STATUS(host.begin_shutdown(v.handle), Status::Ok);
+    const VmTerminal terminal = host.wait_closed(v.handle);
+    CHECK(terminal.phase == Phase::Stopped);
+    CHECK(terminal.pipelines_aborted == 1); // a clean stop still says so
+    std::printf("  a stage ended: %d calls to its pipeline served, %d aborted; the other pipeline delivered all 41 in order\n",
+                fragile_ok, fragile_aborted);
+}
+
 // The stated requirement, with real compiled source instead of test guests.
 void atto_thousand_tenants_in_one_process() {
     const LoadedGuest counter = load("atto_counter");
@@ -696,7 +830,7 @@ int run_accepted_guest(const std::string& name) {
         auto a = host.spawn_actor(v.handle, 0);
         if (a.status != Status::Ok) return 6;
         for (int turn = 0; turn < 4; ++turn) {
-            auto r = host.call(a.actor, msg(static_cast<std::int64_t>(next() % 13), static_cast<std::int64_t>(next() >> (next() % 64)),
+            auto r = host.call(a.actor, msg(static_cast<std::int64_t>(next() % 14), static_cast<std::int64_t>(next() >> (next() % 64)),
                                             static_cast<std::int64_t>(next()))).get();
             if (r.status == Status::TenantFailed || r.status == Status::NotRunning) break;
         }
@@ -731,6 +865,10 @@ const Case cases[] = {
     {"atto_main_spawns_sends_and_stops", atto_main_spawns_sends_and_stops},
     {"atto_misordered_mail_is_detected", atto_misordered_mail_is_detected},
     {"atto_refused_send_ends_the_vm", atto_refused_send_ends_the_vm},
+    {"atto_pipeline_of_actors", atto_pipeline_of_actors},
+    {"atto_shutdown_drains_the_whole_pipeline", atto_shutdown_drains_the_whole_pipeline},
+    {"atto_a_failed_turn_sent_nothing", atto_a_failed_turn_sent_nothing},
+    {"atto_a_stage_that_ends_stops_its_pipeline_only", atto_a_stage_that_ends_stops_its_pipeline_only},
     {"atto_thousand_tenants_run_programs", atto_thousand_tenants_run_programs},
 #endif
 };

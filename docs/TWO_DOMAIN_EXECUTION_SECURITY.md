@@ -2,10 +2,21 @@
 
 Decision: 2026-10-12. Security audit / integration contract.
 
-> **Superseded in part, 2026-11-03.** Untrusted execution moves from one shared isolate to one
-> VM per tenant, up to 1000 in one OS process. Wherever this document fixes a single shared
-> untrusted Engine or pool, that no longer holds. The Java implementation has not changed yet.
-> See [TENANT_VM_IN_PROCESS_V1.md](TENANT_VM_IN_PROCESS_V1.md).
+> **Experimental LLVM topology; NOT a security-policy supersession (2026-11-07).**
+> [TENANT_VM_IN_PROCESS_V1.md](TENANT_VM_IN_PROCESS_V1.md) explores up to 1000 tenant
+> VMs sharing one OS process. Its native loader and cage design are not a proved
+> containment boundary for hostile native code: the guest ABI expressly states
+> that its memory-addressing rule is not enforced by the ABI, and a caller-supplied
+> SHA-256 only verifies byte identity, not compiler provenance or authorization.
+> Conformance [tenant-isolation-v2](https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/pull/352)
+> supersedes v1's mandatory per-tenant OS sandbox: validated-Wasm tenants may share
+> a process when each has a genuinely enforced VM-isolate. **That architecture
+> decision is not approval of this LLVM implementation.** Continue to refuse
+> hostile native libraries; retain the existing deployment-level security hold
+> for this experimental loader until authenticated compiler provenance,
+> confinement/admission negative tests and independent review have passed.
+> Separately deployed process isolation may remain defense in depth. The
+> existing Java topology is not changed by this proposal.
 
 ## Topology
 
