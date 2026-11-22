@@ -1,0 +1,88 @@
+name: Atto LLVM alloc library actual guest and native region cleanup
+on:
+  pull_request:
+    paths:
+      - 'stdlib/alloc/heap.atto'
+      - 'stdlib/alloc/arena.atto'
+      - 'stdlib/alloc/region.atto'
+      - 'src/main/cpp/oreslang/frontend/Generated*Atto.inc'
+      - 'src/main/cpp/oreslang/frontend/CoreLibrarySources.hpp'
+      - 'tools/atto-library-embed/**'
+      - 'tests/alloc_library_imports.py'
+      - 'tests/fixtures/alloc-heap-arena-region-policy.atto'
+      - '.github/workflows/atto-alloc-guest-llvm.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  real-llvm-alloc-guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact unprivileged source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          submodules: false
+      - name: Check source blob identities and HEAD
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          for mod in heap arena region; do
+            f="stdlib/alloc/${mod}.atto"
+            test -f "$f" && test ! -L "$f"
+            test "$(git rev-parse "HEAD:$f")" = "$(git hash-object --no-filters "$f")"
+          done
+          test -z "$(git status --porcelain)"
+          echo "LLVM_ALLOC_GUEST_HEAD=$EXPECTED_HEAD TREE=$(git rev-parse HEAD^{tree})"
+      - name: Install LLVM dev and native compilers
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends cmake ninja-build llvm-dev clang gcc python3
+      - name: Verify source-owned embed generator and C++17 registry
+        run: |
+          set -euo pipefail
+          cargo test --locked --manifest-path tools/atto-library-embed/Cargo.toml
+          cargo run --locked --manifest-path tools/atto-library-embed/Cargo.toml -- --check
+          c++ -std=c++17 -Isrc/main/cpp tests/atto_library_embed_cpp17_probe.cpp -o "$RUNNER_TEMP/alloc-registry"
+          "$RUNNER_TEMP/alloc-registry"
+          echo 'LLVM_ALLOC_SOURCE_EMBED_AND_REGISTRY_EXECUTED'
+      - name: Build actual LLVM compiler and native IR auditor
+        run: |
+          set -euo pipefail
+          cmake -G Ninja -S . -B "$RUNNER_TEMP/atto-alloc-build" \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DLLVM_DIR="$(llvm-config --cmakedir)"
+          cmake --build "$RUNNER_TEMP/atto-alloc-build" --target oreslang-llvmc oreslang-no-gc-ir-audit --parallel 2
+          sha256sum "$RUNNER_TEMP/atto-alloc-build/oreslang-llvmc"
+      - name: Compile and execute actual Atto alloc guest, reject import spoofing
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tests/alloc_library_imports.py \
+            --compiler "$RUNNER_TEMP/atto-alloc-build/oreslang-llvmc" --clang "$(command -v clang)"
+          echo 'LLVM_ALLOC_GUEST_IR_NATIVE_EXIT_42_EXECUTED'
+      - name: Verify checked ownership cleanup through real LLVM guest
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -DROOT="$(pwd)" -DBUILD="$RUNNER_TEMP/atto-alloc-build" \
+            -DCLANG="$(command -v clang)" -P tests/actor_region_v2_multiowner_guest.cmake
+          echo 'LLVM_GUEST_RESTRICTED_OWNER_CLEANUP_EXECUTED'
+      - name: Verify real native physical reclamation with sanitizers
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tests/run_actor_region_compiler_finish_v1.sh
+          echo 'LLVM_ACTOR_REGION_NATIVE_SANITIZER_MATRIX_EXECUTED'
+      - name: Require unchanged source SHA after testing
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          echo "LLVM_ALLOC_GUEST_TESTED_HEAD=$EXPECTED_HEAD"
