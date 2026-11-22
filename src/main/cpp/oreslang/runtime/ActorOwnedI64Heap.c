@@ -47,7 +47,25 @@ struct OresActorI64Heap {
     ActorSlot slots[];
 };
 
+/* Domain IDs are 64-bit on every host. 32-bit targets must provide lock-free
+ * 64-bit atomics (i686 cmpxchg8b, ARMv7 ldrexd); a libatomic lock here would
+ * put a hidden mutex on actor heap admission. */
+_Static_assert(ATOMIC_LLONG_LOCK_FREE == 2,
+               "actor heap domains require lock-free 64-bit atomics");
 static _Atomic(uint64_t) next_domain = 1;
+
+/* CAS reservation, never fetch_add: fetch_add keeps advancing past the
+ * terminal value, wraps through 0 and re-issues domain 1, so stale slots and
+ * loans from the first heap would validate against a new one. */
+static uint64_t reserve_domain(void) {
+    uint64_t current = atomic_load_explicit(&next_domain, memory_order_relaxed);
+    while (current != 0 && current != UINT64_MAX) {
+        if (atomic_compare_exchange_weak_explicit(&next_domain, &current, current + 1,
+                memory_order_relaxed, memory_order_relaxed))
+            return current;
+    }
+    return 0;
+}
 /* One admitted actor heap per physical carrier, not just per logical epoch.
  * Carrier migration is permitted only after a completed leave. A stolen
  * OresActorTurn token may not authorize access on an unrelated thread. */
@@ -164,7 +182,7 @@ OresActorI64Heap* ores_actor_i64_heap_open(uint64_t actor_id,
     OresActorI64Heap* heap = (OresActorI64Heap*) calloc(1, bytes);
     if (!heap) rejected();
     atomic_flag_clear(&heap->mutex);
-    const uint64_t id = atomic_fetch_add_explicit(&next_domain, 1, memory_order_relaxed);
+    const uint64_t id = reserve_domain();
     if (id == 0 || id == UINT64_MAX) rejected();
     heap->domain = id;
     heap->owner = actor_id;

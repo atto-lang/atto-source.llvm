@@ -1,6 +1,6 @@
 # Compile the real AttoLang trap-int guest via the production oreslang-llvmc
 # and source-owned audited AOT driver, then execute at Clang O0 and O2.
-# This proves ONLY the restricted, nonthrowing Option<int> guest slice.
+# This proves ONLY the restricted, nonthrowing Result<int, Error> guest slice.
 cmake_minimum_required(VERSION 3.20)
 foreach(var ORES_TRAP_LLVM_CLI ORES_TRAP_SOURCE ORES_TRAP_AOT_SCRIPT ORES_TRAP_AUDITOR)
     if(NOT DEFINED ${var} OR NOT EXISTS "${${var}}")

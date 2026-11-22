@@ -168,7 +168,7 @@ public:
         require(ores_native_actor_scheduler_is_current_actor(s.scheduler, a.ref));
         auto slot = payload & 1023u;
         auto& c = s.connections[slot];
-        NativeHttpExchange::Token token{payload >> 10, index + 1};
+        NativeHttpExchange::Token token{payload >> 10, a.ref};
         require(c.exchange.claim(token));
         c.started = now();
         if (!a.heap) {
@@ -232,7 +232,7 @@ public:
     }
     void dispatch(std::size_t i) {
         auto& c = connections[i];
-        if (!c.exchange.enqueue(c.actor + 1)) throw std::runtime_error("exchange generation exhausted");
+        if (!c.exchange.enqueue(actors[c.actor].ref)) throw std::runtime_error("exchange generation exhausted");
         auto token = c.exchange.token();
         if (token.generation > (UINT64_MAX >> 10)) throw std::runtime_error("mailbox token generation exhausted");
         auto payload = (token.generation << 10) | i;
@@ -269,7 +269,7 @@ public:
         std::uint64_t payload;
         while (completions.try_pop(payload)) {
             auto i = payload & 1023u; auto& c = connections[i];
-            require(c.busy && c.exchange.reclaim({payload >> 10, c.actor + 1}));
+            require(c.busy && c.exchange.reclaim({payload >> 10, actors[c.actor].ref}));
             queue_ns += c.started - c.parsed; actor_ns += c.finished - c.started;
             completion_ns += now() - c.finished;
             c.busy = false; c.progress = now();

@@ -61,7 +61,13 @@ static void bounded_port_selective() {
     auto selected = p.try_receive_tagged(shutdown, 1, yielded.cursor);
     CHECK(selected.status == Status::Matched && selected.delivery);
     CHECK(selected.inspected == 1 && *selected.delivery->value().value == 300);
-    // Even checked-out receives hold bytes until physical ACK.
+    // Dequeue is custody transfer, not admission credit refund.
+    // Regression: despite a free physical queue slot, an unacknowledged
+    // selected receipt must keep both frame and byte windows saturated.
+    CHECK(p.used_frames() == 3 && p.used_bytes() == 48);
+    MoveOnlyMessage while_inflight(410);
+    CHECK(!p.offer(std::move(while_inflight), 16, payment));
+    CHECK(while_inflight.value && *while_inflight.value == 410);
     CHECK(p.used_frames() == 3 && p.used_bytes() == 48);
     CHECK(selected.delivery->acknowledge_released());
     CHECK(!selected.delivery->acknowledge_released());
@@ -189,6 +195,13 @@ static void bound_actor_turn_selective() {
         (void)inbox.try_receive_tagged(Lane::Normal, 23, 1);
     } catch (const std::logic_error&) { bypass_rejected = true; }
     CHECK(bypass_rejected && inbox.used_frames(Lane::Normal) == 3);
+    // The legacy FIFO probe must also fail closed: accepting an ordinary
+    // receive would allow guest code to bypass supervisor CONTROL entirely.
+    bool fifo_bypass_rejected = false;
+    try {
+        (void)inbox.try_receive();
+    } catch (const std::logic_error&) { fifo_bypass_rejected = true; }
+    CHECK(fifo_bypass_rejected && inbox.used_frames(Lane::Normal) == 3);
 
     Inbox::SelectiveCursor cursor;
     bool processed = false;
@@ -210,6 +223,14 @@ static void bound_actor_turn_selective() {
     CHECK(inbox.dispatch_next_tagged(group, actor, Lane::Normal, 23, 1,
                                     cursor, consumer) == Status::Resume);
     CHECK(!processed && inbox.used_frames(Lane::Normal) == 3);
+    // CONTROL arriving between two bounded scan slices must preempt the
+    // continuation before it can inspect or check out the matching DATA.
+    bool mid_scan_control_executed = false;
+    CHECK(group.enqueue_control(actor, [&] { mid_scan_control_executed = true; }));
+    CHECK(inbox.dispatch_next_tagged(group, actor, Lane::Normal, 23, 1,
+                                    cursor, consumer) == Status::Control);
+    CHECK(mid_scan_control_executed && !processed);
+    CHECK(inbox.used_frames(Lane::Normal) == 3);
     CHECK(inbox.dispatch_next_tagged(group, actor, Lane::Normal, 23, 1,
                                     cursor, consumer) == Status::Resume);
     CHECK(inbox.dispatch_next_tagged(group, actor, Lane::Normal, 23, 1,
@@ -299,8 +320,11 @@ static void randomized_tagged_dequeue() {
 }
 
 // Selective ACK may complete a newer sequence before an earlier queued
-// receipt. The global completion window must stay bounded by the contiguous
-// watermark, even after physical frame credits are refunded out of order.
+// receipt. As in every other port test, the consumer reports each receipt's
+// global completion explicitly after its physical ACK; the port itself only
+// refunds frame/byte credit. The global completion window must stay bounded
+// by the contiguous watermark, even after physical frame credits are
+// refunded out of order.
 static void selective_ack_does_not_skip_global_completion_window() {
     using Port = BoundedActorPort<MoveOnlyMessage>;
     using Ledger = oreslang::runtime::ActorMailboxCompletion;
@@ -315,6 +339,7 @@ static void selective_ack_does_not_skip_global_completion_window() {
     CHECK(newest.status == Port::SelectiveStatus::Matched && newest.delivery);
     CHECK(newest.delivery->sequence() == 3);
     CHECK(newest.delivery->acknowledge_released());
+    ledger->complete(newest.delivery->sequence());
     CHECK(port.used_frames() == 2);
     CHECK(ledger->watermark() == 0);
     CHECK(!port.offer(std::move(four), 8, 23));
@@ -322,6 +347,7 @@ static void selective_ack_does_not_skip_global_completion_window() {
     auto first = port.try_receive();
     CHECK(first && first->sequence() == 1);
     CHECK(first->acknowledge_released());
+    ledger->complete(first->sequence());
     CHECK(ledger->watermark() == 1);
     CHECK(port.offer(std::move(four), 8, 23));
     CHECK(ledger->snapshot() == 4);
@@ -329,10 +355,12 @@ static void selective_ack_does_not_skip_global_completion_window() {
     CHECK(fourth.status == Port::SelectiveStatus::Matched && fourth.delivery);
     CHECK(fourth.delivery->sequence() == 4);
     CHECK(fourth.delivery->acknowledge_released());
+    ledger->complete(fourth.delivery->sequence());
     CHECK(ledger->watermark() == 1);
     auto second = port.try_receive();
     CHECK(second && second->sequence() == 2);
     CHECK(second->acknowledge_released());
+    ledger->complete(second->sequence());
     CHECK(ledger->watermark() == 4);
     CHECK(ledger->completed_through(4));
     CHECK(port.used_frames() == 0 && port.used_bytes() == 0);

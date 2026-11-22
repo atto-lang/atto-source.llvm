@@ -1,0 +1,113 @@
+use namespace core;
+
+// Core NATS subject semantics, owned by AttoLang rather than the host bridge.
+// Split literal dot tokens, reject empty tokens, validate wildcard placement.
+// A trailing '>' means *one or more* additional tokens; it does not match
+// the prefix alone. The raw decoder must separately enforce byte/control
+// budgets and reject Unicode whitespace before creating a String value.
+pub fnc valid_subject_token(String token): bool {
+  if token == "" then
+    return false;
+  fi
+  if token.contains_literal(" ") || token.contains_literal("\t") ||
+     token.contains_literal("\r") || token.contains_literal("\n") ||
+     token.contains_literal("\u0000") then
+    return false;
+  fi
+  return true;
+}
+
+pub fnc valid_publish_subject(String subject): bool {
+  if subject == "" then
+    return false;
+  fi
+  val parts = subject.split_literal(".");
+  if parts.size == 0 then
+    return false;
+  fi
+  for (let int i = 0; i < parts.size; i = i + 1) {
+    val String token = parts.get(i);
+    if !valid_subject_token(token) || token.contains_literal("*") ||
+       token.contains_literal(">") then
+      return false;
+    fi
+  }
+  return true;
+}
+
+pub fnc valid_subscribe_pattern(String pattern): bool {
+  if pattern == "" then
+    return false;
+  fi
+  val parts = pattern.split_literal(".");
+  if parts.size == 0 then
+    return false;
+  fi
+  for (let int i = 0; i < parts.size; i = i + 1) {
+    val String token = parts.get(i);
+    if !valid_subject_token(token) then
+      return false;
+    fi
+    if token == ">" then
+      if i != parts.size - 1 then
+        return false;
+      fi
+    elif token != "*" then
+      if token.contains_literal("*") || token.contains_literal(">") then
+        return false;
+      fi
+    fi
+  }
+  return true;
+}
+
+pub fnc subject_matches(String pattern, String subject): bool {
+  // Tokenize each input exactly once. The previous implementation split
+  // both strings again after validating them (four splits per match).
+  if pattern == "" || subject == "" then
+    return false;
+  fi
+  val pattern_parts = pattern.split_literal(".");
+  val subject_parts = subject.split_literal(".");
+  if pattern_parts.size == 0 || subject_parts.size == 0 then
+    return false;
+  fi
+  // Authenticate/authorize and apply byte budgets at the ingress boundary.
+  // This pure matching helper still rejects malformed inputs on its own.
+  for (let int i = 0; i < subject_parts.size; i = i + 1) {
+    val String token = subject_parts.get(i);
+    if !valid_subject_token(token) || token.contains_literal("*") ||
+       token.contains_literal(">") then
+      return false;
+    fi
+  }
+  for (let int i = 0; i < pattern_parts.size; i = i + 1) {
+    val String token = pattern_parts.get(i);
+    if !valid_subject_token(token) then
+      return false;
+    fi
+    if token == ">" then
+      // The terminal > matches at least one additional subject token.
+      if i != pattern_parts.size - 1 then
+        return false;
+      fi
+      return subject_parts.size > i;
+    fi
+    if token != "*" &&
+       (token.contains_literal("*") || token.contains_literal(">")) then
+      return false;
+    fi
+    if i >= subject_parts.size then
+      return false;
+    fi
+    if token != "*" && token != subject_parts.get(i) then
+      return false;
+    fi
+  }
+  return pattern_parts.size == subject_parts.size;
+}
+
+pub fnc direct_subject_match(String pattern, String subject): bool {
+  // Kept as the existing router API name, now includes tokenized wildcards.
+  return subject_matches(pattern, subject);
+}

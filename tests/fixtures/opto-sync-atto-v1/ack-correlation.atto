@@ -1,0 +1,14 @@
+// A response acknowledges only its exact in-flight identity after commit.
+pub fnc ack_ok(int in_flight, int response_id, int server_committed): int {
+  if (in_flight <= 0) { return 0; } fi
+  if (response_id < in_flight) { return 0; } fi
+  if (response_id > in_flight) { return 0; } fi
+  if (server_committed < response_id) { return 0; } fi
+  return 1;
+}
+pub fnc main(): int {
+  return 41 + ack_ok(2,2,2)
+    + 10 * ack_ok(2,1,2) + 10 * ack_ok(2,3,3)
+    + 10 * ack_ok(2,2,1) + 10 * ack_ok(0,1,1)
+    + 10 * ack_ok(2,2,0);
+}

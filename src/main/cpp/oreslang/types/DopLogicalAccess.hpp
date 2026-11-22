@@ -2,8 +2,10 @@
 
 #include "oreslang/runtime/DopLayout.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -61,9 +63,19 @@ inline bool blank_identity(const std::string& value) {
     return true;
 }
 
+inline constexpr std::uint64_t max_write_granule = 1024;
+
 /**
  * Logical ownership place independent of AoS/SoA/AoSoA byte geometry.
  * Missing hierarchy elements denote the whole parent place.
+ *
+ * `granule` is how many consecutive rows a writer touches as one unit: the
+ * AoSoA lane count for tile-wide stores, the vector width for unmasked SIMD
+ * stores over SoA columns, or 1 for scalar access. Logically disjoint ranges
+ * that split a granule are not independently writable (a full-tile store to
+ * rows [8,16) clobbers rows [12,16) owned by someone else), so write conflicts
+ * compare ranges widened to granule boundaries. Mirrors Java
+ * DataOrientedBorrowChecker.Place.
  */
 struct Place {
     oreslang::dop::Layout layout = oreslang::dop::Layout::AoS;
@@ -73,6 +85,7 @@ struct Place {
     std::optional<std::string> field;
     std::optional<Range> rows;
     std::uint64_t epoch = 0;
+    std::uint64_t granule = 1;
 
     Place(oreslang::dop::Layout physical_layout,
           std::string store_id,
@@ -80,14 +93,16 @@ struct Place {
           std::optional<std::string> component_id,
           std::optional<std::string> field_id,
           std::optional<Range> row_range,
-          std::uint64_t storage_epoch)
+          std::uint64_t storage_epoch,
+          std::uint64_t write_granule = 1)
         : layout(physical_layout),
           store(std::move(store_id)),
           archetype(std::move(archetype_id)),
           component(std::move(component_id)),
           field(std::move(field_id)),
           rows(std::move(row_range)),
-          epoch(storage_epoch) {
+          epoch(storage_epoch),
+          granule(write_granule) {
         validate();
     }
 
@@ -99,6 +114,8 @@ struct Place {
             default: throw std::invalid_argument("invalid DOP layout");
         }
         if (rows) rows->validate();
+        if (granule == 0 || granule > max_write_granule || (granule & (granule - 1)) != 0)
+            throw std::invalid_argument("DOP write granule must be a power of two in 1..1024");
         if (blank_identity(store)) throw std::invalid_argument("DOP place requires store identity");
         auto require_nonblank = [](const std::optional<std::string>& value,
                                    const char* label) {
@@ -136,7 +153,17 @@ inline void require_current_epoch(const Place& place, std::uint64_t current_epoc
         throw std::invalid_argument("stale DOP logical borrow epoch");
 }
 
-inline bool overlaps(const Place& left, const Place& right) {
+inline Range widen_to_granule(const Range& range, std::uint64_t granule) {
+    if (granule == 1) return range;
+    const auto begin = range.begin - range.begin % granule;
+    const auto rem = range.end % granule;
+    const auto pad = rem == 0 ? 0 : granule - rem;
+    const auto end = range.end > std::numeric_limits<std::uint64_t>::max() - pad
+        ? std::numeric_limits<std::uint64_t>::max() : range.end + pad;
+    return Range(begin, end);
+}
+
+inline bool overlaps_at_granule(const Place& left, const Place& right, std::uint64_t granule) {
     left.validate();
     right.validate();
     if (left.store != right.store) return false;
@@ -146,14 +173,22 @@ inline bool overlaps(const Place& left, const Place& right) {
     if (!same_or_whole(left.archetype, right.archetype)) return false;
     if (!same_or_whole(left.component, right.component)) return false;
     if (!same_or_whole(left.field, right.field)) return false;
-    return !left.rows || !right.rows || left.rows->overlaps(*right.rows);
+    return !left.rows || !right.rows
+        || widen_to_granule(*left.rows, granule).overlaps(widen_to_granule(*right.rows, granule));
+}
+
+// Logical aliasing: do the two places name any common cell?
+inline bool overlaps(const Place& left, const Place& right) {
+    return overlaps_at_granule(left, right, 1);
 }
 
 inline bool conflicts(const Loan& left, const Loan& right) {
     left.validate();
     right.validate();
-    return overlaps(left.place, right.place)
-        && (left.access == Access::Write || right.access == Access::Write);
+    const bool writes = left.access == Access::Write || right.access == Access::Write;
+    const auto granule = writes ? std::max(left.place.granule, right.place.granule) : std::uint64_t{1};
+    // Overlap runs first so stale epochs fail closed even for read/read.
+    return overlaps_at_granule(left.place, right.place, granule) && writes;
 }
 
 inline bool can_run_concurrently(const std::vector<Loan>& left,
