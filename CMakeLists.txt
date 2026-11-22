@@ -569,6 +569,30 @@ target_include_directories(oreslang-llvmc PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
     "${LLVM_INCLUDE_DIRS}"
 )
+# Core-four binary embeds are mechanically generated snapshots of backend-owned
+# .atto files. A stale or edited embed must fail configuration before compilation.
+foreach(_core_name IN ITEMS range cell contracts num)
+    if(_core_name STREQUAL "range")
+        set(_core_cap "Range")
+    elseif(_core_name STREQUAL "cell")
+        set(_core_cap "Cell")
+    elseif(_core_name STREQUAL "contracts")
+        set(_core_cap "Contracts")
+    else()
+        set(_core_cap "Num")
+    endif()
+    set(_core_input "${CMAKE_CURRENT_SOURCE_DIR}/core/${_core_name}.atto")
+    set(_core_embed "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/frontend/GeneratedCore${_core_cap}Atto.inc")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_core_input}" "${_core_embed}")
+    file(READ "${_core_input}" _core_text)
+    file(READ "${_core_embed}" _core_actual)
+    set(_core_expected "R\"ATTO_CORE4(${_core_text})ATTO_CORE4\"\n")
+    if(NOT _core_actual STREQUAL _core_expected)
+        message(FATAL_ERROR
+            "core-four .atto source/embed mismatch: ${_core_name}; regenerate reviewed embed from exact backend-owned source")
+    endif()
+endforeach()
+
 add_definitions(${LLVM_DEFINITIONS})
 llvm_map_components_to_libnames(ORE_LLVM_LIBS core support)
 target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
