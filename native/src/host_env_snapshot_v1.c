@@ -80,6 +80,8 @@ static bool valid_utf8(const unsigned char *s, size_t n) {
     if (!s && n) return false;
     for (size_t i = 0; i < n;) {
         unsigned c = s[i++];
+        // NUL bytes cannot exist in a process environment value.
+        if (c == 0) return false;
         if (c < 0x80) continue;
         unsigned need = 0;
         unsigned lo = 0x80, hi = 0xbf;
