@@ -1,5 +1,5 @@
 // Alloc-tier candidate: finite actor-local trace collection, separate from
-// the native clock adapter; no libc, threads, I/O, runtime codegen or telemetry.
+// the native clock adapter; no libc, I/O, runtime codegen or telemetry.
 define module perf_trace_buffer as
   // Numeric-only record. kind: 1=span, 2=counter, 3=gauge, 4=instant.
   pub define class Event as
