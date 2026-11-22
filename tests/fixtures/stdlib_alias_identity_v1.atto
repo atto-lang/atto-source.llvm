@@ -1,0 +1,20 @@
+// Compiler-owned std import aliases must resolve ONE immutable native module.
+// A lookalike project file named std/path.atto may never replace these bytes.
+import module path as P from "std/path";
+import module path as Q from "atto.std/path.atto";
+import module path as R from "ores.std/path";
+import module telemetry as T from "std/telemetry";
+import module telemetry as U from "atto.std/telemetry.atto";
+import module sync as S from "std/sync";
+import module sync as V from "ores.std/sync.atto";
+
+pub fnc main(): int {
+  if !P.is_separator(47, false) then return 1; fi
+  if !Q.is_separator(47, false) then return 2; fi
+  if !R.is_separator(92, true) then return 3; fi
+  if !T.sampled_flag(1) then return 4; fi
+  if !U.sampled_flag(3) then return 5; fi
+  if !S.mutex_take_admissible(false, false, 0) then return 6; fi
+  if !V.mutex_take_admissible(false, false, 0) then return 7; fi
+  return 0;
+}
