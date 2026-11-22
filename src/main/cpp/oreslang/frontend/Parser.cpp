@@ -1115,6 +1115,15 @@ public:
                 pointer_int_aot::Parser(std::move(tokens)).parse());
             return program;
         }
+        // A namespace is a file-header declaration, not an import or module
+        // wrapper. Parse it before any import/export; never let the imported
+        // dependency graph silently turn a late header into a valid header.
+        if (token_.text == "use" && peek_next().text == "namespace")
+            advance();
+        if (accept("namespace")) {
+            program.namespace_name = identifier();
+            require(";");
+        }
         while (token_.text == "import" || token_.text == "export") {
             if (token_.text == "export") { export_declaration(program); continue; }
             advance();
@@ -1260,13 +1269,11 @@ public:
             require(";");
             program.imports.push_back(std::move(imported));
         }
-        // Match Java: a contextual "use" in the source header selects the
-        // SAME flat namespace; it does not authorize cross-package binding.
-        if (token_.text == "use" && peek_next().text == "namespace")
-            advance();
-        if (accept("namespace")) {
-            program.namespace_name = identifier();
-            require(";");
+        if (token_.text == "namespace" ||
+            (token_.text == "use" && peek_next().text == "namespace")) {
+            if (!program.namespace_name.empty())
+                fail("NAMESPACE_DUPLICATE: only one file-level namespace header is permitted");
+            fail("NAMESPACE_HEADER_ORDER: namespace header must precede imports and declarations");
         }
         bool wrapped_module = false;
         if (token_.text == "import")
