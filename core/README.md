@@ -1,14 +1,23 @@
-# Atto core slice, iter, cmp (first source-owned increment)
+# LLVM native Atto core slice, iter, cmp
 
-These are implementation files, not declarations of a runtime-provided safe Slice<T> or Iterator<T> ABI.
+The compiler-owned import registry maps `atto.core/{slice,iter,cmp}` to
+the immutable embedded source in `core/{slice,iter,cmp}.atto`.
+Aliases `ores.core/*` and explicit `*.atto` resolve to the same
+unit identity. Included `Generated*Atto.inc` raw-string snapshots have
+Git-blob SHA-1 comments verified byte-for-byte by
+`tests/check_atto_core_modules.py`.
 
-* `slice.atto`: allocation-free bounds-safe logical windows and integer element operations on pre-existing `Array<int>`.
-* `iter.atto`: allocation-free cursor arithmetic and callback-based fold/any/all/find/count on pre-existing arrays.
-* `cmp.atto`: int/bool total ordering, min/max/clamp, lexicographic array ordering and sortedness checks.
+The **compiler-admitted first tier** is intentionally scalar-only:
+checked ranges/index metadata, pure cursor positions with explicit -1
+exhaustion, deterministic comparisons, min/max and bound checks.
+It allocates no memory, but does **not** create a lifetime-safe
+`Slice<T>` or a generic lazy iterator.
 
-All functions use signed `int` bounds; bounds are validated with subtraction after comparisons to avoid overflow. Invalid reads return `Option` rather than a sentinel, while invalid boolean predicates return false. Empty valid ranges are admitted and do not read elements. The `*_int` functions operate on copyable scalar elements only. Comparators produce -1/0/1 without subtraction overflow.
-
-## Explicitly not yet implemented
-A general `Slice<T>`/`SliceMut<T>` borrowed view and lifetime/generation enforcement, generic `Iterator<T>`/`IntoIterator<T>` and lazy adapters, zero-copy mutable chunk/split operations, an `Ordering` algebraic data type, and arbitrary `Ord` generic dispatch require type-checker/runtime support. A function accepting an `Array<int>` is not sufficient proof of memory safety or absence of underlying array allocation.
-
-The proposed import fixture is in `tests/slice_iter_cmp_smoke.atto`. It must only be counted as passing after each compiler wires `atto.core` package resolution and executes the fixture at the exact PR head. Do not report source presence as executed conformance. Independent backend implementations are permitted; match public semantics and negative bounds behavior.
+Full `Array<int>` and higher-order callback APIs are preserved as
+experimental `.atto` source under `core/experimental/`, not
+advertised as compiled guest functionality. They must wait for checked
+Array/Option/borrow/callback MIR and AOT execution. The native source
+graph positive tests in `tests/native_module_imports.py` and
+`tests/core_library_sources_test.cpp` only count as proven after exact
+PR-head compiler and guest execution, not merely passing source
+snapshot checks.
