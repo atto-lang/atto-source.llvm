@@ -201,6 +201,8 @@ int main(int argc, char** argv) {
     bool static_ffi_i64_capability = false;
     bool wasm32_target = false;
     bool cortex_m_target = false;
+    // Hosted Linux cross triple (x86_64/aarch64/i686/armv7); empty = host.
+    std::string hosted_linux_triple;
     bool tenant_vm_guest = false;
     bool target_seen = false;
     bool native_hard_rt_profile = false;
@@ -328,12 +330,16 @@ int main(int argc, char** argv) {
                 wasm32_target = oreslang::TargetAbi::parse("wasm32-unknown-unknown").experimental_wasm32_ir();
             } else {
                 try {
-                    (void)oreslang::TargetAbi::parse(target);
-                    std::cerr << "target has no certified IR/ABI lowering: " << target << '\n';
+                    if (oreslang::TargetAbi::parse(target).experimental_hosted_linux_ir()) {
+                        hosted_linux_triple = target;
+                    } else {
+                        std::cerr << "target has no certified IR/ABI lowering: " << target << '\n';
+                        return 2;
+                    }
                 } catch (const std::invalid_argument&) {
                     std::cerr << "unknown target triple: " << target << '\n';
+                    return 2;
                 }
-                return 2;
             }
         } else if (arg.rfind("--cpu=", 0) == 0) {
             std::cerr << "explicit CPU feature selection not implemented: " << arg << '\n';
@@ -405,7 +411,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--guest-abi=tenant-vm] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--experimental-pointer-int-aot] [--experimental-static-ffi-i64-aot] [--ffi-grant=atto.math.i64.v1] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi|x86_64-unknown-linux-gnu|aarch64-unknown-linux-gnu|i686-unknown-linux-gnu|armv7-unknown-linux-gnueabihf] [--guest-abi=tenant-vm] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--experimental-pointer-int-aot] [--experimental-static-ffi-i64-aot] [--ffi-grant=atto.math.i64.v1] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -430,11 +436,11 @@ int main(int argc, char** argv) {
         if (text.find("// ores:") != std::string::npos) {
             throw std::runtime_error("native target admission unsupported: ores environment headers require compiler verification");
         }
-        if (experimental_rt_scalar_loop && (wasm32_target || experimental_owned_int))
+        if (experimental_rt_scalar_loop && (wasm32_target || experimental_owned_int || !hosted_linux_triple.empty()))
             throw std::runtime_error("scalar-loop frame requires native host and no owned-int experiment");
         if (cortex_m_target && text.size() > 128u * 1024u)
             throw std::runtime_error("cortex-m source exceeds 128 KiB limit");
-        if (native_hard_rt_profile && (wasm32_target || cortex_m_target))
+        if (native_hard_rt_profile && (wasm32_target || cortex_m_target || !hosted_linux_triple.empty()))
             throw std::runtime_error("native-hard-rt profile currently requires the host target");
         if (native_hard_rt_profile && experimental_owned_int)
             throw std::runtime_error("native-hard-rt profile rejects experimental owned heap lowering");
@@ -443,7 +449,7 @@ int main(int argc, char** argv) {
             // Test-only static native C i64 ABI; never implies actor FFI, imported
             // modules, signed supervisor authorization or production permissions.
             if (!experimental_static_ffi_i64 || !static_ffi_i64_capability ||
-                    experimental_pointer_int_aot || wasm32_target || cortex_m_target ||
+                    experimental_pointer_int_aot || wasm32_target || cortex_m_target || !hosted_linux_triple.empty() ||
                     tenant_vm_guest || experimental_owned_int ||
                     experimental_rt_scalar_loop || bounded_allocator_provider ||
                     tree_shake || !tree_shake_roots.empty() || native_hard_rt_profile ||
@@ -464,7 +470,7 @@ int main(int argc, char** argv) {
             // Its admitted grammar remains a closed-world nonescaping stack
             // specialization until full Pointer<T> lowering is verified.
             if (static_ffi_i64_capability ||
-                    wasm32_target || cortex_m_target || tenant_vm_guest ||
+                    wasm32_target || cortex_m_target || !hosted_linux_triple.empty() || tenant_vm_guest ||
                     experimental_owned_int || experimental_rt_scalar_loop ||
                     bounded_allocator_provider || tree_shake ||
                     !tree_shake_roots.empty() || native_hard_rt_profile ||
@@ -487,7 +493,7 @@ int main(int argc, char** argv) {
         // C i64 symbol through its semantic FFI gate. This temporary CLI grant
         // is NOT a signed supervisor capability or a foreign-actor permission.
         if (static_ffi_i64_capability &&
-                (wasm32_target || cortex_m_target || tenant_vm_guest ||
+                (wasm32_target || cortex_m_target || !hosted_linux_triple.empty() || tenant_vm_guest ||
                  native_hard_rt_profile || rt_check_only || rt_entry_seen ||
                  rt_report_seen || tree_shake || !tree_shake_roots.empty() ||
                  experimental_owned_int || experimental_rt_scalar_loop ||
@@ -815,7 +821,8 @@ int main(int argc, char** argv) {
             // so unsupported target features cannot hide in unreachable code.
             (void)oreslang::emit_verified_llvm_ir(
                 ast, wasm32_target, cortex_m_target,
-                bounded_allocator_provider, tenant_vm_guest);
+                bounded_allocator_provider, tenant_vm_guest,
+                hosted_linux_triple.empty() ? nullptr : hosted_linux_triple.c_str());
 
             // The shipped pass is deliberately function-only. Richer Program
             // owners have hidden semantic/ABI roots that are not represented
@@ -827,7 +834,8 @@ int main(int argc, char** argv) {
         }
         std::cout << oreslang::emit_verified_llvm_ir(
                 ast, wasm32_target, cortex_m_target,
-                bounded_allocator_provider, tenant_vm_guest);
+                bounded_allocator_provider, tenant_vm_guest,
+                hosted_linux_triple.empty() ? nullptr : hosted_linux_triple.c_str());
         std::cout.flush();
         if (coreLog) coreLog->dump(stderr);
         return 0;

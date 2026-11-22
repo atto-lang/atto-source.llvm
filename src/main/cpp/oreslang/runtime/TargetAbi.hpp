@@ -20,13 +20,13 @@ public:
 
     static TargetAbi parse(std::string_view triple) {
         if (triple == "x86_64-unknown-linux-gnu")
-            return {"x86_64-unknown-linux-gnu", 64, "little", "sysv", "unimplemented"};
+            return {"x86_64-unknown-linux-gnu", 64, "little", "sysv", "experimental-hosted-linux-ir"};
         if (triple == "aarch64-unknown-linux-gnu")
-            return {"aarch64-unknown-linux-gnu", 64, "little", "aapcs64", "unimplemented"};
+            return {"aarch64-unknown-linux-gnu", 64, "little", "aapcs64", "experimental-hosted-linux-ir"};
         if (triple == "i686-unknown-linux-gnu")
-            return {"i686-unknown-linux-gnu", 32, "little", "sysv", "unimplemented"};
+            return {"i686-unknown-linux-gnu", 32, "little", "sysv", "experimental-hosted-linux-ir"};
         if (triple == "armv7-unknown-linux-gnueabihf")
-            return {"armv7-unknown-linux-gnueabihf", 32, "little", "aapcs32-hardfp", "unimplemented"};
+            return {"armv7-unknown-linux-gnueabihf", 32, "little", "aapcs32-hardfp", "experimental-hosted-linux-ir"};
         if (triple == "thumbv7m-none-eabi")
             return {"thumbv7m-none-eabi", 32, "little", "aapcs32-soft", "experimental-cortexm-scalar-ir"};
         if (triple == "wasm32-unknown-unknown")
@@ -40,6 +40,25 @@ public:
 
     bool experimental_wasm32_ir() const noexcept {
         return emission_ == "experimental-wasm32-ir";
+    }
+
+    // Hosted Linux cross target: same IR as --target=host, but with an explicit
+    // triple and DataLayout so it can be compiled for another machine.
+    bool experimental_hosted_linux_ir() const noexcept {
+        return emission_ == "experimental-hosted-linux-ir";
+    }
+
+    // LLVM's own DataLayout for each hosted triple (clang 18-22).
+    std::string_view data_layout() const noexcept {
+        if (triple_ == "x86_64-unknown-linux-gnu")
+            return "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128";
+        if (triple_ == "aarch64-unknown-linux-gnu")
+            return "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32";
+        if (triple_ == "i686-unknown-linux-gnu")
+            return "e-m:e-p:32:32-p270:32:32-p271:32:32-p272:64:64-i128:128-f64:32:64-f80:32-n8:16:32-S128";
+        if (triple_ == "armv7-unknown-linux-gnueabihf")
+            return "e-m:e-p:32:32-Fi8-i64:64-v128:64:128-a:0:32-n32-S64";
+        return {};
     }
 
     std::uint64_t max_contiguous_bytes() const noexcept {

@@ -9,7 +9,10 @@ namespace oreslang {
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target = false,
                                   bool cortex_m_target = false,
                                   bool bounded_allocator_provider = false,
-                                  bool tenant_vm_guest = false);
+                                  bool tenant_vm_guest = false,
+                                  // Hosted Linux cross triple (TargetAbi experimental-hosted-linux-ir),
+                                  // or nullptr for the historical inferred host target.
+                                  const char* hosted_linux_triple = nullptr);
 
 // Opt-in scalar-only continuation IR; external host owns and pins frame storage.
 std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop);
