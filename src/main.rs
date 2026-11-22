@@ -936,6 +936,52 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compiled_http_namespace_imports_real_backend_owned_ast() {
+        let source = include_str!("../tests/http_stdlib/namespace_import_canary.atto");
+        let ir = compile_ir(source).expect("registered public HTTP namespace must compile");
+        assert!(ir.contains("define i32 @main()"), "{ir}");
+        // The regular typed backend lowers both imported and caller functions
+        // to native LLVM; no interpreter or synthetic hardcoded exit 42.
+        assert!(ir.contains("@atto_func_"), "{ir}");
+        assert!(ir.contains("llvm.trap"), "{ir}");
+    }
+
+    #[test]
+    fn native_http_import_rejects_unregistered_and_private_symbols() {
+        let bad = [
+            (r#"import * as http from "std.unregistered"; pub fnc main(): int { return 42; }"#,
+             "E_NATIVE_IMPORT_UNREGISTERED"),
+            (r#"import * as http from "std.http"; pub fnc main(): int { return http.private_helper(1); }"#,
+             "E_NATIVE_IMPORT_PRIVATE"),
+            (r#"import * as http from "std.http"; pub fnc main(): int { if http_status_valid(200) then return 42; fi return 1; }"#,
+             "E_NATIVE_IMPORT_PRIVATE"),
+            (r#"import * as http from "std.http"; import * as http from "std.http"; pub fnc main(): int { return 42; }"#,
+             "E_NATIVE_IMPORT_UNSUPPORTED"),
+            (r#"import module http from "std.http"; pub fnc main(): int { return 42; }"#,
+             "E_NATIVE_IMPORT_UNSUPPORTED"),
+            (r#"import * as http from "std.http"; pub fnc main(): int { val x = http; return 42; }"#,
+             "E_NATIVE_IMPORT_ALIAS"),
+        ];
+        for (source, code) in bad {
+            let err = compile_ir(source).expect_err("invalid import must emit NO LLVM IR");
+            assert!(err.contains(code), "expected {code}, got: {err}");
+        }
+    }
+
+    #[test]
+    fn native_http_import_is_not_freestanding_and_not_ambient() {
+        let source=r#"import * as http from "std.http"; pub fnc main(): int { return 42; }"#;
+        let err=compile_ir_with_profile(source, LibraryProfile::FreestandingCore)
+            .expect_err("freestanding scalar core cannot import hosted HTTP");
+        assert!(err.contains("E_FREESTANDING_FORBIDDEN_IMPORT"), "{err}");
+        let no_import="pub fnc main(): int { if http_status_valid(200) then return 42; fi return 1; }";
+        let err=compile_ir(no_import).expect_err("compiler does not provide ambient std symbols");
+        assert!(err.contains("E_UNBOUND"), "{err}");
+        let comment_only="// import * as http from \"std.http\";\npub fnc main(): int { return 42; }";
+        assert!(compile_ir(comment_only).is_ok(), "commented import is not a dependency");
+    }
     #[test]
     fn native_pipe_and_rpipe_fail_before_emitting_llvm_ir() {
         for direction in ["pipe", "rpipe"] {
