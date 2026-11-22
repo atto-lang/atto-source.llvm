@@ -1,0 +1,44 @@
+// Freestanding helpers for the candidate std/error v1 numeric catalog.
+// These predicates do NOT establish nominal Error identity or catch authority.
+// The LLVM compiler/runtime owns Error, actor CONTROL, cancellation and serialization.
+define module error as
+
+  // Candidate shared catalog defined by atto-source.java PR #662.
+  // Only stable built-in codes are recognized. Never use this as a type cast.
+  pub fnc is_known_core_code(int code): bool {
+    if code == 0; do return true; fi
+    return (code >= 1000 && code <= 1008) ||
+           (code >= 2000 && code <= 2013) ||
+           (code >= 3000 && code <= 3008) ||
+           code == 3090 ||
+           (code >= 4000 && code <= 4008) ||
+           (code >= 5000 && code <= 5008) ||
+           (code >= 6000 && code <= 6011) ||
+           (code >= 7000 && code <= 7008) ||
+           (code >= 8000 && code <= 8010) ||
+           (code >= 9000 && code <= 9014);
+  }
+
+  pub fnc is_bounds_code(int code): bool {
+    return code == 1007 || code == 1008;
+  }
+
+  // Retry is advisory only. It NEVER grants permission or automatic retries.
+  pub fnc is_retry_advisory_code(int code): bool {
+    return code == 4003 || code == 5001 || code == 5003 ||
+           code == 5005 || code == 5006;
+  }
+
+  // Actor API errors are ordinary recoverable API values, not the
+  // supervisor-only panic/raise CONTROL channel.
+  pub fnc is_actor_api_code(int code): bool {
+    return code == 2012 || code == 2013 ||
+           (code >= 9000 && code <= 9014);
+  }
+
+  // Callers validate UTF-8 separately. This does not sanitize message bytes.
+  pub fnc valid_message_length(int bytes, int maximum): bool {
+    return bytes >= 0 && maximum >= 0 && bytes <= maximum;
+  }
+
+end

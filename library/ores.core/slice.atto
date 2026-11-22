@@ -1,0 +1,68 @@
+// Freestanding checked scalar arithmetic for contiguous borrowed slices.
+// This is a pure preflight library: no allocation, backing pointer, owner token,
+// or borrow authority is created by importing it.
+// Native LLVM must prove Slice<T> provenance, mutability and suspension gates.
+define module slice as
+
+  // -1 means invalid. Every successful index is in [0, length).
+  // Compare against -length before adding length: even MIN_INT is safe.
+  pub fnc normalize_index(int index, int length): int {
+    if length <= 0; do return -1; fi
+    if index >= 0; do
+      if index < length; do return index; fi
+      return -1;
+    fi
+    if index < -length; do return -1; fi
+    return length + index;
+  }
+
+  pub fnc valid_index(int index, int length): bool {
+    val int resolved = normalize_index(index, length);
+    return resolved >= 0;
+  }
+
+  // Explicit half-open endpoints permit [0,length], including an empty
+  // container. Omitted negative-stride end (-1 sentinel) is NOT represented.
+  pub fnc normalize_bound(int bound, int length): int {
+    if length < 0; do return -1; fi
+    if bound >= 0; do
+      if bound <= length; do return bound; fi
+      return -1;
+    fi
+    if bound < -length; do return -1; fi
+    return length + bound;
+  }
+
+  pub fnc valid_range(int start, int end, int length): bool {
+    return normalize_bound(start, length) >= 0 &&
+           normalize_bound(end, length) >= 0;
+  }
+
+  // Positive-step range element count, 0 for a valid empty/reversed interval,
+  // and -1 for an invalid explicit bound. No unchecked addition/multiplication.
+  pub fnc range_len(int start, int end, int length): int {
+    val int first = normalize_bound(start, length);
+    val int last = normalize_bound(end, length);
+    if first < 0 || last < 0; do return -1; fi
+    if first >= last; do return 0; fi
+    return last - first;
+  }
+
+  // A view is [offset, offset + count). Subtract only after bounds validation.
+  pub fnc valid_window(int offset, int count, int length): bool {
+    if offset < 0 || count < 0 || length < 0; do return false; fi
+    if offset > length; do return false; fi
+    return count <= length - offset;
+  }
+
+  // This scalar helper supports only positive stride. Reverse/strided view
+  // constructors must remain compiler-gated until their representation ships.
+  pub fnc valid_strided_window(int offset, int stride, int count, int length): bool {
+    if stride <= 0 || count < 0; do return false; fi
+    if !valid_window(offset, 0, length); do return false; fi
+    if count == 0; do return true; fi
+    if offset >= length; do return false; fi
+    return count - 1 <= (length - 1 - offset) / stride;
+  }
+
+end
