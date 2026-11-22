@@ -1,10 +1,15 @@
-name: Native .atto HTTP message-policy guest
+name: Native Atto HTTP policy and linked namespace guests
 on:
   pull_request:
     paths:
+      - 'src/main.rs'
+      - 'frontend/src/**'
+      - 'Cargo.toml'
+      - 'frontend/Cargo.toml'
       - 'stdlib/http/message_policy.atto'
       - 'tests/http_stdlib/**'
       - 'ci/test_http_stdlib_policy.sh'
+      - 'ci/test_http_namespace_import.sh'
       - '.github/workflows/http-stdlib-guest.yml'
   workflow_dispatch:
 permissions:
@@ -12,13 +17,24 @@ permissions:
 jobs:
   native-http-guest:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
-      - name: Toolchain inventory
+        with:
+          persist-credentials: false
+      - name: Exact-head source and toolchain inventory
         run: |
+          echo "ATTO_LLVM_EXACT_HEAD=$(git rev-parse HEAD)"
+          echo "ATTO_LLVM_ROOT_TREE=$(git rev-parse HEAD^{tree})"
           rustc --version
           cargo --version
           clang --version
-      - name: Compile Atto guest to native executable and run 34 cases
+          git hash-object stdlib/http/message_policy.atto
+      - name: Compile and execute 46 native HTTP scalar policy cases
         run: bash ci/test_http_stdlib_policy.sh
+      - name: Compile linked namespace guest and reject 8 forbidden import cases
+        run: bash ci/test_http_namespace_import.sh
+      - name: Evidence scope
+        run: |
+          echo 'COMPILER_GUEST: LLVM native import scalar-only and 46 source-policy checks'
+          echo 'NOT_CLAIMED: multi-module namespace class linking, QUIC, network sockets or NativeAOT across all 11 backends'
