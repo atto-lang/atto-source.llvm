@@ -76,6 +76,27 @@ define module zorde as
       }
       return true;
     }
+    // One bounded transaction: length varint plus all bytes, or no change.
+    pub write_length_delimited(mut self)(Array<int> values): bool {
+      if values.size > 1048576; do return false; fi
+      let int length = values.size;
+      let int width = 1;
+      let int probe = length;
+      while probe >= 128; do
+        width = width + 1;
+        probe = probe / 128;
+      done
+      if width > self.maximum - self.content.size ||
+         length > self.maximum - self.content.size - width; do
+        return false;
+      fi
+      for (let int i = 0; i < length; i = i + 1) {
+        if values.get(i) < 0 || values.get(i) > 255; do return false; fi
+      }
+      // All operations below are proved to fit and contain valid octets.
+      let bool wrote_length = self.write_varuint(length);
+      return wrote_length && self.write_bytes(values);
+    }
     pub size(): int { return self.content.size; }
     pub finish(): Array<int> {
       let mut Array<int> copy = new Array<int>();
@@ -150,6 +171,27 @@ define module zorde as
       }
       return Err("VaruintOverflow");
     }
+
+    // Atomic on bad varint, out-of-bounds length, and truncated bytes.
+    pub read_length_delimited(mut self)(int maximum): Result<Array<int>, String> {
+      if maximum < 0 || maximum > 1048576; do
+        return Err("InvalidLengthLimit");
+      fi
+      let int start = self.position;
+      let decoded = self.read_varuint();
+      if decoded.is_err(); do return Err("InvalidLengthVaruint"); fi
+      let int length = decoded.unwrap();
+      if length > maximum || length > self.remaining(); do
+        self.position = start;
+        return Err("LengthExceededOrTruncated");
+      fi
+      let contents = self.read_bytes(length);
+      if contents.is_err(); do
+        self.position = start;
+        return Err("TruncatedPayload");
+      fi
+      return Ok(contents.unwrap());
+    }
   end
 
   pub fnc writer(int maximum): Writer { return new Writer(maximum); }
@@ -181,6 +223,13 @@ define module zorde as
     if wire.size < 8 || wire.size > 1048576; do
       return Err("InvalidFrameSize");
     fi
+    // Reader constructor is a checked/throwing boundary. Preflight *all*
+    // octets here to preserve the Result contract for untrusted input.
+    for (let int i = 0; i < wire.size; i = i + 1) {
+      if wire.get(i) < 0 || wire.get(i) > 255; do
+        return Err("InvalidWireByte");
+      fi
+    }
     // Check the source before transferring it into the detached Reader.
     if wire.get(0) != 90 || wire.get(1) != 79 ||
        wire.get(2) != 82 || wire.get(3) != 68 ||
@@ -207,5 +256,74 @@ define module zorde as
     let payload_result = r.read_bytes(length);
     if payload_result.is_err(); do return Err("TruncatedPayload"); fi
     return Ok(new Frame(schema_id, schema_version, payload_result.unwrap()));
+
+  // Generated codecs should bind one expected schema/version at the caller.
+  // No arbitrary deserializer, reflection, or actor-capability admission.
+  pub fnc decode_frame_for(int schema_id, int schema_version,
+                           Array<int> wire): Result<Frame, String> {
+    if schema_id < 1 || schema_version < 1; do
+      return Err("InvalidExpectedSchema");
+    fi
+    let decoded = decode_frame(wire);
+    if decoded.is_err(); do return Err("InvalidFrame"); fi
+    let Frame frame = decoded.unwrap();
+    if frame.schema() != schema_id; do return Err("WrongSchema"); fi
+    if frame.version() != schema_version; do
+      return Err("UnsupportedSchemaVersion");
+    fi
+    return Ok(frame);
+  }
+
+  // Closed, scalar-only sample of source-authored AOT codec instances.
+  // A schema generator may use these but must not encode pointers or actors.
+  pub fnc encode_bool_frame(int schema_id, int schema_version,
+                            bool value): Result<Array<int>, String> {
+    let mut Array<int> payload = new Array<int>();
+    if value; do payload.add(1); else payload.add(0); fi
+    return encode_frame(schema_id, schema_version, payload);
+  }
+
+  pub fnc decode_bool_frame(int schema_id, int schema_version,
+                            Array<int> wire): Result<bool, String> {
+    let decoded = decode_frame_for(schema_id, schema_version, wire);
+    if decoded.is_err(); do return Err("InvalidBoolFrame"); fi
+    let Array<int> bytes = decoded.unwrap().bytes();
+    if bytes.size != 1 || (bytes.get(0) != 0 && bytes.get(0) != 1); do
+      return Err("InvalidBoolValue");
+    fi
+    return Ok(bytes.get(0) == 1);
+  }
+
+  // Bounded signed ZigZag31 uses canonical varuint, not platform i64 casts.
+  // This does not pretend to serialize every possible 64-bit int value.
+  pub fnc encode_i31_frame(int schema_id, int schema_version,
+                           int value): Result<Array<int>, String> {
+    if value < -1073741824 || value > 1073741823; do
+      return Err("I31Range");
+    fi
+    let int encoded = 0;
+    if value < 0; do
+      encoded = (-value) * 2 - 1;
+    else
+      encoded = value * 2;
+    fi
+    let mut Writer writer = new Writer(5);
+    if !writer.write_varuint(encoded); do return Err("I31EncodeFailure"); fi
+    return encode_frame(schema_id, schema_version, writer.finish());
+  }
+
+  pub fnc decode_i31_frame(int schema_id, int schema_version,
+                           Array<int> wire): Result<int, String> {
+    let decoded = decode_frame_for(schema_id, schema_version, wire);
+    if decoded.is_err(); do return Err("InvalidI31Frame"); fi
+    let mut Reader reader = new Reader(decoded.unwrap().bytes());
+    let value = reader.read_varuint();
+    if value.is_err() || reader.remaining() != 0; do
+      return Err("InvalidI31Payload");
+    fi
+    let int zigzag = value.unwrap();
+    if zigzag % 2 == 0; do return Ok(zigzag / 2); fi
+    return Ok(-(zigzag / 2) - 1);
+  }
   }
 end
