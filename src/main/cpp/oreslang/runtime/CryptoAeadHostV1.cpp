@@ -137,6 +137,9 @@ bool AeadKey::open(const std::array<std::uint8_t, NONCE_BYTES>& nonce,
                     const std::vector<std::uint8_t>& aad,
                     const std::vector<std::uint8_t>& ciphertext_and_tag,
                     std::vector<std::uint8_t>& output) {
+    // Clearing a vector only changes its logical length. Explicitly wipe the
+    // previous plaintext before reporting any new authentication result.
+    if (!output.empty()) OPENSSL_cleanse(output.data(), output.size());
     output.clear();
     if (aad.size() > MAX_AAD_BYTES ||
         ciphertext_and_tag.size() < TAG_BYTES ||
