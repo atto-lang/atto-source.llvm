@@ -1,0 +1,3 @@
+// Reset-like scalar function and addition, expected LLVM native exit 42.
+pub fnc reset(current: int): int { return 0; }
+pub fnc main(): int { return reset(41) + 42; }
