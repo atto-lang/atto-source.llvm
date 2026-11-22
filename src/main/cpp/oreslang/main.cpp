@@ -82,14 +82,11 @@ static std::vector<std::string> tree_shake_function_calls(
     return facts.calls;
 }
 
-static void require_function_only_tree_shake_surface(
+static void require_supported_tree_shake_surface(
         const oreslang::Program& program) {
     if (!program.actors.empty())
         throw std::runtime_error(
             "tree shaking currently rejects actor declarations until actor roots are modeled");
-    if (!program.classes.empty())
-        throw std::runtime_error(
-            "tree shaking currently rejects class declarations until class initializer roots are modeled");
     if (!program.cooperative_loops.empty())
         throw std::runtime_error(
             "tree shaking currently rejects cooperative loop declarations until continuation ABI roots are modeled");
@@ -168,6 +165,15 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
     if (pending.empty())
         throw std::runtime_error(
             "tree shaking requires an explicit root, main, or at least one pub function");
+
+    // Phase-0 has no class-initializer dependency edges. Never prune a
+    // function that may be invoked from a constructor or a field initializer.
+    // Class programs therefore admit the opt-in flag with *identity*
+    // retention: all declarations and overload ABI names remain unchanged.
+    // Roots were validated above and full-program target/codegen admission
+    // happens before this function. Semantic class pruning must wait for the
+    // independently verified Phase-2 reachability graph.
+    if (!program.classes.empty()) return;
 
     std::size_t scanned_edges = 0;
     for (std::size_t cursor = 0; cursor < pending.size(); ++cursor) {
@@ -1689,12 +1695,11 @@ int main(int argc, char** argv) {
                 bounded_allocator_provider, {}, actor_region_v1_aot, {}, {},
                 tenant_vm_guest);
 
-            // The shipped pass is deliberately function-only. Richer Program
-            // owners have hidden semantic/ABI roots that are not represented
-            // by the direct-call graph yet. Fail closed rather than deleting
-            // a helper that is reachable only from an actor handler, class
-            // initializer, or host-driven continuation.
-            require_function_only_tree_shake_surface(ast);
+            // The shipped destructive pass remains function-only. For class
+            // programs, retain every declaration rather than deleting any
+            // constructor/field-initializer helper before Phase-2 graph proof.
+            // Actor and continuation surfaces still fail closed.
+            require_supported_tree_shake_surface(ast);
             tree_shake_functions(ast, tree_shake_roots);
         }
         std::cout << oreslang::emit_verified_llvm_ir(
