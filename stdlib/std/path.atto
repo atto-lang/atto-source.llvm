@@ -50,6 +50,50 @@ define module path as
     return is_ascii_letter(first) && second == 58;
   }
 
+  // A successful lexical budget check is not native filesystem authority.
+  // Inputs are already checked per-component by the caller's source scanner.
+  pub fnc relative_join_budget_admissible(int left_scalars, int right_scalars,
+                                           int left_components, int right_components): bool {
+    if !scanner_budget_admissible(left_scalars, left_components) then return false; fi
+    if !scanner_budget_admissible(right_scalars, right_components) then return false; fi
+    // Reserve one separator without addition that could wrap.
+    if left_scalars > 4095 - right_scalars then return false; fi
+    return left_components <= 256 - right_components;
+  }
+
+  // Only dots with a nonempty basename and suffix can start an extension.
+  // Dotfile ".env", leading dot and trailing dot are not extensions.
+  pub fnc extension_offset_admissible(int filename_scalars, int dot_index): bool {
+    if filename_scalars < 3 || filename_scalars > 255 then return false; fi
+    return dot_index >= 1 && dot_index < filename_scalars - 1;
+  }
+
+  fnc to_upper_ascii(int cp): int {
+    if cp >= 97 && cp <= 122 then return cp - 32; fi
+    return cp;
+  }
+
+  // All recognized Windows aliases remain reserved when an extension follows.
+  // The full scanner must validate the complete stem and suffix separately.
+  pub fnc windows_device_3(int first, int second, int third): bool {
+    let int a = to_upper_ascii(first);
+    let int b = to_upper_ascii(second);
+    let int c = to_upper_ascii(third);
+    if a == 67 && b == 79 && c == 78 then return true; fi
+    if a == 80 && b == 82 && c == 78 then return true; fi
+    if a == 65 && b == 85 && c == 88 then return true; fi
+    return a == 78 && b == 85 && c == 76;
+  }
+
+  pub fnc windows_device_4(int first, int second, int third, int fourth): bool {
+    if fourth < 49 || fourth > 57 then return false; fi
+    let int a = to_upper_ascii(first);
+    let int b = to_upper_ascii(second);
+    let int c = to_upper_ascii(third);
+    return (a == 67 && b == 79 && c == 77) ||
+           (a == 76 && b == 80 && c == 84);
+  }
+
   // Root/handle confinement is NOT a consequence of this lexical predicate.
   pub fnc scanner_budget_admissible(int scalars, int components): bool {
     if scalars < 1 || scalars > 4096 then return false; fi
