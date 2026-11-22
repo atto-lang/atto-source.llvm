@@ -619,6 +619,14 @@ public:
 
     Program parse() {
         Program program;
+        // A source-local namespace header is descriptive, not an import or
+        // permission to bypass the native parser. Admit both canonical forms.
+        // The 'use namespace' form must precede imports and other definitions.
+        if (accept("use")) {
+            require("namespace");
+            program.namespace_name = identifier();
+            require(";");
+        }
         if (experimental_pointer_int_aot_) {
             // One canonical native scanner for both ordinary scalar programs
             // and nominal Pointer<int>. Never feed bytes through an alternate
@@ -668,6 +676,8 @@ public:
             program.imports.push_back(std::move(imported));
         }
         if (accept("namespace")) {
+            if (!program.namespace_name.empty())
+                fail("duplicate native namespace header");
             program.namespace_name = identifier();
             require(";");
         }
@@ -814,11 +824,31 @@ public:
         if (wrapped_module) require("end");
         if (token_.kind != Kind::End) fail("unexpected trailing source");
         validate_type_only_declarations(program);
+        // Executable namespace admission is deliberately restricted to one
+        // standalone, unlinked actor plus a trusted zero-argument main. The
+        // actor name remains file-local: no imports, cross-unit exports,
+        // secondary code generators or public host C symbols can refer to it.
+        // This does NOT enable general namespace actor/async/NIO lowering.
+        const bool standalone_namespace_actor =
+            program.imports.empty() && program.module.empty() &&
+            program.actors.size() == 1 && program.functions.size() == 1 &&
+            program.functions.front().name == "main" &&
+            program.functions.front().exported &&
+            program.functions.front().parameters.empty() &&
+            program.functions.front().method_owner.empty() &&
+            !program.functions.front().native_internal &&
+            program.functions.front().c_export_u32_symbol.empty() &&
+            !program.functions.front().async_source_i64 &&
+            program.classes.empty() && program.contracts.empty() &&
+            program.type_only_declarations.empty() &&
+            program.cooperative_loops.empty() &&
+            program.generators.empty() && program.conforms.empty();
         if (!program.namespace_name.empty() &&
                 (!program.functions.empty() || !program.classes.empty() ||
                  !program.actors.empty() || !program.contracts.empty() ||
-                 !program.cooperative_loops.empty() || !program.generators.empty())) {
-            fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: native namespace v1 is metadata-only");
+                 !program.cooperative_loops.empty() || !program.generators.empty()) &&
+                !standalone_namespace_actor) {
+            fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: native namespace v1 is metadata-only except for one standalone actor and main");
         }
         compile_type_constraint_descriptors(program);
         lower_extension_calls(program);

@@ -1,0 +1,23 @@
+use namespace rmq;
+// Real LLVM source-actor guest; AMQP 0-9-1 eight-octet preface is sent as
+// eight bounded scalar actor mails. This does NOT read TCP or parse AMQP.
+define actor PrefaceActor as {
+  let digest: int = 0;
+  pub fnc on_message(int byte): int {
+    digest = digest * 17 + byte;
+    return digest;
+  }
+}
+pub fnc main(): int {
+  const checker = spawn PrefaceActor();
+  checker.send(65);
+  checker.send(77);
+  checker.send(81);
+  checker.send(80);
+  checker.send(0);
+  checker.send(0);
+  checker.send(9);
+  checker.send(1);
+  stop checker;
+  return 43;
+}

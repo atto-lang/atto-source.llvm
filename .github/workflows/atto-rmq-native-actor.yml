@@ -1,0 +1,62 @@
+name: AttoRMQ real LLVM source actor compiler admission
+on:
+  push:
+    branches: [perf/atto-rmq-native-actor-llvm-20261112]
+  pull_request:
+    paths:
+      - 'tests/fixtures/atto-rmq-native-preface-actor.atto'
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'tests/atto_rmq_native_actor_guest.rs'
+      - '.github/workflows/atto-rmq-native-actor.yml'
+permissions:
+  contents: read
+jobs:
+  real-native-actor:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Pin clean exact-head source including generated actor fixture
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          echo "LLVM_SOURCE_HEAD=$EXPECTED_HEAD"
+          echo "LLVM_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+          git hash-object tests/fixtures/atto-rmq-native-preface-actor.atto
+          git hash-object src/main/cpp/oreslang/frontend/Parser.cpp
+          git hash-object tests/atto_rmq_native_actor_guest.rs
+      - name: Install native compiler dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get -qq update
+          sudo apt-get -y install --no-install-recommends clang llvm-dev cmake ninja-build build-essential rustc
+          llvm-config --version
+          clang --version | head -1
+          rustc --version
+      - name: Build exact-source production LLVM compiler
+        run: |
+          set -euo pipefail
+          cmake -G Ninja -S . -B "$RUNNER_TEMP/llvm-rmq-build" \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
+            -DLLVM_DIR="$(llvm-config --cmakedir)"
+          cmake --build "$RUNNER_TEMP/llvm-rmq-build" --target oreslang-llvmc --parallel 2
+          sha256sum "$RUNNER_TEMP/llvm-rmq-build/oreslang-llvmc"
+      - name: Compile and run actual native actor guest and verify lifecycle receipts
+        run: |
+          set -euo pipefail
+          rustc --edition=2021 -D warnings -O tests/atto_rmq_native_actor_guest.rs \
+            -o "$RUNNER_TEMP/rmq-native-actor-check"
+          "$RUNNER_TEMP/rmq-native-actor-check" \
+            "$RUNNER_TEMP/llvm-rmq-build/oreslang-llvmc" clang "$PWD" "$RUNNER_TEMP/rmq-native-guest"
+      - name: Preserve evidence boundaries
+        run: |
+          echo ATTO_RMQ_LLVM_COMPILED_SOURCE_ACTOR=EXECUTED
+          echo ATTO_RMQ_LLVM_TCP_IO_GUEST=NOT_IMPLEMENTED
+          echo ATTO_RMQ_FULL_AMQP_BROKER=NOT_IMPLEMENTED
+          echo ATTO_RMQ_DURABLE_QUORUM=NOT_EXECUTED
