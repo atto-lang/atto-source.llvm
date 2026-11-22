@@ -82,7 +82,7 @@ jobs:
           for function in 'is_separator' 'sampled_flag' 'mutex_take_admissible'; do
             count="$(grep -Ec "^define i64 @__ores_module_[0-9]+\\.${function}\\(" \
               "$RUNNER_TEMP/std-alias-guest.ll" || true)"
-            test "$count" -le 1
+            test "$count" -eq 1
           done
           clang -O2 -x ir "$RUNNER_TEMP/std-alias-guest.ll" \
             -o "$RUNNER_TEMP/std-alias-guest.bin"
