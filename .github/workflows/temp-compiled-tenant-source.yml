@@ -1,0 +1,43 @@
+name: TEMP exact-blobs LLVM compiled AttoLang tenant guest E2E
+on:
+  push:
+    branches:
+      - ci/source-compiled-tenant-guest-20261106
+permissions:
+  contents: read
+jobs:
+  source-compiled-native-tenant:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    env:
+      ATTO_BUILD_JOBS: "2"
+      LLVM_DIR: /usr/lib/llvm-18/lib/cmake/llvm
+      ATTO_E2E_EXPECTED_HEAD_SHA: ${{ github.sha }}
+      EXPECTED_CARRIER_HEAD_SHA: ${{ github.sha }}
+    steps:
+      - name: Checkout exact isolated private carrier commit without credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate all 57 exact original Git source blobs
+        run: python3 ci/verify-source-subset.py
+      - name: Install LLVM 18, Clang wasm32, WABT and build tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang-18 lld-18 llvm-18-dev libzstd-dev wabt cmake python3 file
+          sudo ln -sf /usr/bin/clang-18 /usr/local/bin/clang
+          sudo ln -sf /usr/bin/clang++-18 /usr/local/bin/clang++
+          sudo ln -sf /usr/bin/wasm-ld-18 /usr/local/bin/wasm-ld
+          echo "TOOLCHAIN_LLVM_DIR=$LLVM_DIR"
+          command -v clang clang++ wasm-ld wasm2c wat2wasm
+          find /usr/include /usr/share -name 'wasm-rt.h' -print 2>/dev/null | head -10 || true
+      - name: Five negative source-AOT contract controls
+        run: python3 -m unittest discover -s tests/tenant-vm -p test_e2e_gate.py -v
+      - name: Build actual eight-unit LLVM compiler and run source-generated native tenant guests
+        run: bash tools/tenant-vm/verify-atto-e2e.sh
+      - name: Explicit evidence scope
+        run: |
+          echo "EXECUTED_GUEST_SCOPE=SELECTED_EXACT_ORIGINAL_GIT_BLOBS_NOT_COMPLETE_SOURCE_TREE"
+          echo "NO_GRAALVM_NO_PRODUCTION_NATIVE_UNTRUSTED_SANDBOX_NO_FIVE_BACKEND_PARITY"

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "oreslang/runtime/DopLayout.hpp"
+#include "oreslang/runtime/DopRegionSchedule.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 #include <climits>
 #include <cmath>
@@ -67,9 +68,11 @@ struct OpenClArtifact {
 class HostBuffer {
     struct State {
         Plan layout;
+        RegionRoot region_root;
         std::vector<unsigned char> bytes;
         mutable std::mutex lock;
         std::size_t loans = 0;
+        bool writer = false;
         bool closed = false;
         static std::size_t checked_host_size(const Plan& layout) {
             // HostBuffer read()/write() always copy sizeof(float) bytes. A
@@ -86,7 +89,11 @@ class HostBuffer {
             return oreslang::TargetAbi::checked_host_bytes(layout.byte_length());
         }
         explicit State(Plan value)
-            : layout(value), bytes(checked_host_size(value), 0) { }
+            : layout(value), region_root(RegionRoot::create_bound(value.rows(), value.fields())),
+              bytes(checked_host_size(value), 0) { }
+        // Region identity must retire when the final storage reference dies,
+        // including owner destruction without an explicit close().
+        ~State() noexcept { region_root.retire_bound(); }
     };
 public:
     class ReadLoan {
@@ -118,6 +125,36 @@ public:
         std::shared_ptr<State> state_;
     };
 
+    // Per-element locks cannot protect a batch from concurrent partial observation.
+    class WriteLoan {
+    public:
+        explicit WriteLoan(std::shared_ptr<State> state) : state_(std::move(state)) {}
+        WriteLoan(const WriteLoan&) = delete;
+        WriteLoan& operator=(const WriteLoan&) = delete;
+        WriteLoan(WriteLoan&& other) noexcept : state_(std::move(other.state_)) {}
+        WriteLoan& operator=(WriteLoan&&) = delete;
+        ~WriteLoan() { release(); }
+        void write(std::uint64_t row, std::uint32_t field, float value) {
+            if (!state_) throw std::logic_error("stale write loan");
+            std::lock_guard<std::mutex> guard(state_->lock);
+            if (state_->closed || !state_->writer)
+                throw std::logic_error("inactive write loan");
+            const auto offset = state_->layout.byte_offset(row, field);
+            std::memcpy(state_->bytes.data() + static_cast<std::size_t>(offset),
+                        &value, sizeof(value));
+        }
+        void release() noexcept {
+            if (!state_) return;
+            auto held = std::move(state_);
+            {
+                std::lock_guard<std::mutex> guard(held->lock);
+                held->writer = false;
+            }
+        }
+    private:
+        std::shared_ptr<State> state_;
+    };
+
     explicit HostBuffer(Plan layout) : state_(std::make_shared<State>(layout)) {}
     HostBuffer(const HostBuffer&) = delete;
     HostBuffer& operator=(const HostBuffer&) = delete;
@@ -127,7 +164,7 @@ public:
         // transferred behind its borrow owner's back.
         if (other.state_) {
             std::lock_guard<std::mutex> guard(other.state_->lock);
-            if (other.state_->closed || other.state_->loans != 0)
+            if (other.state_->closed || other.state_->loans != 0 || other.state_->writer)
                 throw std::logic_error("cannot move closed or borrowed host buffer");
         }
         state_ = std::move(other.state_);
@@ -138,14 +175,14 @@ public:
         // Never silently drop a live allocation or an outstanding loan.
         if (state_) {
             std::lock_guard<std::mutex> state_guard(state_->lock);
-            if (!state_->closed || state_->loans != 0)
+            if (!state_->closed || state_->loans != 0 || state_->writer)
                 throw std::logic_error("cannot overwrite live owned host buffer");
         }
         // Reject transfer of a borrowed or closed source, not just an
         // unretired destination, while both owner locks are held.
         if (other.state_) {
             std::lock_guard<std::mutex> guard(other.state_->lock);
-            if (other.state_->closed || other.state_->loans != 0)
+            if (other.state_->closed || other.state_->loans != 0 || other.state_->writer)
                 throw std::logic_error("cannot move closed or borrowed host buffer");
         }
         state_ = std::move(other.state_);
@@ -161,6 +198,15 @@ public:
         if (state_->closed) throw std::logic_error("buffer moved or closed");
         return state_->layout;
     }
+    // Region identity is anchored in the actual storage State, not in a
+    // caller-minted planning token. take()/native moves preserve this identity.
+    RegionRoot region_root() const {
+        std::lock_guard<std::mutex> owner(owner_lock_);
+        active();
+        std::lock_guard<std::mutex> guard(state_->lock);
+        if (state_->closed) throw std::logic_error("closed region owner");
+        return state_->region_root;
+    }
     bool identical_storage(const HostBuffer& other) const noexcept {
         if (this == &other) {
             std::lock_guard<std::mutex> owner(owner_lock_);
@@ -174,7 +220,7 @@ public:
         std::lock_guard<std::mutex> owner(owner_lock_);
         active();
         std::lock_guard<std::mutex> guard(state_->lock);
-        if (state_->loans != 0) throw std::logic_error("cannot move borrowed buffer");
+        if (state_->loans != 0 || state_->writer) throw std::logic_error("cannot move borrowed buffer");
         HostBuffer replacement(std::move(state_));
         return replacement;
     }
@@ -183,11 +229,21 @@ public:
         std::lock_guard<std::mutex> owner(owner_lock_);
         active();
         std::lock_guard<std::mutex> guard(state_->lock);
-        if (state_->closed) throw std::logic_error("closed buffer");
+        if (state_->closed || state_->writer) throw std::logic_error("closed or write-borrowed buffer");
         if (state_->loans == std::numeric_limits<std::size_t>::max())
             throw std::overflow_error("read loan counter exhausted");
         ++state_->loans;
         return ReadLoan(state_);
+    }
+
+    WriteLoan borrow_write() {
+        std::lock_guard<std::mutex> owner(owner_lock_);
+        active();
+        std::lock_guard<std::mutex> guard(state_->lock);
+        if (state_->closed || state_->writer || state_->loans != 0)
+            throw std::logic_error("cannot exclusively borrow host buffer");
+        state_->writer = true;
+        return WriteLoan(state_);
     }
 
     float read(std::uint64_t row, std::uint32_t field) const {
@@ -199,17 +255,29 @@ public:
         std::lock_guard<std::mutex> owner(owner_lock_);
         active();
         std::lock_guard<std::mutex> guard(state_->lock);
-        if (state_->closed || state_->loans) throw std::logic_error("write to closed or borrowed buffer");
+        if (state_->closed || state_->loans || state_->writer) throw std::logic_error("write to closed or borrowed buffer");
         const auto offset = state_->layout.byte_offset(row, field);
         std::memcpy(state_->bytes.data() + static_cast<std::size_t>(offset), &value, sizeof(value));
+    }
+
+    // Host-only physical allocation accounting; unlike shape byte_length()
+    // this reports capacity still retained by this buffer wrapper.
+    std::size_t retained_host_capacity_bytes() const {
+        std::lock_guard<std::mutex> owner(owner_lock_);
+        if (!state_) return 0;
+        std::lock_guard<std::mutex> guard(state_->lock);
+        return state_->bytes.capacity();
     }
 
     void close() {
         std::lock_guard<std::mutex> owner(owner_lock_);
         if (!state_) return; // relinquished ownership
         std::lock_guard<std::mutex> guard(state_->lock);
-        if (state_->loans != 0) throw std::logic_error("outstanding read loan");
+        if (state_->loans != 0 || state_->writer) throw std::logic_error("outstanding host buffer loan");
         state_->closed = true;
+        state_->region_root.retire_bound();
+        std::vector<unsigned char> released;
+        state_->bytes.swap(released);
     }
 
 private:
@@ -237,6 +305,7 @@ inline void execute_cpu(const Kernel& kernel, const HostBuffer& input, HostBuffe
             || !matching_layout(kernel.layout, output.layout()))
         throw std::invalid_argument("kernel layout does not match owned buffers");
     auto loan = input.borrow_read();
+    auto destination = output.borrow_write();
     for (std::uint64_t row = 0; row < kernel.layout.rows(); ++row) {
         for (std::uint32_t field = 0; field < kernel.layout.fields(); ++field) {
             const auto v = loan.read(row, field);
@@ -252,8 +321,45 @@ inline void execute_cpu(const Kernel& kernel, const HostBuffer& input, HostBuffe
                 volatile float product = v * kernel.scale;
                 result = product + kernel.bias;
             }
-            output.write(row, field, result);
+            // Whole-batch exclusive write loan: no partial batch is observable.
+            destination.write(row, field, result);
         }
+    }
+}
+
+
+/**
+ * Checked CPU region lowering for a single column / half-open row slice.
+ * The planner is advisory; actual isolation is enforced by whole-buffer loans.
+ * Until field-granular runtime loans exist, two writes to different fields of
+ * the SAME HostBuffer are intentionally serialized, even if logically disjoint.
+ */
+inline void execute_cpu_region(const Kernel& kernel,
+        const HostBuffer& input, HostBuffer& output,
+        const RegionAccess& source, const RegionAccess& destination) {
+    if (input.identical_storage(output))
+        throw std::invalid_argument("region input/output alias forbidden");
+    if (!matching_layout(kernel.layout, input.layout())
+            || !matching_layout(kernel.layout, output.layout()))
+        throw std::invalid_argument("region kernel layout mismatch");
+    if (source.mode != RegionMode::Read || destination.mode != RegionMode::Write
+            || source.field != destination.field || source.begin != destination.begin
+            || source.end != destination.end
+            || !source.root.same_root(input.region_root())
+            || !destination.root.same_root(output.region_root()))
+        throw std::invalid_argument("invalid CPU region owner, privilege or footprint");
+    RegionTask admitted("cpu-region", {source, destination});
+    require_live_owned(admitted);
+    // No write occurs unless BOTH loans have been acquired. Failed second
+    // admission unwinds the first RAII loan without changing output storage.
+    auto loan = input.borrow_read();
+    auto writer = output.borrow_write();
+    for (auto row = source.begin; row < source.end; ++row) {
+        const auto value = loan.read(row, source.field);
+        const auto result = kernel.operation == Op::Scale ? value * kernel.scale
+            : kernel.operation == Op::Bias ? value + kernel.bias
+            : (value * kernel.scale) + kernel.bias;
+        writer.write(row, destination.field, result);
     }
 }
 

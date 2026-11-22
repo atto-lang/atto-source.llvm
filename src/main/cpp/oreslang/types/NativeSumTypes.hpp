@@ -17,17 +17,22 @@ inline std::string native_sum_scalar_name(ScalarType type) {
     }
     throw std::runtime_error("invalid native sum scalar payload kind");
 }
-inline std::string native_sum_name(NativeSumType::Kind kind, ScalarType value, ScalarType error = ScalarType::I64) {
+inline std::string native_sum_name(NativeSumType::Kind kind, ScalarType value, ScalarType error = ScalarType::I64,
+                                   bool trap_error = false) {
     // Invalid enum discriminants must never collapse to valid Result<int,int>
     // names, and unchecked ScalarType values must never turn into "int".
     const std::string component = native_sum_scalar_name(value);
     switch (kind) {
         case NativeSumType::Kind::Option:
+            if (trap_error)
+                throw std::runtime_error("native Option descriptor cannot carry a trap Error slot");
             if (error != ScalarType::I64)
                 throw std::runtime_error("native Option descriptor has noncanonical error slot");
             return "Option<" + component + ">";
         case NativeSumType::Kind::Result:
-            return "Result<" + component + "," + native_sum_scalar_name(error) + ">";
+            if (trap_error && error != ScalarType::String)
+                throw std::runtime_error("native Result<_, Error> descriptor has noncanonical error slot");
+            return "Result<" + component + "," + (trap_error ? std::string("Error") : native_sum_scalar_name(error)) + ">";
     }
     throw std::runtime_error("invalid native sum descriptor kind");
 }
@@ -49,7 +54,7 @@ inline void validate_native_sum_registry(const Program& program) {
             throw std::runtime_error("invalid native sum scalar ABI descriptor");
         if (!admitted_sum_names.insert(sum.name).second)
             throw std::runtime_error("duplicate native sum type descriptor");
-        const auto expected = native_sum_name(sum.kind, sum.value_type, sum.error_type);
+        const auto expected = native_sum_name(sum.kind, sum.value_type, sum.error_type, sum.trap_error);
         const auto shape = types::functor_v1::parse_type(sum.name);
         const bool correct_kind = shape.name ==
             (sum.kind == NativeSumType::Kind::Option ? "Option" : "Result");
@@ -120,7 +125,8 @@ inline void merge_native_sum_descriptor(std::vector<NativeSumType>& target,
         if (existing.name != incoming.name) continue;
         if (existing.kind != incoming.kind ||
                 existing.value_type != incoming.value_type ||
-                existing.error_type != incoming.error_type)
+                existing.error_type != incoming.error_type ||
+                existing.trap_error != incoming.trap_error)
             throw std::runtime_error("conflicting linked native sum type descriptor '" + incoming.name + "'");
         return;
     }
@@ -144,21 +150,24 @@ inline void resolve_native_sums(Program& program) {
     for (const auto& fn : program.functions) functions.emplace(native_function_slot(fn.name, fn.parameters.size()), &fn);
     auto field_hint = [](const ClassField& f) { return Hint{f.scalar_type, f.sum_type, f.class_name, f.int_array, f.array_element_type, f.array_record_class}; };
     auto local_hint = [](const LocalBinding& b) { return Hint{b.scalar_type, b.sum_type, b.class_name, b.int_array, b.array_element_type, b.array_record_class}; };
-    auto add_type = [&](NativeSumType::Kind kind, ScalarType value, ScalarType error = ScalarType::I64) {
-        const auto name = native_sum_name(kind, value, error);
+    auto add_type = [&](NativeSumType::Kind kind, ScalarType value, ScalarType error = ScalarType::I64,
+                        bool trap_error = false) {
+        const auto name = native_sum_name(kind, value, error, trap_error);
         for (const auto& type : program.sum_types) if (type.name == name) return name;
-        program.sum_types.push_back({kind, name, value, error}); return name;
+        program.sum_types.push_back({kind, name, value, error, trap_error}); return name;
     };
     std::function<Hint(Expression&, const Env&, const std::string&)> expression;
     expression = [&](Expression& e, const Env& env, const std::string& expected) -> Hint {
         validate_native_sum_expression_shape(e);
         using E = Expression::Kind;
         if (e.kind == E::SumConstruct) {
-            if (e.trap_origin && (e.name != "Some" || e.arguments.size() != 1 ||
+            if (e.trap_origin && (e.name != "Ok" || e.arguments.size() != 1 ||
                     !native_trap_pure_integer(*e.arguments.front())))
                 throw std::runtime_error("invalid native trap AST: operand must be a pure i64 expression");
-            if (e.trap_origin && !expected.empty() && expected != "Option<int>")
-                throw std::runtime_error("native trap requires exactly Option<int>, no nested/erased result conversion");
+            // trap yields Result<T, Error> (spec ch. 7, S-04). Only the pure i64
+            // slice is lowered; it cannot fail, so the Error slot is never set.
+            if (e.trap_origin && !expected.empty() && expected != "Result<int,Error>")
+                throw std::runtime_error("native trap yields exactly Result<int, Error>, no Option or erased result conversion");
             // Do not admit a partially rewritten/malformed constructor AST.
             // The native lowering consumes only name + positional payloads;
             // stray children must not hide effectful or ownership-sensitive IR.
@@ -174,6 +183,8 @@ inline void resolve_native_sums(Program& program) {
                 if (!payload)
                     throw std::runtime_error("malformed native sum constructor AST");
             std::string selected = expected;
+            if (selected.empty() && e.trap_origin)
+                selected = add_type(NativeSumType::Kind::Result, ScalarType::I64, ScalarType::String, true);
             if (selected.empty()) {
                 if (e.name != "Some" || e.arguments.size() != 1) throw std::runtime_error("native sum constructor requires a declared Option/Result context");
                 const auto value = expression(*e.arguments[0], env, {});
@@ -182,8 +193,10 @@ inline void resolve_native_sums(Program& program) {
             }
             const NativeSumType type = native_sum(program, selected);
             const bool option = type.kind == NativeSumType::Kind::Option;
-            if (e.trap_origin && (!option || type.value_type != ScalarType::I64))
-                throw std::runtime_error("native trap only lowers Option<int> with noncatching checked arithmetic");
+            if (e.trap_origin && (option || !type.trap_error || type.value_type != ScalarType::I64))
+                throw std::runtime_error("native trap only lowers Result<int, Error> with noncatching checked arithmetic");
+            if (type.trap_error && !e.trap_origin)
+                throw std::runtime_error("native Result<_, Error> values are minted only by trap; Ok/Err cannot construct them");
             if ((option && e.name != "Some" && e.name != "None") || (!option && e.name != "Ok" && e.name != "Err"))
                 throw std::runtime_error("native sum constructor variant does not match declared sum type");
             if (e.arguments.size() != (e.name == "None" ? 0u : 1u)) throw std::runtime_error("native sum constructor payload arity mismatch");

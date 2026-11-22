@@ -1,0 +1,24 @@
+# GPU G1 provider-owned device loan registry (host-only foundation)
+
+Implementation: `src/main/cpp/oreslang/backend/GpuG1DeviceLeaseRegistry.hpp`.
+
+**Evidence class:** HOST_ONLY; compiler-backed kernel execution and physical GPU event attestation are **NOT_EXECUTED** in this change. The C++ class is a resource state machine, not a device driver or a public guest API. It must be embedded behind an authenticated, private GPU provider; untrusted `.atto` code must never access `provider_register_*`, `provider_submit`, `provider_request_cancel`, `provider_ack_event` or device-quarantine controls.
+
+## Guarantees
+
+1. An allocation/queue handle can only be minted by its owning registry. Its immutable identity is bound to registry incarnation, tenant, physical device ID, resource ID and positive generation. Generation changes after retirement/re-creation and stale/cross-registry handles fail closed. Handles are copyable for trusted host code; **not cryptographic secrets**, not OS/tenant isolation on their own.
+2. `provider_submit` verifies **all** typed byte views and active loans under one short mutex-held critical section. It accepts only 4-byte-aligned, positive-length, bounds-checked f32 ranges. Any overlapping mutable versus read-only or mutable range is denied both within a submission and against all active submissions. Read/read overlap and adjacent independent writes are legal. The lock performs no I/O and must be called from an appropriate provider/control lane rather than an actor carrier needing nonblocking semantics.
+3. Provider quotas: per tenant **active resident bytes**, active allocations, in-flight submissions, *tracked lifetime queue identities*, *tracked lifetime allocation identities*; per launch bounded view count and summed referenced bytes. Tracking retired IDs consumes lifetime identity capacity to prevent unbounded map growth; exhausted registries need a separately authorized replacement/generation transition, never unsafe ID reuse. Registrations and submissions are atomic on admitted records.
+4. `provider_request_cancel` marks intent but **does not** release any device loan or enable allocation/queue retirement. A trusted provider may call `provider_ack_event` only after independently observing actual GPU completion or a confirmed cancelled-and-quiescent event. A cancelled acknowledgment without a prior cancellation request, an event for the wrong queue, a duplicate/stale event, and a late event after retirement are rejected.
+5. `provider_quarantine_device(device)` fences a **physical device across all tenants**: existing handles and new queue/allocation registrations fail closed. Outstanding loans stay held. There is deliberately no speculative recover/unquarantine, implicit CPU fallback, synthetic completion, or host-side assumption that CUDA context loss equals quiescence.
+6. No direct reuse of `DeviceLeaseRegistry::Ticket` values within a registry. No guest-originated event acknowledgment. All public `provider_*` functions are **trusted embedding interfaces** and require a genuine provider trust boundary outside this class.
+
+## Review and proof gates
+
+- Standalone test: `g++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -UNDEBUG -pthread -I src/main/cpp tests/gpu_g1_device_lease_registry_test.cpp -o /tmp/g1-lease-test && /tmp/g1-lease-test`. Also validated with Clang and ASan+UBSan.
+- Local exact-source test: **449/449 host-only lifecycle assertions**, eight racing submitters (exactly one write winner), 128 repeated cancellation/fence cycles, generation ABA, cross-registry/cross-tenant rejection, alias overlap, identity history quota, device-wide quarantine and unaffected other physical device.
+- Negative mutation: removing the `provider_retire_allocation` in-flight hold check causes the same compiled test to abort nonzero. This is an isolated host-only mutation, **not** a compiler-backed guest mutation.
+- CMake/CTest `native_gpu_g1_provider_loan_lifecycle_host_only` plus the exact-head `gpu-g1-exact-head-compiler.yml` host job hash and run the checked-in test. `steps=null` remains runner admission failure, never an executed-test pass.
+- **Still missing:** real runtime allocator registration and physical queue authority, full `.atto` borrow/effect compiler integration, hardware event callback authentication, nonblocking `Future` resume, deadline/cancellation policy, tenant teardown/driver-reset recovery, cross-backend portability, and physically executed CUDA SAXPY receipts with independent numeric oracle. The private provider must prove actual GPU quiescence before acknowledging; a self-reported event cannot establish it.
+
+Stack: LLVM G1 restricted source compiler PR #1473 -> launch quota/ABI PR #1506 -> this provider-ledger PR, with common-source GPU contract #245 and conformance evidence admission PR #549 tracked separately. Independent review and real exact-head nonzero CI steps are mandatory before merge or claims of native GPU support.

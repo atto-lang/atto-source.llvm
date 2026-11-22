@@ -1,0 +1,9 @@
+// Even capture-free immutable caller work is bounded to one scalar tile.
+// A second independent local before await must fail the compiler gate.
+pub fnc main(): int {
+  let Task<int> first = task { return 10; };
+  val int second = 20;
+  val int third = 12;
+  let int partial = await first;
+  return partial + second + third;
+}

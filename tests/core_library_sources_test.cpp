@@ -101,6 +101,10 @@ int main() {
     assert(find_alloc_library_source("atto.alloc/int_buffer.ores") == nullptr);
     assert(find_core_library_source("ores.core") == nullptr);
     assert(find_core_library_source("ores.core/unknown") == nullptr);
+    // Staged .atto source cannot silently become a linked LLVM library:
+    // higher-order generics, effects and ownership need typed lowering first.
+    assert(find_core_library_source("ores.core/collections") == nullptr);
+    assert(find_compiler_library_source("ores.core/collections.atto") == nullptr);
     assert(find_core_library_source("ores.core/../numeric") == nullptr);
     assert(find_core_library_source("ores.core//numeric") == nullptr);
     assert(find_core_library_source("ores.core\\numeric") == nullptr);

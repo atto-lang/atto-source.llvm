@@ -10,7 +10,9 @@
 
 namespace oreslang {
 inline llvm::Type* native_pointer_type(llvm::LLVMContext& context, llvm::Type* pointee) {
-#if LLVM_VERSION_MAJOR >= 23
+    // Pointers are opaque from LLVM 17: getPointerTo() already returned this
+    // `ptr` type, and it is deprecated (-Werror) from LLVM 21.
+#if LLVM_VERSION_MAJOR >= 17
     (void)pointee;
     return llvm::PointerType::get(context, 0);
 #else
@@ -21,7 +23,7 @@ inline llvm::Type* native_pointer_type(llvm::LLVMContext& context, llvm::Type* p
 
 inline void native_lifetime_start(llvm::IRBuilder<>& builder, llvm::Value* ptr,
                                   std::uint64_t bytes) {
-#if LLVM_VERSION_MAJOR >= 23
+#if LLVM_VERSION_MAJOR >= 22
     (void)bytes;
     builder.CreateLifetimeStart(ptr);
 #else
@@ -31,7 +33,7 @@ inline void native_lifetime_start(llvm::IRBuilder<>& builder, llvm::Value* ptr,
 }
 inline void native_lifetime_end(llvm::IRBuilder<>& builder, llvm::Value* ptr,
                                 std::uint64_t bytes) {
-#if LLVM_VERSION_MAJOR >= 23
+#if LLVM_VERSION_MAJOR >= 22
     (void)bytes;
     builder.CreateLifetimeEnd(ptr);
 #else

@@ -45,13 +45,14 @@ class Loader {
     // Environment values are snapshotted on first use for the duration of
     // this compiler invocation; source import resolution never runs a shell.
     std::unordered_map<std::string, std::optional<std::string>> import_environment;
-    bool owned, scalar_loop, host;
+    bool owned, scalar_loop, host, foreign_i64_granted;
+    int language_version = 0;
     std::uint32_t root_provider_bits = 0;
 public:
     Loader(bool owned, bool scalar_loop, bool host,
-           std::uint32_t admitted_provider_bits)
-        : owned(owned), scalar_loop(scalar_loop), host(host),
-          root_provider_bits(admitted_provider_bits) {}
+           std::uint32_t admitted_provider_bits, bool foreign_grant, int language_version)
+        : owned(owned), scalar_loop(scalar_loop), host(host), foreign_i64_granted(foreign_grant),
+          language_version(language_version), root_provider_bits(admitted_provider_bits) {}
     Program run(const std::string& path, std::string text, SourceIdentity identity) {
         read_bytes = text.size();
         visit(fs::canonical(path), std::move(text), identity, 0, false,
@@ -66,9 +67,16 @@ public:
         }
         if (units.front()->program.imports.empty()) {
             auto root = std::move(units.front()->program);
+            root.foreign_i64_granted = foreign_i64_granted;
             resolve_and_validate_program(root);
             return root;
         }
+        // M1 FFI admits no module imports: imported symbol qualification and
+        // trust provenance must be separately proved before any linkage.
+        for (const auto& unit : units)
+            for (const auto& fn : unit->program.functions)
+                if (fn.foreign_import)
+                    throw std::runtime_error("foreign FFI imports require one standalone source unit");
         Program linked;
         linked.module = units.front()->program.module;
         linked.namespace_name = units.front()->program.namespace_name;
@@ -154,7 +162,12 @@ private:
         unit->compiler_owned_library = compiler_owned_library;
         unit->compiler_library_tier = compiler_library_tier;
         unit->admitted_core_provider_bits = admitted_core_provider_bits;
-        try { unit->program = parse_unresolved_program(text, owned, scalar_loop); }
+        // Compiler-owned core sources are not guest-authored and retain
+        // their existing syntactic contract; project sources share the
+        // selected version across the resolved import graph.
+        try { unit->program = parse_unresolved_program(
+            text, owned, scalar_loop, false,
+            unit->compiler_owned_library ? 0 : language_version); }
         catch (const std::exception& error) {
             // Preserve historical diagnostics for a standalone entry unit.
             if (!index) throw;
@@ -513,8 +526,10 @@ private:
 } // namespace
 Program load_native_program(const std::string& path, std::string source, SourceIdentity identity,
                             bool owned, bool scalar_loop, bool host,
-                            std::uint32_t admitted_provider_bits) {
-    return Loader(owned, scalar_loop, host, admitted_provider_bits)
+                            std::uint32_t admitted_provider_bits, bool foreign_i64_granted,
+                            int language_version) {
+    return Loader(owned, scalar_loop, host, admitted_provider_bits, foreign_i64_granted,
+                  language_version)
         .run(path, std::move(source), identity);
 }
 frontend::VerifiedNamespaceSourceSnapshotV2 admit_native_namespace_sources_v2(
