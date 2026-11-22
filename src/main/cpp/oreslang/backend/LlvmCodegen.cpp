@@ -87,6 +87,9 @@ struct RegionMoveLowering {
     const NativeI64DispatchImage* frozen_scalar_dispatch = nullptr;
     const std::unordered_map<std::string, llvm::Function*>* frozen_scalar_callees = nullptr;
     const std::unordered_map<std::string, std::string>* frozen_scalar_symbols = nullptr;
+    // Source-owned Box<int> identifiers remain non-Copy even though the
+    // native owned region stores their values as opaque generation tokens.
+    const std::unordered_set<std::string>* native_box_names = nullptr;
 };
 
 llvm::Value* receiver_array_region(const Expression& receiver, const RegionMoveLowering* moves) {
@@ -308,6 +311,11 @@ llvm::Value* lower(const Expression& expr,
         case Expression::Kind::Boolean:
             return llvm::ConstantInt::get(i64, expr.boolean ? 1 : 0);
         case Expression::Kind::Variable: {
+            const bool boxed = moves && moves->native_box_names &&
+                moves->native_box_names->count(expr.name);
+            if (expr.native_box_read != boxed)
+                throw std::runtime_error(
+                    "ATTO_BOX_MAIN_V1_REJECT: raw or forged Box<int> lowering");
             if (!expr.resolved_class.empty()) {
                 if (!moves || !moves->record_classes || !moves->record_schemas)
                     throw std::runtime_error("record value lacks root-region provenance");
@@ -842,6 +850,14 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                                   const std::vector<CheckedSourceRoutineV1>& checked_routines,
                                   const std::vector<CheckedLogSiteV1>& checked_sites,
                                   bool tenant_vm_guest) {
+    for (const auto& fn : source.functions)
+        for (const auto& binding : fn.locals)
+            if (binding.native_box_i64 &&
+                    (wasm32_target || cortex_m_target ||
+                     !isolate_entry.empty() || tenant_vm_guest || sizeof(void*) != 8 ||
+                     fn.name != "main" || !fn.parameters.empty()))
+                throw std::runtime_error(
+                    "ATTO_BOX_MAIN_V1_REJECT: Box<int> requires hosted native 64-bit main ABI");
     if (source.pointer_int_plan) {
         if (wasm32_target || cortex_m_target || bounded_allocator_provider ||
                 tenant_vm_guest || !source.functions.empty() ||
@@ -1937,6 +1953,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             array_region = builder.CreateLoad(native_ptr, open_out, "native.int.array.region");
             }
         }
+        std::unordered_set<std::string> native_box_names;
+        for (const auto& binding : fn.locals)
+            if (binding.native_box_i64) native_box_names.insert(binding.name);
         std::unordered_map<std::string, ActorRegionFieldLowering> actor_region_fields;
         RegionMoveLowering region_moves{region, regionRead, regionDrop, &owned_live_flags,
             array_region, arrayAdd, arrayGet, arraySet, arrayLength, &array_names,
@@ -1971,6 +1990,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             return builder.CreateLoad(i64, address, label + ".array.new");
         };
         region_moves.layouts = &layouts;
+        region_moves.native_box_names = &native_box_names;
         region_moves.sum_program = &source;
         region_moves.sum_check = sum_check;
         region_moves.frozen_scalar_dispatch = &frozen_i64_dispatch;

@@ -2167,6 +2167,15 @@ if(BUILD_TESTING)
             --compiler "$<TARGET_FILE:oreslang-llvmc>"
             --clang "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_source_i64_fullwidth_execution PROPERTIES TIMEOUT 120)
+    # Directional value applications are real .atto source lowering into IR.
+    # Reverse <| must produce the same value as forward |>, while rpipe
+    # remains compile-negative until bounded native graph lowering exists.
+    add_test(NAME native_directional_value_pipe_execution
+        COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_directional_value_pipe_source.sh"
+            "$<TARGET_FILE:oreslang-llvmc>"
+            "${ORE_SOURCE_I64_CLANG}"
+            "${CMAKE_CURRENT_SOURCE_DIR}")
+    set_tests_properties(native_directional_value_pipe_execution PROPERTIES TIMEOUT 120)
     # Java TransparentTypeAliasTest parity: `type N = T;`, `define type alias N as T;`
     # and alias-prefixed scalar locals, compiled to native guests at O0/O2.
     add_test(NAME native_type_alias_spellings
@@ -2191,6 +2200,13 @@ if(BUILD_TESTING)
         COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_void_early_return.sh"
             "$<TARGET_FILE:oreslang-llvmc>" "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_void_early_return PROPERTIES TIMEOUT 120)
+    # Explicit v1/v2 Atto callable-body grammar through the production native
+    # source parser, LLVM IR generator, Clang guest and negative no-IR checks.
+    add_test(NAME native_atto_callable_language_versions
+        COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_atto_callable_versions.sh"
+            "$<TARGET_FILE:oreslang-llvmc>" "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_atto_callable_language_versions
+        PROPERTIES TIMEOUT 120 LABELS "native-guest;atto-callable-version")
     # New real .ores guest span-boundary contract: no host/reference promotion.
     # Uses the production source compiler and Clang AOT executable path.
     add_test(NAME native_tensor_span_source_aot

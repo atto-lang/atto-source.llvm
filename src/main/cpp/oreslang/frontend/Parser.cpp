@@ -416,7 +416,7 @@ public:
         }
         // Contiguous comparison/logical operators are single tokens, matching
         // the Java/Graal precedence grammar.
-        for (std::string_view op : {"->", "::", "|>", "==", "!=", "<=", ">=", "&&", "||", "^^"}) {
+        for (std::string_view op : {"->", "::", "|>", "<|", "==", "!=", "<=", ">=", "&&", "||", "^^"}) {
             if (source_.substr(at_, 2) == op) {
                 at_ += 2;
                 return {Kind::Symbol, source_.substr(start, 2), start};
@@ -948,6 +948,12 @@ bool callable_nominal_name(std::string_view name) {
     return name == "Callable" || name == "Fnc" || name == "Function"
             || name == "Routine" || name == "Method";
 }
+// Compiler-owned affine and synchronization type names must not be
+// impersonated by guest aliases, actors or nominal class definitions.
+bool native_ownership_intrinsic_name(std::string_view name) {
+    return name == "Atomic" || name == "Box" || name == "Arc" ||
+           name == "Weak";
+}
 
 // Entry is a compiler-owned nominal product in the Java/Graal frontend.
 // Until the native backend has a real two-slot representation, projection
@@ -1068,15 +1074,18 @@ public:
                     bool experimental_rt_scalar_loop,
                     bool verified_namespace_metadata_only = false,
                     std::size_t unsafe_base_offset = 0,
-                    bool experimental_pointer_int_aot = false)
+                    bool experimental_pointer_int_aot = false, int language_version = 0)
         : source_(source),
           lexer_(source, unsafe_base_offset, experimental_pointer_int_aot),
           token_(lexer_.next()),
           unsafe_base_offset_(unsafe_base_offset),
           experimental_owned_int_(experimental_owned_int),
           experimental_rt_scalar_loop_(experimental_rt_scalar_loop),
+          language_version_(language_version),
           verified_namespace_metadata_only_(verified_namespace_metadata_only),
           experimental_pointer_int_aot_(experimental_pointer_int_aot) {
+        if (language_version_ < 0 || language_version_ > 2)
+            throw std::runtime_error("E_LANGUAGE_VERSION: expected 1 or 2");
         if (!experimental_pointer_int_aot_) reject_unlowered_with_update();
     }
 
@@ -2016,6 +2025,8 @@ private:
                   "define model is a runtime type and value");
 
         decl.name = identifier();
+        if (native_ownership_intrinsic_name(decl.name))
+            fail("NATIVE_OWNERSHIP_INTRINSIC_RESERVED: compiler-owned type cannot be redefined");
         if (decl.name == "String" || decl.name == "string" || callable_nominal_name(decl.name) || entry_builtin_name(decl.name))
             fail("TYPE_DECL_RESERVED_BUILTIN: compiler-owned nominal type name '" +
                  decl.name + "' cannot be redefined");
@@ -2154,7 +2165,7 @@ private:
         const std::string name = identifier();
         if (name == "String" || name == "string" || name == "int" ||
                 name == "bool" || reserved(name) || callable_nominal_name(name) ||
-                entry_builtin_name(name))
+                entry_builtin_name(name) || native_ownership_intrinsic_name(name))
             fail("native forward type cannot shadow builtin or reserved types");
         if (token_.text == "<")
             fail("native generic type alias forward requires a verified monomorphization ABI");
@@ -2177,7 +2188,8 @@ private:
             fail("native generic type alias requires a verified monomorphization ABI");
         if (name == "int" || name == "bool" || name == "string" ||
                 name == "String" || reserved(name) ||
-                callable_nominal_name(name) || entry_builtin_name(name))
+                callable_nominal_name(name) || entry_builtin_name(name) ||
+                native_ownership_intrinsic_name(name))
             fail("native type alias cannot shadow a builtin or reserved language name");
         require("=");
         std::string target;
@@ -3316,6 +3328,12 @@ private:
         method_scope_ = owner;
         struct RestoreReceivers { std::unordered_set<std::string>& target; std::unordered_set<std::string> prior; ~RestoreReceivers() { target = std::move(prior); } } restore_receivers{class_receivers_, std::move(class_receivers_)};
         class_receivers_.clear();
+        struct RestoreBoxReceivers {
+            std::unordered_set<std::string>& target;
+            std::unordered_set<std::string> prior;
+            ~RestoreBoxReceivers() { target = std::move(prior); }
+        } restore_boxes{box_receivers_, std::move(box_receivers_)};
+        box_receivers_.clear();
         struct RestoreClassLocals {
             std::unordered_map<std::string, std::string>& locals;
             std::unordered_map<std::string, std::string> saved;
@@ -3619,11 +3637,27 @@ private:
         // body token begins on a later physical source line than its complete
         // return type; the body is then the same expression sequence.
         const bool explicit_end_body = token_.text == "::";
-        const bool newline_end_body = owner.empty() && arrow_return_type &&
-            token_.text != "{" && last_token_end_ <= token_.offset &&
+        const bool unmarked_end_candidate = owner.empty() && arrow_return_type &&
+            token_.text != "{" && token_.text != "::";
+        const bool newline_end_body = unmarked_end_candidate && last_token_end_ <= token_.offset &&
             source_.substr(last_token_end_, token_.offset - last_token_end_)
                 .find_first_of("\r\n") != std::string_view::npos;
-        if (explicit_end_body || newline_end_body) {
+        // Version 2's unmarked end is a statement body, never a comma tail.
+        // The verified LLVM scalar slice handles one explicit scalar return.
+        if (language_version_ == 2 && unmarked_end_candidate) {
+            if (!accept_return_marker())
+                fail("E_LANGUAGE_VERSION: v2 unmarked body requires explicit return; comma tails require '::'");
+            if (value.returns_void)
+                fail("E_UNSUPPORTED: native v2 void body needs typed lowering");
+            value.result = expression();
+            if (token_.text == ",")
+                fail("E_LANGUAGE_VERSION: v2 comma tail requires '::'");
+            require(";");
+            require("end");
+            return value;
+        }
+        if (explicit_end_body || newline_end_body ||
+                (language_version_ == 1 && unmarked_end_candidate)) {
             if (!arrow_return_type)
                 fail("native '::' body requires '->' return syntax");
             if (explicit_end_body) require("::");
@@ -3837,10 +3871,46 @@ private:
             require(";");
             return true;
         };
+        auto native_box_local = [&]() -> bool {
+            if (!(token_.text == "val" && peek_next().text == "Box"))
+                return false;
+            // Restrict to the already-proven hosted owned-i64 region and
+            // immutable single-owner, no-escape synchronous main. This does
+            // not admit actor transport, Box moves, asynchronous suspension
+            // or a guest-visible raw pointer.
+            if (!experimental_owned_int_)
+                fail("ATTO_BOX_MAIN_V1_REJECT: requires --experimental-owned-int");
+            if (!owner.empty() || value.name != "main" || value.async_source_i64 ||
+                    !value.parameters.empty() || !value.locals.empty() ||
+                    !value.source_tasks.empty() || !value.future_pipelines.empty() ||
+                    !value.actor_spawns.empty() || !box_receivers_.empty())
+                fail("ATTO_BOX_MAIN_V1_REJECT: one local Box<int> only in synchronous zero-arg main");
+            LocalBinding binding;
+            binding.offset = token_.offset;
+            binding.native_box_i64 = binding.heap_owned = true;
+            require("val"); require("Box"); require("<");
+            if (!accept("int"))
+                fail("ATTO_BOX_MAIN_V1_REJECT: only Box<int> is supported");
+            require(">");
+            binding.name = identifier();
+            require("=");
+            require("Box"); require("<");
+            if (!accept("int"))
+                fail("ATTO_BOX_MAIN_V1_REJECT: only Box<int> constructor is supported");
+            require(">"); require("(");
+            auto initial = make_expression(Expression::Kind::Integer, token_.offset);
+            initial->integer = signed_integer_literal();
+            binding.initializer = std::move(initial);
+            require(")"); require(";");
+            box_receivers_.insert(binding.name);
+            value.locals.push_back(std::move(binding));
+            return true;
+        };
         while (token_.text == "const" || token_.text == "val" || token_.text == "let" ||
                 token_.text == "int" || token_.text == "bool" ||
                 token_.text == "string" || token_.text == "String" ||
                 token_.text == "stdio" || array_effect_ahead()) {
+            if (native_box_local()) continue;
             // Typed Future<void> is admitted ONLY as a linear lexical alias
             // for one already-spawned ActorRef.get_ready() lifecycle promise.
             // No scalar/object borrow crosses this suspension, and general
@@ -4220,6 +4290,8 @@ private:
                     // a partial chain as an ordinary actor spawn.
                     if (token_.text == "pipe")
                         fail("NATIVE_ACTOR_PIPE_UNSUPPORTED: typed actor pipe requires guest port, mailbox and supervisor lowering");
+                    if (token_.text == "rpipe")
+                        fail("E_ACTOR_PIPE_BACKEND_UNSUPPORTED: 'rpipe' requires reversed typed roles, authenticated guest ports and native mailbox lowering");
                     require(";");
                     value.actor_spawns.push_back(std::move(spawned));
                     continue;
@@ -5375,29 +5447,61 @@ private:
         return value;
     }
 
-    // Eager scalar |> pipelines desugar to ordinary checked calls.
-    // Infix actor 'pipe' is a different, unimplemented transport operation.
+    // Eager scalar |> and reverse <| lower to the SAME checked call AST.
+    // Reverse stages are right-associative: f <| g <| x means f(g(x)).
+    // Continuous actor pipe/rpipe remain distinct, fail-closed operations.
     std::unique_ptr<Expression> expression() {
         auto value = conditional();
         std::size_t stages = 0;
-        while (accept("|>")) {
-            if (++stages > kMaxNativePipelineStages)
-                fail("pipeline exceeds 128 stages");
-            auto stage = primary();
-            if (stage->kind != Expression::Kind::Variable &&
-                    stage->kind != Expression::Kind::Call)
-                fail("native scalar pipeline stage must be a named function");
-            // Existing function validation checks arity, names, types,
-            // generics and effects. Evaluate the incoming value once.
-            stage->kind = Expression::Kind::Call;
-            stage->pipeline_stage = true;
-            stage->arguments.insert(stage->arguments.begin(), std::move(value));
-            stage->argument_names.insert(stage->argument_names.begin(), "");
-            value = std::move(stage);
+        if (accept("<|")) {
+            // Right-associative reverse application lowers to the same
+            // checked Call AST as eager |>, with main's 128-stage limit.
+            std::vector<std::unique_ptr<Expression>> reverse;
+            reverse.push_back(std::move(value));
+            do {
+                if (++stages > kMaxNativePipelineStages)
+                    fail("pipeline exceeds 128 stages");
+                reverse.push_back(conditional());
+            } while (accept("<|"));
+            if (token_.text == "|>")
+                fail("E_VALUE_PIPE_DIRECTION: parenthesize mixed |> and <| applications");
+            value = std::move(reverse.back());
+            for (std::size_t i = reverse.size() - 1; i > 0; --i) {
+                auto stage = std::move(reverse[i - 1]);
+                if (stage->kind != Expression::Kind::Variable &&
+                        stage->kind != Expression::Kind::Call)
+                    fail("native scalar pipeline stage must be a named function");
+                stage->kind = Expression::Kind::Call;
+                stage->pipeline_stage = true;
+                stage->arguments.insert(stage->arguments.begin(), std::move(value));
+                stage->argument_names.insert(stage->argument_names.begin(), "");
+                value = std::move(stage);
+            }
+        } else {
+            while (accept("|>")) {
+                if (++stages > kMaxNativePipelineStages)
+                    fail("pipeline exceeds 128 stages");
+                auto stage = primary();
+                if (stage->kind != Expression::Kind::Variable &&
+                        stage->kind != Expression::Kind::Call)
+                    fail("native scalar pipeline stage must be a named function");
+                // Existing function validation checks arity, names, types,
+                // generics and effects. Evaluate the incoming value once.
+                stage->kind = Expression::Kind::Call;
+                stage->pipeline_stage = true;
+                stage->arguments.insert(stage->arguments.begin(), std::move(value));
+                stage->argument_names.insert(stage->argument_names.begin(), "");
+                value = std::move(stage);
+            }
+            if (token_.text == "<|")
+                fail("E_VALUE_PIPE_DIRECTION: parenthesize mixed |> and <| applications");
         }
         if (token_.text == "pipe")
             fail("actor pipe expressions require typed roles, supervisor "
                  "exclusion, bounded edge transport and ownership lowering");
+        if (token_.text == "rpipe")
+            fail("E_ACTOR_PIPE_BACKEND_UNSUPPORTED: 'rpipe' requires reversed typed roles, "
+                 "supervisor isolation, bounded edge transport and ownership lowering");
         // '^' is lexed only for the statement-level caret return. After a
         // complete expression it would be infix XOR, which this backend does
         // not lower: keep legacy's reserved-token diagnostic.
@@ -6732,6 +6836,18 @@ private:
             auto field = make_expression(Expression::Kind::Field, offset);
             field->left = std::move(expr);
             field->name = identifier();
+            if (field->left && field->left->kind == Expression::Kind::Variable &&
+                    box_receivers_.count(field->left->name)) {
+                if (field->left->native_box_read || field->name != "get")
+                    fail("ATTO_BOX_MAIN_V1_REJECT: only Box<int>.get() is admitted");
+                require("("); require(")");
+                field->kind = Expression::Kind::Variable;
+                field->name = field->left->name;
+                field->native_box_read = true;
+                field->left.reset();
+                expr = std::move(field);
+                continue;
+            }
             // Keep ActorRef.send(...) for the outer actor action parser.
             // Eager ArrayCall parsing would erase the send/stop ordering.
             const bool named_class_receiver = field->left
@@ -6946,6 +7062,8 @@ private:
         // '_' is reserved for wildcard/inference-hole use, never a
         // stable runtime nominal identity or module contract name.
         std::string name = identifier();
+        if (native_ownership_intrinsic_name(name))
+            fail("NATIVE_OWNERSHIP_INTRINSIC_RESERVED: compiler-owned nominal cannot be redefined");
         if (name == "pattern") fail("contextual pattern keyword cannot declare a native nominal type");
         if (name == "_") fail("wildcard '_' cannot be declared as a nominal type name");
         return name;
@@ -9197,12 +9315,15 @@ private:
     std::unordered_set<std::string> function_import_names_;
     std::string method_scope_;
     std::unordered_set<std::string> class_receivers_;
+    std::unordered_set<std::string> box_receivers_;
     std::unordered_map<std::string, std::string> class_literal_locals_;
     std::unordered_map<std::string,
         std::unordered_map<std::string, ScalarType>> public_class_fields_;
     std::vector<Function> methods_;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
+    // 0 preserves legacy syntax, 1/2 require explicit backend version selection.
+    int language_version_ = 0;
     // Restricted host-only AST pass, never set by the ordinary CLI parser.
     bool verified_namespace_metadata_only_ = false;
     bool experimental_pointer_int_aot_ = false;
@@ -9427,10 +9548,12 @@ Program parse_verified_namespace_source_unresolved(
 }
 
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int,
-                      bool experimental_rt_scalar_loop, bool experimental_pointer_int_aot) {
+                      bool experimental_rt_scalar_loop, bool experimental_pointer_int_aot,
+                      int language_version) {
     reject_unlowered_mutex_constructor(source, experimental_pointer_int_aot);
     Program program = Parser(source, experimental_owned_int,
-                             experimental_rt_scalar_loop, experimental_pointer_int_aot).parse();
+                             experimental_rt_scalar_loop, false, 0,
+                             experimental_pointer_int_aot, language_version).parse();
     if (experimental_rt_scalar_loop &&
             (program.functions.size() != 1 || !program.functions.front().scalar_while ||
              !program.classes.empty() || !program.actors.empty() ||
@@ -9525,9 +9648,10 @@ void resolve_and_validate_program(Program& program) {
 }
 
 Program parse_program(std::string_view source, bool experimental_owned_int,
-                      bool experimental_rt_scalar_loop, bool experimental_pointer_int_aot) {
+                      bool experimental_rt_scalar_loop, bool experimental_pointer_int_aot,
+                      int language_version) {
     auto program = parse_unresolved_program(source, experimental_owned_int,
-        experimental_rt_scalar_loop, experimental_pointer_int_aot);
+        experimental_rt_scalar_loop, experimental_pointer_int_aot, language_version);
     resolve_and_validate_program(program);
     return program;
 }

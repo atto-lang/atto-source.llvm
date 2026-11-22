@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -56,6 +57,9 @@ struct Expression {
     std::size_t offset = 0;
     std::int64_t integer = 0;
     bool boolean = false;
+    // Minted ONLY by the parser for a compiler-owned Box<int>.get() call.
+    // The raw Box owner is non-Copy and must never lower as an i64 value.
+    bool native_box_read = false;
     mutable ScalarType resolved_type = ScalarType::I64;
     ScalarType cast_target = ScalarType::I64; // checked, identity-only native scalar cast
     mutable std::string resolved_class;
@@ -121,6 +125,7 @@ struct LocalBinding {
     std::string name;
     std::unique_ptr<Expression> initializer;
     bool heap_owned = false;
+    bool native_box_i64 = false; // non-Copy Box<int> backed by native owned region
     bool int_array = false; // non-Copy owned i64-slot array local, no escape
     ScalarType array_element_type = ScalarType::I64; // int value or checked immutable String handle
     std::string array_record_class;
@@ -617,13 +622,15 @@ struct Program {
 // direct/typed get_ready readiness or explicit ActorRef.get_done().
 Program parse_program(std::string_view source, bool experimental_owned_int = false,
                       bool experimental_rt_scalar_loop = false,
-                      bool experimental_pointer_int_aot = false);
+                      bool experimental_pointer_int_aot = false,
+                      int language_version = 0);
 
 // Internal module-linking stages: syntax trees are NOT admitted for codegen.
 // resolve_and_validate_program must run after all module names are resolved.
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int = false,
                                  bool experimental_rt_scalar_loop = false,
-                                 bool experimental_pointer_int_aot = false);
+                                 bool experimental_pointer_int_aot = false,
+                                 int language_version = 0);
 // HOST-ONLY preparatory AST: caller must supply already authenticated frozen
 // source bytes, and only the verified package graph may consume the result.
 // Unlike parse_program(), this must never authorize IR or guest execution.
