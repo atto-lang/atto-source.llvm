@@ -51,6 +51,24 @@ pub fnc main(): int {
   if cell.may_borrow_shared(-2) || cell.may_destroy(-1); do
     return 15;
   fi
+  // These are conservative Cell borrow-state *policy* checks.
+  // The actual owner/loan proof is provided by compiler-negative tests.
+  if !cell.is_valid_state(-1) || cell.is_valid_state(-2); do
+    return 19;
+  fi
+  if !cell.may_owner_read(0) || !cell.may_owner_read(3) || cell.may_owner_read(-1); do
+    return 20;
+  fi
+  if !cell.may_owner_write(0) || cell.may_owner_write(1) || cell.may_owner_write(-1); do
+    return 21;
+  fi
+  if !cell.may_move_owner(0) || cell.may_move_owner(1) || cell.may_move_owner(-1); do
+    return 22;
+  fi
+  if !cell.may_suspend_unpinned(0) || cell.may_suspend_unpinned(1) ||
+     cell.may_suspend_unpinned(-1); do
+    return 23;
+  fi
   if num.saturating_neg(-9223372036854775808) != 9223372036854775807; do
     return 16;
   fi
