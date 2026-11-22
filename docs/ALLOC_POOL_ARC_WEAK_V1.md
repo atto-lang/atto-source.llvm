@@ -39,3 +39,45 @@ drop! owned; // exactly once T destructor, weak.upgrade() becomes None
 - Concurrency: CAS/upgrade versus last drop races; count underflow/overflow; cancellation/unwind; no actor-local or cross-worker sharing without explicit domain proofs.
 
 **Verification classification for this change:** `.atto` source authored; real backend compile/guest execution = **NOT_EXECUTED**. Do not mark Ready based only on source review or a host-side transition oracle.
+
+
+## LLVM/native atomic Arc/Weak control integration (2026-11-22)
+
+`src/main/cpp/oreslang/runtime/ArcControlV1.{h,c}` implements a **trusted
+native runtime ABI**, not a public Atto pointer:
+- C11 `_Atomic` strong/weak counters with checked 1,048,576-owner bound;
+- atomic increment-if-nonzero, acquire/release CAS, and no strong resurrection;
+- one implicit weak sentinel while the last-strong destructor runs;
+- exactly-once destructor invocation on the 1→0 strong transition;
+- allocator-provided final weak reclaimer after the payload destructor;
+- immutable domain and generation checks for all public ABI transitions;
+- **no hidden `malloc`, `free`, OS thread, GC or background collector**
+  inside the runtime primitive (owner supplies storage and callbacks).
+
+The host fixture `tests/native_arc_control_v1_test.c` covers invalid
+generation/domain, wrong-owner release, final-drop versus weak-upgrade
+races, a delayed destructor barrier, 100 × eight competing upgraders,
+and physical payload/control frees through **owner-supplied** callbacks.
+`tests/run_native_arc_control_v1.sh` executed locally under Clang/GCC
+at O0/O2 with ASan+UBSan: **4/4 native host executions PASSED**. A separate
+isolated CMake+CTest registration test also passed **1/1** locally;
+the real repository's full CMake and compiler AOT build have not executed.
+
+The LLVM compiler's existing pinned source embed generator and
+`CoreLibrarySources.hpp` now register and reserve the three actual
+`.atto` sources as `atto.alloc/{pool,arc,weak}` and `alloc/*` aliases
+under one immutable unit identity. Generated `.inc` inputs reproduce the
+source bytes exactly; the three SHA-pinned source / embed / registry
+checks passed **12/12**. A native `.atto` guest fixture exists at
+`tests/fixtures/alloc-pool-arc-weak-policy.atto`, but actual parse/link/
+execute through `oreslang-llvmc`, Rust generator `cargo --check`, compiler
+borrow/drop lowering, and AOT/sanitizer guest tests remain **NOT EXECUTED**.
+
+**Safety boundary:** the C ABI is for compiler-proven linear strong/weak
+holders and allocator-authenticated control-block pointers. The domain and
+generation numbers are not authentication tokens. Calling it with a forged
+pointer, duplicate raw C handle, or recycling a control block before the
+last external weak retires is forbidden; the compiler/allocator must enforce
+that provenance. Destructors/reclaimers must not throw or re-enter.
+No generic `Arc<T>` guest API, deep freeze, actor transport or
+cross-worker sharing is certified here.
