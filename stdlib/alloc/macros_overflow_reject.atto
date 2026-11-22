@@ -1,0 +1,2 @@
+import * as m from "./macros.atto";
+pub fnc main() -> int { return expand! m.const_capacity(const 9223372036854775807 + 1); }

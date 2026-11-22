@@ -1,0 +1,2 @@
+import * as m from "./macros.atto";
+pub fnc main() -> int { return expand! m.splice_expr(const 42); }

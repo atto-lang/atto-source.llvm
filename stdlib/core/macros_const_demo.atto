@@ -1,0 +1,4 @@
+import * as m from "./macros.atto";
+pub fnc main() -> int {
+  return expand! m.const_int(const 6 * 7);
+}

@@ -1,0 +1,9 @@
+// LLVM-owned alloc macro producer. Compiler-only; no runtime evaluator.
+// Const<int> proves compile-time closure, not valid range/permissions.
+define pub macro const_capacity(Const<int> slots) -> Syntax<Expr> {
+  return quote(slots);
+}
+
+define pub macro const_alignment(Const<int> bytes) -> Syntax<Expr> {
+  return quote(bytes);
+}

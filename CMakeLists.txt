@@ -4409,6 +4409,46 @@ if(BUILD_TESTING)
     endif()
 endif()
 
+# Compiler-owned typed macro .atto libraries: require real Clang-linked AOT
+# guests, exact producer+consumer hash receipts and zero-IR macro denials.
+if(BUILD_TESTING)
+    find_program(ORE_NATIVE_MACRO_CLANG_EXECUTABLE NAMES clang)
+    if(ORE_NATIVE_MACRO_CLANG_EXECUTABLE)
+        foreach(macro_case IN ITEMS
+                core/macros_const_demo core/macros_splice_demo
+                std/macros_retry_demo std/macros_timeout_demo
+                alloc/macros_capacity_demo alloc/macros_alignment_demo)
+            get_filename_component(macro_tier "${macro_case}" DIRECTORY)
+            string(REPLACE "/" "_" macro_id "${macro_case}")
+            add_test(NAME "native_macro_stdlib_${macro_id}_linked_guest_aot_42"
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+                    "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/stdlib/${macro_case}.atto"
+                    "-DPRODUCER=${CMAKE_CURRENT_SOURCE_DIR}/stdlib/${macro_tier}/macros.atto"
+                    "-DCLANG=${ORE_NATIVE_MACRO_CLANG_EXECUTABLE}"
+                    "-DSTAGING=${CMAKE_CURRENT_BINARY_DIR}/macro-stdlib-${macro_id}"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_macro_guest_aot.cmake")
+            set_tests_properties("native_macro_stdlib_${macro_id}_linked_guest_aot_42"
+                PROPERTIES TIMEOUT 90)
+        endforeach()
+    endif()
+
+    foreach(macro_case IN ITEMS
+            core/macros_wrong_kind_reject
+            std/macros_dynamic_reject
+            alloc/macros_overflow_reject)
+        string(REPLACE "/" "_" macro_id "${macro_case}")
+        add_test(NAME "native_macro_stdlib_${macro_id}_no_ir"
+            COMMAND "${CMAKE_COMMAND}"
+                "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+                "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/stdlib/${macro_case}.atto"
+                "-DDIAGNOSTIC=NATIVE_MACRO_"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_macro_reject.cmake")
+        set_tests_properties("native_macro_stdlib_${macro_id}_no_ir"
+            PROPERTIES TIMEOUT 25)
+    endforeach()
+endif()
+
 # Dependency-free, executable import/source admission boundary. This test
 # compiles the production SourceInput.hpp with the host C++ compiler.
 if(BUILD_TESTING AND UNIX)

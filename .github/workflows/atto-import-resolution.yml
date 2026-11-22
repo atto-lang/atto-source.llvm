@@ -21,6 +21,8 @@ on:
       - 'tests/fixtures/numerics-atto-main.atto'
       - 'contracts/atto-parity-v1/add.atto'
       - 'CMakeLists.txt'
+      - 'stdlib/**/macros*.atto'
+      - 'docs/STDLIB_MACROS_AOT_V1.md'
       - '.github/workflows/atto-import-resolution.yml'
   workflow_dispatch:
 permissions:
@@ -116,6 +118,15 @@ jobs:
             native_macro_shared_literal-42_linked_guest_aot_42 \
             native_macro_shared_identity-42_linked_guest_aot_42 \
             native_macro_shared_nested-42_linked_guest_aot_42 \
+            native_macro_stdlib_core_macros_const_demo_linked_guest_aot_42 \
+            native_macro_stdlib_core_macros_splice_demo_linked_guest_aot_42 \
+            native_macro_stdlib_std_macros_retry_demo_linked_guest_aot_42 \
+            native_macro_stdlib_std_macros_timeout_demo_linked_guest_aot_42 \
+            native_macro_stdlib_alloc_macros_capacity_demo_linked_guest_aot_42 \
+            native_macro_stdlib_alloc_macros_alignment_demo_linked_guest_aot_42 \
+            native_macro_stdlib_core_macros_wrong_kind_reject_no_ir \
+            native_macro_stdlib_std_macros_dynamic_reject_no_ir \
+            native_macro_stdlib_alloc_macros_overflow_reject_no_ir \
             numerics_atto_integer_guest \
             atto_shared_scalar_guest
           do
