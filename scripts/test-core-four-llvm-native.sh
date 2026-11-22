@@ -42,7 +42,7 @@ done
 # The compiler's *own* ownership checker must refuse invalid Atto
 # even if core/cell returns an unrelated "safe" integer-state policy.
 # A rejection must emit zero LLVM IR, not a partial function/module header.
-for name in borrow-use-after-take borrow-escape; do
+for name in borrow-use-after-take borrow-escape borrow-conflicting-loans; do
   src="$root/tests/fixtures/core-four-v1/$name.atto"
   [[ -f "$src" ]] || { echo "missing ownership fixture: $name" >&2; exit 65; }
   negative_ir="$tmp/$name.ll"
@@ -61,6 +61,11 @@ for name in borrow-use-after-take borrow-escape; do
     borrow-escape)
       grep -Eiq 'borrow|loan|escape' "$negative_log" || {
         echo "core ownership loan diagnostic missing: $name" >&2; cat "$negative_log" >&2; exit 1;
+      } ;;
+    borrow-conflicting-loans)
+      grep -Fqi 'conflicting active native borrow' "$negative_log" || {
+        echo "core ownership shared/mutable conflict diagnostic missing: $name" >&2;
+        cat "$negative_log" >&2; exit 1;
       } ;;
   esac
   printf 'CORE_FOUR_LLVM_BORROW_COMPILER_NEGATIVE|head=%s|case=%s|IR=NONE\n' "$EXPECTED_HEAD" "$name"
