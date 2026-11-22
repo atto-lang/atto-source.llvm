@@ -1,0 +1,105 @@
+name: LLVM Atto core noalloc and borrow compiler gate (NO guest parity)
+on:
+  pull_request:
+    paths:
+      - 'stdlib/core/**'
+      - 'stdlib/alloc/text_*.atto'
+      - 'stdlib/std/collections.atto'
+      - 'tests/core_alloc_collections_source_only.test.mjs'
+      - 'tests/fixtures/core-alloc-ownership/**'
+      - '.github/workflows/atto-core-alloc-collections-candidate.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  llvm-compiler-admission:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - name: Exact PR HEAD checkout, no retained source token
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify head and five module Git blobs
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          echo "source_head=$EXPECTED_HEAD"
+          echo "source_tree=$(git rev-parse 'HEAD^{tree}')"
+          for path in stdlib/core/convert.atto stdlib/core/fmt.atto \
+            stdlib/alloc/text_convert.atto stdlib/alloc/text_fmt.atto \
+            stdlib/std/collections.atto; do
+            test "$(git rev-parse "HEAD:$path")" = "$(git hash-object --no-filters "$path")"
+          done
+      - name: Set up Node 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.16.0'
+      - name: Execute source-only purity and borrow manifest checks
+        run: node --test tests/core_alloc_collections_source_only.test.mjs
+      - name: Install Clang, LLVM and CMake
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang llvm-dev
+      - name: Build actual native LLVM compiler
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
+            -DATTO_EXPECTED_SOURCE_SHA="$EXPECTED_SHA"
+          cmake --build build --target oreslang-llvmc --parallel 2
+          test -x build/oreslang-llvmc
+      - name: Parse and lower positive core and alloc modules (compiler, not guest)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/atto-core-alloc-evidence
+          for path in stdlib/core/convert.atto stdlib/core/fmt.atto \
+            stdlib/alloc/text_convert.atto stdlib/alloc/text_fmt.atto \
+            stdlib/std/collections.atto \
+            tests/fixtures/core-alloc-ownership/positive_owned_copy.atto; do
+            name="$(basename "$path" .atto)"
+            build/oreslang-llvmc --check "$path" > /dev/null
+            build/oreslang-llvmc "$path" > "build/atto-core-alloc-evidence/$name.ll"
+            test -s "build/atto-core-alloc-evidence/$name.ll"
+            echo "COMPILER_IR_ONLY $path"
+          done
+      - name: Negative borrow cases must parse, then reject semantically
+        shell: bash
+        run: |
+          set -euo pipefail
+          for path in tests/fixtures/core-alloc-ownership/negative_*.atto; do
+            build/oreslang-llvmc --check "$path" > /dev/null
+            if build/oreslang-llvmc "$path" > /tmp/borrow-unexpected-ir 2> /tmp/borrow-semantic-diagnostic; then
+              echo "::error::unexpectedly admitted borrow-unsafe source: $path"
+              exit 1
+            fi
+            if ! grep -Eiq 'borrow|loan|ownership|owned|readonly|immutable|move|take' \
+              /tmp/borrow-semantic-diagnostic; then
+              echo "::error::no semantic ownership diagnostic for $path"
+              exit 1
+            fi
+            if grep -Eiq 'syntax error|parse error|unsupported syntax|unknown token' \
+              /tmp/borrow-semantic-diagnostic; then
+              echo "::error::parser denial cannot count as borrow-checking evidence"
+              exit 1
+            fi
+            echo "SEMANTIC_BORROW_REJECTION $path"
+          done
+          echo 'EVIDENCE=LLVM_COMPILER_ONLY GUEST_RUNTIME=NOT_EXECUTED'
+      - name: Preserve non-certifying IR evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: llvm-atto-core-alloc-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/atto-core-alloc-evidence/
+          if-no-files-found: warn
+          retention-days: 7
