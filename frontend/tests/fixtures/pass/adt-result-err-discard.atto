@@ -1,0 +1,9 @@
+// expect-exit: 42
+// The Err payload is not read, evaluated or bound by on Err().
+fnc read_id(): Result<int,string> { return Err("invalid integer"); }
+pub fnc main(): int {
+  return match read_id() over
+    on Ok(_) -> 0,
+    on Err() -> 42
+  end;
+}

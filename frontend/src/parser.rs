@@ -228,6 +228,20 @@ fn unsupported(pos: Pos, what: &str) -> Diagnostic {
     Diagnostic::new(pos, "E_UNSUPPORTED", format!("{what} is not supported by the browser compiler yet"))
 }
 
+// A block arm of a return-position match is valid only if its terminal
+// statement proves an enclosing-callable exit. Any unproved path fails closed.
+fn guard_failure_exits(stmts: &[Stmt]) -> bool {
+    match stmts.last() {
+        Some(Stmt::Return(..) | Stmt::Throw(..)) => true,
+        Some(Stmt::Block(inner)) => guard_failure_exits(inner),
+        Some(Stmt::If { arms, otherwise: Some(other), .. }) =>
+            !arms.is_empty()
+                && arms.iter().all(|(_, branch)| guard_failure_exits(branch))
+                && guard_failure_exits(other),
+        _ => false,
+    }
+}
+
 impl Parser {
     pub fn new(toks: Vec<Token>) -> Self {
         Parser {
@@ -1101,7 +1115,13 @@ impl Parser {
             self.terminator()?;
             return Ok(Stmt::YieldFrom(source, pos));
         }
-        let word = self.word_at(0).map(str::to_owned);
+        // A statement-leading ^ returns from the current callable. Infix ^ is
+        // intentionally not admitted by this restricted frontend.
+        let word = if *self.peek() == Tok::Caret {
+            Some("return".to_owned())
+        } else {
+            self.word_at(0).map(str::to_owned)
+        };
         match word.as_deref() {
             Some("val" | "const" | "let") => {
                 let s = self.parse_binding()?;
@@ -1143,6 +1163,13 @@ impl Parser {
             }
             Some("return") => {
                 self.advance();
+                if self.is_word("match") {
+                    if self.in_generator {
+                        return Err(Diagnostic::new(pos, "E_RETURN",
+                            "generator cannot return a match value"));
+                    }
+                    return self.parse_return_match(pos);
+                }
                 let at_end = matches!(self.peek(), Tok::Semi | Tok::RBrace)
                     || matches!(self.word_at(0), Some("fi" | "end" | "done" | "elif" | "elseif" | "else"));
                 let value = if at_end { None } else { Some(self.parse_expr()?) };
@@ -1407,6 +1434,61 @@ impl Parser {
         Ok(Stmt::If { arms, otherwise, pos })
     }
 
+    /// Return-position match: all selected arms terminate the callable.
+    /// Expression arms desugar to Return(Some(expr)); block arms must
+    /// definitely exit, so an exhaustive match cannot silently fall through.
+    /// The ordinary checker retains once-only subject evaluation, guarded
+    /// binder scope, type checking, unreachable arms, and exhaustiveness.
+    fn parse_return_match(&mut self, pos: Pos) -> R<Stmt> {
+        self.expect_word("match")?;
+        let subject = self.parse_expr()?;
+        self.expect_word("over")?;
+        let mut arms = Vec::new();
+        while !self.is_word("end") {
+            if *self.peek() == Tok::Eof {
+                return Err(Diagnostic::new(self.pos(), "E_EOF",
+                    "expected 'end' to close return match"));
+            }
+            self.grow(1)?;
+            let apos = self.pos();
+            self.expect_word("on")?;
+            let pattern = self.parse_pattern()?;
+            let guard = if self.eat_word("when") {
+                Some(self.parse_expr()?)
+            } else {
+                None
+            };
+            self.expect(Tok::Arrow, "'->' in a return match arm")?;
+            let braced = *self.peek() == Tok::LBrace;
+            let body = if braced {
+                let body = self.parse_block()?;
+                if !guard_failure_exits(&body) {
+                    return Err(Diagnostic::new(apos, "E_RETURN",
+                        "braced return match arm must return on every path"));
+                }
+                body
+            } else {
+                let value = self.parse_expr()?;
+                vec![Stmt::Return(Some(value), apos)]
+            };
+            arms.push(MatchArm { pattern, guard, body, pos: apos });
+            if braced {
+                self.eat(&Tok::Comma);
+            } else if !self.eat(&Tok::Comma) && !self.is_word("end") {
+                return Err(Diagnostic::new(self.pos(), "E_SYNTAX",
+                    "expected ',' between return match value arms"));
+            }
+        }
+        self.expect_word("end")?;
+        self.height -= arms.len() as u32;
+        if arms.is_empty() {
+            return Err(Diagnostic::new(pos, "E_SYNTAX",
+                "return match requires at least one arm"));
+        }
+        self.terminator()?;
+        Ok(Stmt::Match { subject, arms, pos })
+    }
+
     /// Java Parser.parseMatch. Canonical `match x over on P -> { } end`
     /// (or `over { on P { } }`); legacy `match [first] x [;] P -> { } end`
     /// with `else` as the catch-all. `do match` requires `over`.
@@ -1523,15 +1605,57 @@ impl Parser {
                 "Some" | "Ok" | "Err" => {
                     self.advance();
                     self.expect(Tok::LParen, "'(' after payload variant")?;
-                    let (name, _) = self.ident("a payload binding name")?;
-                    self.expect(Tok::RParen, "')' after payload binding")?;
-                    Ok(Pattern::Adt(w, Some(name)))
+                    // Match a tagged constructor without binding its payload.
+                    // Err() and Err(_) are both checked discards, not a
+                    // zero-argument Err value. None remains bare 'on None'.
+                    let binding = if self.eat(&Tok::RParen) {
+                        "_".to_owned()
+                    } else {
+                        let (name, _) = self.ident("a payload binding name or '_'")?;
+                        self.expect(Tok::RParen, "')' after payload pattern")?;
+                        name
+                    };
+                    Ok(Pattern::Adt(w, Some(binding)))
                 },
                 "_" => {
                     self.advance();
                     Ok(Pattern::Wild)
                 }
-                "is" | "structural" => Err(unsupported(pos, "type patterns")),
+                // Closed nominal Result/Option constructor syntax. These
+                // <...> tokens bind a payload: NOT generic type arguments,
+                // dynamic type tests, or user-supplied unapply() extractors.
+                "is" => {
+                    self.advance();
+                    let (constructor, at) = self.ident("Result/Option constructor after is")?;
+                    if !matches!(constructor.as_str(), "Ok" | "Err" | "Some" | "None") {
+                        return Err(Diagnostic::new(at, "E_PATTERN",
+                            "on is admits only sealed Ok, Err, Some, None in this frontend"));
+                    }
+                    if constructor == "None" {
+                        if *self.peek() == Tok::Lt || *self.peek() == Tok::LParen {
+                            return Err(Diagnostic::new(self.pos(), "E_ARITY",
+                                "None is a zero-payload variant"));
+                        }
+                        return Ok(Pattern::Adt(constructor, None));
+                    }
+                    if *self.peek() != Tok::Lt {
+                        if constructor == "Ok" {
+                            // The type checker enforces Result<void,E> for bare Ok.
+                            return Ok(Pattern::Adt(constructor, None));
+                        }
+                        return Err(Diagnostic::new(self.pos(), "E_ARITY",
+                            "on is payload variants require <name> or <_>"));
+                    }
+                    self.advance();
+                    let (binding, _) = self.ident("pattern payload binding or _")?;
+                    self.expect(Tok::Gt, "'>' after ADT payload binder")?;
+                    if *self.peek() == Tok::LParen || *self.peek() == Tok::Lt {
+                        return Err(Diagnostic::new(self.pos(), "E_PATTERN",
+                            "nested/untrusted extractors require separately checked structural matching"));
+                    }
+                    Ok(Pattern::Adt(constructor, Some(binding)))
+                }
+                "structural" => Err(unsupported(pos, "structural type patterns")),
                 _ => {
                     self.advance();
                     if *self.peek() == Tok::Dot {
@@ -1549,15 +1673,10 @@ impl Parser {
                         if next != "when" && next != "_" {
                             return Err(unsupported(pos, "typed binding patterns ('Type name')"));
                         }
-                        if next == "when" {
-                            // Java parses `name when` as the typed binding
-                            // pattern `name when` and then fails; mirror that.
-                            return Err(Diagnostic::new(
-                                self.pos(),
-                                "E_SYNTAX",
-                                "a binding pattern cannot take a 'when' guard",
-                            ));
-                        }
+                        // A binder followed by contextual 'when' is a
+                        // guarded value pattern, not a typed declaration.
+                        // The match checker scopes it to the selected arm
+                        // and requires a boolean guard.
                     }
                     if w.chars().next().is_some_and(|c| c.is_uppercase()) {
                         return Err(unsupported(pos, "constructor patterns"));
@@ -2206,6 +2325,7 @@ fn describe(t: &Tok) -> String {
                 Tok::Pipe => "|",
                 Tok::PipeGt => "|>",
                 Tok::Amp => "&",
+                Tok::Caret => "^",
                 Tok::At => "@",
                 _ => "?",
             };

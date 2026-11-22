@@ -1,0 +1,13 @@
+// expect-exit: 42
+// ? returns the original Err from checked(), not a panic or a default int.
+fnc failed(): Result<int,string> { return Err("bad id"); }
+fnc checked(): Result<int,string> {
+  val n = failed()?;
+  return Ok(n);
+}
+pub fnc main(): int {
+  return match checked() over
+    on Ok(_) -> 0,
+    on Err() -> 42
+  end;
+}

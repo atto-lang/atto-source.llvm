@@ -16,6 +16,9 @@ fn scalar_type(t: Type) -> Result<&'static str, String> {
         Type::Void => Ok("void"),
         // A generation checked capability, never an address or raw state pointer.
         Type::ActorRef(_) => Ok("i32"),
+        // Heapless native ADT ABI: tag 0=None, tag 1=Some, i64 payload.
+        // No pointer or shared mutable reference escapes a call frame.
+        Type::OptionInt => Ok("{ i64, i64 }"),
         _ => Err(format!("E_UNSUPPORTED_NATIVE_TYPE: {}", t.name())),
     }
 }
@@ -103,6 +106,75 @@ impl<'a> FunctionEmitter<'a> {
         match &expr.e {
             TExpr::I64(n) => Ok(n.to_string()),
             TExpr::Bool(b) => Ok(if *b { "true" } else { "false" }.to_string()),
+            TExpr::AdtNew { tag, payload, .. } => {
+                if expr.ty != Type::OptionInt || *tag > 1 ||
+                    (*tag == 1) != payload.is_some() {
+                    return Err("E_UNSUPPORTED_NATIVE_ADT: only valid Option<int> constructors".into());
+                }
+                let tagged = self.id("option_tag");
+                self.instr(format!(
+                    "%{tagged} = insertvalue {{ i64, i64 }} zeroinitializer, i64 {tag}, 0"
+                ));
+                if let Some(value) = payload {
+                    if value.ty != Type::Int {
+                        return Err("E_UNSUPPORTED_NATIVE_ADT: Some payload must be int".into());
+                    }
+                    let payload = self.expr(value)?;
+                    let constructed = self.id("option_value");
+                    self.instr(format!(
+                        "%{constructed} = insertvalue {{ i64, i64 }} %{tagged}, i64 {payload}, 1"
+                    ));
+                    Ok(format!("%{constructed}"))
+                } else {
+                    Ok(format!("%{tagged}"))
+                }
+            }
+            TExpr::AdtIs { obj, tag } => {
+                if obj.ty != Type::OptionInt || *tag > 1 {
+                    return Err("E_UNSUPPORTED_NATIVE_ADT: Option<int> tag expected".into());
+                }
+                let sum = self.expr(obj)?;
+                let read_tag = self.id("option_tag");
+                self.instr(format!("%{read_tag} = extractvalue {{ i64, i64 }} {sum}, 0"));
+                let equal = self.id("option_is");
+                self.instr(format!("%{equal} = icmp eq i64 %{read_tag}, {tag}"));
+                Ok(format!("%{equal}"))
+            }
+            TExpr::AdtPayload(obj) => {
+                if obj.ty != Type::OptionInt || expr.ty != Type::Int {
+                    return Err("E_UNSUPPORTED_NATIVE_ADT: typed Option<int> payload expected".into());
+                }
+                // Match checking guards the payload read with a tag test.
+                let sum = self.expr(obj)?;
+                let value = self.id("option_payload");
+                self.instr(format!("%{value} = extractvalue {{ i64, i64 }} {sum}, 1"));
+                Ok(format!("%{value}"))
+            }
+            TExpr::AdtPropagate { source, success_tag, .. } => {
+                if source.ty != Type::OptionInt || self.func.ret != Type::OptionInt ||
+                    *success_tag != 1 {
+                    return Err("E_UNSUPPORTED_NATIVE_ADT: ? requires matching Option<int> return".into());
+                }
+                // Evaluate the original Option exactly once; on None return
+                // those identical two value slots, never fabricate Some(0).
+                // Defer/try are not emitted by this scalar native lowering.
+                let value = self.expr(source)?;
+                let read_tag = self.id("option_tag");
+                self.instr(format!("%{read_tag} = extractvalue {{ i64, i64 }} {value}, 0"));
+                let missing = self.id("option_missing");
+                self.instr(format!("%{missing} = icmp ne i64 %{read_tag}, 1"));
+                let fail = self.id("option_return_none");
+                let pass = self.id("option_unwrap_some");
+                self.instr(format!("br i1 %{missing}, label %{fail}, label %{pass}"));
+                self.terminated = true;
+                self.label(&fail);
+                self.instr(format!("ret {{ i64, i64 }} {value}"));
+                self.terminated = true;
+                self.label(&pass);
+                let payload = self.id("option_payload");
+                self.instr(format!("%{payload} = extractvalue {{ i64, i64 }} {value}, 1"));
+                Ok(format!("%{payload}"))
+            }
             TExpr::Local(slot) => {
                 let idx = *slot as usize;
                 let ty = scalar_type(*self.slots.get(idx).ok_or("E_INTERNAL: bad local slot")?)?;
@@ -158,6 +230,9 @@ impl<'a> FunctionEmitter<'a> {
                             BinOp::Lt => "slt", BinOp::Le => "sle",
                             BinOp::Gt => "sgt", _ => "sge",
                         };
+                        if ty != "i64" && ty != "i1" {
+                            return Err("E_UNSUPPORTED_NATIVE_ADT_COMPARE: use match on Option<int>".into());
+                        }
                         let tmp = self.id("v");
                         self.instr(format!("%{tmp} = icmp {pred} {ty} {a}, {b}"));
                         Ok(format!("%{tmp}"))
@@ -344,6 +419,11 @@ impl<'a> FunctionEmitter<'a> {
                 self.terminated = true;
             }
             TStmt::Block(block) => self.block(block)?,
+            TStmt::Unreachable => {
+                self.instr("call void @llvm.trap()");
+                self.instr("unreachable");
+                self.terminated = true;
+            },
             TStmt::If(arms, fallback) => {
                 let end_label = self.id("if_end");
                 for (test, body) in arms {
@@ -387,7 +467,11 @@ impl<'a> FunctionEmitter<'a> {
             if idx < self.func.params.len() {
                 self.instr(format!("store {llty} %arg{idx}, ptr %local{idx}"));
             } else {
-                let zero = if ty == Type::Bool { "false" } else { "0" };
+                let zero = match ty {
+                    Type::Bool => "false",
+                    Type::OptionInt => "zeroinitializer",
+                    _ => "0",
+                };
                 self.instr(format!("store {llty} {zero}, ptr %local{idx}"));
             }
         }
@@ -402,6 +486,86 @@ impl<'a> FunctionEmitter<'a> {
         let _ = writeln!(self.out, "}}");
         Ok(self.out)
     }
+}
+
+// This is the only allocation bypass for the Rust-authored native LLVM
+// bootstrap. Inspect *all* checked functions and typed expressions, including
+// unused code: one Option<int> local must never admit an unrelated guest heap,
+// object constructor, string allocation or exception path.
+fn heapless_option_expr(e: &TE, owner_ret: Type) -> bool {
+    if !matches!(e.ty, Type::Int | Type::Bool | Type::Void | Type::OptionInt) {
+        return false;
+    }
+    match &e.e {
+        TExpr::I64(_) | TExpr::Bool(_) | TExpr::Local(_) => true,
+        TExpr::Neg(a) | TExpr::Not(a) =>
+            heapless_option_expr(a, owner_ret),
+        TExpr::Bin(_, a, b) =>
+            matches!(a.ty, Type::Int | Type::Bool) &&
+            matches!(b.ty, Type::Int | Type::Bool) &&
+            heapless_option_expr(a, owner_ret) &&
+            heapless_option_expr(b, owner_ret),
+        TExpr::Ternary(cond, yes, no) =>
+            cond.ty == Type::Bool && yes.ty == no.ty &&
+            heapless_option_expr(cond, owner_ret) &&
+            heapless_option_expr(yes, owner_ret) &&
+            heapless_option_expr(no, owner_ret),
+        TExpr::Call(_, args) =>
+            args.iter().all(|arg| heapless_option_expr(arg, owner_ret)),
+        TExpr::AdtNew { tag, payload, .. } =>
+            e.ty == Type::OptionInt && *tag <= 1 &&
+            (*tag == 1) == payload.is_some() &&
+            payload.as_ref().is_none_or(|value|
+                value.ty == Type::Int && heapless_option_expr(value, owner_ret)),
+        TExpr::AdtIs { obj, tag } =>
+            e.ty == Type::Bool && obj.ty == Type::OptionInt &&
+            *tag <= 1 && heapless_option_expr(obj, owner_ret),
+        TExpr::AdtPayload(obj) =>
+            e.ty == Type::Int && obj.ty == Type::OptionInt &&
+            heapless_option_expr(obj, owner_ret),
+        TExpr::AdtPropagate { source, success_tag, .. } =>
+            owner_ret == Type::OptionInt && source.ty == Type::OptionInt &&
+            e.ty == Type::Int && *success_tag == 1 &&
+            heapless_option_expr(source, owner_ret),
+        // Explicit denylist by exhaustive default: Alloc, FieldGet, Trap,
+        // strings, heap-backed objects, actor effects, and later IR variants.
+        _ => false,
+    }
+}
+
+fn heapless_option_stmt(s: &TStmt, ret: Type) -> bool {
+    match s {
+        TStmt::Set(_, e) | TStmt::Expr(e) | TStmt::Return(Some(e)) =>
+            heapless_option_expr(e, ret),
+        TStmt::Return(None) | TStmt::Unreachable => true,
+        TStmt::Block(body) =>
+            body.iter().all(|s| heapless_option_stmt(s, ret)),
+        TStmt::If(arms, fallback) =>
+            arms.iter().all(|(test, body)| test.ty == Type::Bool &&
+                heapless_option_expr(test, ret) &&
+                body.iter().all(|s| heapless_option_stmt(s, ret))) &&
+            fallback.as_ref().is_none_or(|body|
+                body.iter().all(|s| heapless_option_stmt(s, ret))),
+        // Do not authorize cleanup, loops, actor state or throws merely
+        // because some other expression contains Option<int>.
+        _ => false,
+    }
+}
+
+fn heapless_option_program(p: &TProgram) -> bool {
+    if !p.actors.is_empty() || !p.generators.is_empty() ||
+       !p.globals.is_empty() || !p.imports.is_empty() ||
+       p.strings || p.guest_eh || !p.data.is_empty() {
+        return false;
+    }
+    let valid_type = |ty| matches!(ty, Type::Int | Type::Bool | Type::Void | Type::OptionInt);
+    let contains_option = p.funcs.iter().any(|f|
+        f.ret == Type::OptionInt || f.params.contains(&Type::OptionInt) ||
+        f.locals.contains(&Type::OptionInt));
+    contains_option && p.funcs.iter().all(|f|
+        valid_type(f.ret) &&
+        f.params.iter().chain(f.locals.iter()).copied().all(valid_type) &&
+        f.body.iter().all(|s| heapless_option_stmt(s, f.ret)))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -463,11 +627,13 @@ fn compile_ir_with_profile(source: &str, profile: LibraryProfile) -> Result<Stri
             .map_err(|e|e.to_string())?
     };
     let typed = check::check(&program).map_err(|e|e.to_string())?;
+    let typed_option_only = heapless_option_program(&typed);
     if profile == LibraryProfile::FreestandingCore {
         if !typed.imports.is_empty() {
             return Err("E_FREESTANDING_FORBIDDEN_IMPORT: typed host imports".into());
         }
-        if typed.heap || typed.strings || typed.guest_eh || !typed.data.is_empty() {
+        if (typed.heap && !typed_option_only) || typed.strings ||
+           typed.guest_eh || !typed.data.is_empty() {
             return Err("E_ALLOCATOR_REQUIRED: non-scalar runtime payload in core-only profile".into());
         }
         if !typed.actors.is_empty() || !typed.globals.is_empty() ||
@@ -476,7 +642,11 @@ fn compile_ir_with_profile(source: &str, profile: LibraryProfile) -> Result<Stri
         }
     }
     let native_actor_mode = !typed.actors.is_empty();
-    if !typed.generators.is_empty() || typed.heap || typed.strings ||
+    // Browser frontend allocates ADTs via the heap. The native Option ABI
+    // uses only value slots. This exception requires a complete typed-IR
+    // structural proof; declarations alone never authorize heap bypass.
+    let heapless_option = !native_actor_mode && typed_option_only;
+    if !typed.generators.is_empty() || (typed.heap && !heapless_option) || typed.strings ||
        typed.guest_eh || !typed.data.is_empty() {
         return Err("E_UNSUPPORTED_NATIVE_RUNTIME: guest object heap/string/generator/exception not lowered".into());
     }
@@ -771,6 +941,96 @@ mod tests {
         assert!(ir.contains("ret i64 42"));
         assert!(!ir.contains("wasm"));
     }
+    #[test]
+    fn heapless_option_admission_checks_every_typed_expression() {
+        let src = "fnc checked(): Option<int> { return Some(42); } \
+                   pub fnc main(): int { return match checked() over \
+                     on Some(value) -> value, on None -> 0 end; }";
+        let tokens = atto_compiler::lexer::lex(src).unwrap();
+        let parsed = atto_compiler::parser::Parser::new(tokens).parse_program().unwrap();
+        let mut typed = check::check(&parsed).unwrap();
+        assert!(heapless_option_program(&typed), "closed native Option should pass");
+        // Mutate a *different function* with an artificial heap operation.
+        // The old contains(Option<int>) bypass would have admitted it.
+        typed.funcs[typed.main as usize].body.insert(
+            0,
+            TStmt::Expr(TE { e: TExpr::Alloc(16), ty: Type::Int })
+        );
+        assert!(!heapless_option_program(&typed), "unrelated allocation bypassed admission");
+    }
+
+    #[test]
+    fn heapless_option_admission_rejects_nested_unlowered_effects() {
+        let src = "fnc checked(): Option<int> { return Some(42); } \
+                   pub fnc main(): int { return match checked() over \
+                     on Some(value) -> value, on None -> 0 end; }";
+        let tokens = atto_compiler::lexer::lex(src).unwrap();
+        let parsed = atto_compiler::parser::Parser::new(tokens).parse_program().unwrap();
+        let mut typed = check::check(&parsed).unwrap();
+        typed.funcs[typed.main as usize].body.push(
+            TStmt::Block(vec![TStmt::Expr(TE { e: TExpr::Alloc(8), ty: Type::Int })])
+        );
+        assert!(!heapless_option_program(&typed), "nested heap effect bypassed gate");
+        typed.funcs[typed.main as usize].body.pop();
+        typed.strings = true;
+        assert!(!heapless_option_program(&typed), "hidden strings bypassed gate");
+        typed.strings = false;
+        typed.guest_eh = true;
+        assert!(!heapless_option_program(&typed), "guest exception handling bypassed gate");
+    }
+
+    #[test]
+    fn native_option_tag_arity_is_deny_by_default() {
+        let src = "fnc maybe(): Option<int> { return Some(42); } \
+                   pub fnc main(): int { return match maybe() over \
+                     on Some(n) -> n, on None -> 0 end; }";
+        let parsed = atto_compiler::parser::Parser::new(
+            atto_compiler::lexer::lex(src).unwrap()).parse_program().unwrap();
+        let mut typed = check::check(&parsed).unwrap();
+        assert!(heapless_option_program(&typed));
+        let main_idx = typed.main as usize;
+        typed.funcs[main_idx].body.insert(0, TStmt::Expr(TE {
+            e: TExpr::AdtNew { tag: 2, payload: None, tmp: 0 },
+            ty: Type::OptionInt,
+        }));
+        assert!(!heapless_option_program(&typed), "invalid tag must never produce native IR");
+    }
+    #[test]
+    fn native_option_rejects_wrong_return_channel() {
+        let source = "fnc maybe(): Option<int> { return None; } \
+                      pub fnc main(): int { return maybe()?; }";
+        let err = compile_ir(source).unwrap_err();
+        assert!(err.contains("postfix '?'"), "{err}");
+    }
+
+    #[test]
+    fn native_heapless_option_match_uses_value_aggregate() {
+        let src = "fnc maybe(): Option<int> { return Some(42); } \
+                   pub fnc main(): int { return match maybe() over \
+                     on Some(value) -> value, on None -> 0 end; }";
+        let ir = compile_ir(src).expect("Option<int> should lower to native LLVM values");
+        assert!(ir.contains("insertvalue { i64, i64 }"), "{ir}");
+        assert!(ir.contains("extractvalue { i64, i64 }"), "{ir}");
+        assert!(!ir.contains("@malloc") && !ir.contains("@atto_actor_"));
+    }
+    #[test]
+    fn native_option_question_mark_propagates_none_without_heap() {
+        let src = "fnc absent(): Option<int> { return None; } \
+                   fnc checked(): Option<int> { val n = absent()?; return Some(n); } \
+                   pub fnc main(): int { return match checked() over \
+                     on Some(_) -> 0, on None -> 42 end; }";
+        let ir = compile_ir(src).expect("native Option<int> ? should compile");
+        assert!(ir.contains("option_return_none"), "{ir}");
+        assert!(ir.contains("ret { i64, i64 }"), "{ir}");
+        assert!(!ir.contains("@malloc"));
+    }
+    #[test]
+    fn native_result_string_requires_independent_error_layout() {
+        let src = "fnc maybe(): Result<int,string> { return Err(\"bad\"); } \
+                   pub fnc main(): int { return 42; }";
+        assert!(compile_ir(src).is_err(), "Result<int,string> must not be silently lowered as Option");
+    }
+
     #[test]
     fn rejects_unbound_identifiers_without_emitting_ir() {
         let e = compile_ir("pub fnc main(): int { return missing_symbol; }").unwrap_err();

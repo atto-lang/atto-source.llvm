@@ -1,0 +1,9 @@
+// expect-exit: 42
+// Ok() discards a non-void payload; Err(_) is the explicit discard alias.
+fnc read_id(): Result<int,string> { return Ok(17); }
+pub fnc main(): int {
+  return match read_id() over
+    on Ok() -> 42,
+    on Err(_) -> 0
+  end;
+}

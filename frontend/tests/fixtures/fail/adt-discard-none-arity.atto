@@ -1,0 +1,8 @@
+// expect-error: E_ARITY
+fnc maybe_id(): Option<int> { return None; }
+pub fnc main(): int {
+  return match maybe_id() over
+    on Some() -> 1,
+    on None() -> 0
+  end;
+}

@@ -1,0 +1,9 @@
+// expect-error: E_PATTERN
+// A nominal Option<int> constructor cannot invoke any user-defined extractor.
+fnc checked(): Option<int> { return Some(42); }
+pub fnc main(): int {
+  return match checked() over
+    on is ArbitraryExtractor<n> -> 0,
+    on is None -> 0
+  end;
+}

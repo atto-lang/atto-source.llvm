@@ -1,0 +1,7 @@
+// expect-error: E_TYPE
+fnc failed(): Result<int,string> { return Err("bad"); }
+fnc checked(): Option<int> {
+  val n = failed()?;
+  return Some(n);
+}
+pub fnc main(): int { return 0; }
