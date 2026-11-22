@@ -29,7 +29,8 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$EXPECTED"
       - name: Compile independent POSIX host boundary
         run: |
-          cmake -S native -B build -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DCMAKE_C_COMPILER=${{ matrix.compiler }}
+          if [ "${{ matrix.compiler }}" = "gcc" ]; then CXX=g++; else CXX=clang++; fi
+          cmake -S native -B build -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DCMAKE_C_COMPILER=${{ matrix.compiler }} -DCMAKE_CXX_COMPILER="$CXX" -DATTO_TENANT_BYTES_SANITIZERS=ON
           cmake --build build --parallel
-      - name: Prove host survives fatal actor worker faults
+      - name: Verify native isolation and shared tenant allocator host tests
         run: ctest --test-dir build --output-on-failure
