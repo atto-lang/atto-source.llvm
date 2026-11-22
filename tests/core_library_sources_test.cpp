@@ -102,6 +102,9 @@ int main() {
     assert(testing_scalar->source.find("pub fnc equal_int") != std::string_view::npos);
     assert(testing_scalar->source.find("pub fnc not_equal_int") != std::string_view::npos);
     assert(testing_scalar->source.find("pub fnc combine_status") != std::string_view::npos);
+    assert(testing_scalar->source.find("pub fnc greater_than_int") != std::string_view::npos);
+    assert(testing_scalar->source.find("pub fnc less_than_int") != std::string_view::npos);
+    assert(testing_scalar->source.find("pub fnc in_range_int") != std::string_view::npos);
 #ifdef ATTO_SCALAR_SOURCE_PATH
     // Reject drift between the checked-in AttoLang .atto source and the exact
     // compiler-owned native module bytes. This is a host test, not a guest.
