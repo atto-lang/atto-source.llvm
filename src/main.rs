@@ -1015,6 +1015,8 @@ mod tests {
         let bad = [
             (r#"import * as http from "std.unregistered"; pub fnc main(): int { return 42; }"#,
              "E_NATIVE_IMPORT_UNREGISTERED"),
+            (r#"import * as collections from "ores.core.collections"; pub fnc main(): int { return 42; }"#,
+             "E_NATIVE_IMPORT_UNREGISTERED"),
             (r#"import * as http from "std.http"; pub fnc main(): int { return http.private_helper(1); }"#,
              "E_NATIVE_IMPORT_PRIVATE"),
             (r#"import * as http from "std.http"; pub fnc main(): int { if http_status_valid(200) then return 42; fi return 1; }"#,
