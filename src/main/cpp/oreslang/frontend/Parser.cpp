@@ -3723,8 +3723,25 @@ private:
                         fail("E_NON_CONST_INITIALIZER: await is not compile-time constant");
                     if (binding.scalar_type != ScalarType::I64)
                         fail("native scalar await requires an int result binding");
-                    if (!value.locals.empty())
-                        fail("native first async slice requires await to immediately consume its Future/Task");
+                    // A single immutable, capture-free scalar tile may execute
+                    // between task submission and await. Its initializer has
+                    // no receiver, loan, I/O or task-state access, so the
+                    // already-emitted task start remains independent of it.
+                    // This is NOT general suspension or multi-Task admission.
+                    if (!value.locals.empty()) {
+                        const bool pure_immutable_i64_tile =
+                            value.source_tasks.size() == 1 &&
+                            value.locals.size() == 1 &&
+                            value.locals.front().scalar_type == ScalarType::I64 &&
+                            !value.locals.front().assignable &&
+                            !value.locals.front().heap_owned &&
+                            !value.locals.front().int_array &&
+                            value.locals.front().initializer &&
+                            native_capture_free_task_tree(
+                                *value.locals.front().initializer);
+                        if (!pure_immutable_i64_tile)
+                            fail("native first async slice requires await to immediately consume its Future/Task; only one pure immutable int tile may precede await");
+                    }
                     const std::string awaited_name = identifier();
                     if (std_await_stage) {
                         require("|>");
@@ -7936,10 +7953,29 @@ private:
                         ScalarType::I64)
                     throw std::runtime_error(
                         "native Task<int> producer must return int");
-                if (fn.locals.empty() ||
-                        fn.locals.front().task_await_name != task.name)
+                // Recheck the one permitted pure immutable caller tile
+                // independently of parsing. Codegen starts the capture-free
+                // producer before lowering locals in lexical order, so the
+                // only admitted pre-await work is exactly one value-only int.
+                const bool immediate_await =
+                    !fn.locals.empty() &&
+                    fn.locals.front().task_await_name == task.name;
+                bool immutable_tile_then_await = false;
+                if (fn.locals.size() >= 2) {
+                    const auto& tile = fn.locals.front();
+                    const auto& awaited = fn.locals[1];
+                    immutable_tile_then_await =
+                        awaited.task_await_name == task.name &&
+                        tile.scalar_type == ScalarType::I64 &&
+                        !tile.assignable &&
+                        !tile.heap_owned &&
+                        !tile.int_array &&
+                        tile.initializer &&
+                        native_capture_free_task_tree(*tile.initializer);
+                }
+                if (!immediate_await && !immutable_tile_then_await)
                     throw std::runtime_error(
-                        "native Task<int> v1 await must be the first scalar local");
+                        "native Task<int> await must immediately follow the Task or one pure immutable int tile");
                 if (std::any_of(
                         fn.locals.begin(), fn.locals.end(),
                         [&](const LocalBinding& local) {
