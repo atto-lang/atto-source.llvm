@@ -6407,6 +6407,33 @@ if(BUILD_TESTING)
         COMMAND oreslang-ownership-dataflow-v1-test --self-check-runner)
     set_tests_properties(native_ownership_dataflow_v1_runner_continuation
         PROPERTIES TIMEOUT 30)
+    # Seed-replayable native CFG properties against an independent cleanup oracle.
+    add_executable(oreslang-ownership-dataflow-v1-property-test
+        tests/ownership_dataflow_v1_property_test.cpp)
+    target_include_directories(oreslang-ownership-dataflow-v1-property-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-ownership-dataflow-v1-property-test PRIVATE
+        cxx_std_17)
+    target_compile_options(oreslang-ownership-dataflow-v1-property-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_ownership_dataflow_v1_property
+        COMMAND oreslang-ownership-dataflow-v1-property-test)
+    set_tests_properties(native_ownership_dataflow_v1_property PROPERTIES
+        TIMEOUT 90)
+
+    # Compile four mutated copies of the analyzer, never the source header.
+    # The original 54-case executable must kill each implementation mutant.
+    add_test(NAME native_ownership_dataflow_v1_mutation
+        COMMAND "${CMAKE_COMMAND}"
+            "-DORIGINAL_HEADER=${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/backend/OwnershipDataflowV1.hpp"
+            "-DTEST_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/ownership_dataflow_v1_test.cpp"
+            "-DBASELINE_EXECUTABLE=$<TARGET_FILE:oreslang-ownership-dataflow-v1-test>"
+            "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
+            "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/ownership-dataflow-mutation"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/ownership_dataflow_v1_mutation.cmake")
+    set_tests_properties(native_ownership_dataflow_v1_mutation PROPERTIES
+        TIMEOUT 600)
+
 
     add_test(NAME native_actor_region_v2_multiowner_guarded_cleanup
         COMMAND "${CMAKE_COMMAND}"
