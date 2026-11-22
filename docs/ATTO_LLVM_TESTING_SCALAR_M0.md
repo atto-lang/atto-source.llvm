@@ -29,6 +29,9 @@ The module exports:
 | `equal_int(actual, expected)` | `0` if equal, otherwise `1` |
 | `not_equal_int(actual, expected)` | `0` if unequal, otherwise `1` |
 | `combine_status(first, second)` | `0` if both are zero, otherwise `1` |
+| `greater_than_int(actual, lower_bound)` | `0` if strictly greater, otherwise `1` |
+| `less_than_int(actual, upper_bound)` | `0` if strictly less, otherwise `1` |
+| `in_range_int(actual, lower_bound, upper_bound)` | `0` for an inclusive in-range value, otherwise `1`; inverted bounds reject |
 
 Integer result `0` means the test assertion passed; any nonzero result
 must be **explicitly returned from the guest `main`** so the host can
@@ -52,9 +55,9 @@ and exact checked-in `.atto` source fidelity. It is **host testing**, not
 guest execution.
 
 The existing focused native harness PR #1365 is the parent. This slice
-extends the existing 24 canonical guest programs by **six**, for **30**
+extends the existing 24 canonical guest programs by **14**, for **38**
 positive `.atto` entries. The same production compiler/Clang pipeline
-must emit and run each at **O0 and O2**, giving **60 possible native guest
+must emit and run each at **O0 and O2**, giving **76 possible native guest
 executions** only when every step actually runs. The manifest has **five**
 checked-in negative compiler cases and the harness creates three
 additional security negatives (**eight total**). New negative programs
@@ -95,7 +98,7 @@ the complete Java native `TestSuite` implementation.
 
 The scalar-only module in this PR does **not** generate receipts itself.
 Subject to admitted exact-head proof, the combined harness requires
-**60 scalar guest executions + four independent receipt smoke executions**,
+**76 scalar guest executions + four independent receipt smoke executions**,
 and **eight compiler negatives**. The stdout smoke may not be counted as
 native `TestCase` registration, skip/filter/fail-fast, isolation or actor
 TestKit parity. The parent native receipt additions, their no-GC IR
@@ -107,7 +110,7 @@ integration tree.
 The source-owning private GitHub Actions organization has historically
 reported failures with **zero job steps**. Do not call this module
 compiler-backed or merge-ready without **an admitted exact-head native
-LLVM compiler build, 60 independently launched guest binaries, all eight
+LLVM compiler build, 76 independently launched guest binaries, all eight
 compiler-negative results, unchanged source tree and independent review**.
 No private source is copied to another GitHub organization. CI, JIT/AOT
 and Java/LLVM full TestKit parity remain unverified until real execution.
@@ -119,3 +122,17 @@ receipts, skipped/filtered/fail-fast accounting, deterministic
 scheduler/actor test support, and exact matching Java and LLVM guest
 observations. Do **not** silently promote this M0 scalar-only module to
 `ores.std/testing` until those functions are implemented and tested.
+
+## M0 extension: strict integer comparisons and bounded range
+
+The LLVM backend-specific module now adds `greater_than_int`,
+`less_than_int` and `in_range_int`. Range checks are inclusive, reject
+lower > upper, and compare endpoints without subtraction or addition.
+Eight additional native `.atto` guests are recorded separately in
+`cases.tsv`, covering passing and rejecting strict comparisons,
+endpoint acceptance, reversed bounds and out-of-range values. Native
+cases now number **38**; the independent O0/O2 native execution target
+is **76** guest processes, plus the parent's four receipt smoke runs.
+This is not Java `TestCase`/full TestKit parity and remains **NOT EXECUTED**
+until an exact-head, stepful LLVM CI run proves actual code generation,
+no-GC audit and OS exits.
