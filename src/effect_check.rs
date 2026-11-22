@@ -57,7 +57,7 @@ impl Walker {
             }
             TExpr::Not(arg) | TExpr::IntToFloat(arg) => self.expr(arg, depth + 1)?,
             TExpr::Bin(op, lhs, rhs) => {
-                if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul) {
+                if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div) {
                     self.effects.insert("panic");
                 }
                 self.expr(lhs, depth + 1)?;
@@ -300,6 +300,19 @@ mod tests {
         ]);
         assert!(infer(&p).unwrap()[0].effects.contains("alloc"));
         assert!(admit(&p, Profile::NoAlloc).is_err());
+    }
+
+    #[test]
+    fn checked_division_is_not_reported_as_effect_free() {
+        // The native emitter currently rejects division; if a backend
+        // supports it later, its exceptional path must already be explicit.
+        let lhs = e(TExpr::I64(42));
+        let rhs = e(TExpr::I64(0));
+        let p = program(vec![vec![TStmt::Return(Some(e(TExpr::Bin(
+            BinOp::Div, Box::new(lhs), Box::new(rhs)
+        ))))]]);
+        let rows = infer(&p).expect("the checked typed graph is closed");
+        assert!(rows[0].effects.contains("panic"));
     }
 
     #[test]
