@@ -39,4 +39,30 @@ for level in 0 2; do
   }
   printf 'CORE_FOUR_LLVM_LOCAL_GUEST_PASS|head=%s|O%s|fixtures=2|compilation=real|source_model=no\n' "$EXPECTED_HEAD" "$level"
 done
+# The compiler's *own* ownership checker must refuse invalid Atto
+# even if core/cell returns an unrelated "safe" integer-state policy.
+# A rejection must emit zero LLVM IR, not a partial function/module header.
+for name in borrow-use-after-take borrow-escape; do
+  src="$root/tests/fixtures/core-four-v1/$name.atto"
+  [[ -f "$src" ]] || { echo "missing ownership fixture: $name" >&2; exit 65; }
+  negative_ir="$tmp/$name.ll"
+  negative_log="$tmp/$name.stderr"
+  if "$compiler" --target=host "$src" >"$negative_ir" 2>"$negative_log"; then
+    echo "unsafe core borrow source was accepted: $name" >&2; exit 1
+  fi
+  [[ ! -s "$negative_ir" ]] || {
+    echo "unsafe core borrow source emitted partial LLVM IR: $name" >&2; exit 1
+  }
+  case "$name" in
+    borrow-use-after-take)
+      grep -Eiq 'moved|move|taken|take' "$negative_log" || {
+        echo "core ownership move diagnostic missing: $name" >&2; cat "$negative_log" >&2; exit 1;
+      } ;;
+    borrow-escape)
+      grep -Eiq 'borrow|loan|escape' "$negative_log" || {
+        echo "core ownership loan diagnostic missing: $name" >&2; cat "$negative_log" >&2; exit 1;
+      } ;;
+  esac
+  printf 'CORE_FOUR_LLVM_BORROW_COMPILER_NEGATIVE|head=%s|case=%s|IR=NONE\n' "$EXPECTED_HEAD" "$name"
+done
 echo 'CORE_FOUR_LLVM_LOCAL_MATRIX_PASS|O0+O2|non_certifying_until_independent_CI'
