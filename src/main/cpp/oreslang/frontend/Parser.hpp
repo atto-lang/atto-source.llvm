@@ -483,6 +483,16 @@ struct NamespaceImportSyntax {
     std::size_t offset = 0;
 };
 
+// Parsed, non-executable typed constant selection. The real linker must
+// verify immutable export kind, package/file owner, visibility, dependency
+// ordering and runtime startup capabilities before guest lowering.
+struct NativeConstImportSyntax {
+    std::string source_name;
+    std::string local_name;
+    std::string path;
+    std::size_t offset = 0;
+};
+
 struct TypeConstraintDescriptor {
     std::string schema_id;
     std::string qualified_type_name;
@@ -495,6 +505,7 @@ struct TypeConstraintDescriptor {
 struct Program {
     std::vector<ModuleImport> imports;
     std::vector<NamespaceImportSyntax> namespace_imports;
+    std::vector<NativeConstImportSyntax> const_imports;
     std::vector<CooperativeScalarLoop> cooperative_loops;
     std::vector<ScalarGenerator> generators;
     std::string namespace_name;
