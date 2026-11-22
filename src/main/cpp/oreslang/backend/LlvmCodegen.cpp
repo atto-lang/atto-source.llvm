@@ -3756,6 +3756,20 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         auto* two = llvm::ConstantInt::get(i64, 2);
         auto* lifecycle = new llvm::GlobalVariable(module, i64, false,
             llvm::GlobalValue::InternalLinkage, zero, "oreslang.wasm.actor.lifecycle");
+        // Per-WebAssembly.Instance managed scalar frame backing. The
+        // import-free actor ABI guarantees no guest callback can reenter
+        // concurrently. These are Wasm linear-memory globals, not a carrier
+        // thread-local variable or a host-provided pointer. Recursion itself
+        // remains rejected until compiler-owned nested frame/return lowering.
+        constexpr std::uint64_t kActorGuestFrameLimit = 64;
+        auto* guestFrameDepth = new llvm::GlobalVariable(module, i64, false,
+            llvm::GlobalValue::InternalLinkage, zero,
+            "oreslang.wasm.actor.frame.depth");
+        auto* frameType = llvm::ArrayType::get(i64, kActorGuestFrameLimit);
+        auto* guestFrameSlots = new llvm::GlobalVariable(module, frameType, false,
+            llvm::GlobalValue::InternalLinkage,
+            llvm::ConstantAggregateZero::get(frameType),
+            "oreslang.wasm.actor.frame.slots");
         std::vector<llvm::GlobalVariable*> globals;
         for (const auto& field : actor.fields) {
             globals.push_back(new llvm::GlobalVariable(module, i64, false,
@@ -3790,6 +3804,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 noStorage, noStorage, noFunctions);
             init.CreateStore(initial, globals[i]);
         }
+        init.CreateStore(zero, guestFrameDepth);
         init.CreateStore(one, lifecycle);
         init.CreateRetVoid();
 
@@ -3798,10 +3813,45 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             llvm::Function::ExternalLinkage, export_prefix + "on_message", module);
         llvm::IRBuilder<> b(llvm::BasicBlock::Create(context, "entry", handler));
         guard(b, handler, one);
+        // Check the bounded actor-instance frame depth before taking a
+        // private scalar slot. This is a compiler-owned guest frame and
+        // does not rely on the OS Worker call stack for the message value.
+        auto* depthLoad = b.CreateLoad(i64, guestFrameDepth,
+            "atto.actor.guest.frame.depth.before");
+        depthLoad->setVolatile(true);
+        llvm::Value* depth = depthLoad;
+        auto* frameAdmitted = llvm::BasicBlock::Create(
+            context, "atto.actor.guest.frame.admitted", handler);
+        auto* frameDenied = llvm::BasicBlock::Create(
+            context, "atto.actor.guest.frame.denied", handler);
+        b.CreateCondBr(b.CreateICmpULT(depth,
+            llvm::ConstantInt::get(i64, kActorGuestFrameLimit)),
+            frameAdmitted, frameDenied);
+        b.SetInsertPoint(frameDenied);
+        // Deterministic guest trap before an out-of-bounds frame reference.
+        // The host must treat unknown traps as carrier-fatal; it must not
+        // recover arbitrary native stack overflows as actor-local failures.
+        b.CreateCall(native_trap(module));
+        b.CreateUnreachable();
+        b.SetInsertPoint(frameAdmitted);
+        llvm::Value* paramSlot = b.CreateInBoundsGEP(frameType,
+            guestFrameSlots, {zero, depth}, "atto.actor.guest.frame.message");
+        // Volatile guest-frame accesses make the per-instance memory
+        // materialization observable even under native wasm32 -Oz.
+        // A transient carrier-stack cache remains for the current scalar
+        // evaluator; this does not establish full stackless call lowering.
+        auto* incomingStore = b.CreateStore(&*handler->arg_begin(), paramSlot);
+        incomingStore->setVolatile(true);
+        auto* incomingRead = b.CreateLoad(i64, paramSlot,
+            "atto.actor.guest.frame.message.read");
+        incomingRead->setVolatile(true);
+        auto* carrierCache = b.CreateAlloca(i64, nullptr,
+            "atto.actor.guest.message.cache");
+        b.CreateStore(incomingRead, carrierCache);
+        auto* pushDepth = b.CreateStore(b.CreateAdd(depth, one), guestFrameDepth);
+        pushDepth->setVolatile(true);
         std::unordered_map<std::string, llvm::Value*> values, emptyFields;
-        auto* paramSlot = b.CreateAlloca(i64, nullptr, "message.slot");
-        b.CreateStore(&*handler->arg_begin(), paramSlot);
-        values.emplace(actor.on_message.parameters[0].name, paramSlot);
+        values.emplace(actor.on_message.parameters[0].name, carrierCache);
         for (std::size_t i = 0; i < actor.fields.size(); ++i) {
             auto* slot = b.CreateAlloca(i64, nullptr, actor.fields[i].name + ".slot");
             b.CreateStore(b.CreateLoad(i64, globals[i]), slot);
@@ -3821,6 +3871,13 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         // host callback or suspension may interleave during this transition.
         for (std::size_t i = 0; i < actor.fields.size(); ++i)
             b.CreateStore(b.CreateLoad(i64, values.at(actor.fields[i].name)), globals[i]);
+        // Pop and zero the private guest frame before returning control to
+        // the pooled host carrier. An abnormal Wasm trap never returns:
+        // physical-instance quarantine/retirement must scrub its memory.
+        auto* frameClear = b.CreateStore(zero, paramSlot);
+        frameClear->setVolatile(true);
+        auto* depthRelease = b.CreateStore(depth, guestFrameDepth);
+        depthRelease->setVolatile(true);
         b.CreateRet(value);
 
         if (tenant_vm_guest) {
@@ -3861,6 +3918,19 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             llvm::Function::ExternalLinkage, export_prefix + "teardown", module);
         llvm::IRBuilder<> finish(llvm::BasicBlock::Create(context, "entry", teardown));
         guard(finish, teardown, one);
+        // An actor cannot STOP with a live guest frame. This cannot fire in
+        // the current synchronous zero-import ABI but pins the invariant for
+        // future compiler-generated nested guest execution.
+        auto* frameClean = llvm::BasicBlock::Create(
+            context, "atto.actor.guest.frames.clean", teardown);
+        auto* frameLive = llvm::BasicBlock::Create(
+            context, "atto.actor.guest.frames.live", teardown);
+        finish.CreateCondBr(finish.CreateICmpEQ(
+            finish.CreateLoad(i64, guestFrameDepth), zero), frameClean, frameLive);
+        finish.SetInsertPoint(frameLive);
+        finish.CreateCall(native_trap(module));
+        finish.CreateUnreachable();
+        finish.SetInsertPoint(frameClean);
         for (auto* field : globals) finish.CreateStore(zero, field);
         finish.CreateStore(two, lifecycle);
         finish.CreateRetVoid();

@@ -1,0 +1,122 @@
+name: LLVM wasm32 actor guest frame exact-head
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
+      - 'tests/wasm32_actor_owned_guest_frames.py'
+      - 'tests/fixtures/wasm32-single-source-actor.atto'
+      - 'CMakeLists.txt'
+      - '.github/workflows/wasm-actor-guest-frames.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compiled-atto-wasm-frames:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout immutable PR head, not GitHub's generated merge commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Pin source HEAD, tree and canonical actor fixture bytes
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          echo "ATTO_ACTOR_FRAME_HEAD=$EXPECTED_HEAD"
+          echo "ATTO_ACTOR_FRAME_TREE=$(git rev-parse 'HEAD^{tree}')"
+          test "$(git hash-object tests/fixtures/wasm32-single-source-actor.atto)" = "adfc0b43463d7ce92d32a4b1b63602f91e527329"
+          test "$(git hash-object tests/fixtures/wasm32-single-source-actor.ores)" = "adfc0b43463d7ce92d32a4b1b63602f91e527329"
+
+      - name: Set up Node 22
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Install real LLVM C++ and wasm32 toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang llvm-dev python3
+          node --version
+          clang --version | head -1
+
+      - name: Build native oreslang-llvmc from exact source HEAD
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --target oreslang-llvmc --parallel 2
+          test -x build/oreslang-llvmc
+          sha256sum build/oreslang-llvmc
+
+      - name: Execute compiled source actor frame guest at O0 and Oz
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -I tests/wasm32_actor_owned_guest_frames.py \
+            --compiler "$PWD/build/oreslang-llvmc" \
+            --clang clang --node node --fixtures "$PWD/tests/fixtures" \
+            2>&1 | tee "$RUNNER_TEMP/wasm-actor-guest-frame.log"
+          test "$(grep -c '"kind": "actual-source-wasm-actor-frame"' "$RUNNER_TEMP/wasm-actor-guest-frame.log")" = "2"
+          grep -F 'PASS compiler-owned Wasm scalar actor frame IR and guest instance isolation (O0/Oz)' "$RUNNER_TEMP/wasm-actor-guest-frame.log"
+
+      - name: Preserve exact source-compiled Wasm execution evidence
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          python3 -I - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          temp = pathlib.Path(os.environ["RUNNER_TEMP"])
+          data = (temp / "wasm-actor-guest-frame.log").read_text()
+          cases = [json.loads(line) for line in data.splitlines()
+                   if line.startswith("{") and '"kind": "actual-source-wasm-actor-frame"' in line]
+          if len(cases) != 2 or sorted(x["opt"] for x in cases) != ["-O0", "-Oz"]:
+              raise SystemExit("expected two independently executed source-compiled Wasm guest receipts")
+          if not all(x["test"] == "ATTO_WASM_ACTOR_GUEST_FRAME_SCALAR_EXECUTED=YES"
+                     and x["stack_overflow"] == "UNPROVEN" for x in cases):
+              raise SystemExit("invalid executed guest classification")
+          sha = lambda p: hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()
+          head = subprocess.check_output(("git", "rev-parse", "HEAD"), text=True).strip()
+          tree = subprocess.check_output(("git", "rev-parse", "HEAD^{tree}"), text=True).strip()
+          if head != os.environ["EXPECTED_HEAD"]:
+              raise SystemExit("exact-head drift")
+          if any(x["compiler_sha256"] != sha("build/oreslang-llvmc") for x in cases):
+              raise SystemExit("compiler executable digest changed during verification")
+          receipt = {"schema": "attolang.wasm.actor_guest_scalar_frame_m1",
+                     "head_sha": head, "tree_sha": tree,
+                     "run_id": int(os.environ["GITHUB_RUN_ID"]),
+                     "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+                     "compiler_sha256": sha("build/oreslang-llvmc"),
+                     "source_blob": "adfc0b43463d7ce92d32a4b1b63602f91e527329",
+                     "compiler_backed_scalar_actor_frame_guest_executed": True,
+                     "actor_nested_recursion_verified": False,
+                     "actor_stack_overflow_isolation_verified": False,
+                     "java_llvm_wasm_full_parity_verified": False,
+                     "cases": cases}
+          (temp / "wasm-actor-guest-frame-receipt.json").write_text(
+              json.dumps(receipt, sort_keys=True, indent=2) + "\n")
+          PY
+
+      - name: Upload source-owned exact-head guest evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: llvm-wasm-actor-frame-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/wasm-actor-guest-frame.log
+            ${{ runner.temp }}/wasm-actor-guest-frame-receipt.json
+          if-no-files-found: error
+          retention-days: 7

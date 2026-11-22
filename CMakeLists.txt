@@ -2997,6 +2997,17 @@ if(BUILD_TESTING)
                 --node "${ORE_NODE}"
                 --fixtures "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
         set_tests_properties(wasm32_source_actor_guest_lifecycle PROPERTIES TIMEOUT 120)
+        # Real .atto compiler -> LLVM -> Wasm O0/Oz: instance-owned scalar
+        # frame materialization, checked depth, zeroization and two actors.
+        add_test(NAME wasm32_compiler_owned_actor_guest_frame_scalar
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm32_actor_owned_guest_frames.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --node "${ORE_NODE}"
+                --fixtures "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+        set_tests_properties(wasm32_compiler_owned_actor_guest_frame_scalar
+            PROPERTIES TIMEOUT 240)
     endif()
     # First real compiler-emitted AOT while continuation. The host owns the
     # frame and schedules finite reductions; actor/mailbox integration is not
