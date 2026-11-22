@@ -78,6 +78,7 @@ class Compiler {
     bool has_atomic_ = false;
     unsigned step_ = 0;
     unsigned statements_ = 0;
+    bool checked_arithmetic_used_ = false;
 
     const Token& at() const { return tokens_.at(cursor_); }
     bool take(std::string_view word) {
@@ -249,6 +250,59 @@ class Compiler {
         need(")");
         if (!is_rmw_order(order)) fail(at().byte, "invalid atomic RMW memory order");
         const auto raw = native_value(arg);
+        if (op == "fetch_add" || op == "fetch_sub") {
+            // LLVM atomicrmw add/sub WRAPS. Atto signed integer operations
+            // instead trap on overflow and must never publish that value.
+            // Recheck on every failed CAS: another writer can change the
+            // admissible arithmetic result between load and publication.
+            checked_arithmetic_used_ = true;
+            const auto preheader = new_temp();
+            const auto initial = new_temp();
+            const auto loop = new_temp();
+            const auto old = new_temp();
+            const auto pair = new_temp();
+            const auto next = new_temp();
+            const auto overflow = new_temp();
+            const auto trap = new_temp();
+            const auto cas_block = new_temp();
+            const auto retry = new_temp();
+            const auto done = new_temp();
+            const auto cas = new_temp();
+            const auto observed = new_temp();
+            const auto exchanged = new_temp();
+            emit("br label " + preheader);
+            emit(preheader.substr(1) + ":");
+            emit(initial + " = load atomic i64, ptr %cell monotonic, align 8");
+            emit("br label " + loop);
+            emit(loop.substr(1) + ":");
+            emit(old + " = phi i64 [ " + initial + ", " + preheader +
+                 " ], [ " + observed + ", " + retry + " ]");
+            const auto intrinsic = op == "fetch_add"
+                ? "@llvm.sadd.with.overflow.i64"
+                : "@llvm.ssub.with.overflow.i64";
+            emit(pair + " = call { i64, i1 } " + intrinsic +
+                 "(i64 " + old + ", i64 " + raw + ")");
+            emit(next + " = extractvalue { i64, i1 } " + pair + ", 0");
+            emit(overflow + " = extractvalue { i64, i1 } " + pair + ", 1");
+            emit("br i1 " + overflow + ", label " + trap + ", label " + cas_block);
+            emit(trap.substr(1) + ":");
+            emit("call void @llvm.trap()");
+            emit("unreachable");
+            emit(cas_block.substr(1) + ":");
+            const auto failure_order = order == Ordering::Release
+                ? Ordering::Relaxed
+                : order == Ordering::AcqRel ? Ordering::Acquire : order;
+            emit(cas + " = cmpxchg ptr %cell, i64 " + old + ", i64 " +
+                 next + " " + llvm_order(order) + " " +
+                 llvm_order(failure_order));
+            emit(observed + " = extractvalue { i64, i1 } " + cas + ", 0");
+            emit(exchanged + " = extractvalue { i64, i1 } " + cas + ", 1");
+            emit("br i1 " + exchanged + ", label " + done + ", label " + retry);
+            emit(retry.substr(1) + ":");
+            emit("br label " + loop);
+            emit(done.substr(1) + ":");
+            return {Type::Int, old};
+        }
         const auto prev = new_temp();
         emit(prev + " = atomicrmw " + it->second + " ptr %cell, " +
              llvm_type + " " + raw + " " + llvm_order(order));
@@ -320,6 +374,11 @@ public:
         need("}");
         need("<eof>");
         code_ += "}\n";
+        if (checked_arithmetic_used_) {
+            code_ += "declare { i64, i1 } @llvm.sadd.with.overflow.i64(i64, i64)\n";
+            code_ += "declare { i64, i1 } @llvm.ssub.with.overflow.i64(i64, i64)\n";
+            code_ += "declare void @llvm.trap()\n";
+        }
         return code_;
     }
 };
