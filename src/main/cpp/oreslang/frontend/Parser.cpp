@@ -1989,6 +1989,16 @@ private:
                 if (token_.text == "@")
                     fail("native @Default parameter annotation requires checked literal, Option and ownership ABI lowering");
                 Parameter parameter;
+                // Structural tuple v2 is syntax-known but has no native ABI yet.
+                // Reject before attempting identifier/class fallback so a future
+                // grammar expansion cannot accidentally turn tuple shapes into
+                // nominal class parameters.
+                if (token_.text == "structural") {
+                    fail("native structural positional tuple requires verified nonescaping readonly-view lowering");
+                }
+                if (token_.text == "tuple" || token_.text == "(") {
+                    fail("native positional tuple parameter requires verified readonly-slot and optional-tail lowering");
+                }
                 if (accept("borrow")) {
                     parameter.mode = accept("mut") ? Parameter::Mode::BorrowMut
                                                     : Parameter::Mode::Borrow;

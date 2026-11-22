@@ -62,3 +62,19 @@ if(BUILD_TESTING)
     "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
   target_compile_options(oreslang-actor-slab-heap-bench PRIVATE -O2 -Wall -Wextra -Wpedantic -Werror)
 endif()
+
+# Structural positional tuple v2: native lowering is not implemented yet.
+# Keep a positive scalar execution control and require a semantic compiler
+# rejection rather than treating arbitrary parse failure as conformance.
+if(BUILD_TESTING)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME native_structural_tuple_v2_failclosed
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_structural_tuple_v2_gate.py"
+            "$<TARGET_FILE:oreslang-llvmc>")
+    set_tests_properties(native_structural_tuple_v2_failclosed PROPERTIES TIMEOUT 90)
+    add_test(NAME native_structural_tuple_v2_harness_selftest
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_structural_tuple_v2_gate.py")
+    set_tests_properties(native_structural_tuple_v2_harness_selftest PROPERTIES TIMEOUT 90)
+endif()
