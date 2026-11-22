@@ -162,4 +162,23 @@ define module num as
     fi
     return product;
   }
+
+  pub fnc saturating_neg(int value): int {
+    if value == -9223372036854775808; do
+      return 9223372036854775807;
+    fi
+    return -value;
+  }
+  pub fnc saturating_abs(int value): int {
+    if value == -9223372036854775808; do
+      return 9223372036854775807;
+    fi
+    if value < 0; do
+      return -value;
+    fi
+    return value;
+  }
+  pub fnc wrapping_neg(int value): int {
+    return wrapping_sub(0, value);
+  }
 end
