@@ -2,6 +2,7 @@
 #include <assert.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdio.h>
 
 int main(void) {
     unsigned char original[] = "atto";
@@ -73,5 +74,35 @@ int main(void) {
     };
     assert(atto_host_env_create_v1(duplicate, 2, allow, 1, deny, 1, true, &env) == ATTO_ENV_V1_INVALID);
     assert(env == NULL);
+    // Every value is individually legal but aggregate admission is bounded
+    // to exactly 1 MiB. Denied values are never dereferenced or counted.
+    unsigned char block[16384];
+    memset(block, 'x', sizeof block);
+    char budget_names[65][32];
+    atto_host_env_entry_v1 budget[65];
+    for (size_t i = 0; i < 65; ++i) {
+        snprintf(budget_names[i], sizeof budget_names[i], "ATTO_BUDGET_%zu", i);
+        budget[i] = (atto_host_env_entry_v1) {
+            budget_names[i], block, sizeof block
+        };
+    }
+    const char *budget_grants[] = { "ATTO_BUDGET_*" };
+    assert(atto_host_env_create_v1(budget, 64, budget_grants, 1,
+                                   NULL, 0, true, &env) == ATTO_ENV_V1_OK);
+    assert(env != NULL);
+    atto_host_env_destroy_v1(env);
+    env = NULL;
+    assert(atto_host_env_create_v1(budget, 65, budget_grants, 1,
+                                   NULL, 0, true, &env) == ATTO_ENV_V1_INVALID);
+    assert(env == NULL);
+    budget[64].value = (const unsigned char *)(uintptr_t)1;
+    budget[64].value_length = (size_t)-1;
+    const char *budget_denies[] = { "ATTO_BUDGET_64" };
+    assert(atto_host_env_create_v1(budget, 65, budget_grants, 1,
+                                   budget_denies, 1, true, &env) == ATTO_ENV_V1_OK);
+    assert(env != NULL);
+    atto_host_env_destroy_v1(env);
+    env = NULL;
+
     return 0;
 }
