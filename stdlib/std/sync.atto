@@ -28,7 +28,8 @@ define module sync as
 
   pub fnc sem_return_admissible(int available, int released,
                                 int capacity, bool closed): bool {
-    if closed || capacity < 1 || available < 0 || available > capacity then return false; fi
+    // Closing the semaphore stops new acquisitions, not release of owned permits.
+    if capacity < 1 || available < 0 || available > capacity then return false; fi
     return released >= 1 && released <= capacity - available;
   }
 
