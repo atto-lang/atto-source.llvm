@@ -45,6 +45,11 @@ int main(void) {
     assert(atto_host_env_create_v1(entries, 3, bad_rules, 1, deny, 1, true, &env) == ATTO_ENV_V1_INVALID);
     assert(env == NULL);
 
+    const unsigned char nul_value[] = {'a', 0, 'b'};
+    atto_host_env_entry_v1 nul[] = { { "ATTO_NUL", nul_value, sizeof nul_value } };
+    assert(atto_host_env_create_v1(nul, 1, allow, 1, deny, 1, true, &env) == ATTO_ENV_V1_INVALID);
+    assert(env == NULL);
+
     const unsigned char invalid_utf8[] = {0xed, 0xa0, 0x80};
     atto_host_env_entry_v1 bad[] = { { "ATTO_BAD", invalid_utf8, sizeof invalid_utf8 } };
     assert(atto_host_env_create_v1(bad, 1, allow, 1, deny, 1, true, &env) == ATTO_ENV_V1_INVALID);
