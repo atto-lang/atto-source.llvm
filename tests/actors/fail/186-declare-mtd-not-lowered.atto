@@ -1,0 +1,7 @@
+// The newer syntax-only target profile must fail closed until fully lowered.
+use namespace workers;
+declare actor Foo1;
+declare actor Foo2;
+mtd (Foo1 self) process_value(int value): int { return value + 1; }
+mtd (Foo2 self) process_value(int value): int { return value * 2; }
+pub fnc main(): int { return 42; }

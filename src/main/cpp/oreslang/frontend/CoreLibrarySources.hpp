@@ -54,19 +54,16 @@ struct CoreLibrarySource {
 };
 
 inline bool is_reserved_core_import(std::string_view raw) noexcept {
-    return raw == "atto.core" || raw.rfind("atto.core/", 0) == 0 ||
-        raw == "ores.core" || raw.rfind("ores.core/", 0) == 0;
+    return raw == "ores.core" || raw.rfind("ores.core/", 0) == 0;
 }
 
 inline bool is_reserved_std_import(std::string_view raw) noexcept {
-    return raw == "atto.std" || raw.rfind("atto.std/", 0) == 0 ||
-        raw == "ores.std" || raw.rfind("ores.std/", 0) == 0 ||
+    return raw == "ores.std" || raw.rfind("ores.std/", 0) == 0 ||
         raw == "std" || raw.rfind("std/", 0) == 0;
 }
 
 inline bool is_reserved_alloc_import(std::string_view raw) noexcept {
-    return raw == "atto.alloc" || raw.rfind("atto.alloc/", 0) == 0 ||
-        raw == "alloc" || raw.rfind("alloc/", 0) == 0;
+    return raw == "alloc" || raw.rfind("alloc/", 0) == 0;
 }
 
 inline bool is_reserved_compiler_library_import(std::string_view raw) noexcept {
@@ -81,10 +78,10 @@ inline bool compiler_library_dependency_allowed(
 }
 
 inline const CoreLibrarySource* find_compiler_library_source(std::string_view raw) noexcept {
-    // Canonical Atto imports and legacy Ores imports must share one immutable
-    // compiler-owned unit identity; no spelling may duplicate modules.
+    // Keep aliases identity-stable: the optional .ores suffix selects the same
+    // compiler-owned unit and can never create a duplicate module instance.
     static constexpr std::string_view kNumericSource =
-R"ORES_CORE(// Compiler-owned atto.core source (legacy ores.core alias).
+R"ORES_CORE(// Compiler-owned ores.core source.
 // This module has no OS, Java, filesystem, network, process, actor-scheduler,
 // or ambient project dependency.
 
@@ -121,9 +118,9 @@ end
 )ORES_CORE";
     static constexpr CoreLibrarySource kNumeric{
         CompilerLibraryTier::Core,
-        "atto.core/numeric",
+        "ores.core/numeric",
         "numeric",
-        "@atto.core/numeric.atto",
+        "@ores.core/numeric.ores",
         kNumericSource,
         0u
     };
@@ -146,9 +143,9 @@ end
 )ORES_ALLOC";
     static constexpr CoreLibrarySource kIntBuffer{
         CompilerLibraryTier::Alloc,
-        "atto.alloc/int_buffer",
+        "alloc/int_buffer",
         "int_buffer",
-        "@atto.alloc/int_buffer.atto",
+        "@alloc/int_buffer.ores",
         kIntBufferSource,
         core_provider_bit(CoreProviderRequirement::Allocator)
     };
@@ -158,7 +155,7 @@ R"ORES_ALLOC(// Compiler-owned alloc tier transitive-closure probe.
 // The local body is allocation-free, but linking this module brings in the
 // allocator-bearing int_buffer dependency and therefore requires Allocator.
 
-import module int_buffer from "atto.alloc/int_buffer";
+import module int_buffer from "alloc/int_buffer";
 
 define module int_buffer_bundle as
 
@@ -170,21 +167,19 @@ end
 )ORES_ALLOC";
     static constexpr CoreLibrarySource kIntBufferBundle{
         CompilerLibraryTier::Alloc,
-        "atto.alloc/int_buffer_bundle",
+        "alloc/int_buffer_bundle",
         "int_buffer_bundle",
-        "@atto.alloc/int_buffer_bundle.atto",
+        "@alloc/int_buffer_bundle.ores",
         kIntBufferBundleSource,
         core_provider_bit(CoreProviderRequirement::Allocator)
     };
 
-    if (raw == "atto.core/numeric" || raw == "atto.core/numeric.atto" ||
-            raw == "ores.core/numeric" || raw == "ores.core/numeric.ores")
+    if (raw == "ores.core/numeric" || raw == "ores.core/numeric.ores")
         return &kNumeric;
-    if (raw == "atto.alloc/int_buffer" || raw == "atto.alloc/int_buffer.atto" ||
-            raw == "alloc/int_buffer" || raw == "alloc/int_buffer.ores")
+    if (raw == "alloc/int_buffer" || raw == "alloc/int_buffer.ores")
         return &kIntBuffer;
-    if (raw == "atto.alloc/int_buffer_bundle" || raw == "atto.alloc/int_buffer_bundle.atto" ||
-            raw == "alloc/int_buffer_bundle" || raw == "alloc/int_buffer_bundle.ores")
+    if (raw == "alloc/int_buffer_bundle" ||
+            raw == "alloc/int_buffer_bundle.ores")
         return &kIntBufferBundle;
     return nullptr;
 }
