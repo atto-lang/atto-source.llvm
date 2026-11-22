@@ -29,3 +29,11 @@ std-scalar-not-equal-pass|positive/std-scalar-not-equal-pass.atto|0
 std-scalar-combined-fail|positive/std-scalar-combined-fail.atto|1
 std-scalar-combined-success|positive/std-scalar-combined-success.atto|0
 std-scalar-alias-pass|positive/std-scalar-alias-pass.atto|0
+std-scalar-greater-pass|positive/std-scalar-greater-pass.atto|0
+std-scalar-greater-fail|positive/std-scalar-greater-fail.atto|1
+std-scalar-less-pass|positive/std-scalar-less-pass.atto|0
+std-scalar-less-fail|positive/std-scalar-less-fail.atto|1
+std-scalar-range-lower|positive/std-scalar-range-lower.atto|0
+std-scalar-range-upper|positive/std-scalar-range-upper.atto|0
+std-scalar-range-inverted|positive/std-scalar-range-inverted.atto|1
+std-scalar-range-outside|positive/std-scalar-range-outside.atto|1
