@@ -37,9 +37,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout immutable triggering HEAD
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+          submodules: false
+      - name: Check Git HEAD and unmodified working tree
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet
+          git diff --cached --quiet
+          echo "ATTO_LLVM_ALLOC_SOURCE_HEAD=$EXPECTED_HEAD"
+          echo "ATTO_LLVM_ALLOC_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
       - name: Self-test strict Box guest and safety-negative test oracles
         shell: bash
         run: bash tests/atto_box_main_v1_oracle_test.sh
