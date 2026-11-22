@@ -15,3 +15,7 @@ This is this backend's independently maintained `core/types.atto` source, not an
 ## Namespace-only source layout
 
 The canonical Atto `.atto` file uses the file-level `use namespace types;` declaration and public top-level functions, **not** `define module types`. Namespace is source identity, not a dependency import: consumers must use an explicit static import. This changes no runtime allocation or intrinsic guarantee. Parsing, linked guest execution and negative fixture rejection are distinct gates and remain NOT_EXECUTED until the compiler actually runs.
+
+## Native LLVM explicit function imports
+
+The current C++ frontend admits `import fnc ... from "relative.atto";`, but not the wildcard-import syntax in other backend fixtures. LLVM's positive and two semantic-negative guests therefore use explicit named imports and direct calls. This differs in fixture spelling without weakening the range, width, or negative-rejection contract; the 63-case matrix remains intact. The source header `use namespace types;` is admitted only for function-only file links. Unverified `import namespace`, package identity federation, actor classes and nominal type crossing remain denied. Actual executed native guests are still NOT_EXECUTED until runner steps exist.

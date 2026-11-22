@@ -91,9 +91,11 @@ test('mutated boundaries, spoofed exports and hosted imports are rejected',()=>{
   for(const changed of variants){assert.notEqual(changed,source);assert.throws(()=>check(changed));}
 });
 test('positive linked fixture and all eight compiler-negative fixtures are present',()=>{
-  assert.match(positive,/import \* as types from "\.\.\/\.\.\/\.\.\/core\/types\.atto";/);
+  const importMatch=positive.match(/^import fnc ([a-z_0-9, ]+) from "\\.\\.\\/\\.\\.\\/\\.\\.\\/core\\/types\\.atto";$/m);
+  assert.ok(importMatch,"native LLVM must explicitly select the linked public functions");
+  assert.deepEqual(importMatch[1].split(",").map(x=>x.trim()).sort(),[...names].sort());
   assert.match(positive,/pub fnc main\(\) -> int/);
-  for(const name of names)assert.ok(positive.includes('types.'+name+'('),name);
+  for(const name of names)assert.ok(positive.includes(name+'('),name);
   const required=[
     ['void-value-negative.atto',/let void invalid/],
     ['void-return-negative.atto',/fnc bad\(\) -> void\s*\{\s*return 7;/],

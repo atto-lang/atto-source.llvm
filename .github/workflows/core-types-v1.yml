@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - 'core/types.atto'
+      - 'src/main/cpp/oreslang/frontend/ModuleLoader.cpp'
       - 'tests/core-types-source.test.mjs'
       - 'tests/core-types-matrix-source.test.mjs'
       - 'tests/core-types-native-guest.sh'
