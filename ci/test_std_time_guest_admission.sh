@@ -66,4 +66,51 @@ for required in ("ceil-sub-ms","hours-overflow","manual-overflow-atomic",
     assert required in labels,required
 print("STD_TIME_GUEST_VERIFIED_52_CASES")
 PY
+# A fixed val binding has a mutable referent (const mut): real native guest
+# execution must accept all three mut-self operations without an alias escape.
+positive=tests/fixtures/std-time-borrow-positive-val.atto
+test -f "$positive"
+test "$(grep -c 'val .* = time\.' "$positive")" -ge 3
+positive_guest="$work/time_val_guest"
+"$compiler" "$positive" -o "$positive_guest"
+test -s "$positive_guest"
+if command -v readelf >/dev/null; then
+  readelf -h "$positive_guest" | grep -Eq 'Class:[[:space:]]*ELF64'
+fi
+echo "ATTO_TIME_VAL_GUEST_ARTIFACT_SHA256=$(sha256sum "$positive_guest" | cut -d' ' -f1)"
+timeout 20s "$positive_guest" >"$work/time-val-out" 2>"$work/time-val-err" || {
+  echo "FAIL positive val const-mut native guest" >&2
+  sed -n '1,35p' "$work/time-val-err" >&2
+  exit 1
+}
+printf '1\ntrue\ntrue\n' >"$work/expected-val-out"
+cmp "$work/time-val-out" "$work/expected-val-out" || {
+  echo "FAIL val did not preserve writable referent semantics" >&2
+  exit 1
+}
+echo "STD_TIME_VAL_MUTABLE_REFERENT_GUEST_EXECUTED"
+
+# Conversely, const is read-only. Each negative must be rejected for
+# borrow/mutable-receiver reasons, never for unrelated syntax/import errors.
+for kind in clock timer interval; do
+  negative="tests/fixtures/std-time-borrow-negative-$kind.atto"
+  test -f "$negative"
+  reject_artifact="$work/time-immutable-$kind"
+  if "$compiler" "$negative" -o "$reject_artifact" \
+     >"$work/neg-$kind.stdout" 2>"$work/neg-$kind.stderr"; then
+    echo "FAIL immutable const $kind receiver compiled" >&2
+    exit 1
+  fi
+  test ! -e "$reject_artifact" || {
+    echo "FAIL immutable const $kind rejection left executable artifact" >&2
+    exit 1
+  }
+  if ! grep -Eiq 'borrow|mutab|read-only|immutable|ownership|const[ -]receiver' \
+     "$work/neg-$kind.stdout" "$work/neg-$kind.stderr"; then
+    echo "FAIL immutable const $kind rejected without ownership diagnostic" >&2
+    sed -n '1,35p' "$work/neg-$kind.stderr" >&2
+    exit 1
+  fi
+  echo "STD_TIME_CONST_MUT_SELF_COMPILE_REJECTED=$kind"
+done
 echo "STD_TIME_VERIFIED_GUEST_EXECUTED"
