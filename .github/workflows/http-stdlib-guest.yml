@@ -1,0 +1,24 @@
+name: Native .atto HTTP message-policy guest
+on:
+  pull_request:
+    paths:
+      - 'stdlib/http/message_policy.atto'
+      - 'tests/http_stdlib/**'
+      - 'ci/test_http_stdlib_policy.sh'
+      - '.github/workflows/http-stdlib-guest.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-http-guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain inventory
+        run: |
+          rustc --version
+          cargo --version
+          clang --version
+      - name: Compile Atto guest to native executable and run 34 cases
+        run: bash ci/test_http_stdlib_policy.sh
