@@ -8,6 +8,9 @@ on:
       - 'tests/std-metrics-json-zorde-source-contract.test.mjs'
       - 'contracts/std-metrics-json-zorde-source-v1.json'
       - '.github/workflows/atto-metrics-json-zorde-source.yml'
+      - 'contracts/core-borrow-preflight-v1.json'
+      - 'tests/core-borrow-preflight-source.test.mjs'
+      - 'stdlib/core/borrow_admission.atto'
   workflow_dispatch:
 permissions:
   contents: read
@@ -32,5 +35,6 @@ jobs:
           test -z "$(git ls-files --others --exclude-standard)"
           echo "ATTO_LLVM_STDLIB_TREE=$(git rev-parse 'HEAD^{tree}')"
           node --test tests/std-metrics-json-zorde-source-contract.test.mjs
+          node --test tests/core-borrow-preflight-source.test.mjs
           echo 'ATTO_LLVM_STDLIB_SOURCE_CONTRACT=PASS'
           echo 'ATTO_LLVM_STDLIB_GUEST_EXECUTION=NOT_EXECUTED'
