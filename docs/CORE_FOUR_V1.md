@@ -61,3 +61,21 @@ advertising Cell<T> or RefCell<T>, the frontend/runtime must implement:
 Do not conflate runtime policy function tests with real compiler borrow tests.
 An unauthorized cross-org private source export is prohibited. Any Actions job
 with zero actual steps is NOT_EXECUTED, not a test failure or success.
+
+## 2026-11-22 conservative Cell policy and compiler borrow gate
+
+`core/cell.atto` now includes `is_valid_state`, `may_owner_read`,
+`may_owner_write`, `may_move_owner`, and
+`may_suspend_unpinned`. The pure counter predicates cannot issue
+borrow tokens; a signed counter of -1 represents an exclusive loan and
+0 an unborrowed owner. Direct owner writes/moves and unpinned suspension
+are denied while any loan is live. Actual actor generation, ownership
+provenance, loan escape and lifetime rights MUST come from the compiler.
+
+The core-four fixture checks the new predicates as an actual Atto guest
+*when compiler CI executes*. Compiler-negative fixtures
+`borrow-use-after-take.atto` and `borrow-escape.atto` require
+rejection with zero published artifacts. The LLVM registry's embedded `GeneratedCoreCellAtto.inc` must remain byte-for-byte equal to `core/cell.atto`; the exact-head O0/O2 native workflow now demands two compiler-negative, zero-IR witnesses.
+
+All candidate additions remain **NOT_EXECUTED** until real compiler,
+native/JVM guest, and material exact-head CI steps are observed.
