@@ -34,7 +34,8 @@ define module arc as
     // Existing weak owners may duplicate their weak interest after strong=0;
     // they must never resurrect the already-dropped payload.
     pub try_clone_weak(mut self)(): bool {
-      if self.weak < 1 || self.weak >= 1048576; do
+      if self.weak < 1 || self.weak >= 1048576 ||
+         ((self.strong > 0 || self.pending_drop) && self.weak == 1); do
         return false;
       fi
       self.weak = self.weak + 1;
