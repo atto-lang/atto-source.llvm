@@ -47,3 +47,17 @@ Reconstructed the exact four Git source blobs of `native/include/atto/host_env_s
 Added explicit rejection of embedded NUL values, with a native negative case; the entire four-cell local sanitizer matrix was rerun successfully on the new exact blobs.
 
 These are **LOCAL HOST-ONLY** results, not real .atto guest compilation. The GitHub `std-env host snapshot v1 (HOST ONLY)` matrix failed before any job steps executed (source-org runner admission issue). Treat GitHub CI as **NOT_EXECUTED** until exact-head, stepful runs complete. No hard-RT safety certification is implied.
+
+## Coarse ENV admission-before-metadata hardening (2026-11-22)
+
+`atto_host_env_create_v1` now checks `env->coarse` before it reads an
+entry's `name` pointer. The native test includes an intentionally poisoned
+`(const char*)(uintptr_t)1` key with a denied coarse capability, proving a
+correct implementation must neither dereference the name nor the value.
+This regression is intended for GCC/Clang O1/O2 with ASan+UBSan in
+`scripts/test-native-host-env-v1.sh`.
+
+**The previous 4/4 local sanitizer receipt predates this new regression**.
+The updated exact-head native test is NOT_EXECUTED in material CI, and
+there is no new current-source local compiler execution receipt. No LLVM
+guest `.atto` import/link/AOT parity proof is implied.
