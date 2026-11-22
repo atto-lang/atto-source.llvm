@@ -444,6 +444,35 @@ fn admit_freestanding_tokens(
     Ok(())
 }
 
+/// Core/import borrow boundary for this deliberately scalar-only native
+/// compiler slice. No implicit borrow, class ownership, heap handle, stream
+/// or generator may cross an imported std.http function signature. Extending
+/// this surface to non-Copy types requires a real lifetime-aware borrow proof,
+/// not merely adding a type to the LLVM emitter.
+fn validate_http_core_copy_boundary(
+    library: &atto_compiler::ast::Program,
+) -> Result<(), String> {
+    use atto_compiler::ast::Type;
+    if library.funcs.is_empty() || !library.classes.is_empty()
+        || !library.actors.is_empty() || !library.enums.is_empty()
+        || library.actor_interface.is_some() || !library.type_names.is_empty()
+    {
+        return Err("E_NATIVE_IMPORT_BORROW: std.http may expose only closed scalar functions".into());
+    }
+    for function in &library.funcs {
+        if function.is_generator
+            || !matches!(function.ret, Type::Int | Type::Bool)
+            || function.params.iter().any(|p| !matches!(p.ty, Type::Int | Type::Bool))
+        {
+            return Err(format!(
+                "E_NATIVE_IMPORT_BORROW: non-Copy or effectful core function '{}'",
+                function.name
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Resolve the *compiler-owned* HTTP scalar library as a separate parsed
 /// source unit before type checking. The bootstrap frontend has no general
 /// module AST, so this initial native import slice admits only qualified,
@@ -505,12 +534,7 @@ fn link_registered_http_import(
     let library = atto_compiler::parser::Parser::new(library_tokens.clone())
         .parse_program()
         .map_err(|e| format!("E_NATIVE_IMPORT_LIBRARY_PARSE: {e}"))?;
-    if library.funcs.is_empty() || !library.classes.is_empty()
-        || !library.actors.is_empty() || !library.enums.is_empty()
-        || library.actor_interface.is_some() || !library.type_names.is_empty()
-    {
-        return Err("E_NATIVE_IMPORT_LIBRARY_SHAPE: std.http must contain only scalar functions".into());
-    }
+    validate_http_core_copy_boundary(&library)?;
     let library_names: BTreeSet<String> = library.funcs.iter()
         .map(|func| func.name.clone()).collect();
     if library_names.len() != library.funcs.len() || library_names.contains("main") {
@@ -946,6 +970,44 @@ mod tests {
         // to native LLVM; no interpreter or synthetic hardcoded exit 42.
         assert!(ir.contains("@atto_func_"), "{ir}");
         assert!(ir.contains("llvm.trap"), "{ir}");
+    }
+
+    #[test]
+    fn imported_core_http_signature_rejects_non_copy_and_generator_abises() {
+        use atto_compiler::ast::Type;
+        let toks=atto_compiler::lexer::lex(include_str!("../stdlib/http/message_policy.atto"))
+            .expect("compiler-owned HTTP library lexes");
+        let original=atto_compiler::parser::Parser::new(toks).parse_program()
+            .expect("compiler-owned HTTP policy parses");
+        validate_http_core_copy_boundary(&original)
+            .expect("pure, scalar int/bool ABI is admitted");
+
+        let mut non_copy=original.clone();
+        non_copy.funcs[0].ret=Type::Class(0);
+        let err=validate_http_core_copy_boundary(&non_copy).unwrap_err();
+        assert!(err.contains("E_NATIVE_IMPORT_BORROW"), "{err}");
+
+        let mut borrowed=original.clone();
+        borrowed.funcs[0].params[0].ty=Type::Str;
+        let err=validate_http_core_copy_boundary(&borrowed).unwrap_err();
+        assert!(err.contains("E_NATIVE_IMPORT_BORROW"), "{err}");
+
+        let mut suspended=original.clone();
+        suspended.funcs[0].is_generator=true;
+        let err=validate_http_core_copy_boundary(&suspended).unwrap_err();
+        assert!(err.contains("E_NATIVE_IMPORT_BORROW"), "{err}");
+
+        let mut module_like=original.clone();
+        module_like.classes.push(atto_compiler::ast::ClassDecl {
+            name: "Forbidden".into(),
+            pos: Default::default(),
+            public: true,
+            fields: vec![],
+            ctor: None,
+            methods: vec![],
+        });
+        let err=validate_http_core_copy_boundary(&module_like).unwrap_err();
+        assert!(err.contains("E_NATIVE_IMPORT_BORROW"), "{err}");
     }
 
     #[test]
