@@ -258,7 +258,7 @@ mod tests {
 
     #[test]
     fn closed_scalar_is_pure_and_no_alloc() {
-        let p = program(vec![vec![TStmt::Return(Some(e(TExpr::I64(42)))] )]]);
+        let p = program(vec![vec![TStmt::Return(Some(e(TExpr::I64(42))))]]);
         for mode in [Profile::Pure, Profile::Deterministic, Profile::NoAlloc] {
             assert!(admit(&p, mode).is_ok());
         }
