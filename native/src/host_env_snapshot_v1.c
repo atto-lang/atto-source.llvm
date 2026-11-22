@@ -177,8 +177,11 @@ atto_host_env_status_v1 atto_host_env_create_v1(
         if (!env->items) { status = ATTO_ENV_V1_NO_MEMORY; goto failed; }
     }
     for (size_t i = 0; i < entry_count; ++i) {
+        // No coarse capability: do not dereference a single host entry name,
+        // even if the trusted snapshot points at inaccessible storage.
+        if (!env->coarse) continue;
         const char *key = entries[i].name;
-        if (!valid_key(key) || !env->coarse || !allowed_key(env, key)) continue;
+        if (!valid_key(key) || !allowed_key(env, key)) continue;
         if (entries[i].value_length > MAX_VALUE ||
             !valid_utf8(entries[i].value, entries[i].value_length)) {
             status = ATTO_ENV_V1_INVALID; goto failed;
