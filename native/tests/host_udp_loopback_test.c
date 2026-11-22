@@ -56,7 +56,11 @@ int main(void) {
     assert(atto_udp_loopback_send(a,(unsigned)bp,NULL,1,&sent)==-EINVAL);
     denied_port=(unsigned)bp;
     assert(atto_udp_loopback_send(a,(unsigned)bp,out,1,&sent)==-EACCES);
+    /* Denied endpoint must win before examining invalid payload length.
+     * Under an allowed endpoint the same oversize is a validation error. */
+    assert(atto_udp_loopback_send(a,(unsigned)bp,out,65508u,&sent)==-EACCES && sent==0);
     denied_port=0;
+    assert(atto_udp_loopback_send(a,(unsigned)bp,out,65508u,&sent)==-EINVAL && sent==0);
     const uint8_t pkt[]={1,0,2,3};
     assert(atto_udp_loopback_send(a,(unsigned)bp,pkt,4,&sent)==0 && sent==4);
     assert(read_next(b,out,sizeof(out),&n,&source)==0 && n==4 && source==(unsigned)ap);
