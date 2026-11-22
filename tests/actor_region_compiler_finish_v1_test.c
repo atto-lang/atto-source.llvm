@@ -50,7 +50,8 @@ enum BadFinish {
     DUPLICATE_OWNER, EXTRA_UNLISTED_OWNER, BORROWED_LAST_OWNER,
     STALE_LATER_GENERATION, FORGED_LATER_OFFSET, FOREIGN_LATER_DOMAIN,
     MISSING_COUNT, EXCESSIVE_COUNT, NULL_OWNER_POINTER,
-    STALE_TURN, ALREADY_DROPPED_OWNER
+    STALE_TURN, ALREADY_DROPPED_OWNER, READ_AFTER_RETIRE,
+    WRITE_AFTER_RETIRE, ALLOC_AFTER_RETIRE
 };
 
 static void attempt_bad(enum BadFinish scenario) {
@@ -95,6 +96,21 @@ static void attempt_bad(enum BadFinish scenario) {
         case ALREADY_DROPPED_OWNER:
             ores_actor_region_v1_compiler_drop(arena, &turn, &refs[0]);
             break;
+        case READ_AFTER_RETIRE:
+            ores_actor_region_v1_retire(arena);
+            (void)ores_actor_region_v1_compiler_read_i64(
+                arena, &turn, &refs[0], 0);
+            return;
+        case WRITE_AFTER_RETIRE:
+            ores_actor_region_v1_retire(arena);
+            ores_actor_region_v1_compiler_write_i64(
+                arena, &turn, &refs[0], 0, 3);
+            return;
+        case ALLOC_AFTER_RETIRE:
+            ores_actor_region_v1_retire(arena);
+            ores_actor_region_v1_compiler_alloc(
+                arena, &turn, 8, &refs[0]);
+            return;
     }
     ores_actor_region_v1_compiler_finish(arena, &turn, order, 2);
 }
@@ -121,7 +137,7 @@ int main(void) {
             CHECK(success_batch(count, incarnation) == 0);
     }
 #if defined(__unix__) || defined(__APPLE__)
-    for (int scenario = DUPLICATE_OWNER; scenario <= ALREADY_DROPPED_OWNER; ++scenario)
+    for (int scenario = DUPLICATE_OWNER; scenario <= ALLOC_AFTER_RETIRE; ++scenario)
         CHECK(must_abort((enum BadFinish)scenario));
 #endif
     puts("ACTOR_REGION_COMPILER_ATOMIC_FINISH_HOST_PASS");
