@@ -67,6 +67,65 @@ jobs:
             "$RUNNER_TEMP/std-guest-O$opt"
             echo "LLVM_ATTO_STD_REAL_GUEST=EXECUTED opt=$opt"
           done
+      - name: Reject unsupported std import spellings, traversal, shadowing and freestanding admission
+        shell: bash
+        run: |
+          set -euo pipefail
+          compiler="$RUNNER_TEMP/std-backend/oreslang-llvmc"
+          mkdir -p "$RUNNER_TEMP/std-negative/std"
+          # An application-owned lookalike must not replace the compiler-owned module.
+          cat > "$RUNNER_TEMP/std-negative/std/path.atto" <<'ATTO'
+          define module path as
+            pub fnc is_separator(int scalar, bool windows): bool { return false; }
+          end
+          ATTO
+          cat > "$RUNNER_TEMP/std-negative/shadow.atto" <<'ATTO'
+          import module path from "std/path";
+          pub fnc main(): int {
+            if path.is_separator(47, false) then return 0; fi
+            return 37;
+          }
+          ATTO
+          "$compiler" --target=host "$RUNNER_TEMP/std-negative/shadow.atto" > "$RUNNER_TEMP/std-shadow.ll"
+          test -s "$RUNNER_TEMP/std-shadow.ll"
+          clang -O2 -x ir "$RUNNER_TEMP/std-shadow.ll" -o "$RUNNER_TEMP/std-shadow.bin"
+          "$RUNNER_TEMP/std-shadow.bin"
+          echo "LLVM_STD_SHADOW_PROTECTION=EXECUTED"
+
+          reject_import() {
+            local name="$1" spelling="$2" diagnostic="$3"
+            printf 'import module path from "%s"; pub fnc main():int{return 0;}\n' "$spelling" \
+              > "$RUNNER_TEMP/std-negative/$name.atto"
+            if "$compiler" --target=host "$RUNNER_TEMP/std-negative/$name.atto" \
+              > "$RUNNER_TEMP/std-negative/$name.ll" 2> "$RUNNER_TEMP/std-negative/$name.err"; then
+              echo "::error::Forbidden std source import succeeded: $name" >&2
+              exit 1
+            fi
+            test ! -s "$RUNNER_TEMP/std-negative/$name.ll"
+            grep -Fq "$diagnostic" "$RUNNER_TEMP/std-negative/$name.err"
+            echo "LLVM_STD_FAIL_CLOSED=$name"
+          }
+          reject_import legacy "std/path.ores" "native ores.std package resolution remains unsupported"
+          reject_import unknown "std/does_not_exist" "native ores.std package resolution remains unsupported"
+          reject_import traversal "std/../path" "native ores.std package resolution remains unsupported"
+          reject_import extension "std/path.atto.bak" "native ores.std package resolution remains unsupported"
+          reject_import other "atto.std/otp" "native atto.std package resolution remains unsupported"
+
+          cat > "$RUNNER_TEMP/std-negative/freestanding.atto" <<'ATTO'
+          import module path from "std/path";
+          pub fnc main():int{return path.component_kind(1,97,0);}
+          ATTO
+          if "$compiler" --library-profile=core --target=wasm32-unknown-unknown \
+            "$RUNNER_TEMP/std-negative/freestanding.atto" \
+            > "$RUNNER_TEMP/std-negative/freestanding.ll" \
+            2> "$RUNNER_TEMP/std-negative/freestanding.err"; then
+            echo "::error::Freestanding std import succeeded unexpectedly" >&2
+            exit 1
+          fi
+          test ! -s "$RUNNER_TEMP/std-negative/freestanding.ll"
+          grep -Fq 'hosted compiler-owned std/* requires --target=host' \
+            "$RUNNER_TEMP/std-negative/freestanding.err"
+          echo "LLVM_STD_FREESTANDING_IMPORT_DENIED=EXECUTED"
       - name: Compile sanitized native guest and run actual instrumentation
         shell: bash
         env:
