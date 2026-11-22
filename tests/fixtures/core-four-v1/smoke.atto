@@ -1,0 +1,43 @@
+// LLVM-owned Atto source; independent of other compiler repository implementations.
+// Compile and execute using the real Atto compiler; expected process exit: 42.
+// Not certified by the existence of this file or by a host-language model.
+import module range from "std/core/range";
+import module num from "std/core/num";
+import module cell from "std/core/cell";
+import module contracts from "std/core/contracts";
+pub fnc main(): int {
+  if !range.contains(1, 5, 4) || range.contains(1, 5, 5); do
+    return 1;
+  fi
+  if !range.contains_inclusive(1, 5, 5); do
+    return 2;
+  fi
+  if range.overlaps(1, 2, 2, 3); do
+    return 3;
+  fi
+  if !range.overlaps_inclusive(1, 2, 2, 3); do
+    return 4;
+  fi
+  if range.can_step_forward_inclusive(9223372036854775807, 9223372036854775807, 1); do
+    return 5;
+  fi
+  if num.can_add(9223372036854775807, 1); do
+    return 6;
+  fi
+  if num.wrapping_add(9223372036854775807, 1) != -9223372036854775808; do
+    return 7;
+  fi
+  if num.wrapping_sub(-9223372036854775808, 1) != 9223372036854775807; do
+    return 8;
+  fi
+  if num.saturating_mul(-9223372036854775808, -1) != 9223372036854775807; do
+    return 9;
+  fi
+  if !cell.may_borrow_shared(0) || cell.may_borrow_exclusive(-1); do
+    return 10;
+  fi
+  contracts.requires(contracts.check(true), "core contract precondition");
+  contracts.ensures(true, "core contract postcondition");
+  contracts.invariant(true, "core contract invariant");
+  return 42;
+}
