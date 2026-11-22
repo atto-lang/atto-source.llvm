@@ -354,10 +354,58 @@ llvm::Value* lower(const Expression& expr,
                 inst->setAtomic(order);
                 return inst;
             }
+            // The language's signed fetch_add is checked: atomicrmw add
+            // silently wraps on overflow. Instead preflight each observed
+            // value, then publish only through one strong CAS linearization.
+            // A losing CAS must recompute overflow from the NEW observed
+            // value; the initial load alone cannot authorize publication.
             auto* delta = lower(*expr.arguments.front(), builder, i64, storage,
                                 field_storage, functions, moves);
-            return builder.CreateAtomicRMW(llvm::AtomicRMWInst::Add,
-                found->second, delta, llvm::MaybeAlign(8), order);
+            auto* parent = builder.GetInsertBlock()->getParent();
+            auto* module = builder.GetInsertBlock()->getModule();
+            auto& context = builder.getContext();
+            auto* retry = llvm::BasicBlock::Create(
+                context, "atto.atomic.checked.retry", parent);
+            auto* overflow = llvm::BasicBlock::Create(
+                context, "atto.atomic.checked.overflow", parent);
+            auto* exchange = llvm::BasicBlock::Create(
+                context, "atto.atomic.checked.cas", parent);
+            auto* finished = llvm::BasicBlock::Create(
+                context, "atto.atomic.checked.done", parent);
+            builder.CreateBr(retry);
+            builder.SetInsertPoint(retry);
+            auto* current = builder.CreateLoad(
+                i64, found->second, "atto.atomic.checked.observed");
+            current->setAlignment(llvm::Align(8));
+            current->setAtomic(llvm::AtomicOrdering::Monotonic);
+            auto* intrinsic = native_intrinsic_declaration(
+                module, llvm::Intrinsic::sadd_with_overflow, {i64});
+            auto* pair = builder.CreateCall(
+                intrinsic, {current, delta}, "atto.atomic.checked.pair");
+            auto* next = builder.CreateExtractValue(
+                pair, {0}, "atto.atomic.checked.next");
+            auto* wrapped = builder.CreateExtractValue(
+                pair, {1}, "atto.atomic.checked.wrapped");
+            builder.CreateCondBr(wrapped, overflow, exchange);
+            builder.SetInsertPoint(overflow);
+            builder.CreateCall(native_intrinsic_declaration(
+                module, llvm::Intrinsic::trap));
+            builder.CreateUnreachable();
+            builder.SetInsertPoint(exchange);
+            const auto failed_order =
+                order == llvm::AtomicOrdering::Release
+                    ? llvm::AtomicOrdering::Monotonic
+                    : order == llvm::AtomicOrdering::AcquireRelease
+                        ? llvm::AtomicOrdering::Acquire : order;
+            auto* cas = builder.CreateAtomicCmpXchg(
+                found->second, current, next, llvm::MaybeAlign(8),
+                order, failed_order);
+            cas->setWeak(false);
+            auto* exchanged = builder.CreateExtractValue(
+                cas, {1}, "atto.atomic.checked.exchanged");
+            builder.CreateCondBr(exchanged, finished, retry);
+            builder.SetInsertPoint(finished);
+            return current;
         }
         case Expression::Kind::ArrayCall: {
             if (!expr.left)
