@@ -115,6 +115,11 @@ struct OresNativeActorScheduler {
     uint32_t affinity_window;
     unsigned char head_skips[TURN_CLASSES];
     uint64_t affine_picks;
+    /* Measured on accepted physical turns under the scheduler lock. These
+     * count actor-carrier switches, NOT hardware cache misses or ownership
+     * transfers. No allocation, syscall, or extra hot-path atomic. */
+    uint64_t carrier_migrations;
+    uint64_t continuation_migrations; /* WAKE / TASK only */
     /* Carriers parked in pthread_cond_wait(ready) / busy-polling work_epoch.
      * Both change only under `lock`, which is what makes skipping a signal
      * safe: a producer that sees a spinner knows it will re-check under the
@@ -368,7 +373,11 @@ enum { AFFINITY_WINDOW_DEFAULT = 8, AFFINITY_WINDOW_MAX = 64, AFFINITY_MAX_HEAD_
  * Never leaves a runnable turn waiting for a particular carrier. */
 static size_t pick_affine_locked(OresNativeActorScheduler* s, int k, size_t self) {
     const uint32_t head = s->rq_head[k];
-    if (s->affinity_window == 0 || s->head_skips[k] >= AFFINITY_MAX_HEAD_SKIPS
+    /* With only one started carrier, scanning actor queue nodes cannot
+     * improve locality and only pollutes L1/L2. Keep FIFO until a second
+     * physical worker has actually started. */
+    if (s->started_workers <= 1 || s->affinity_window <= 1
+            || s->head_skips[k] >= AFFINITY_MAX_HEAD_SKIPS
             || s->actors[head].last_carrier1 == (uint32_t)self + 1) {
         s->head_skips[k] = 0;
         return head;
@@ -557,7 +566,17 @@ static void* carrier(void* raw) {
                 ? (consecutive < 2 ? consecutive + 1 : 2) : 1;
         recent_actor = i;
         ActorLane* lane = &s->actors[i];
-        lane->last_carrier1 = (uint32_t)slot->index + 1;
+        const uint32_t previous_carrier1 = lane->last_carrier1;
+        const uint32_t current_carrier1 = (uint32_t)slot->index + 1;
+        /* Reuse the existing per-actor hint, while the dispatch lock is
+         * held; never consult OS thread ids or add global cache-line writes. */
+        if (previous_carrier1 && previous_carrier1 != current_carrier1) {
+            if (s->carrier_migrations != UINT64_MAX) ++s->carrier_migrations;
+            if ((kind == TURN_WAKE || kind == TURN_TASK)
+                    && s->continuation_migrations != UINT64_MAX)
+                ++s->continuation_migrations;
+        }
+        lane->last_carrier1 = current_carrier1;
         uint64_t payload = 0;
         uint64_t original_mail_sequence = 0;
         OresNativeActorTerminalFailure failure = {0};
@@ -1134,6 +1153,8 @@ OresNativeActorRef ores_native_actor_scheduler_spawn(
     }
     ActorLane* a = &s->actors[i];
     a->spawned = 1;
+    /* A fresh incarnation must not inherit an older actor's cache hint. */
+    a->last_carrier1 = 0;
     a->generation = a->authority.generation;
     a->allocation_domain = (OresNativeAllocationDomainRef){
         ORES_ALLOCATION_DOMAIN_ACTOR,
@@ -1958,4 +1979,21 @@ uint64_t ores_native_actor_scheduler_affine_picks(OresNativeActorScheduler* s) {
     const uint64_t picks = s->affine_picks;
     unlock(s);
     return picks;
+}
+
+/* Observability only: a carrier switch does not transfer execution authority.
+ * Both counters are read under the scheduler lock and saturate on overflow. */
+uint64_t ores_native_actor_scheduler_carrier_migrations(OresNativeActorScheduler* s) {
+    if (!s) return 0;
+    lock(s);
+    const uint64_t count = s->carrier_migrations;
+    unlock(s);
+    return count;
+}
+uint64_t ores_native_actor_scheduler_continuation_migrations(OresNativeActorScheduler* s) {
+    if (!s) return 0;
+    lock(s);
+    const uint64_t count = s->continuation_migrations;
+    unlock(s);
+    return count;
 }
