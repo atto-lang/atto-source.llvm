@@ -11,8 +11,8 @@ cd "$root"
 [[ -z "$(git status --porcelain --untracked-files=no)" ]] || {
   echo 'core-four: dirty tracked source' >&2; exit 65;
 }
-compiler="$root/build/oreslang-llvmc"
-auditor="$root/build/oreslang-no-gc-ir-audit"
+compiler="${ORESLANG_LLVMC:-$root/build/oreslang-llvmc}"
+auditor="${ORES_NO_GC_IR_AUDIT:-$root/build/oreslang-no-gc-ir-audit}"
 [[ -x "$compiler" && -x "$auditor" ]] || {
   echo 'core-four: compiled llvmc and no-GC IR auditor required' >&2; exit 69;
 }
