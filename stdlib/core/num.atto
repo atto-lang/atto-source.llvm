@@ -133,4 +133,33 @@ define module num as
     fi
     return left - right;
   }
+  // 63-bit shift-and-add using checked modular additions. MIN multiplier
+  // is handled separately so negating the multiplier cannot overflow.
+  pub fnc wrapping_mul(int left, int right): int {
+    if right == -9223372036854775808; do
+      if left % 2 != 0; do
+        return -9223372036854775808;
+      fi
+      return 0;
+    fi
+    let int factor = right;
+    let bool negative = false;
+    if factor < 0; do
+      factor = -factor;
+      negative = true;
+    fi
+    let int product = 0;
+    let int term = left;
+    for (let int i = 0; i < 63; i = i + 1) {
+      if factor % 2 != 0; do
+        product = wrapping_add(product, term);
+      fi
+      factor = factor / 2;
+      term = wrapping_add(term, term);
+    }
+    if negative; do
+      return wrapping_sub(0, product);
+    fi
+    return product;
+  }
 end
