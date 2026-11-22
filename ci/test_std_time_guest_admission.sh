@@ -37,7 +37,8 @@ if ! "$compiler" "$source" -o "$candidate" >"$work/compile-stdout" 2>"$work/comp
     exit 1
   fi
   echo "STD_TIME_GUEST_UNSUPPORTED_NOT_PARITY"
-  exit 0
+  # Exit nonzero so a source job can NEVER be mistaken for positive parity.
+  exit 78
 fi
 # Unexpected acceptance must prove genuine ELF executable and exact guest
 # stdout. A compiler returning zero without output is ALWAYS a failure.
