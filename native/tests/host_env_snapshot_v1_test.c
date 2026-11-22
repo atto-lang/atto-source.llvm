@@ -41,6 +41,18 @@ int main(void) {
     assert(atto_host_env_get_v1(env, "PUBLIC_NAME", buf, sizeof buf, &count) == ATTO_ENV_V1_DENIED);
     atto_host_env_destroy_v1(env);
 
+    // With coarse ENV absent, not even a name pointer may be touched.
+    // A broken admission order would segfault/ASan-fail this case.
+    atto_host_env_entry_v1 unreadable[] = {
+        { (const char *)(uintptr_t)1, (const unsigned char *)(uintptr_t)1, 9 }
+    };
+    assert(atto_host_env_create_v1(unreadable, 1, allow, 1,
+                                   deny, 1, false, &env) == ATTO_ENV_V1_OK);
+    assert(env != NULL);
+    assert(atto_host_env_has_v1(env, "PUBLIC_NAME", &present) == ATTO_ENV_V1_DENIED);
+    atto_host_env_destroy_v1(env);
+    env = NULL;
+
     const char *bad_rules[] = { "A**" };
     assert(atto_host_env_create_v1(entries, 3, bad_rules, 1, deny, 1, true, &env) == ATTO_ENV_V1_INVALID);
     assert(env == NULL);
