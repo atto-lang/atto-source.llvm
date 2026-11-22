@@ -62,3 +62,65 @@ if(BUILD_TESTING)
     "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
   target_compile_options(oreslang-actor-slab-heap-bench PRIVATE -O2 -Wall -Wextra -Wpedantic -Werror)
 endif()
+
+# Prototype freestanding actor kernel: host harness exercises the same C11
+# implementation that compiles to ARM without libc or pthread dependencies.
+# This does NOT yet prove source-defined actor execution under QEMU.
+if(BUILD_TESTING)
+    add_executable(oreslang-freestanding-actor-kernel-test
+        tests/freestanding_actor_kernel_test.c
+        src/main/cpp/oreslang/runtime/FreestandingActorKernel.c)
+    target_include_directories(oreslang-freestanding-actor-kernel-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    if(MSVC)
+        target_compile_options(oreslang-freestanding-actor-kernel-test PRIVATE /UNDEBUG)
+    else()
+        target_compile_options(oreslang-freestanding-actor-kernel-test PRIVATE
+            -UNDEBUG -Wall -Wextra -Wpedantic -Werror)
+    endif()
+    add_test(NAME freestanding_actor_kernel_bounded_host
+        COMMAND oreslang-freestanding-actor-kernel-test)
+    set_tests_properties(freestanding_actor_kernel_bounded_host PROPERTIES TIMEOUT 15)
+    # Independent bounded-mailbox reference model. Deterministic 100k-step
+    # spawn/send/stop/snapshot/reset/turn matrix with stale-handle coverage.
+    add_executable(oreslang-freestanding-actor-kernel-model-test
+        tests/freestanding_actor_kernel_model_test.c
+        src/main/cpp/oreslang/runtime/FreestandingActorKernel.c)
+    target_include_directories(oreslang-freestanding-actor-kernel-model-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    if(MSVC)
+        target_compile_options(oreslang-freestanding-actor-kernel-model-test PRIVATE /UNDEBUG)
+    else()
+        target_compile_options(oreslang-freestanding-actor-kernel-model-test PRIVATE
+            -UNDEBUG -Wall -Wextra -Wpedantic -Werror)
+    endif()
+    add_test(NAME freestanding_actor_kernel_model_100k
+        COMMAND oreslang-freestanding-actor-kernel-model-test)
+    set_tests_properties(freestanding_actor_kernel_model_100k PROPERTIES TIMEOUT 30)
+endif()
+
+# Standalone MCU firmware with C actor handlers, not Oreslang source actors.
+# Only register the positive + negative QEMU gate when all tools exist.
+# CI targeting freestanding Cortex-M MUST set ORE_REQUIRE_CORTEXM_QEMU=ON,
+# so missing emulator/toolchain cannot silently reduce test coverage.
+option(ORE_REQUIRE_CORTEXM_QEMU "Require Cortex-M3/QEMU actor runtime validation" OFF)
+if(BUILD_TESTING)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    find_program(ORE_CORTEXM_ARM_CLANG NAMES clang-18 clang)
+    find_program(ORE_CORTEXM_READELF NAMES readelf llvm-readelf)
+    find_program(ORE_CORTEXM_QEMU NAMES qemu-system-arm)
+    if(ORE_REQUIRE_CORTEXM_QEMU AND
+            (NOT ORE_CORTEXM_ARM_CLANG OR NOT ORE_CORTEXM_READELF OR NOT ORE_CORTEXM_QEMU))
+        message(FATAL_ERROR "Cortex-M actor QEMU test requires clang, readelf and qemu-system-arm")
+    endif()
+    if(ORE_CORTEXM_ARM_CLANG AND ORE_CORTEXM_READELF AND ORE_CORTEXM_QEMU)
+        add_test(NAME freestanding_actor_kernel_cortexm_qemu_positive_negative
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/freestanding_actor_kernel_qemu.py"
+                --clang "${ORE_CORTEXM_ARM_CLANG}"
+                --readelf "${ORE_CORTEXM_READELF}"
+                --qemu "${ORE_CORTEXM_QEMU}")
+        set_tests_properties(freestanding_actor_kernel_cortexm_qemu_positive_negative
+            PROPERTIES TIMEOUT 120)
+    endif()
+endif()
