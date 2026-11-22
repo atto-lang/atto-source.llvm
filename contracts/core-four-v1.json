@@ -17,7 +17,15 @@
   "cell": {
     "scope": "BORROW_STATE_POLICY_ONLY",
     "state": "-1 exclusive;0 idle;1..MAX shared count",
-    "non_capability": "No Cell<T>, RefCell<T>, reference issuance, actor ownership, or lifetime guarantees until compiler gates are verified"
+    "non_capability": "No Cell<T>, RefCell<T>, reference issuance, actor ownership, or lifetime guarantees until compiler gates are verified",
+    "owner_policy": {
+      "is_valid_state": "state>=-1; -2 and smaller are invalid",
+      "may_owner_read": "state>=0; owner reads denied during exclusive loan",
+      "may_owner_write": "state==0; direct writes denied while any loan exists",
+      "may_move_owner": "state==0; move/take denied while any loan exists",
+      "may_suspend_unpinned": "state==0; no active shared/exclusive loan may cross unpinned suspension",
+      "capability": "POLICY_ONLY_NO_AUTHORITY; compiler must prove root identity, take/use-after-move, escaping loans, actor generation and suspension rights"
+    }
   },
   "contracts": {
     "failure": "rt fail;trappable;never optimized out",
@@ -25,7 +33,9 @@
   },
   "fixtures": {
     "tests/fixtures/core-four-v1/smoke.atto": "guest exit 42",
-    "tests/fixtures/core-four-v1/contract-failure.atto": "guest must fail; never exit 42"
+    "tests/fixtures/core-four-v1/contract-failure.atto": "guest must fail; never exit 42",
+    "tests/fixtures/core-four-v1/borrow-use-after-take.atto": "compiler negative; moved/taken owner must not be readable; zero guest",
+    "tests/fixtures/core-four-v1/borrow-escape.atto": "compiler negative; local borrow cannot be returned/escape; zero guest"
   },
   "evidence_requirements": [
     "source SHA",
@@ -35,7 +45,10 @@
     "typecheck",
     "AOT/JIT guest exit",
     "negative trap",
-    "ownership/lifetime negatives"
+    "ownership/lifetime negatives",
+    "compiler-negative use-after-take/no artifact",
+    "compiler-negative escaped borrow/no artifact",
+    "byte-identical embedded core cell source on LLVM"
   ],
   "prohibit": [
     "source_presence_as_guest_pass",
