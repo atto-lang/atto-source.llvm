@@ -1,0 +1,31 @@
+name: Rust source-actor test driver compilation
+on:
+  push:
+    paths:
+      - 'tests/source_actor_e2e.rs'
+      - 'docs/RUST_SOURCE_ACTOR_E2E.md'
+      - '.github/workflows/rust-source-actor-driver.yml'
+  pull_request:
+    paths:
+      - 'tests/source_actor_e2e.rs'
+      - 'docs/RUST_SOURCE_ACTOR_E2E.md'
+      - '.github/workflows/rust-source-actor-driver.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  rust_driver_source_only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Compile and unit-test Rust runner (not compiler guest evidence)
+        run: |
+          set -euo pipefail
+          rustc --edition=2021 --test -D warnings tests/source_actor_e2e.rs -o /tmp/atto-source-actor-tests
+          /tmp/atto-source-actor-tests
+          rustc --edition=2021 -O -D warnings tests/source_actor_e2e.rs -o /tmp/atto-source-actor-e2e
+          echo 'RUST_DRIVER_UNIT_TESTED=PASS'
+          echo 'REAL_LLVM_ATTO_GUEST_EXECUTED=false'

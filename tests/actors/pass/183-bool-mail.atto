@@ -1,0 +1,18 @@
+// Boolean message payloads cross the mailbox as isolated scalar data.
+// expect-exit: 0
+// stdout-order: strict
+// expect-stdout: 1
+// expect-stdout: 0
+define actor Flag as
+    receive(ActorMail<bool> mail): void {
+        stdio.println(mail.value);
+        return;
+    }
+end
+
+pub fnc main(): int {
+    val worker = spawn Flag();
+    worker.send(true);
+    worker.send(false);
+    return 0;
+}

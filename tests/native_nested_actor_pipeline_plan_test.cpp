@@ -193,7 +193,7 @@ int main() {
         }, "aggregate slot");
         limits.max_total_slots = 2064;
         check(check_nested_actor_pipeline(
-            nested(16, PipeRestartStrategy::one_for_one), limits).total_slots == 2064,
+            nested(16, PipeRestartStrategy::one_for_one), limits).total_slots() == 2064,
             "exact slot quota should admit");
         limits.max_stages = 3;
         must_reject([&] { (void)check_nested_actor_pipeline(nested(),limits); }, "stage budget");

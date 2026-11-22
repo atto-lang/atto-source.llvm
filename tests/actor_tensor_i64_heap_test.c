@@ -38,6 +38,10 @@ static void expect_abort(int scenario) {
                 ores_actor_tensor_i64_drop(a_tensor, a_heap, a_turn);
                 break; /* read loan freezes drop */
             case 4:
+                /* One admitted turn per carrier: suspend A, run B, then try
+                 * to reach A's storage through B's heap authority. */
+                ores_actor_i64_heap_leave(a_heap, a_turn);
+                b_turn = ores_actor_i64_heap_enter(b_heap, 102, 1);
                 (void)ores_actor_tensor_i64_read(a_tensor, b_heap, b_turn,
                     1, 2, 2, 0);
                 break; /* foreign heap/actor authority */
@@ -79,20 +83,23 @@ int main(void) {
 
     a_heap = ores_actor_i64_heap_open(101, 1, 8);
     b_heap = ores_actor_i64_heap_open(102, 1, 8);
-    a_turn = ores_actor_i64_heap_enter(a_heap, 101, 1);
-    b_turn = ores_actor_i64_heap_enter(b_heap, 102, 1);
 
     int64_t av[5] = {3, 5, 7, 11, 13};
     int64_t bv[2] = {17, 19};
     OresActorTensorI64 a = {0}, b = {0}, moved = {0};
     a_tensor = &a;
     moved_tensor = &moved;
-    ores_actor_tensor_i64_init(&a, a_heap, a_turn, av, 5);
+    /* A native carrier runs at most one admitted actor turn at a time
+     * (ActorOwnedI64Heap carrier TLS), so A and B turns alternate. */
+    b_turn = ores_actor_i64_heap_enter(b_heap, 102, 1);
     ores_actor_tensor_i64_init(&b, b_heap, b_turn, bv, 2);
+    CHECK(ores_actor_tensor_i64_read(&b, b_heap, b_turn, 0, 2, 1, 0) == 17);
+    ores_actor_i64_heap_leave(b_heap, b_turn);
 
+    a_turn = ores_actor_i64_heap_enter(a_heap, 101, 1);
+    ores_actor_tensor_i64_init(&a, a_heap, a_turn, av, 5);
     CHECK(ores_actor_tensor_i64_read(&a, a_heap, a_turn, 1, 2, 2, 0) == 5);
     CHECK(ores_actor_tensor_i64_read(&a, a_heap, a_turn, 1, 2, 2, 1) == 11);
-    CHECK(ores_actor_tensor_i64_read(&b, b_heap, b_turn, 0, 2, 1, 0) == 17);
 
     OresActorTensorI64Loan loan = {0};
     ores_actor_tensor_i64_borrow_read(&a, a_heap, a_turn, &loan);
@@ -103,9 +110,11 @@ int main(void) {
     ores_actor_i64_heap_leave(a_heap, a_turn);
 
     /* Actor B continues independently while A's loan survives suspension. */
+    b_turn = ores_actor_i64_heap_enter(b_heap, 102, 1);
     ores_actor_tensor_i64_write(&b, b_heap, b_turn, 0, 2, 1, 1, 20);
     CHECK(ores_actor_tensor_i64_read(&b, b_heap, b_turn, 0, 2, 1, 1) == 20);
     ores_actor_tensor_i64_write(&b, b_heap, b_turn, 0, 2, 1, 1, 19);
+    ores_actor_i64_heap_leave(b_heap, b_turn);
 
     ores_actor_tensor_i64_release(&loan);
     a_turn = ores_actor_i64_heap_enter(a_heap, 101, 1);
@@ -126,6 +135,7 @@ int main(void) {
     CHECK(ores_actor_i64_heap_try_destroy(a_heap));
     a_heap = NULL;
 
+    b_turn = ores_actor_i64_heap_enter(b_heap, 102, 1);
     CHECK(ores_actor_tensor_i64_read(&b, b_heap, b_turn, 0, 2, 1, 0) == 17);
     CHECK(ores_actor_tensor_i64_read(&b, b_heap, b_turn, 0, 2, 1, 1) == 19);
     ores_actor_tensor_i64_drop(&b, b_heap, b_turn);

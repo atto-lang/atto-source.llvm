@@ -4,14 +4,14 @@ compiler="${CXX:-c++}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 log="$(mktemp)"
 trap 'rm -f "$log"' EXIT
-for scenario in PUBLIC_ISSUE FLOAT BOOL; do
+for scenario in PUBLIC_ISSUE PUBLIC_FENCE FLOAT BOOL; do
   if "$compiler" -std=c++17 -Wall -Wextra -Wpedantic -Werror \
       -I"$repo_root/src/main/cpp" -D"ORESLANG_TEST_NEGATIVE_$scenario" \
       -fsyntax-only "$repo_root/tests/native_region_negative_compile.cpp" >"$log" 2>&1; then
     echo "FAIL: $scenario was unexpectedly admitted" >&2
     exit 1
   fi
-  if [[ "$scenario" == PUBLIC_ISSUE ]]; then
+  if [[ "$scenario" == PUBLIC_ISSUE || "$scenario" == PUBLIC_FENCE ]]; then
     pattern='private'
   else
     pattern='unsigned 8/16/32/64-bit scalar'

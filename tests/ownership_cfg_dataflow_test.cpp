@@ -109,6 +109,20 @@ int main() {
         bad_generated.blocks = {{{op(Kind::Read, bad)}, {}}};
         assert(rejected([&] { verify(bad_generated); }));
     }
+    // A fieldless object's compiler-owned identity slot is a flat leaf place
+    // (OwnershipChecker emits "<owner>.$identity"); nothing may project
+    // through it and no other '$' leaf is admitted.
+    Graph identity_slot;
+    identity_slot.entry = {{"self.$identity", cell(kOwned)}};
+    identity_slot.blocks = {{{op(Kind::Read, "self.$identity")}, {}}};
+    verify(identity_slot);
+    for (const char* bad : {"self.$identity.a", "self.$identityx", "self.$ident",
+                            "self.a.$identity.b"}) {
+        Graph bad_identity;
+        bad_identity.entry = {{bad, cell(kOwned)}};
+        bad_identity.blocks = {{{op(Kind::Read, bad)}, {}}};
+        assert(rejected([&] { verify(bad_identity); }));
+    }
     Graph too_deep_path;
     std::string deep_key = "p";
     for (int i = 0; i < 16; ++i) deep_key += ".a";
@@ -602,6 +616,30 @@ int main() {
     bounded_graph.entry = {{"x", cell(kOwned)}};
     bounded_graph.blocks = {{{op(Kind::Read, "x")}, {}}};
     verify(bounded_graph);
+
+
+    // Suspension must reject all live lexical loans, including field loans.
+    Graph suspension_guard;
+    suspension_guard.entry = {{"x", cell(kOwned)}};
+    suspension_guard.blocks = {{{op(Kind::BorrowShared, "x"),
+                                 op(Kind::Suspend, ""),
+                                 op(Kind::ReleaseShared, "x")}, {}}};
+    assert(rejected([&] { verify(suspension_guard); }));
+    suspension_guard.blocks[0].operations = {
+        op(Kind::BorrowShared, "x"),
+        op(Kind::ReleaseShared, "x"),
+        op(Kind::Suspend, "")};
+    verify(suspension_guard);
+    suspension_guard.blocks[0].operations = {
+        op(Kind::BorrowExclusive, "x"), op(Kind::Suspend, "")};
+    assert(rejected([&] { verify(suspension_guard); }));
+    suspension_guard.entry = {{"x.field", cell(kOwned)}, {"x.other", cell(kOwned)}};
+    suspension_guard.blocks[0].operations = {
+        op(Kind::BorrowShared, "x.field"), op(Kind::Suspend, "")};
+    assert(rejected([&] { verify(suspension_guard); }));
+    suspension_guard.blocks[0].operations = {op(Kind::Suspend, ""),
+                                            op(Kind::Read, "x.other")};
+    verify(suspension_guard);
 
     return 0;
 }

@@ -3,6 +3,7 @@
 import argparse
 import pathlib
 import re
+import hashlib
 import subprocess
 import tempfile
 
@@ -66,6 +67,29 @@ def parse_actor_receipt(line):
         assert fields["ready"] == fields["processed"] == fields["last"] == 0, fields
     return fields
 
+
+# Canonical source bytes are also pinned in oreslang-platform-conformance
+# fixtures/mailbox-linearizability-v1/manifest.json. This pins the actual
+# guest fixture being compiled; do not replace it with a host-only simulation.
+_CANONICAL_ACTOR_GUEST_BLOBS = {
+    "source-actor-send.ores": "3050260bd65b019a2b00191fba9086971409511b",
+    "source-actor-interleaved-stop.ores": "c7488835f34e926dfa4c8766c8917301fe84da09",
+    "source-actor-send-after-stop.ores": "ba046cb355fd16d9b5f6f7b39ace45356ef497db",
+}
+
+def require_canonical_actor_guest_blobs(fixtures):
+    for name, expected_blob in _CANONICAL_ACTOR_GUEST_BLOBS.items():
+        path = fixtures / name
+        assert path.is_file() and not path.is_symlink(), (
+            "source actor guest fixture must be a regular file", name)
+        source = path.read_bytes()
+        assert 0 < len(source) < 16384, ("invalid fixture size", name)
+        marker = b"blob " + str(len(source)).encode("ascii") + bytes([0])
+        actual = hashlib.sha1(marker + source).hexdigest()
+        assert actual == expected_blob, (
+            "portable actor fixture drift; update conformance review first",
+            name, actual, expected_blob)
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--compiler", required=True)
@@ -75,10 +99,12 @@ def main():
     args = ap.parse_args()
     root = pathlib.Path(args.root)
     fixtures = root / "tests" / "fixtures"
+    require_canonical_actor_guest_blobs(fixtures)
     runtime = root / "src" / "main" / "cpp" / "oreslang" / "runtime"
     source_dirs = root / "src" / "main" / "cpp"
     positives = [
         ("source-actor-spawn-stop.ores", 1, 0, None),
+        ("source-actor-lazy-first-carrier.atto", 1, 2, 3),
         # Verify real compiled guest execution, not just IR text admission,
         # for all three source spellings of native instance on_message.
         ("source-actor-method-keyword.ores", 1, 2, 3),
@@ -178,13 +204,13 @@ def main():
             guest = run([args.compiler, *flags, str(fixtures / name)])
             assert guest.returncode == 0, (name, guest.stderr)
             assert guest.stdout.startswith("; ModuleID"), name
-            assert "oreslang_source_actor_spawn" in guest.stdout, name
-            assert "oreslang_source_actor_stop" in guest.stdout, name
+            assert "call i64 @oreslang_source_actor_spawn_id(" in guest.stdout, name
+            assert "oreslang_source_actor_stop_id" in guest.stdout, name
             if name not in {
                 "source-actor-spawn-stop.ores",
                 "source-actor-await-done.ores",
             }:
-                assert "oreslang_source_actor_send" in guest.stdout, name
+                assert "call void @oreslang_source_actor_send_id(" in guest.stdout, name
             if name in {
                 "source-actor-scoped-owned-i64.ores",
                 "source-actor-two-owned-heaps.ores",
@@ -202,24 +228,37 @@ def main():
             if name in {"source-actor-await-ready.ores",
                         "source-actor-await-worker.ores",
                         "source-actor-future-void-ready.ores"}:
-                assert "oreslang_source_actor_await_ready" in guest.stdout, name
+                assert "oreslang_source_actor_await_ready_id" in guest.stdout, name
                 assert "ready_continuation" in guest.stdout, name
                 # A runtime declaration or source text alone is not an await:
                 # require exactly one generated call to the CONTROL bridge.
                 calls = [line for line in guest.stdout.splitlines()
-                         if "call i64 @oreslang_source_actor_await_ready(" in line]
+                         if "call i64 @oreslang_source_actor_await_ready_id(" in line]
                 assert len(calls) == 1, (name, "expected one guest await", calls)
             if name == "source-actor-await-done.ores":
-                assert "oreslang_source_actor_request_stop" in guest.stdout, name
-                assert "oreslang_source_actor_await_done" in guest.stdout, name
+                assert "oreslang_source_actor_request_stop_id" in guest.stdout, name
+                assert "call i64 @oreslang_source_actor_await_done_id(" in guest.stdout, name
                 assert "done_continuation" in guest.stdout, name
-                assert "call void @oreslang_source_actor_request_stop" in guest.stdout, name
+                assert "call void @oreslang_source_actor_request_stop_id(" in guest.stdout, name
             if name == "source-actor-interleaved-stop.ores":
                 # IR call ordering must reflect lexical source ordering.
                 # Previous lowering grouped every send before every stop.
-                first_stop = guest.stdout.find("call void @oreslang_source_actor_stop")
-                final_send = guest.stdout.rfind("call void @oreslang_source_actor_send")
+                first_stop = guest.stdout.find("call void @oreslang_source_actor_stop_id(")
+                final_send = guest.stdout.rfind("call void @oreslang_source_actor_send_id(")
                 assert 0 <= first_stop < final_send, (name, "source actor effects reordered")
+            # Actor identity is now a by-value 64-bit incarnation ID,
+            # never a malloc pointer. Unused declarations do not count:
+            # real generated callsites MUST target the checked ABI.
+            forbidden = (
+                "call ptr @oreslang_source_actor_spawn(",
+                "call void @oreslang_source_actor_stop(",
+                "call void @oreslang_source_actor_send(",
+                "call void @oreslang_source_actor_request_stop(",
+                "call i64 @oreslang_source_actor_await_ready(",
+                "call i64 @oreslang_source_actor_await_done(",
+            )
+            assert not any(x in guest.stdout for x in forbidden), (
+                name, "legacy source actor pointer runtime callsite detected")
             ll = pathlib.Path(temp, name + ".ll")
             ll.write_text(guest.stdout)
             exe = pathlib.Path(temp, name + ".guest")
@@ -248,6 +287,11 @@ def main():
             assert len(vm_lines) == 1 and (
                 "domains=4 main=1 cold_carriers=0" in vm_lines[0]), (
                 name, vm_lines)
+            first_carrier = [line for line in executed.stderr.splitlines()
+                             if line.startswith("SOURCE_ACTOR_FIRST_CARRIER_READY ")]
+            assert first_carrier == [
+                "SOURCE_ACTOR_FIRST_CARRIER_READY main=1 shared=0 private=0 untrusted=0"
+            ], (name, "source actor carrier not ready at publication", first_carrier)
             if name in {"source-actor-await-ready.ores",
                         "source-actor-await-worker.ores",
                         "source-actor-future-void-ready.ores"}:

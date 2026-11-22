@@ -55,6 +55,12 @@ class ActorOwnedGraphHeap final {
                   "invalid actor graph capacity");
     static_assert(NodeBytes > 0, "node payload must have positive size");
     static_assert(LinksPerNode > 0, "node link capacity must be positive");
+    // Per-node bookkeeping is stored in 32 bits on every host (see Slot).
+    static_assert(NodeBytes <= std::numeric_limits<std::uint32_t>::max()
+                      && LinksPerNode <= std::numeric_limits<std::uint32_t>::max(),
+                  "node payload and link counts must fit 32-bit slot metadata");
+    using index_type = std::uint32_t;
+    static constexpr index_type kNoNode = static_cast<index_type>(NodeCapacity);
 
     // Internal graph edges never leave this heap. Since remove() purges every
     // incoming edge before a slot can be reused, adjacency needs only the
@@ -81,15 +87,17 @@ private:
         // Compiler-lowered drop glue. No C++ virtual tables, heap-owned
         // closures, or C++ exceptions on deterministic actor retirement.
         void (*drop)(void*) noexcept = nullptr;
-        std::array<LocalLinkRef, LinksPerNode> links{};
-        std::size_t length = 0;
-        std::size_t link_count = 0;
         std::uint64_t generation = 1;
-        bool live = false;
-        // Intrusive construction-order links; NodeCapacity is the null index.
+        std::array<LocalLinkRef, LinksPerNode> links{};
+        // 32-bit bookkeeping regardless of host pointer width. These were
+        // std::size_t, which cost a 64-bit host 16 extra bytes per node.
+        index_type length = 0;
+        index_type link_count = 0;
+        // Intrusive construction-order links; kNoNode is the null index.
         // Reuse does not leave historical slot entries that could double-drop.
-        std::size_t older = NodeCapacity;
-        std::size_t newer = NodeCapacity;
+        index_type older = kNoNode;
+        index_type newer = kNoNode;
+        bool live = false;
     };
 
     const ActorHeapIdentity owner_;
@@ -147,10 +155,10 @@ private:
 
     void append_construction_order(std::size_t index) noexcept {
         Slot& slot = slots_[index];
-        slot.older = newest_;
-        slot.newer = NodeCapacity;
+        slot.older = static_cast<index_type>(newest_);
+        slot.newer = kNoNode;
         if (newest_ == NodeCapacity) oldest_ = index;
-        else slots_[newest_].newer = index;
+        else slots_[newest_].newer = static_cast<index_type>(index);
         newest_ = index;
     }
 
@@ -160,8 +168,8 @@ private:
         else slots_[slot.older].newer = slot.newer;
         if (slot.newer == NodeCapacity) newest_ = slot.older;
         else slots_[slot.newer].older = slot.older;
-        slot.older = NodeCapacity;
-        slot.newer = NodeCapacity;
+        slot.older = kNoNode;
+        slot.newer = kNoNode;
     }
 
     void erase_all() noexcept {
@@ -190,7 +198,7 @@ private:
             slot.links.fill(LocalLinkRef{});
             slot.length = 0;
             slot.link_count = 0;
-            slot.older = slot.newer = NodeCapacity;
+            slot.older = slot.newer = kNoNode;
             if (slot.generation < std::numeric_limits<std::uint64_t>::max())
                 ++slot.generation;
         }
@@ -257,7 +265,7 @@ public:
             // Initialize only after complete argument validation.
             std::fill(slot.payload.begin(), slot.payload.end(), std::byte{0});
             if (length) std::memcpy(slot.payload.data(), bytes, length);
-            slot.length = length;
+            slot.length = static_cast<index_type>(length); // <= NodeBytes
             slot.link_count = 0;
             slot.drop = nullptr;
             slot.live = true;
@@ -290,7 +298,7 @@ public:
             std::fill(slot.payload.begin(), slot.payload.end(), std::byte{0});
             void* memory = slot.payload.data();
             ::new (memory) T(std::forward<Args>(args)...);
-            slot.length = sizeof(T);
+            slot.length = static_cast<index_type>(sizeof(T));
             slot.link_count = 0;
             slot.drop = [](void* address) noexcept {
                 static_cast<T*>(address)->~T();
@@ -324,7 +332,7 @@ public:
         require_external_span(bytes, length);
         std::fill(slot.payload.begin(), slot.payload.end(), std::byte{0});
         if (length) std::memcpy(slot.payload.data(), bytes, length);
-        slot.length = length;
+        slot.length = static_cast<index_type>(length); // <= NodeBytes
     }
 
     bool link(ActorHeapIdentity actor, Handle source, Handle target) {
@@ -369,7 +377,7 @@ public:
             for (std::size_t i = 0; i < before; ++i) {
                 if (!(slot.links[i] == deleted_ref)) slot.links[keep++] = slot.links[i];
             }
-            slot.link_count = keep;
+            slot.link_count = static_cast<index_type>(keep);
             active_edges_ -= before - keep;
         }
         active_edges_ -= deleted.link_count;

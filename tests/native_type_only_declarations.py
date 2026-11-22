@@ -126,7 +126,7 @@ def main():
         ("reject concrete declare model",
          "declare model M as Pass() end\n" + main_fn, "TYPE_ONLY_INVALID_KIND"),
         ("reject concrete declare actor",
-         "declare actor A as end\n" + main_fn, "TYPE_ONLY_INVALID_KIND"),
+         "declare actor A as end\n" + main_fn, "NATIVE_ACTOR_FORWARD_BODY"),
         ("reject unsupported scalar alias target",
          "declare type Id = string;\n" + main_fn, "TYPE_ALIAS_UNKNOWN_TARGET"),
         ("reject generic trait without native contract proof",
@@ -166,6 +166,27 @@ def main():
          "declare trait Api as fnc read(): int { return 1; } end\n" + main_fn,
          None),
     ]
+
+    # New nominal syntax must never be accepted as a class/actor alias or
+    # emit scalar LLVM IR before matching parser/type/ownership lowering exists.
+    negative.extend([
+        ("state container needs owner-scoped mutable-state lowering",
+         "define state container Ledger as end\n" + main_fn, None),
+        ("state container cannot fake an ordinary class inheritance",
+         "define state container Ledger extends Holder as end\n" + main_fn, None),
+        ("grain needs keyed virtual actor identity",
+         "define grain User as end\n" + main_fn, None),
+        ("grain cannot inherit plain actor and bypass activation",
+         "define grain User extends ActorBase as end\n" + main_fn, None),
+        ("supervisor requires CONTROL-plane lowering",
+         "define supervisor Root as end\n" + main_fn, None),
+        ("supervisor cannot borrow ordinary class inheritance",
+         "define supervisor Root extends Base as end\n" + main_fn, None),
+        ("protocol needs typed verified wire descriptor",
+         "define protocol Wire as end\n" + main_fn, None),
+        ("service is not an implicit network actor",
+         "define service Api as end\n" + main_fn, None),
+    ])
 
     negative.extend([
         ("missing scalar alias target fails even if unused",
@@ -264,7 +285,7 @@ def main():
          "TYPE_ALIAS_UNKNOWN_TARGET"),
         ("bool alias cannot bypass borrow rule",
          "declare type Flag = bool;\n"
-         "fnc unsafe(borrow Flag value): int { return value; }\n" + main_fn,
+         "fnc unchecked_flag(borrow Flag value): int { return value; }\n" + main_fn,
          "native bool borrow ABI"),
     ])
     with tempfile.TemporaryDirectory(prefix="ores-native-typeonly-") as root:

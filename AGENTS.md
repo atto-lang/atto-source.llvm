@@ -1,30 +1,14 @@
-# AttoLang source-first implementation guidance
+# Repository AI agent instructions
 
-These instructions apply to this repository's code changes, examples, fixtures, and AI coding agents. They supplement, and never override, repository security rules or review requirements.
+<!-- org-merge-review-policy:begin -->
+> **Canonical Atto PR governance:** [atto-lang/.github/AGENTS.md](https://github.com/atto-lang/.github/blob/main/AGENTS.md) is authoritative; this local summary never overrides effective branch protection, security CODEOWNERS, or required material CI.
+>
+> **One persistent human approval per PR:** Exactly one independent GitHub `APPROVED` review from **either** `the1mills` (GitHub ID `2148448`) **OR** `ORESoftware` (GitHub ID `11139560`) fills the human slot. Never require both. No self-approval; verify reviewer ID and active review state. Ordinary commits, rebases and merges from `main` do **not** demand another human approval. Dismissals, revocations, blocking `CHANGES_REQUESTED` and GitHub protections remain effective.
+>
+> **Ready age 0–72h:** Same one human approval **plus** current-cycle, current-head, independently verified **OpenAI** and **Anthropic** attestations. **Ready age 72–240h:** Same one human approval; no additional AI slot, but perform and document the mandatory competing/overlapping-PR audit before merging. **Ready age ≥240h:** Reuse the human approval and require fresh post-240h current-head OpenAI **and** Anthropic attestations. The Ready clock starts at the latest genuine Draft→Ready event (or creation when opened Ready); a new Ready cycle resets AI freshness, not the valid human approval.
+>
+> **Drafts and holds:** At ≥72 consecutive hours in the current Draft cycle, promote only with genuine passing exact-head material CI, verified current labels and no hard hold. `keep-as-draft`, `keep-draft` and `not-ready` prevent automatic promotion **and** automated merging. Never game the draft clock. Reread labels, current head, checks and GitHub protections immediately before action. Fail closed if evidence is missing.
+>
+> **Security:** Approval policy text is not merge authorization or permission to export private source. Preserve all actual GitHub rules, CODEOWNERS restrictions, source-security checks and conflict/overlap review. If Actions cannot start, use only an authorized private SHA-verified Git-tree carrier, not cross-organization checkout tokens. Check the [legacy Oreslang migration map](https://github.com/ores-truffle-oreslang/.github/blob/main/governance/atto-migration-map.json) before duplicating features.
+<!-- org-merge-review-policy:end -->
 
-## Source placement
-
-- New AttoLang guest source, standard-library algorithms, sample programs, and guest-language regression fixtures use **`.atto`**. The `.ores` suffix is for legacy compatibility or explicit migration tests only; do not create new `.ores` features.
-- Implement portable guest-visible behavior in AttoLang wherever it is expressible. Add only the smallest necessary host/compiler primitive when the language cannot safely implement that behavior itself. Do not disguise host-language emulation as actual AttoLang guest execution.
-- Keep functions and methods in `snake_case`. Preserve actor ownership, sealed state, capability boundaries, deterministic errors, and full-AOT compatibility.
-- If a necessary host-language implementation remains, document why guest code is not yet possible, which capability it supplies, and how it can be replaced. Do not mass-rename host compiler/runtime files to `.atto`.
-
-## Evidence and security
-
-- Separate source-only fixtures, host-model tests, compiler parse/typecheck, executable guest tests, and native AOT evidence. A zero-step workflow, synthetic receipt, or host-only test means **NOT_EXECUTED** for guest parity.
-- Record exact fixture/compiler Git blobs and source heads when making parity claims; do not mark another backend as passing without its own executed result.
-- Do not copy private Git objects to another organization simply because its runner has capacity. Respect source-side authorization, independent security review, approved private destination, and protected-branch requirements.
-
-## LLVM-specific responsibilities
-
-- Use C++/LLVM IR for parsing, semantic checking, typed lowering, memory domains, machine-code generation, and security-critical native primitives—not for high-level standard-library logic that can live in `.atto`.
-- Test `.atto` through the real `oreslang-llvmc` frontend; require actual generated-IR and native guest results, including O0/O2 and ASan/UBSan where applicable. An isolated C++ reference model is not compiler-backed parity.
-- Preserve zero-GC actor-owned heaps, lifetime/borrow checks and deterministic rejection without executable IR for unsupported unsafe constructs.
-
-## Full guest AOT and zero-GC controlled-dynamism directive (proposed policy)
-
-**Review all new features against [organization policy PR #38](https://github.com/ores-truffle-oreslang/.github/pull/38) and [language-spec chapter PR #18](https://github.com/ores-truffle-oreslang/attolang-language-spec.md/pull/18), and the [local checklist](docs/AOT_ZERO_GC_DYNAMISM.md).** In sealed full-guest-AOT builds, no runtime eval/source compilation, new classes/methods, unbounded host reflection, monkey-patching or implicit interpreter/JIT fallback. Compile static proxy forwarding, virtual dispatch metadata, generics/macros and closure state machines ahead of time; reject unsupported shapes before IR/code emission.
-
-Every allocation, closure capture, actor heap and suspended frame needs an owner, bounded accounting, release strategy and cancellation/restart/generation-fencing proof. Ban arbitrary strong-reference cycles without an approved lifetime/region plan; long-lived actors must reclaim retired allocations without waiting for actor termination. Channels/pub-sub carry Sendable data, never functions/closures, raw pointers or hidden host capabilities. Preserve explicit `rt take`/`rt copy`/`rt borrow`/`rt share`, no implicit conversions/operator overloading/`%`/`^`/`^^` and no implicit nested `Future`/`Option` flattening.
-
-**Review gate:** PRs declare execution profile (JIT/hybrid, host AOT, sealed guest AOT, governed precompiled-module AOT) and memory claim (managed host, zero guest tracing-GC, process zero-GC); add positive and negative `.atto` compilation/execution cases, runtime cancellation/allocator stress, immutable source/fixture IDs and stepful evidence. `steps=[]` and `steps=null` remain **NOT_EXECUTED**. Do not claim cross-backend parity from this documentation.

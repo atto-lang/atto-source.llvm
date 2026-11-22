@@ -36,6 +36,35 @@ int main() {
     auto plain = parse_program(valid_actor);
     check(plain.actors.size() == 1);
     check(plain.actors.front().max_actor_threads == oreslang::MaxActorThreads::LOW);
+    check(!plain.actors.front().declared_receives_i64);
+
+    // Native actor messages are permanently int-only in this stage-0 ABI.
+    // The explicit receives clause must survive in the parsed AST.
+    std::string typed_header(valid_actor);
+    const auto at = typed_header.find("Worker as");
+    check(at != std::string::npos);
+    typed_header.replace(at, std::string("Worker as").size(), "Worker receives int as");
+    const auto typed_actor = parse_program(typed_header);
+    check(typed_actor.actors.size() == 1);
+    check(typed_actor.actors.front().declared_receives_i64);
+
+    auto changed_header = [&](const std::string& replacement) {
+        std::string source(valid_actor);
+        const auto pos = source.find("Worker as");
+        check(pos != std::string::npos);
+        source.replace(pos, std::string("Worker as").size(), replacement);
+        return source;
+    };
+    denied(changed_header("Worker receives String as"),
+           "NATIVE_ACTOR_RECEIVES_TYPE_UNSUPPORTED");
+    denied(changed_header("Worker receives int | String as"),
+           "NATIVE_ACTOR_RECEIVES_UNION_UNSUPPORTED");
+    denied(changed_header("Worker receives int receives int as"),
+           "NATIVE_ACTOR_RECEIVES_DUPLICATE");
+    denied(changed_header("Worker sends int as"),
+           "NATIVE_ACTOR_SENDS_EFFECT_UNSUPPORTED");
+    denied(changed_header("Worker receives int sends int as"),
+           "NATIVE_ACTOR_SENDS_EFFECT_UNSUPPORTED");
 
     auto low = parse_program(std::string(canonical_enum)
             + "@ActorMaxThreads(MaxActorThreads.LOW)\n" + std::string(valid_actor));
