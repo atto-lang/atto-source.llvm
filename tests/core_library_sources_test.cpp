@@ -65,6 +65,26 @@ int main() {
     assert(numeric->source.find("define module numeric as") != std::string_view::npos);
     assert(numeric->source.find("clamp_int") != std::string_view::npos);
 
+    // The three new helpers are compiler-owned and cannot resolve from disk.
+    for (std::string_view path : {"atto.core/math", "atto.core/hash", "atto.core/cell"}) {
+        const auto* owned = find_core_library_source(path);
+        assert(owned != nullptr);
+        assert(owned->tier == CompilerLibraryTier::Core);
+        assert(owned->admitted_provider_bits == 0u);
+        assert(!owned->source.empty());
+    }
+    assert(find_core_library_source("atto.core/math") ==
+           find_core_library_source("ores.core/math"));
+    assert(find_core_library_source("atto.core/hash") ==
+           find_core_library_source("ores.core/hash"));
+    assert(find_core_library_source("atto.core/cell") ==
+           find_core_library_source("ores.core/cell"));
+    assert(find_core_library_source("atto.core/hash.ores") == nullptr);
+    assert(find_core_library_source("atto.core/../hash") == nullptr);
+    assert(find_core_library_source("ores.core/cell/../math") == nullptr);
+    assert(find_core_library_source("atto.core/hash")->source.find("step_byte") != std::string_view::npos);
+    assert(find_core_library_source("atto.core/cell")->source.find("POLICY only") != std::string_view::npos);
+
     const auto* buffer = find_alloc_library_source("atto.alloc/int_buffer");
     assert(buffer == find_alloc_library_source("atto.alloc/int_buffer.atto"));
     assert(buffer == find_alloc_library_source("alloc/int_buffer"));
