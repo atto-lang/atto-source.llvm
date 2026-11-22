@@ -119,6 +119,42 @@ inline const CoreLibrarySource* find_compiler_library_source(std::string_view ra
         core_provider_bit(CoreProviderRequirement::Allocator)
     };
 
+    static constexpr std::string_view kSliceSource =
+#include "oreslang/frontend/GeneratedSliceAtto.inc"
+    ;
+    static constexpr CoreLibrarySource kSlice{
+        CompilerLibraryTier::Core,
+        "atto.core/slice",
+        "slice",
+        "@atto.core/slice.atto",
+        kSliceSource,
+        0u
+    };
+
+    static constexpr std::string_view kIterSource =
+#include "oreslang/frontend/GeneratedIterAtto.inc"
+    ;
+    static constexpr CoreLibrarySource kIter{
+        CompilerLibraryTier::Core,
+        "atto.core/iter",
+        "iter",
+        "@atto.core/iter.atto",
+        kIterSource,
+        0u
+    };
+
+    static constexpr std::string_view kCmpSource =
+#include "oreslang/frontend/GeneratedCmpAtto.inc"
+    ;
+    static constexpr CoreLibrarySource kCmp{
+        CompilerLibraryTier::Core,
+        "atto.core/cmp",
+        "cmp",
+        "@atto.core/cmp.atto",
+        kCmpSource,
+        0u
+    };
+
     if (raw == "atto.core/numeric" || raw == "atto.core/numeric.atto" ||
             raw == "ores.core/numeric" || raw == "ores.core/numeric.ores")
         return &kNumeric;
@@ -128,6 +164,15 @@ inline const CoreLibrarySource* find_compiler_library_source(std::string_view ra
     if (raw == "atto.alloc/int_buffer_bundle" || raw == "atto.alloc/int_buffer_bundle.atto" ||
             raw == "alloc/int_buffer_bundle" || raw == "alloc/int_buffer_bundle.ores")
         return &kIntBufferBundle;
+    if (raw == "atto.core/slice" || raw == "atto.core/slice.atto" ||
+            raw == "ores.core/slice" || raw == "ores.core/slice.atto")
+        return &kSlice;
+    if (raw == "atto.core/iter" || raw == "atto.core/iter.atto" ||
+            raw == "ores.core/iter" || raw == "ores.core/iter.atto")
+        return &kIter;
+    if (raw == "atto.core/cmp" || raw == "atto.core/cmp.atto" ||
+            raw == "ores.core/cmp" || raw == "ores.core/cmp.atto")
+        return &kCmp;
     return nullptr;
 }
 

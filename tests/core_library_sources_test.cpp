@@ -65,6 +65,42 @@ int main() {
     assert(numeric->source.find("define module numeric as") != std::string_view::npos);
     assert(numeric->source.find("clamp_int") != std::string_view::npos);
 
+    const auto* slice = find_core_library_source("atto.core/slice");
+    assert(slice != nullptr);
+    assert(slice == find_core_library_source("atto.core/slice.atto"));
+    assert(slice == find_core_library_source("ores.core/slice"));
+    assert(slice == find_core_library_source("ores.core/slice.atto"));
+    assert(slice->module_name == "slice");
+    assert(slice->canonical_import == "atto.core/slice");
+    assert(slice->unit_id == "@atto.core/slice.atto");
+    assert(slice->admitted_provider_bits == 0u);
+    assert(slice->source.find("define module slice as") != std::string_view::npos);
+    assert(find_core_library_source("atto.core/slice.ores") == nullptr);
+
+    const auto* iter = find_core_library_source("atto.core/iter");
+    assert(iter != nullptr);
+    assert(iter == find_core_library_source("atto.core/iter.atto"));
+    assert(iter == find_core_library_source("ores.core/iter"));
+    assert(iter == find_core_library_source("ores.core/iter.atto"));
+    assert(iter->module_name == "iter");
+    assert(iter->canonical_import == "atto.core/iter");
+    assert(iter->unit_id == "@atto.core/iter.atto");
+    assert(iter->admitted_provider_bits == 0u);
+    assert(iter->source.find("define module iter as") != std::string_view::npos);
+    assert(find_core_library_source("atto.core/iter.ores") == nullptr);
+
+    const auto* cmp = find_core_library_source("atto.core/cmp");
+    assert(cmp != nullptr);
+    assert(cmp == find_core_library_source("atto.core/cmp.atto"));
+    assert(cmp == find_core_library_source("ores.core/cmp"));
+    assert(cmp == find_core_library_source("ores.core/cmp.atto"));
+    assert(cmp->module_name == "cmp");
+    assert(cmp->canonical_import == "atto.core/cmp");
+    assert(cmp->unit_id == "@atto.core/cmp.atto");
+    assert(cmp->admitted_provider_bits == 0u);
+    assert(cmp->source.find("define module cmp as") != std::string_view::npos);
+    assert(find_core_library_source("atto.core/cmp.ores") == nullptr);
+
     const auto* buffer = find_alloc_library_source("atto.alloc/int_buffer");
     assert(buffer == find_alloc_library_source("atto.alloc/int_buffer.atto"));
     assert(buffer == find_alloc_library_source("alloc/int_buffer"));
