@@ -6406,6 +6406,31 @@ private:
             expr->integer = integer_literal();
             return expr;
         }
+        // Java/Graal owns the full tuple/Entry product model today. The
+        // constrained native frontend must reject those value forms explicitly
+        // rather than misparse them as scalar variables/array calls and emit
+        // partial or ABI-incompatible IR. An ordinary user function named
+        // tuple(...) remains legal because only the explicit tuple { ... }
+        // spelling is recognized here.
+        if (token_.text == "tuple") {
+            Lexer lookahead = lexer_;
+            if (lookahead.next().text == "{") {
+                fail("native tuple literal unsupported: fixed product layout and ownership lowering are not implemented");
+            }
+        }
+        if (token_.text == "Entry") {
+            Lexer lookahead = lexer_;
+            const Token next = lookahead.next();
+            // This constrained native expression grammar interprets '<'
+            // after an identifier as generic call type arguments, not as
+            // relational comparison. Reject Entry product syntax before it
+            // can be treated as an ordinary scalar generic call.
+            // A local scalar named Entry remains legal without this suffix.
+            if (next.text == "." || next.text == "<") {
+                fail("native Entry<K,V> unsupported: nominal key/value product layout and ownership lowering are not implemented");
+            }
+        }
+
         if (token_.text == "true" || token_.text == "false") {
             auto expr = make_expression(Expression::Kind::Boolean, offset);
             expr->boolean = token_.text == "true";
