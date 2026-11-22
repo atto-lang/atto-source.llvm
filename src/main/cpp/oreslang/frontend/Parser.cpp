@@ -1094,6 +1094,37 @@ public:
         while (token_.text == "import" || token_.text == "export") {
             if (token_.text == "export") { export_declaration(program); continue; }
             advance();
+            if (token_.text == "pkg") {
+                // Recognize the canonical syntax without granting an
+                // unverified package access to file-import authority.
+                advance();
+                if (token_.kind != Kind::String)
+                    fail("package namespace import requires a quoted package identity");
+                const std::string package_id(token_.text);
+                if (package_id.empty() || package_id.size() > 4096 ||
+                        package_id.find("..") != std::string::npos ||
+                        package_id.back() == '.' ||
+                        package_id.find('\\') != std::string::npos)
+                    fail("invalid package namespace import identity");
+                advance();
+                if (accept("as")) {
+                    (void)identifier();
+                } else {
+                    const std::string inferred = package_id.substr(package_id.rfind('.') + 1);
+                    if (inferred.empty() ||
+                            !((inferred.front() >= 'a' && inferred.front() <= 'z') ||
+                              (inferred.front() >= 'A' && inferred.front() <= 'Z') ||
+                              inferred.front() == '_') ||
+                            !std::all_of(inferred.begin(), inferred.end(), [](unsigned char ch) {
+                                return (ch >= 'a' && ch <= 'z') ||
+                                       (ch >= 'A' && ch <= 'Z') ||
+                                       (ch >= '0' && ch <= '9') || ch == '_';
+                            }))
+                        fail("package namespace import requires explicit as alias");
+                }
+                require(";");
+                fail("package namespace imports require a verified package-export linker");
+            }
             // Outside the host-only verified-metadata mode, namespace imports stay
             // fail-closed here; in that mode they are parsed into metadata and
             // still rejected for compilation below.
@@ -1183,6 +1214,15 @@ public:
             if (!module_names_.insert(imported.local_name).second)
                 fail("duplicate imported module binding '" + imported.local_name + "'");
             require("from");
+            if (accept("pkg")) {
+                if (token_.kind != Kind::String)
+                    fail("package module import requires a quoted package identity");
+                // Module selectors and namespace imports share verified
+                // package identity, never a fallback to a source filename.
+                advance();
+                require(";");
+                fail("package namespace imports require a verified package-export linker");
+            }
             if (token_.kind != Kind::String) fail("native module import requires a quoted source path");
             imported.path = std::string(token_.text);
             if (imported.path.empty() || imported.path.size() > 4096)
