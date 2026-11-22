@@ -175,7 +175,12 @@ def main():
                 ' as pub fnc forged():int{return 99;} end\\n',
                 encoding="utf-8",
             )
-        pure = run([args.compiler, str(alloc_fixture)])
+        # Copy the checked-in guest to the untrusted project root, where
+        # a malicious local alloc/ tree exists. The compiler-owned registry
+        # must ignore that shadow and compile only the pinned embed.
+        pure_entry = root / "alloc_policy.atto"
+        pure_entry.write_bytes(alloc_fixture.read_bytes())
+        pure = run([args.compiler, str(pure_entry)])
         require(pure.returncode == 0, "alloc policy guest rejected: " + pure.stderr)
         for symbol in ("heap_reserved_total", "arena_aligned_start", "region_can_destroy"):
             require(
