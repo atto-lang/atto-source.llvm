@@ -1,0 +1,41 @@
+name: TenantVM guest callback cookie (native host only)
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/OresVM.hpp'
+      - 'src/main/cpp/oreslang/runtime/OresIsolateAbi.h'
+      - 'tests/native_oresvm_guest_call_test.cpp'
+      - '.github/workflows/tenantvm-guest-callback-cookie.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  guest-callback-cookie:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [g++, clang++]
+        profile: [optimized, asan-ubsan]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and execute exact checkout host ABI regression
+        shell: bash
+        env:
+          CXX: ${{ matrix.compiler }}
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          set -euo pipefail
+          args=(-std=c++17 -Wall -Wextra -Wpedantic -Werror -UNDEBUG -pthread -Isrc/main/cpp)
+          if [[ "$PROFILE" == asan-ubsan ]]; then
+            args+=(-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer)
+          else
+            args+=(-O2)
+          fi
+          "$CXX" "${args[@]}" tests/native_oresvm_guest_call_test.cpp -o "$RUNNER_TEMP/tenantvm-guest-cookie"
+          ASAN_OPTIONS=detect_leaks=1 "$RUNNER_TEMP/tenantvm-guest-cookie"
+          echo "HOST_ONLY_EXECUTED: compiler=$CXX profile=$PROFILE sha=$GITHUB_SHA"

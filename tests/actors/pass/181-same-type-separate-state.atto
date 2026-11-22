@@ -1,0 +1,21 @@
+// Native LLVM actor bootstrap: two instances must not share globals.
+// expect-exit: 0
+// stdout-order: unordered across actors
+// expect-stdout: 1
+// expect-stdout: 2
+define actor Counter as
+    let int total = 0;
+    receive(ActorMail<int> mail): void {
+        self.total = self.total + mail.value;
+        stdio.println(self.total);
+        return;
+    }
+end
+
+pub fnc main(): int {
+    val x = spawn Counter();
+    val y = spawn Counter();
+    x.send(1);
+    y.send(2);
+    return 0;
+}

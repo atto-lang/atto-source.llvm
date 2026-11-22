@@ -10,6 +10,9 @@ typedef struct OresIsolateContext {
     uint32_t abi_version;
     uint32_t slot_count;
     uint64_t generation;
+    /* Opaque, single-invocation callback ticket. Do NOT dereference, cache,
+     * transfer to another pthread, or reuse after entry returns. Native
+     * host callbacks validate it against the current executing turn. */
     void* call_data;
     int (*load_i64)(void*, uint32_t, int64_t*);
     int (*store_i64)(void*, uint32_t, int64_t);

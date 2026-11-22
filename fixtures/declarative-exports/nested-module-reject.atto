@@ -1,0 +1,6 @@
+define module Internal as
+  export pub fnc helper;
+  fnc helper(): int { return 42; }
+end
+
+fnc main(): int { return 42; }

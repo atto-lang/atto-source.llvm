@@ -1,0 +1,2 @@
+// Operating-system child processes are forbidden on bare metal.
+pub fnc main(): int { process.spawn("/bin/sh"); return 42; }

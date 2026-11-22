@@ -1,0 +1,10 @@
+// Native scalar loop CFG, with an untaken negated break before the exit.
+pub fnc main(): int {
+  let int i = 0;
+  loop {
+    i = i + 1;
+    do ifnot true then break; fi
+    do ifnot i < 3 then break; fi
+  }
+  return i;
+}

@@ -154,8 +154,10 @@ for **already-proven logical reference kinds**. Given authenticated actor
 heap and lifetime evidence, it selects 4-byte actor offsets, or an 8-byte
 native64 representation when the proven arena exceeds the compressed range
 or the caller deliberately requests native64. It rejects absent actor
-ownership/lifetime proof, invalid alignment and unsupported 32-bit actor
-lowering. Cross-actor capabilities, explicitly shared regions and FFI
+ownership/lifetime proof, invalid alignment, pointer widths other than 32
+and 64, and (on 32-bit targets) arenas larger than the 32-bit address space.
+32-bit targets select the same 4-byte ref32 word as 64-bit targets; see
+"32-bit hosts" below. Cross-actor capabilities, explicitly shared regions and FFI
 pointers stay separate physical categories; opaque capabilities never
 guess a native pointer width. Typed dense-row indices require their own
 row-identity/generation evidence.
@@ -305,3 +307,91 @@ generation word would also help, but must not reconstruct a proof from the offse
 Until that elision exists, do not claim RAM savings for this store. Dense 32-bit
 indices with one generation per row, rather than per edge, are the cheaper option
 for table-shaped data.
+
+## 32-bit hosts and 32-bit heap metadata (November 2026)
+
+Atto must run on 64-bit and 32-bit machines (i686, ARMv7, wasm32), and actor
+heaps should be 32-bit everywhere to keep process memory down. That has two
+halves.
+
+### The ref32 word is the same on every host
+
+`plan_managed_reference` now admits actor-private references on 32-bit
+targets and selects the same `ActorOffset32` field (4 bytes, 8-byte quantum,
+`offset/8 + 1`) as on 64-bit targets. Object layouts and the cross-backend
+golden vectors therefore do not depend on host width. On a 32-bit target an
+arena span above `2^32 - 1` is rejected as corrupt. native64 is reachable only
+through `force_native64`, which stores the address zero-extended in 8 bytes
+for layout parity with a native64 build.
+
+`ManagedRefLowering.hpp` accepts 32- and 64-bit flat-pointer DataLayouts. The
+validator ABI is unchanged on both widths: `i1 (ptr, ptr, i64 span, i32 stored)`.
+All bounds arithmetic stays in `i64`. On 32-bit targets the base is a 32-bit
+`ptrtoint` zero-extended for the checks. The access end must be at most
+`0xFFFFFFFF` (`ref32.end.representable`, checked separately so that
+`ceiling - end` can never underflow into a permissive bound), and the GEP
+receives the offset truncated to `i32` only after every check has passed.
+16-bit pointers and fat or capability pointers (GEP index width different
+from pointer width) fail closed.
+
+### Rule: natural size alignment, never C ABI `alignof`
+
+i386 SysV gives `int64_t` and `double` an `alignof` of 4. Every case below
+was a real failure on i686, found by running the runtime there:
+
+| Component | Symptom on i686 | Fix |
+| --- | --- | --- |
+| `ActorCompactFieldStore` | objects placed at `alignof(Object) == 4`; ref32 cannot encode them, so every link was rejected | `Object` is `alignas(CompressedActorRef::alignment)` |
+| `TrustedPointerWindow` | `% alignof(T)` admitted offset-4 `u64` accesses that 64-bit hosts reject | checks `% sizeof(T)` |
+| `ActorShardColumns` | `dop::Layout(scalar 8, alignment 4)` throws, so no shard could be built | passes `sizeof(double)` as alignment |
+| `NativeActorScheduler.c` | `size_t outstanding == UINT64_MAX` overflow guard was always false | compares against `SIZE_MAX` |
+
+Anything a ref32 may point at must be allocated with at least
+`ActorOwnedHeap::compact_alignment` (8), and every 8-byte field uses 8-byte
+alignment. Compiler-lowered actor objects must take alignment from this rule,
+not from the target C ABI, or i686 objects come out a different size
+(`{i64, i32}` is 12 bytes in the i686 DataLayout and 16 elsewhere).
+
+### Heap bookkeeping is 32-bit on every host
+
+Offsets, lengths, slot indices and construction-order links inside the
+bounded heaps used to be `std::size_t`, so a 64-bit host paid twice the
+bookkeeping of a 32-bit one for the same capacity. They are now 32-bit
+whenever the bounded capacity fits. Generations stay 64-bit: a 32-bit
+generation on one hot slot would be exhausted after about 4e9 reuses, and
+exhaustion must never re-admit ABA. Measured with `sizeof` on aarch64 Linux:
+
+| Heap | Before | After |
+| --- | --- | --- |
+| `ActorOwnedHeap<64 KiB, 1024>` metadata | 65,664 B (64 B/slot) | 36,976 B (36 B/slot) |
+| `ActorHeap<1024, 32 B>` | 65,632 B (64 B/slot) | 49,248 B (48 B/slot) |
+| `ActorOwnedGraphHeap<1024, 32 B, 4>` | 114,800 B (112 B/node) | 98,416 B (96 B/node) |
+
+The 64-bit figures now equal the i686 ones for `ActorOwnedHeap` and
+`ActorHeap`. These are fixed-capacity footprints, not RSS under a workload.
+
+### Other 32-bit hardening
+
+* `BoundedMpscQueue` (the carrier mailbox) asserted `sizeof(size_t) == 8`, so
+  no actor carrier could compile on a 32-bit host. Its counters are now always
+  `uint64_t`, and `std::atomic<uint64_t>` must be lock-free at compile time
+  (cmpxchg8b on i686, ldrexd/strexd on ARMv7). A libatomic lock in the
+  mailbox hot path is a build error, not a silent slowdown.
+* The `ActorHeap` and `ActorOwnedI64Heap` identity counters used `fetch_add`,
+  which wraps through 0 and re-issues identity 1 after exhaustion. They now
+  use the same CAS reservation as the other heaps. The C heap also requires
+  `ATOMIC_LLONG_LOCK_FREE == 2`.
+
+### Validation
+
+* `tests/native_heap_pointer_width_gate.rs` builds and runs 18 heap, ref32,
+  carrier and shard tests with any compiler and flag set. It first proves the
+  pointer width that the flags actually produce. CI
+  (`native-heap-pointer-width.yml`) runs it on x86_64, i686 (`-m32`) and
+  ARMv7 (cross compiler plus `qemu-arm`). Locally it passed 18/18 in i386 and
+  ARMv7 Debian containers.
+* `managed_ref_llvm_lowering_test` verifies the IR for native64, i686, ARMv7
+  and wasm32, and rejects 16-bit and fat-pointer layouts. With
+  `--emit-target i686 --clang-arg -m32`, `managed_ref_llvm_e2e` compiles the
+  i686 IR, links the unchanged death-test harness and executes it, including
+  the stale, null, foreign and out-of-bounds trap paths.

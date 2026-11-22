@@ -1,4 +1,5 @@
 #include "oreslang/types/OwnershipChecker.hpp"
+#include "oreslang/types/PointerIntOwnership.hpp"
 #include "oreslang/types/NativeClassLayout.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/types/OwnershipCfg.hpp"
@@ -24,6 +25,7 @@ struct LocalOwnership {
     Mode mode = Mode::Value;
     bool moved = false;
     bool heap_owned = false; // Experimental region slots cannot transfer ownership yet.
+    bool native_box_i64 = false; // non-Copy Box<int> with compiler-validated .get
     bool int_array = false; // Non-copy lexical array; no borrows or escapes.
     bool record_view = false; // readonly materialized value, not an incoming loan
     bool mutable_owner = false; // lexical let mut or exclusive borrowed parameter
@@ -161,6 +163,8 @@ Loan acquire(const Expression& expr, Mode expected, Locals& locals) {
     if (root->kind != Expression::Kind::Variable)
         reject(expr, "native borrow requires an addressable named int parameter");
     LocalOwnership& source = local(*root, locals);
+    if (source.native_box_i64 || root->native_box_read)
+        reject(expr, "ATTO_BOX_MAIN_V1_REJECT: borrowed Box<int> reference requires typed borrow lowering");
     if (source.int_array)
         reject(expr, "ownership violation: native Array<int> cannot be borrowed or escaped");
     // A borrowed parameter has a caller-held lifetime and already carries
@@ -277,6 +281,10 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
                 reject(expr, "use of explicitly moved int '" + expr.name + "'");
             if (source.exclusive_loan)
                 reject(expr, "read conflicts with active mutable borrow of '" + expr.name + "'");
+            if (source.native_box_i64 && !expr.native_box_read)
+                reject(expr, "ATTO_BOX_MAIN_V1_REJECT: Box<int> is non-Copy; only .get() is admitted");
+            if (expr.native_box_read && !source.native_box_i64)
+                reject(expr, "ATTO_BOX_MAIN_V1_REJECT: .get() requires authenticated Box<int> owner");
             if (source.int_array)
                 reject(expr, "ownership violation: native Array<int> is non-Copy and cannot escape");
             if (!source.class_name.empty())
@@ -310,11 +318,14 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
         }
         case Expression::Kind::Copy:
         case Expression::Kind::Share:
+        case Expression::Kind::Cast: // Cast is checked static identity, but operand may move.
         case Expression::Kind::Negate:
         case Expression::Kind::LogicalNot:
             check_value(*expr.left, locals, functions);
             return;
         case Expression::Kind::Take: {
+            if (expr.left && expr.left->native_box_read)
+                reject(expr, "ATTO_BOX_MAIN_V1_REJECT: taking Box<int>.get() is not a Box move");
             // The bounded class subset has only trivially destructible i64
             // fields. Lowering a field take as a load is valid only because
             // checker state invalidates that place until an explicit write.
@@ -445,6 +456,7 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
             return;
         case Expression::Kind::Negate:
         case Expression::Kind::LogicalNot:
+        case Expression::Kind::Cast:
         case Expression::Kind::Copy:
         case Expression::Kind::Share:
             check_pure_guard(*expr.left, locals, functions);
@@ -534,6 +546,7 @@ void check_caught_throw_scalar_read(const Expression& expr, Locals& locals,
         }
         case Expression::Kind::Negate:
         case Expression::Kind::LogicalNot:
+        case Expression::Kind::Cast:
             check_caught_throw_scalar_read(*expr.left, locals, functions);
             return;
         case Expression::Kind::Add:
@@ -575,6 +588,16 @@ void check_caught_throw_scalar_read(const Expression& expr, Locals& locals,
 } // namespace
 
 void validate_i64_ownership(Program& program) {
+    if (program.pointer_int_plan) {
+        // Pointer<int> cannot be smuggled through an i64 scalar, class or
+        // actor plan: only a dedicated nominal pointer HIR is admitted.
+        if (!program.functions.empty() || !program.classes.empty() ||
+                !program.actors.empty() || !program.imports.empty() ||
+                !program.cooperative_loops.empty())
+            throw std::runtime_error("Pointer<int> ownership cannot mix scalar or actor IR");
+        pointer_int_aot::validate_ownership(*program.pointer_int_plan);
+        return;
+    }
     // A re-validation attempt must revoke every stale lowering authorization
     // before checking anything. Failed ownership admission therefore cannot
     // leave executable Future-pipeline authority from an earlier pass.
@@ -724,10 +747,23 @@ void validate_i64_ownership(Program& program) {
             LocalOwnership entry;
             entry.heap_owned = binding.heap_owned;
             entry.int_array = binding.int_array;
+            entry.native_box_i64 = binding.native_box_i64;
             entry.mutable_owner = binding.owner_mutable;
             entry.assignable = binding.assignable;
             entry.class_name = binding.class_name;
-            if (binding.int_array) {
+            if (binding.native_box_i64) {
+                if (!binding.heap_owned || binding.assignable || binding.owner_mutable ||
+                        binding.new_class || binding.move_class || binding.int_array ||
+                        !binding.initializer ||
+                        binding.initializer->kind != Expression::Kind::Integer ||
+                        function.name != "main" || !function.parameters.empty() ||
+                        function.async_source_i64 || !function.source_tasks.empty() ||
+                        !function.future_pipelines.empty() ||
+                        !function.actor_spawns.empty() || !function.actor_actions.empty() ||
+                        !function.ready_await_actor.empty() || !function.done_await_actor.empty())
+                    throw std::runtime_error(
+                        "ATTO_BOX_MAIN_V1_REJECT: Box<int> ownership context unverified");
+            } else if (binding.int_array) {
                 if (!binding.owner_mutable || binding.heap_owned)
                     throw std::runtime_error("invalid native Array<int> owner");
                 if (binding.initializer) {
@@ -919,9 +955,11 @@ void validate_i64_ownership(Program& program) {
         for (const auto& item : locals) root_names.insert(item.first);
         std::unordered_map<std::string, unsigned> iteration_loans;
         std::function<void(const Statement&, Locals&)> check_effect;
+        std::size_t scalar_loop_depth = 0;
         auto scoped_entry = [&](const LocalBinding& binding) {
             LocalOwnership entry;
             entry.int_array = binding.int_array;
+            entry.native_box_i64 = binding.native_box_i64;
             entry.mutable_owner = binding.owner_mutable;
             entry.assignable = binding.assignable;
             entry.class_name = binding.class_name;
@@ -944,6 +982,26 @@ void validate_i64_ownership(Program& program) {
                 state.erase(action.branch_local->name);
         };
         check_effect = [&](const Statement& stmt, Locals& state) {
+            if (stmt.kind == Statement::Kind::Break ||
+                    stmt.kind == Statement::Kind::Continue) {
+                if (!scalar_loop_depth)
+                    throw std::runtime_error("ownership violation: break/continue outside native scalar loop");
+                return;
+            }
+            if (stmt.kind == Statement::Kind::Loop) {
+                if (++scalar_loop_depth > 16)
+                    throw std::runtime_error("ownership violation: native scalar loop nesting limit");
+                struct Depth {
+                    std::size_t& n;
+                    ~Depth() { --n; }
+                } scoped_depth{scalar_loop_depth};
+                Locals body = state;
+                scoped_effects(stmt.then_statements, body);
+                if (!same_affine_state(state, body))
+                    throw std::runtime_error(
+                        "ownership violation: scalar loop backedge changes affine ownership/loans");
+                return;
+            }
             if (stmt.kind == Statement::Kind::ScalarWrite) {
                 const auto found = state.find(stmt.receiver);
                 if (found == state.end()) throw std::runtime_error("assignment requires a visible scalar slot");
