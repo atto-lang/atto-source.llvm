@@ -168,6 +168,10 @@ llvm::Value* lower(const Expression& expr,
                    const std::unordered_map<std::string, llvm::Function*>& functions,
                    const RegionMoveLowering* moves = nullptr) {
     switch (expr.kind) {
+        case Expression::Kind::Cast:
+            // Scalar type pass proved exact identity. Never emit a conversion
+            // or silently reinterpret an unrelated native handle.
+            return lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
         case Expression::Kind::SumConstruct: {
             // Independent backend gate: a trap-origin Ok may only wrap the
             // statically total integer subset. Never accidentally catch host,

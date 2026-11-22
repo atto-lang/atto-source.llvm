@@ -2896,6 +2896,16 @@ if(BUILD_TESTING)
         set_tests_properties(native_source_bool_${mode} PROPERTIES TIMEOUT 120)
     endforeach()
 
+    # Six pinned native .ores fixtures -> checked LLVM IR -> Clang
+    # (-O0/-O2) -> actual OS guest exit 42; five pinned immutable-default
+    # admission negatives plus two compiler-owned cast negatives.
+    # The Rust harness never substitutes host arithmetic for guest execution.
+    add_test(NAME native_five_backend_checked_cast_guest
+        COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" native-cast-parity
+            "$<TARGET_FILE:oreslang-llvmc>" "${ORE_SOURCE_I64_CLANG}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/parity")
+    set_tests_properties(native_five_backend_checked_cast_guest PROPERTIES TIMEOUT 180)
+
     # Independent T? type-sugar and name? omission admission.
     # Positive .atto controls must compile/link/execute; unsupported forms
     # must be rejected by the real native source compiler with no LLVM IR.
