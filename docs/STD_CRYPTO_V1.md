@@ -32,8 +32,17 @@ sh tests/crypto-aead-host-v1.sh
 This builds a small OpenSSL-linked C++17 test independently of the
 full LLVM SDK. It includes the NIST AES-256-GCM empty-message
 known-answer vector, nonce uniqueness, tamper, wrong key/AAD/nonce,
-zero-length messages, and key retirement. **This runner has not
-been executed yet on the PR head.** These code additions are not
+zero-length messages, and key retirement. **An isolated host test executed and PASSED** with the exact
+committed files under C++17 with OpenSSL 3.5.5:
+`CryptoAeadHostV1.h` blob
+`9f766489f3f01d3a5ff921ff9b6cb7aa5c5bc508`,
+`CryptoAeadHostV1.cpp` blob
+`9aec3197a8251f5b93e5ca6814fc6863ec8d555c`,
+and `crypto_aead_host_v1_test.cpp` blob
+`716d80248c2f31d55811def90104d1d935335df7`.
+The isolated output was `ATTO_CRYPTO_AEAD_OPENSSL_HOST_ONLY_PASS`.
+It was not the GitHub Actions runner or the complete LLVM compiler.
+These code additions are not
 a working `std.crypto` import, actor capability, or hard-real-time
 compiler proof. Fail closed until these are independently tested.
 
