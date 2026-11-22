@@ -4480,11 +4480,12 @@ private:
             field->name = identifier();
             if (field->left && field->left->kind == Expression::Kind::Variable &&
                     atomic_i64_receivers_.count(field->left->name)) {
-                if (field->name != "load" && field->name != "fetch_add")
-                    fail("ATTO_ATOMIC_MAIN_V1_REJECT: only load/fetch_add are admitted");
+                if (field->name != "load" && field->name != "fetch_add" &&
+                        field->name != "fetch_sub")
+                    fail("ATTO_ATOMIC_MAIN_V1_REJECT: only load/fetch_add/fetch_sub are admitted");
                 field->kind = Expression::Kind::NativeAtomicCall;
                 require("(");
-                if (field->name == "fetch_add") {
+                if (field->name == "fetch_add" || field->name == "fetch_sub") {
                     field->arguments.push_back(expression());
                     if (accept(",")) {
                         require("#");
@@ -4852,7 +4853,7 @@ private:
                 if (!expr.left || expr.left->kind != Expression::Kind::Variable)
                     throw std::runtime_error("Atomic call lacks compiler-owned receiver");
                 validate_expression(*expr.left, parameters, functions, depth + 1);
-                if (expr.arguments.size() != (expr.name == "fetch_add" ? 1u : 0u))
+                if (expr.arguments.size() != (expr.name == "load" ? 0u : 1u))
                     throw std::runtime_error("Atomic expression arity mismatch");
                 for (const auto& arg : expr.arguments)
                     validate_expression(*arg, parameters, functions, depth + 1);
@@ -5074,12 +5075,13 @@ private:
             }
             case Expression::Kind::NativeAtomicCall: {
                 if (!expr.left || expr.left->kind != Expression::Kind::Variable ||
-                        (expr.name != "load" && expr.name != "fetch_add") ||
-                        expr.arguments.size() != (expr.name == "fetch_add" ? 1u : 0u))
+                        (expr.name != "load" && expr.name != "fetch_add" &&
+                         expr.name != "fetch_sub") ||
+                        expr.arguments.size() != (expr.name == "load" ? 0u : 1u))
                     throw std::runtime_error("unproven native Atomic<int> expression");
                 for (const auto& arg : expr.arguments)
                     require_type(validate_scalar_expression(*arg, variables, functions, depth + 1),
-                                 ScalarType::I64, "Atomic<int>.fetch_add");
+                                 ScalarType::I64, "Atomic<int> checked fetch arithmetic");
                 return expr.resolved_type = ScalarType::I64;
             }
             case Expression::Kind::ArrayCall: {
