@@ -17,6 +17,17 @@ enable_testing()
 add_test(NAME process_isolated_actor_fault COMMAND atto_actor_process_isolation_test)
 set_tests_properties(process_isolated_actor_fault PROPERTIES TIMEOUT 15)
 
+# Host-only ACK contract gate; NO compiled Atto guest, socket or TLS claim.
+add_library(atto_proxy_receipt_gate_v1 STATIC src/proxy_receipt_gate_v1.c)
+target_include_directories(atto_proxy_receipt_gate_v1 PUBLIC include)
+add_executable(atto_proxy_receipt_gate_v1_test tests/proxy_receipt_gate_v1_test.c)
+target_link_libraries(atto_proxy_receipt_gate_v1_test PRIVATE atto_proxy_receipt_gate_v1)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(atto_proxy_receipt_gate_v1 PRIVATE -Wall -Wextra -Wconversion -Werror)
+  target_compile_options(atto_proxy_receipt_gate_v1_test PRIVATE -Wall -Wextra -Wconversion -Werror -UNDEBUG)
+endif()
+add_test(NAME proxy_receipt_host_gate COMMAND atto_proxy_receipt_gate_v1_test)
+
 # Trusted Linux host-side scoped filesystem broker. This is not an Atto guest
 # or secure TenantVM runtime. openat2 is deliberately NOT emulated on other OSes.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
