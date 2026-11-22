@@ -79,8 +79,8 @@ jobs:
           fixture=tests/fixtures/stdlib_pure_policy_parity_v1.atto
           "$compiler" --target=host "$fixture" > "$RUNNER_TEMP/std-parity-134.ll"
           test -s "$RUNNER_TEMP/std-parity-134.ll"
-          grep -Eq '^define i64 @__oreslang_guest_main\\(' "$RUNNER_TEMP/std-parity-134.ll"
-          grep -Eq '^define i32 @main\\(' "$RUNNER_TEMP/std-parity-134.ll"
+          grep -Eq '^define i64 @__oreslang_guest_main\(' "$RUNNER_TEMP/std-parity-134.ll"
+          grep -Eq '^define i32 @main\(' "$RUNNER_TEMP/std-parity-134.ll"
           for opt in 0 2; do
             clang "-O$opt" -x ir "$RUNNER_TEMP/std-parity-134.ll" \
               -o "$RUNNER_TEMP/std-parity-134-O$opt"
