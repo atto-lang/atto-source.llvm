@@ -90,6 +90,16 @@ int main() {
            compiled.operands.writes.size() == 1);
     const auto ir = emit_native_i64_pair_ir(compiled.mir, compiled.operands);
     INVERTED_REQUIRE(ir.find("define i32 @main()") != std::string::npos);
+    // The wasm32 path consumes the identical verified MIR and emits an i64
+    // WebAssembly ABI, not the native process-exit i32 truncation contract.
+    const auto wasm_ir = emit_wasm32_i64_pair_ir(compiled.mir, compiled.operands);
+    INVERTED_REQUIRE(wasm_ir.find("target triple = \"wasm32-unknown-unknown\"") != std::string::npos);
+    INVERTED_REQUIRE(wasm_ir.find("define i64 @main()") != std::string::npos);
+    INVERTED_REQUIRE(wasm_ir.find("ret i64 %") != std::string::npos);
+    INVERTED_REQUIRE(wasm_ir.find("trunc i64") == std::string::npos);
+    INVERTED_REQUIRE(wasm_ir.find("declare void @llvm.trap()") != std::string::npos);
+    INVERTED_REQUIRE(wasm_ir.find("store volatile i1 false, ptr %alive") != std::string::npos);
+    INVERTED_REQUIRE(wasm_ir.find("store volatile i64 0") != std::string::npos);
     INVERTED_REQUIRE(ir.find("icmp ult i64") != std::string::npos);
     INVERTED_REQUIRE(ir.find("store volatile i1 false, ptr %alive") != std::string::npos);
     // A forged external MIR sequence that simply omits Close must fail

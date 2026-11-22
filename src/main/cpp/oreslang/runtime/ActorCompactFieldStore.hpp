@@ -35,10 +35,16 @@ class ActorCompactFieldStore final {
 public:
     // Oreslang guest object layout: the payload is just a stand-in for the
     // compiler's class fields; the link array is genuinely stored as i32s.
-    struct Object final {
+    // Aligned to the ref32 quantum explicitly, never to the C ABI: i386 SysV
+    // gives int64_t alignof 4, so objects landed on 4-byte boundaries that the
+    // 8-byte ref32 encoding cannot represent and every link was rejected
+    // there. Same alignment, same size, same offsets on every host.
+    struct alignas(CompressedActorRef::alignment) Object final {
         std::int64_t payload = 0;
         std::array<CompressedActorRef, LinksPerNode> links{};
     };
+    static_assert(alignof(Object) == CompressedActorRef::alignment,
+                  "ref32 target objects must start on the ref32 quantum");
     static_assert(sizeof(CompressedActorRef) == 4, "compact fields must be i32");
     static_assert(std::is_trivially_copyable<Object>::value, "native POD object required");
     static_assert(Bytes >= sizeof(Object), "object exceeds actor heap capacity");

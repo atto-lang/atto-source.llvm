@@ -1,0 +1,30 @@
+{
+  "schema": "atto.llvm.reviewed-compiler-overlays.v1",
+  "baseline_main": "4eee1b4180d1f9521faeedba53f1cd63bda6da4c",
+  "merged_prs": [
+    10,
+    13,
+    14,
+    15,
+    18,
+    21,
+    27,
+    19,
+    22,
+    23
+  ],
+  "integration_pr": 23,
+  "provenance": "48 original, immutable Oreslang Git blobs plus exactly 9 reviewed Atto compiler/runtime source overrides. LLVM FFI #22/#23 changed the normal Parser, ModuleLoader, and LLVM emitter; test-only M0 remains opt-in.",
+  "files": {
+    "src/main/cpp/oreslang/backend/LlvmCodegen.cpp": "3aa518f6221e455b2d500244b230e797cb63bebb",
+    "src/main/cpp/oreslang/frontend/Parser.cpp": "511d7ec9c348c78713d5a5008df9aad777a6eaf4",
+    "src/main/cpp/oreslang/frontend/Parser.hpp": "68ab7710b5d918a912b6ca280949845d85bc6ee9",
+    "src/main/cpp/oreslang/main.cpp": "85b3fbb377e77e06e71040edd1b6a5415150a78a",
+    "src/main/cpp/oreslang/types/OwnershipChecker.cpp": "20deb9dbad1a4bbafbf48e6a3cf89b050d3ba3ed",
+    "src/main/cpp/oreslang/runtime/TenantVm.cpp": "bf8ef7b963c19502c97993386ae7e14cfb8b9626",
+    "src/main/cpp/oreslang/runtime/TenantVmGuestAbi.h": "cec4e559b56a94dfdc947f5095a4d2894781c066",
+    "src/main/cpp/oreslang/frontend/ModuleLoader.cpp": "909b19b4c93190714f6a387e460699e11f86c77e",
+    "src/main/cpp/oreslang/frontend/ModuleLoader.hpp": "f20cceef2ddb9f5d815a7c06ec0990a0c87434b7"
+  },
+  "post_merge_main": "8a34d1daf95ae32b64d542d206f71b66c5bc9077"
+}

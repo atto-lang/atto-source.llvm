@@ -1,0 +1,85 @@
+{
+  "schema": "atto.llvm.native-aot-atomic-publish.v1",
+  "status": "PASS_LINUX_X86_64_SCALAR_GUEST_AND_OUTPUT_HARDENING",
+  "base_receipt": "contracts/native-llvm-aot-v1.json",
+  "base_receipt_blob": "f46dbc38b78b7d891229b9e543661fb397e72b9f",
+  "source_repo": "atto-lang/atto-source.llvm",
+  "audited_source_commit": "ec2c04024b10f0dc1005c90fa73c6e741615df39",
+  "audited_full_tree": "bf71ea154bf87bb80c7534678e716d5daa94f455",
+  "audited_blob_count": 32,
+  "llvm_emitter_blob": "22a8d706f839f9fce625b41aa752eca17fdf8ace",
+  "native_ci_script_blob": "da04534fbbaf5a59420343c9e0306ea4329c0ff2",
+  "frontend_typechecker_blob": "18c9b7e3e9696bfdd56fa5130f52a9a71a796c43",
+  "runner": {
+    "repository": "athlet-o/athleto-e2e",
+    "run": "https://github.com/athlet-o/athleto-e2e/actions/runs/43651073559",
+    "mirror_snapshot_commit": "773249636762dcc56b142ca6ab7f0433caebbc91",
+    "workflow_commit": "7def6e66e0a4090a02248725c2e9e9ddf42f08e7",
+    "toolchain": "Rust 1.85.1; Ubuntu clang 18.1.3; Linux x86-64",
+    "sha_exact_local_mirror": true,
+    "cross_org_checkout_credentials": false,
+    "job_conclusion": "success"
+  },
+  "verification": {
+    "native_llvm_to_elf_guest_execution": true,
+    "total_native_atto_cases": 1255,
+    "guests": 4,
+    "actual_exit_code": 42,
+    "frontend_unit_tests_passed": 4,
+    "deterministic_llvm_ir": true,
+    "checked_add_sub_mul_neg_traps": true,
+    "asan_ubsan_smoke_passed": true,
+    "invalid_source_rejected": true,
+    "unsupported_io_rejected": true,
+    "output_uses_exclusive_staging_file": true,
+    "output_commits_only_after_full_success": true,
+    "source_output_alias_rejected": true,
+    "symlink_to_input_rejected": true,
+    "hardlink_to_input_rejected": true,
+    "prior_output_preserved_after_source_or_clang_failure": true,
+    "fake_successful_clang_without_artifact_rejected": true,
+    "fake_successful_clang_with_invalid_elf_rejected": true,
+    "verified_linux_x86_64_elf_header_and_executable_mode": true,
+    "staged_temporary_artifacts_removed": true,
+    "guest_vm_required": false,
+    "guest_gc_required_for_scalar_subset": false
+  },
+  "generated_artifacts": [
+    {
+      "fixture": "167-quic-varint-rfc9000.atto",
+      "cases": 308,
+      "llvm_ir_sha256": "4e76d466924142ee22fe8c34269e0990490b5716183f3abe4e870f309ef73a26",
+      "elf_sha256": "af1e4da43b5cad97cdf3222fed7797fc1c75480e9e57b977384b7c48924d645d"
+    },
+    {
+      "fixture": "168-http3-frame-rfc9114.atto",
+      "cases": 435,
+      "llvm_ir_sha256": "a0c99e390047c626305d33fd0d31d2fabfbdb8d8f7791b5d5ccffc3a5a4b4493",
+      "elf_sha256": "b9986087ff3a3e9ad4e24c1bee071ee2cc9f3eea4b6f454f8d7b580b1eae1b56"
+    },
+    {
+      "fixture": "169-http3-request-state-guards.atto",
+      "cases": 256,
+      "llvm_ir_sha256": "c15f1d6ab5157a456f12bee690d6989eec9d41a54e2c7139c9940eb45e2247a5",
+      "elf_sha256": "a65973558d7905ea3e33c9fea06992f074e1b8d98d2e49d260655243d22391a2"
+    },
+    {
+      "fixture": "170-http3-push-state-guards.atto",
+      "cases": 256,
+      "llvm_ir_sha256": "9433ef1e97859bf63d5764cdbb3ff1d730eb3a95270c269aec1043c8ec3a9399",
+      "elf_sha256": "210ca8d0b1db80e7caed80683f8142430578f8b672358982731ff303d1dd8bee"
+    }
+  ],
+  "limitations": {
+    "cpu_arch": "x86_64",
+    "platform": "linux",
+    "compiler_subset": "scalar functions and control flow only",
+    "actor_runtime_implemented": false,
+    "actor_owned_heaps_and_stacks": false,
+    "full_language_native_aot": false,
+    "real_quic_tls_network": false,
+    "http3_wire_client_server": false,
+    "independent_java_net_wasm_execution": false,
+    "secure_against_hostile_directory_races": false
+  }
+}
