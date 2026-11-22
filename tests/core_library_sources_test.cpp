@@ -84,6 +84,10 @@ int main() {
     assert(find_core_library_source("ores.core/cell/../math") == nullptr);
     assert(find_core_library_source("atto.core/hash")->source.find("step_byte") != std::string_view::npos);
     assert(find_core_library_source("atto.core/cell")->source.find("POLICY only") != std::string_view::npos);
+    // v1 loan count is saturated at 65535: read admission must match acquire.
+    const auto* cell_policy = find_core_library_source("atto.core/cell");
+    assert(cell_policy->source.find("readers < 65535") != std::string_view::npos);
+    assert(cell_policy->source.find("readers <= 65535") == std::string_view::npos);
 
     const auto* buffer = find_alloc_library_source("atto.alloc/int_buffer");
     assert(buffer == find_alloc_library_source("atto.alloc/int_buffer.atto"));

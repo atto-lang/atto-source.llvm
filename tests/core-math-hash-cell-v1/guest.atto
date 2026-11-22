@@ -12,5 +12,8 @@ pub fnc main(): int {
   if !cell.can_borrow_read(3, false); do return 7; fi
   if cell.can_borrow_write(3, false); do return 8; fi
   if cell.readers_after_acquire(65535, false) != -1; do return 9; fi
+  if !cell.can_borrow_read(65534, false); do return 10; fi
+  if cell.can_borrow_read(65535, false); do return 11; fi
+  if cell.readers_after_acquire(65534, false) != 65535; do return 12; fi
   return 42;
 }

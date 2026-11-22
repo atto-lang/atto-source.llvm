@@ -23,7 +23,7 @@ const SOURCES: [Source; 6] = [
         delimiter: "ATTO_HASH", blob: "28d702730cc83c4327d70797c10f39d61e4ce31c" },
     Source { file: "stdlib/cell.atto",
         output: "src/main/cpp/oreslang/frontend/GeneratedCellAtto.inc",
-        delimiter: "ATTO_CELL", blob: "fc60ae6c3de0c95633b4b9d554a00b010eadf93e" },
+        delimiter: "ATTO_CELL", blob: "f6984338fd6453876eb3754f93f7ca7996c87bc9" },
     Source { file: "stdlib/alloc/int_buffer.atto",
         output: "src/main/cpp/oreslang/frontend/GeneratedIntBufferAtto.inc",
         delimiter: "ATTO_INT_BUFFER", blob: "25b3d4bc06a0c859aacadaf0795414027a076bdc" },

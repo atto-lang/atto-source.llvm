@@ -1,11 +1,11 @@
 // Generated from stdlib/cell.atto; do not edit manually.
-// source Git blob SHA-1: fc60ae6c3de0c95633b4b9d554a00b010eadf93e
+// source Git blob SHA-1: f6984338fd6453876eb3754f93f7ca7996c87bc9
 R"ATTO_CELL(// Borrow-admission POLICY only; no Cell<T>/RefCell<T> storage.
 // Checks cannot synchronize, issue loan tokens or legalize aliasing.
 // Real interior mutability requires verified compiler/runtime intrinsics.
 define module cell as
   pub fnc can_borrow_read(int readers, bool writer_active): bool {
-    return readers >= 0 && readers <= 65535 && !writer_active;
+    return readers >= 0 && readers < 65535 && !writer_active;
   }
   pub fnc can_borrow_write(int readers, bool writer_active): bool {
     return readers == 0 && !writer_active;
