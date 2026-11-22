@@ -1475,7 +1475,7 @@ int main(int argc, char** argv) {
                 switch (expr.kind) {
                     case Kind::Integer: case Kind::Boolean:
                     case Kind::Variable: return true;
-                    case Kind::Negate: case Kind::LogicalNot:
+                    case Kind::Negate: case Kind::Abs: case Kind::LogicalNot:
                         return expr.left && scalar(*expr.left, depth + 1, calls);
                     case Kind::Add: case Kind::Subtract: case Kind::Multiply:
                     case Kind::Equal: case Kind::NotEqual:
