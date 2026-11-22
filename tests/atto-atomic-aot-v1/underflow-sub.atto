@@ -1,0 +1,5 @@
+fnc main(): int {
+    val Atomic<int> counter = Atomic<int>(-9223372036854775808);
+    val int prior = counter.fetch_sub(1, #acq_rel);
+    return counter.load();
+}
