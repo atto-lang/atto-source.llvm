@@ -1,5 +1,6 @@
 #include "oreslang/runtime/TenantVm.hpp"
 #include "oreslang/runtime/ActorSlabHeap32.hpp"
+#include "oreslang/runtime/TenantVmFsTurnAuth.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -141,6 +142,9 @@ struct Mail {
 struct Actor {
     const OresVmGuestKind* kind = nullptr;
     std::uint32_t generation = 0; // bumped at every release, so stale refs never match
+    std::uint64_t fs_incarnation = 1; // restart changes this even when actor ref remains
+    HostFsLifecycleBinding fs_lifecycle{}; // trusted borrowed service, never guest-visible
+    HostFsActorIdentity fs_bound_owner{};
     std::uint32_t region = 0;
     std::uint32_t region_bytes = 0;
     // Trusted bitmap metadata; allocated at actor spawn, never in guest cage.
@@ -225,6 +229,8 @@ struct Carrier {
     void* core = nullptr; // TenantVmHost::Core
     const std::shared_ptr<Vm>* vm = nullptr;
     Actor* actor = nullptr;
+    std::uint32_t actor_slot = 0;
+    internal::FsTurnAuth fs_turn{}; // host-only, never guest-visible
 };
 
 // Read in signal handlers, including on threads that never ran a turn. In a library that was
@@ -649,8 +655,23 @@ struct TenantVmHost::Core {
         return vm.actors[slot]->terminated_generation == generation;
     }
 
+    // An I/O service is owned by a single actor incarnation. Revocation
+    // MUST precede restart, memory scrub, and slot reuse. It is a lock-free
+    // trusted host callback; an impossible failure is host-integrity fatal.
+    static void revoke_actor_fs_locked(Actor& actor) noexcept {
+        const HostFsLifecycleBinding bound = actor.fs_lifecycle;
+        if (!bound.revoke) return;
+        const HostFsActorIdentity identity = actor.fs_bound_owner;
+        actor.fs_lifecycle = {};
+        actor.fs_bound_owner = {};
+        if (!bound.revoke(bound.trusted_service, identity)) std::abort();
+    }
+
     // As it was when spawned, except for what the guest committed to its stored state, and its mail.
     void reset_actor_locked(Vm& vm, Actor& actor) {
+        revoke_actor_fs_locked(actor);
+        // Restart preserves actor_ref: deny old tickets on the new incarnation.
+        actor.fs_incarnation = internal::next_fs_incarnation(actor.fs_incarnation);
         std::memset(vm.cage + actor.region, 0, actor.region_bytes);
         if (actor.kind->instance_bytes) std::memset(actor.instance.get(), 0, actor.kind->instance_bytes);
         if (actor.heap_allocator) actor.heap_allocator->reset();
@@ -712,6 +733,7 @@ struct TenantVmHost::Core {
 
         c->vm = &shared;
         c->actor = &actor;
+        c->actor_slot = slot;
         c->trap_reason = FailReason::None;
         c->trap_was_checked = false;
         const std::uint64_t started = now_ns();
@@ -720,6 +742,9 @@ struct TenantVmHost::Core {
         c->restartable_turn.store((kind->flags & ORES_VM_KIND_RESTARTABLE) != 0, std::memory_order_relaxed);
         c->vm_generation.store(vm.generation, std::memory_order_seq_cst);
         c->current_seq = c->turn_seq.fetch_add(1, std::memory_order_seq_cst) + 1; // now odd
+        c->fs_turn = internal::FsTurnAuth{vm.generation, self, actor.fs_incarnation,
+                                            c->current_seq, actor.region, actor.region_bytes,
+                                            scratch, kind->scratch_bytes};
         std::int64_t value = 0;
         bool completed = false;
         // Pairs with fail(): it publishes the phase and then scans carriers, this announces
@@ -731,6 +756,8 @@ struct TenantVmHost::Core {
             c->trap_reason = FailReason::HostKill;
         }
         c->turn_seq.fetch_add(1, std::memory_order_seq_cst); // even again
+        c->fs_turn = {}; // cannot carry authority to a later tenant or turn
+        c->actor_slot = 0;
         const std::uint64_t spent = now_ns() - started;
         vm.cpu_ns.fetch_add(spent, std::memory_order_relaxed);
         vm.vtime_ns.fetch_add(spent, std::memory_order_relaxed);
@@ -840,6 +867,9 @@ struct TenantVmHost::Core {
         }
         Actor& actor = *v.actors[slot];
         actor.kind = kind;
+        actor.fs_lifecycle = {};
+        actor.fs_bound_owner = {};
+        actor.fs_incarnation = 1; // a reused slot has a new actor ref generation
         actor.region = region;
         actor.region_bytes = bytes;
         if (heap_allocator) heap_allocator->bind(v.cage, static_cast<std::uint32_t>(
@@ -858,6 +888,7 @@ struct TenantVmHost::Core {
 
     // Scrubs before reuse, so a later actor can never read what this one left behind.
     void release_actor_locked(Vm& vm, Actor& actor, std::uint32_t slot) {
+        revoke_actor_fs_locked(actor);
         std::memset(vm.cage + actor.region, 0, actor.region_bytes);
         vm.free_regions[actor.region_bytes].push_back(actor.region);
         vm.used -= actor.region_bytes;
@@ -866,6 +897,7 @@ struct TenantVmHost::Core {
         actor.heap_allocator.reset();
         actor.live = false;
         actor.stopping = false;
+        actor.fs_incarnation = internal::next_fs_incarnation(actor.fs_incarnation);
         ++actor.generation;
         // Past the last generation a ref could be reused, so this slot is simply retired.
         if (actor.generation < kMaxGeneration) vm.free_slots.push_back(slot);
@@ -890,8 +922,31 @@ struct TenantVmHost::Core {
     // of stack here is the guest's doing, and must not reach host code, where it would be fatal
     // for every tenant. in_guest is still set, so if these frames touch the guard that is
     // contained as well.
+    // Scheduler-only authority. No guest-supplied tenant/actor numbers, base
+    // pointers or bearer tokens may enter this path. ABI v5 stays disabled.
+    static bool authenticated_fs_turn(const Carrier* c) noexcept {
+        if (!c || c != t_carrier || !c->core || !c->vm || !(*c->vm) ||
+            !c->actor || !c->actor->kind || !c->in_guest) return false;
+        const Vm& vm = **c->vm;
+        const Actor& actor = *c->actor;
+        const Phase phase = vm.current_phase();
+        if (phase != Phase::Running && phase != Phase::Quiescing) return false;
+        const std::uint64_t seq = c->turn_seq.load(std::memory_order_seq_cst);
+        if (seq != c->current_seq ||
+            c->abort_seq.load(std::memory_order_acquire) == seq) return false;
+        const std::uint64_t scratch = std::uint64_t{actor.region} +
+                                      actor.kind->state_bytes + actor.kind->heap_bytes;
+        if (scratch > UINT32_MAX) return false;
+        const internal::FsTurnAuth live{vm.generation,
+            (std::uint64_t{actor.generation} << 32) | c->actor_slot,
+            actor.fs_incarnation, seq, actor.region, actor.region_bytes,
+            static_cast<std::uint32_t>(scratch), actor.kind->scratch_bytes};
+        return internal::same_fs_turn(c->fs_turn, live);
+    }
+
     static Carrier* host_enter() {
         Carrier* c = t_carrier;
+        if (!authenticated_fs_turn(c)) return nullptr;
         const auto sp = reinterpret_cast<std::uintptr_t>(__builtin_frame_address(0));
         const auto stack_low = reinterpret_cast<std::uintptr_t>(c->stack_guard_low) + kCarrierGuardBytes;
         if (sp < stack_low + kHostCallStackBytes) {
@@ -931,6 +986,7 @@ struct TenantVmHost::Core {
     // Host calls run on the guest's stack, under a C frame. No exception may cross it.
     static std::uint32_t host_alloc(std::uint32_t bytes, std::uint32_t alignment) {
         Carrier* c = host_enter();
+        if (!c) return 0;
         const std::uint32_t result = alloc_impl(**c->vm, *c->actor, bytes, alignment);
         host_leave(c);
         return result;
@@ -938,6 +994,7 @@ struct TenantVmHost::Core {
 
     static int host_free(std::uint32_t offset, std::uint32_t bytes, std::uint32_t alignment) {
         Carrier* c = host_enter();
+        if (!c) return 0;
         int result = 0;
         try {
             result = free_impl(**c->vm, *c->actor, offset, bytes, alignment);
@@ -971,6 +1028,7 @@ struct TenantVmHost::Core {
 
     static int host_send(std::uint64_t target, std::uint32_t offset, std::uint32_t length) {
         Carrier* c = host_enter();
+        if (!c) return 0;
         int result = 0;
         try {
             result = static_cast<Core*>(c->core)->send_impl(*c->vm, target, offset, length);
@@ -990,6 +1048,7 @@ struct TenantVmHost::Core {
 
     static std::uint64_t host_spawn(std::uint32_t kind) {
         Carrier* c = host_enter();
+        if (!c) return 0;
         std::uint64_t result = 0;
         try {
             result = static_cast<Core*>(c->core)->spawn_impl(*c->vm, kind);
@@ -1005,6 +1064,7 @@ struct TenantVmHost::Core {
         Actor* actor = resolve_actor_locked(*shared, target);
         if (!actor || actor->stopping) return 0;
         actor->stopping = true;
+        revoke_actor_fs_locked(*actor);
         if (!actor->running && actor->mailbox.empty())
             release_actor_locked(*shared, *actor, static_cast<std::uint32_t>(target));
         return 1;
@@ -1012,6 +1072,7 @@ struct TenantVmHost::Core {
 
     static int host_stop(std::uint64_t target) {
         Carrier* c = host_enter();
+        if (!c) return 0;
         const int result = static_cast<Core*>(c->core)->stop_impl(*c->vm, target);
         host_leave(c);
         return result;
@@ -1048,6 +1109,7 @@ struct TenantVmHost::Core {
             vm->terminal.reason = reason;
             vm->terminal.fault_offset = fault_offset;
             for (auto& actor : vm->actors) {
+                revoke_actor_fs_locked(*actor);
                 for (auto& mail : actor->mailbox) {
                     refund_mail_locked(*vm, mail.bytes.size());
                     doomed.push_back(std::move(mail));
@@ -1353,6 +1415,30 @@ std::future<TurnResult> TenantVmHost::call(const VmActor& ref, std::vector<std::
     return future;
 }
 
+Status TenantVmHost::bind_actor_fs_lifecycle(const VmActor& ref,
+                                               const HostFsLifecycleBinding& binding) {
+    // Host-only: the verifier compares a fully admitted service's immutable
+    // actor owner with the identity resolved from this unforgeable VmActor.
+    if (!binding.trusted_tenant_id || !binding.trusted_service ||
+        !binding.matches || !binding.revoke) return Status::InvalidArgument;
+    Status status = Status::Ok;
+    auto vm = core_->resolve(ref.root_, ref.vm_, ref.generation_, status);
+    if (!vm) return status;
+    std::lock_guard<std::mutex> lock(vm->mutex);
+    if (vm->current_phase() != Phase::Running) return Status::NotRunning;
+    Actor* actor = core_->resolve_actor_locked(*vm, ref.ref_);
+    if (!actor) return Status::UnknownActor;
+    if (actor->stopping) return Status::ActorStopping;
+    if (actor->running || actor->fs_lifecycle.revoke) return Status::Busy;
+    if (!actor->fs_incarnation) return Status::NotRunning; // exhausted incarnation
+    const HostFsActorIdentity owner{binding.trusted_tenant_id, vm->generation,
+                                    ref.ref_, actor->fs_incarnation};
+    if (!binding.matches(binding.trusted_service, owner)) return Status::InvalidArgument;
+    actor->fs_bound_owner = owner;
+    actor->fs_lifecycle = binding;
+    return Status::Ok;
+}
+
 Status TenantVmHost::stop_actor(const VmActor& ref) {
     Status status = Status::Ok;
     auto vm = core_->resolve(ref.root_, ref.vm_, ref.generation_, status);
@@ -1363,6 +1449,7 @@ Status TenantVmHost::stop_actor(const VmActor& ref) {
     if (!actor) return core_->was_terminated_locked(*vm, ref.ref_) ? Status::ActorTerminated : Status::UnknownActor;
     if (actor->stopping) return Status::ActorStopping;
     actor->stopping = true;
+    Core::revoke_actor_fs_locked(*actor);
     if (!actor->running && actor->mailbox.empty())
         core_->release_actor_locked(*vm, *actor, static_cast<std::uint32_t>(ref.ref_));
     return Status::Ok;
@@ -1376,6 +1463,7 @@ Status TenantVmHost::begin_shutdown(const VmHandle& handle) {
         std::lock_guard<std::mutex> lock(vm->mutex);
         if (vm->current_phase() != Phase::Running) return Status::NotRunning;
         vm->phase.store(static_cast<int>(Phase::Quiescing), std::memory_order_seq_cst);
+        for (auto& actor : vm->actors) Core::revoke_actor_fs_locked(*actor);
     }
     core_->maybe_retire(vm);
     return Status::Ok;
