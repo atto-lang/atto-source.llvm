@@ -1,0 +1,50 @@
+// Generated from stdlib/alloc/arena.atto; do not edit manually.
+// source Git blob SHA-1: ae18bb071331f7d8e4919b5ebc47d0402212721f
+R"ATTO_ARENA(// Compiler-owned Atto alloc tier: source implements policy, not physical authority.
+// Real native allocation still requires a provider and compiler-verified lifetimes.
+define module arena as
+// LLVM-backend-owned alloc/arena source: bounded bump-allocation decisions.
+// Offsets are policy values, NOT dereferenceable pointers or owner tickets.
+// Runtime must physically allocate, zero and drop in the actor's own domain.
+// -1 means invalid or out of quota. Zero bytes consume no padding.
+  pub fnc arena_aligned_start(int cursor, int bytes, int alignment, int quota) -> int {
+    if cursor < 0 || bytes < 0 || alignment <= 0 || quota < 0 then return -1; fi
+    if cursor > quota then return -1; fi
+    if (alignment & (alignment - 1)) != 0 then return -1; fi
+    if bytes == 0 then return cursor; fi
+    val int remainder = cursor - (cursor / alignment) * alignment;
+    if remainder == 0 then
+      if bytes > quota - cursor then return -1; fi
+      return cursor;
+    fi
+    val int padding = alignment - remainder;
+    if padding > quota - cursor then return -1; fi
+    val int start = cursor + padding;
+    if bytes > quota - start then return -1; fi
+    return start;
+  }
+
+  pub fnc arena_end(int cursor, int bytes, int alignment, int quota) -> int {
+    val int start = arena_aligned_start(cursor, bytes, alignment, quota);
+    if start < 0 then return -1; fi
+    return start + bytes;
+  }
+
+// Only a native provider-verified empty tail can be rewound; the caller
+// supplied counters cannot themselves constitute proof of quiescence.
+  pub fnc arena_can_rewind(int current, int mark, int mark_epoch,
+                           int current_epoch, int loans, int live_values) -> bool {
+    if current < 0 || mark < 0 || mark > current then return false; fi
+    if mark_epoch < 1 || mark_epoch != current_epoch then return false; fi
+    return loans == 0 && live_values == 0;
+  }
+
+  pub fnc arena_can_reset(bool sealed, int loans, int live_values,
+                          int generation, int generation_maximum) -> bool {
+    if sealed then return false; fi
+    if loans != 0 || live_values != 0 then return false; fi
+    return generation >= 1 && generation < generation_maximum;
+  }
+
+end
+)ATTO_ARENA"
