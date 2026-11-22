@@ -1,0 +1,13 @@
+define class Box as
+  pub let int a = 4;
+  pub let int b = 42;
+end
+fnc edit(borrow Box box): void {
+  box.b = 55;
+  return;
+}
+pub fnc main(): int {
+  let Box box = new Box();
+  edit(rt borrow box);
+  return box.b;
+}

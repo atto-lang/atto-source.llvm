@@ -3,21 +3,28 @@ on:
   push:
     paths:
       - native/**
+      - runtime/actor_runtime.c
       - .github/workflows/native-actor-process-isolation.yml
   pull_request:
     paths:
       - native/**
+      - runtime/actor_runtime.c
       - .github/workflows/native-actor-process-isolation.yml
 permissions:
   contents: read
 jobs:
   posix-process-faults:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        compiler: [gcc, clang]
-        config: [Debug, Release]
+        include:
+          - {os: ubuntu-24.04, compiler: gcc, config: Debug}
+          - {os: ubuntu-24.04, compiler: gcc, config: Release}
+          - {os: ubuntu-24.04, compiler: clang, config: Debug}
+          - {os: ubuntu-24.04, compiler: clang, config: Release}
+          - {os: macos-15, compiler: clang, config: Debug}
+          - {os: macos-15, compiler: clang, config: Release}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -29,7 +36,15 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$EXPECTED"
       - name: Compile independent POSIX host boundary
         run: |
-          cmake -S native -B build -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DCMAKE_C_COMPILER=${{ matrix.compiler }}
+          if [ "${{ matrix.compiler }}" = "gcc" ]; then CXX=g++; else CXX=clang++; fi
+          cmake -S native -B build -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DCMAKE_C_COMPILER=${{ matrix.compiler }} -DCMAKE_CXX_COMPILER="$CXX" -DATTO_TENANT_BYTES_SANITIZERS=ON
           cmake --build build --parallel
-      - name: Prove host survives fatal actor worker faults
+      - name: Verify native isolation and shared tenant allocator host tests
         run: ctest --test-dir build --output-on-failure
+      - name: Reject false in-process hard-fault containment guarantee
+        run: |
+          if ${{ matrix.compiler }} -DATTO_REQUIRE_PROCESS_ISOLATED_ACTORS -c runtime/actor_runtime.c -o build/rejected.o 2> build/rejected.log; then
+            echo "ERROR: pthread-backed native actor runtime claimed SIGSEGV isolation"
+            exit 1
+          fi
+          grep -F "pthread actor runtime cannot contain native SIGSEGV" build/rejected.log

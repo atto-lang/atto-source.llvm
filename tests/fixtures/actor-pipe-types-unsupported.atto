@@ -1,0 +1,2 @@
+// Type-sugar factory must not be interpreted as a value-call or reflection.
+pub fnc main(): int { return Actor.pipe(Reader, Transformer, Writer); }

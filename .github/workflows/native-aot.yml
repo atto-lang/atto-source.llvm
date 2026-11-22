@@ -3,7 +3,7 @@ on:
   push:
     branches: [main, feat/native-atto-http3-policy-20261114]
   pull_request:
-    paths: ['Cargo.toml', 'src/**', 'frontend/**', 'tests/fixtures/**', 'tests/actors/**', 'tests/native_actor_mailbox_stress.c', 'runtime/**', 'contracts/native-llvm-actor-aot-v1.json', 'ci/**', '.github/workflows/native-aot.yml']
+    paths: ['Cargo.toml', 'src/**', 'frontend/**', 'tests/fixtures/**', 'tests/actors/**', 'tests/native_actor_mailbox_stress.c', 'runtime/**', 'contracts/native-llvm-actor-aot-v1.json', 'ci/**', 'stdlib/**', 'fixtures/hosted-policy-main.atto', 'fixtures/hosted-policy-vectors-main.atto', '.github/workflows/native-aot.yml']
 permissions:
   contents: read
 jobs:
@@ -27,5 +27,9 @@ jobs:
           clang --version | head -n 1
       - name: Execute native Atto actors, mailbox stress, sanitizers and previous 1255 cases
         run: bash ci/test_native_actors.sh
+      - name: Compile and execute shared HTTP/FS pure-policy guest through LLVM native AOT
+        run: bash ci/test_hosted_policy_guest.sh
+      - name: Compile and execute guarded return-match and caret native scalar guests
+        run: bash ci/test_guarded_return_match_native.sh
       - name: Verify scalar and native actor AOT exact source receipts
         run: python3 -m unittest discover -s tests -p 'test_llvm_*receipt.py' -v

@@ -1,0 +1,4 @@
+define actor Counter as {
+  const base: int = 12;
+  pub fnc on_message(int message): int { return phantom; }
+}

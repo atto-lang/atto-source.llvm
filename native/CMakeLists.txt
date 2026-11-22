@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(atto_native_actor_fault_boundary LANGUAGES C)
+project(atto_native_actor_fault_boundary LANGUAGES C CXX)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 add_library(atto_actor_process_isolation STATIC src/actor_process_isolation.c)
@@ -28,3 +28,28 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 add_test(NAME result_int_parse_v1_host COMMAND atto_result_int_parse_v1_test)
 set_tests_properties(result_int_parse_v1_host PROPERTIES TIMEOUT 15)
+
+# Compare complete canonical source bytes before any native build.
+# Expected SHA-256 values are from atto-common-source PR #30.
+file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/include/atto/tenant_bytes_v1.hpp" ATTO_SHARED_ALLOC_HEADER_SHA)
+file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/tests/tenant_bytes_v1.cpp" ATTO_SHARED_ALLOC_TEST_SHA)
+if(NOT ATTO_SHARED_ALLOC_HEADER_SHA STREQUAL "4dfa5e8cf73b54c4877c9e423db57355f15b4fb1595d2ded293c97862b334769" OR
+   NOT ATTO_SHARED_ALLOC_TEST_SHA STREQUAL "768e9baba9ac6ded2c81e1256fa6e60cf50333a1ec8bcdac7d6dd4732d2e802d")
+  message(FATAL_ERROR "SHARED_ATTO_ALLOC_SOURCE_DRIFT: sync exact reviewed common-source bytes")
+endif()
+
+# The C++20 allocator host oracle is independent of LLVM/guest codegen.
+# Source byte identity is pinned to atto-common-source PR #30.
+add_executable(atto_tenant_bytes_host_test tests/tenant_bytes_v1.cpp)
+target_include_directories(atto_tenant_bytes_host_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_compile_features(atto_tenant_bytes_host_test PRIVATE cxx_std_20)
+target_link_libraries(atto_tenant_bytes_host_test PRIVATE Threads::Threads)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(atto_tenant_bytes_host_test PRIVATE -Wall -Wextra -Werror -pedantic -UNDEBUG)
+  option(ATTO_TENANT_BYTES_SANITIZERS "Use ASan/UBSan for allocator host test" ON)
+  if(ATTO_TENANT_BYTES_SANITIZERS)
+    target_compile_options(atto_tenant_bytes_host_test PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+    target_link_options(atto_tenant_bytes_host_test PRIVATE -fsanitize=address,undefined)
+  endif()
+endif()
+add_test(NAME tenant_bytes_host_reference COMMAND atto_tenant_bytes_host_test)

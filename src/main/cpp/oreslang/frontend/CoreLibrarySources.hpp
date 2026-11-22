@@ -54,16 +54,19 @@ struct CoreLibrarySource {
 };
 
 inline bool is_reserved_core_import(std::string_view raw) noexcept {
-    return raw == "ores.core" || raw.rfind("ores.core/", 0) == 0;
+    return raw == "atto.core" || raw.rfind("atto.core/", 0) == 0 ||
+        raw == "ores.core" || raw.rfind("ores.core/", 0) == 0;
 }
 
 inline bool is_reserved_std_import(std::string_view raw) noexcept {
-    return raw == "ores.std" || raw.rfind("ores.std/", 0) == 0 ||
+    return raw == "atto.std" || raw.rfind("atto.std/", 0) == 0 ||
+        raw == "ores.std" || raw.rfind("ores.std/", 0) == 0 ||
         raw == "std" || raw.rfind("std/", 0) == 0;
 }
 
 inline bool is_reserved_alloc_import(std::string_view raw) noexcept {
-    return raw == "alloc" || raw.rfind("alloc/", 0) == 0;
+    return raw == "atto.alloc" || raw.rfind("atto.alloc/", 0) == 0 ||
+        raw == "alloc" || raw.rfind("alloc/", 0) == 0;
 }
 
 inline bool is_reserved_compiler_library_import(std::string_view raw) noexcept {
@@ -78,108 +81,52 @@ inline bool compiler_library_dependency_allowed(
 }
 
 inline const CoreLibrarySource* find_compiler_library_source(std::string_view raw) noexcept {
-    // Keep aliases identity-stable: the optional .ores suffix selects the same
-    // compiler-owned unit and can never create a duplicate module instance.
+    // Canonical Atto imports and legacy Ores imports must share one immutable
+    // compiler-owned unit identity; no spelling may duplicate modules.
     static constexpr std::string_view kNumericSource =
-R"ORES_CORE(// Compiler-owned ores.core source.
-// This module has no OS, Java, filesystem, network, process, actor-scheduler,
-// or ambient project dependency.
-
-define module numeric as
-
-  pub fnc min_int(int left, int right): int {
-    if left < right; do
-      return left;
-    fi
-    return right;
-  }
-
-  pub fnc max_int(int left, int right): int {
-    if left > right; do
-      return left;
-    fi
-    return right;
-  }
-
-  pub fnc clamp_int(int value, int lower, int upper): int {
-    if lower > upper; do
-      return lower;
-    fi
-    if value < lower; do
-      return lower;
-    fi
-    if value > upper; do
-      return upper;
-    fi
-    return value;
-  }
-
-end
-)ORES_CORE";
+#include "oreslang/frontend/GeneratedNumericAtto.inc"
+    ;
     static constexpr CoreLibrarySource kNumeric{
         CompilerLibraryTier::Core,
-        "ores.core/numeric",
+        "atto.core/numeric",
         "numeric",
-        "@ores.core/numeric.ores",
+        "@atto.core/numeric.atto",
         kNumericSource,
         0u
     };
 
     static constexpr std::string_view kIntBufferSource =
-R"ORES_ALLOC(// Compiler-owned alloc tier source.
-// This module requires an allocator provider but no OS, filesystem, network,
-// process, actor scheduler, or ambient project dependency.
-
-define module int_buffer as
-
-  pub fnc sum_pair(int left, int right): int {
-    let mut Array<int> values = new Array<int>();
-    values.add(left);
-    values.add(right);
-    return values.get(0) + values.get(1);
-  }
-
-end
-)ORES_ALLOC";
+#include "oreslang/frontend/GeneratedIntBufferAtto.inc"
+    ;
     static constexpr CoreLibrarySource kIntBuffer{
         CompilerLibraryTier::Alloc,
-        "alloc/int_buffer",
+        "atto.alloc/int_buffer",
         "int_buffer",
-        "@alloc/int_buffer.ores",
+        "@atto.alloc/int_buffer.atto",
         kIntBufferSource,
         core_provider_bit(CoreProviderRequirement::Allocator)
     };
 
     static constexpr std::string_view kIntBufferBundleSource =
-R"ORES_ALLOC(// Compiler-owned alloc tier transitive-closure probe.
-// The local body is allocation-free, but linking this module brings in the
-// allocator-bearing int_buffer dependency and therefore requires Allocator.
-
-import module int_buffer from "alloc/int_buffer";
-
-define module int_buffer_bundle as
-
-  pub fnc marker(): int {
-    return 42;
-  }
-
-end
-)ORES_ALLOC";
+#include "oreslang/frontend/GeneratedIntBufferBundleAtto.inc"
+    ;
     static constexpr CoreLibrarySource kIntBufferBundle{
         CompilerLibraryTier::Alloc,
-        "alloc/int_buffer_bundle",
+        "atto.alloc/int_buffer_bundle",
         "int_buffer_bundle",
-        "@alloc/int_buffer_bundle.ores",
+        "@atto.alloc/int_buffer_bundle.atto",
         kIntBufferBundleSource,
         core_provider_bit(CoreProviderRequirement::Allocator)
     };
 
-    if (raw == "ores.core/numeric" || raw == "ores.core/numeric.ores")
+    if (raw == "atto.core/numeric" || raw == "atto.core/numeric.atto" ||
+            raw == "ores.core/numeric" || raw == "ores.core/numeric.ores")
         return &kNumeric;
-    if (raw == "alloc/int_buffer" || raw == "alloc/int_buffer.ores")
+    if (raw == "atto.alloc/int_buffer" || raw == "atto.alloc/int_buffer.atto" ||
+            raw == "alloc/int_buffer" || raw == "alloc/int_buffer.ores")
         return &kIntBuffer;
-    if (raw == "alloc/int_buffer_bundle" ||
-            raw == "alloc/int_buffer_bundle.ores")
+    if (raw == "atto.alloc/int_buffer_bundle" || raw == "atto.alloc/int_buffer_bundle.atto" ||
+            raw == "alloc/int_buffer_bundle" || raw == "alloc/int_buffer_bundle.ores")
         return &kIntBufferBundle;
     return nullptr;
 }

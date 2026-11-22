@@ -453,6 +453,27 @@ fn compile_ir_with_profile(source: &str, profile: LibraryProfile) -> Result<Stri
         return Err("E_SOURCE_LIMIT: native Atto input exceeds 64 KiB".into());
     }
     let toks = atto_compiler::lexer::lex(source).map_err(|e|e.to_string())?;
+    if atto_compiler::directed_pipe::unlowered_pos(&toks).is_some() {
+        return Err("E_UNSUPPORTED_CONTINUOUS_PIPE: typed source/sink DATA graph needs native guest transport and PipeHandle".into());
+    }
+    // Native AOT may not reinterpret a protected actor state schema as
+    // ordinary fields, even when the scalar target linker would otherwise
+    // admit a nested actor declaration.
+    let has_attached_actor_state = toks.windows(5).any(|w|
+        matches!((&w[0].tok,&w[1].tok,&w[2].tok,&w[3].tok,&w[4].tok),
+            (atto_compiler::lexer::Tok::Ident(a),
+             atto_compiler::lexer::Tok::Ident(b),
+             atto_compiler::lexer::Tok::Ident(c),
+             atto_compiler::lexer::Tok::Ident(d),
+             atto_compiler::lexer::Tok::Ident(_))
+                if a=="define"&&b=="state"&&c=="on"&&d=="actor"));
+    if has_attached_actor_state {
+        let headers=atto_compiler::target_syntax::parse_target_declarations(&toks)
+            .map_err(|d|d.to_string())?;
+        if !headers.actor_state_attachments.is_empty() {
+            return Err("E_UNSUPPORTED_NATIVE_STATE: actor guarded state lowering, startup and fenced leases are not yet proven".into());
+        }
+    }
     if profile == LibraryProfile::FreestandingCore {
         admit_freestanding_tokens(&toks)?;
     }
@@ -765,6 +786,46 @@ fn main() {
 mod tests {
     use super::*;
     #[test]
+    fn native_pipe_and_rpipe_fail_before_emitting_llvm_ir() {
+        for direction in ["pipe", "rpipe"] {
+            let source = format!("pub fnc main(): int {{ val x = a {direction} b; return 0; }}");
+            let e = compile_ir(&source).unwrap_err();
+            assert!(e.contains("E_UNSUPPORTED_CONTINUOUS_PIPE"), "{e}");
+            let e = compile_ir_with_profile(&source, LibraryProfile::FreestandingCore).unwrap_err();
+            assert!(e.contains("E_UNSUPPORTED_CONTINUOUS_PIPE"), "{e}");
+        }
+        let ir = compile_ir("// rpipe pipe\npub fnc main(): int { return 42; }").unwrap();
+        assert!(ir.contains("ret i64 42"));
+    }
+
+    #[test]
+    fn native_and_freestanding_compilers_fail_closed_on_canonical_source_bytes() {
+        for (name, source) in [
+            ("actor-forward", include_str!("../fixtures/pipe-rpipe-v1/actor-forward.atto")),
+            ("actor-reverse", include_str!("../fixtures/pipe-rpipe-v1/actor-reverse.atto")),
+            ("actor-missing-emits", include_str!("../fixtures/pipe-rpipe-v1/actor-missing-emits.atto")),
+            ("actor-wrong-direction", include_str!("../fixtures/pipe-rpipe-v1/actor-wrong-direction.atto")),
+            ("mixed-channel-stream-forward", include_str!("../fixtures/pipe-rpipe-v1/mixed-channel-stream-forward.atto")),
+            ("mixed-channel-stream-reverse", include_str!("../fixtures/pipe-rpipe-v1/mixed-channel-stream-reverse.atto")),
+            ("actor-duplicate-direction", include_str!("../fixtures/pipe-rpipe-v1/actor-duplicate-direction.atto")),
+            ("actor-mixed-directions", include_str!("../fixtures/pipe-rpipe-v1/actor-mixed-directions.atto")),
+            ("stopped-source", include_str!("../fixtures/pipe-rpipe-v1/stopped-source.atto")),
+            ("closed-channel", include_str!("../fixtures/pipe-rpipe-v1/closed-channel.atto")),
+            ("stopped-consumer", include_str!("../fixtures/pipe-rpipe-v1/stopped-consumer.atto")),
+            ("stopped-actor-sink", include_str!("../fixtures/pipe-rpipe-v1/stopped-actor-sink.atto")),
+        ] {
+            let standard=compile_ir(source)
+                .expect_err("native LLVM IR must not be emitted for unlowered actor pipeline");
+            assert!(standard.contains("E_UNSUPPORTED_CONTINUOUS_PIPE"),
+                "{name}: {standard}");
+            let freestanding=compile_ir_with_profile(source, LibraryProfile::FreestandingCore)
+                .expect_err("freestanding cannot instantiate guest actor graphs");
+            assert!(freestanding.contains("E_UNSUPPORTED_CONTINUOUS_PIPE"),
+                "{name}: {freestanding}");
+        }
+    }
+
+    #[test]
     fn native_main_is_direct_i64_call() {
         let ir = compile_ir("pub fnc main(): int { return 42; }").unwrap();
         assert!(ir.contains("define i32 @main()"));
@@ -814,6 +875,35 @@ mod tests {
         for (source, code) in samples {
             let err = compile_ir_with_profile(source, LibraryProfile::FreestandingCore).unwrap_err();
             assert!(err.contains(code), "{code} got {err}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod attached_actor_state_native_no_ir {
+    use super::compile_ir;
+
+    #[test]
+    fn parsed_attachment_does_not_lower_to_unprotected_native_state() {
+        let source=r#"
+            define actor Counter as end
+            define state on actor Counter as { let int count: 0; }
+        "#;
+        let error=compile_ir(source).expect_err("no native IR may be emitted for unverified actor state");
+        assert!(error.starts_with("E_UNSUPPORTED_NATIVE_STATE:"),"{error}");
+    }
+
+    #[test]
+    fn exact_shared_counter_examples_are_not_silently_accepted() {
+        let inputs=[
+            include_str!("../tests/fixtures/actor-attached-state-v1/inline_counter.atto"),
+            include_str!("../tests/fixtures/actor-attached-state-v1/attached_counter.atto"),
+            include_str!("../tests/fixtures/actor-attached-state-v1/attached_initialized.atto"),
+        ];
+        for input in inputs {
+            let error=compile_ir(input).expect_err(
+                "full guarded Counter actor startup/message lowering is not proven");
+            assert!(!error.is_empty());
         }
     }
 }

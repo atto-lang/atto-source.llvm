@@ -1,0 +1,39 @@
+use namespace guest;
+
+// True Atto application matching/validation execution: the canonical
+// src/core/subjects.atto is compiled unchanged except namespace metadata.
+pub fnc main(): int {
+  if !valid_subject_token("orders") ||
+     valid_subject_token("bad token") ||
+     valid_subject_token("bad\u0000token") then
+    return 1;
+  fi
+  if !valid_publish_subject("orders.created.eu") ||
+     valid_publish_subject("orders..eu") ||
+     valid_publish_subject("orders.*") ||
+     valid_publish_subject("orders.>") ||
+     valid_publish_subject("orders.created ") then
+    return 2;
+  fi
+  if !valid_subscribe_pattern("orders.*") ||
+     !valid_subscribe_pattern("orders.>") ||
+     valid_subscribe_pattern("orders.>.later") ||
+     valid_subscribe_pattern("orders.cr*") ||
+     valid_subscribe_pattern("orders..created") then
+    return 3;
+  fi
+  if !subject_matches("orders.*", "orders.created") ||
+     !subject_matches("orders.>", "orders.created.eu") ||
+     !subject_matches(">", "orders") ||
+     subject_matches("orders.>", "orders") ||
+     subject_matches("orders.*", "orders.created.eu") ||
+     subject_matches("orders.>.later", "orders.created.eu") ||
+     subject_matches("orders.created", "orders.created ") then
+    return 4;
+  fi
+  if !direct_subject_match("orders.created","orders.created") ||
+     direct_subject_match("orders.created","orders.crea>ted") then
+    return 5;
+  fi
+  return 0;
+}

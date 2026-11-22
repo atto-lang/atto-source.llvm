@@ -1,0 +1,19 @@
+// Result.expect on Err panics with the message. Output printed before the
+// panic must still reach stdout (the async console is drained first).
+fnc check(String label, int actual, int expected): void {
+  if actual != expected then
+    stdio.stdout.write("PARITY_FAIL|");
+    stdio.stdout.println(label);
+    val Result<bool, String> failure = Err(label);
+    failure.expect("parity assertion failed");
+  fi
+  return;
+}
+
+fnc main(): void {
+  check("same", 1, 1);
+  stdio.stdout.println("before");
+  check("differs", 1, 2);
+  stdio.stdout.println("unreachable");
+  return;
+}

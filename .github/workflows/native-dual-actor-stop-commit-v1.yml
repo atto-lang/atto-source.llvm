@@ -1,0 +1,89 @@
+name: Native dual-actor STOP commit exact-head host gate
+on:
+  pull_request:
+    paths:
+      - "src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+      - "src/main/cpp/oreslang/runtime/NativeActorScheduler.h"
+      - "tests/native_dual_actor_handoff_commit_v1_test.c"
+      - ".github/workflows/native-dual-actor-stop-commit-v1.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-free-admission:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Prove assigned runner executed a real step (no checkout)
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RUNNER_NAME:-}"
+          test -n "${GITHUB_RUN_ID:-}"
+          test -n "${GITHUB_RUN_ATTEMPT:-}"
+          printf 'DUAL_ACTOR_ADMISSION runner=%s run=%s attempt=%s\n' \
+            "$RUNNER_NAME" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+  native-gate:
+    needs: [source-free-admission]
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        mode: [optimized, asan-ubsan, tsan]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Compile and run native C test against pinned source
+        shell: bash
+        env:
+          CC: ${{ matrix.compiler }}
+          MODE: ${{ matrix.mode }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.c)" = "a9d775e18751612e58fc3988d41598a2d6abc08c"
+          test "$(git hash-object src/main/cpp/oreslang/runtime/NativeActorScheduler.h)" = "fa8ca67e973eb55c9c2e2c9964d36fba3152cd4a"
+          test "$(git hash-object tests/native_dual_actor_handoff_commit_v1_test.c)" = "5af3174f3df18a36ed827f697aae22c86a8b41a8"
+          flags=(-O2 -UNDEBUG)
+          if [[ "$MODE" == asan-ubsan ]]; then
+            flags=(-O1 -g -UNDEBUG -fsanitize=address,undefined -fno-omit-frame-pointer)
+          elif [[ "$MODE" == tsan ]]; then
+            flags=(-O1 -g -UNDEBUG -fsanitize=thread -fno-omit-frame-pointer)
+          fi
+          work="$(mktemp -d)"
+          "$CC" -std=c11 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+            -o "$work/scheduler.o"
+          "$CC" -std=c11 "${flags[@]}" -Wall -Wextra -Wpedantic -Werror -pthread \
+            -Isrc/main/cpp tests/native_dual_actor_handoff_commit_v1_test.c \
+            "$work/scheduler.o" -o "$work/dual-actor-test"
+          "$work/dual-actor-test" | tee "$work/receipts.log"
+          test "$(grep -c '^DUAL_ACTOR_COMMIT_PASS ' "$work/receipts.log")" = 16
+          grep -qx 'NATIVE_DUAL_ACTOR_COMMIT_16_C_CASES_PASS' "$work/receipts.log"
+          if [[ "$MODE" == optimized ]]; then
+            test "$(grep -Fc 'const int accepted = live ? (commit(opaque) != 0) : 0;' \
+              src/main/cpp/oreslang/runtime/NativeActorScheduler.c)" = 1
+            sed 's/const int accepted = live ? (commit(opaque) != 0) : 0;/const int accepted = commit(opaque) != 0;/' \
+              src/main/cpp/oreslang/runtime/NativeActorScheduler.c > "$work/scheduler-mutant.c"
+            "$CC" -std=c11 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror -pthread \
+              -Isrc/main/cpp -c "$work/scheduler-mutant.c" -o "$work/scheduler-mutant.o"
+            "$CC" -std=c11 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror -pthread \
+              -Isrc/main/cpp tests/native_dual_actor_handoff_commit_v1_test.c \
+              "$work/scheduler-mutant.o" -o "$work/dual-actor-mutant"
+            set +e
+            timeout 45s "$work/dual-actor-mutant" > "$work/mutant.log" 2>&1
+            mutation_status=$?
+            set -e
+            test "$mutation_status" -ne 0
+            grep -Fq 'DUAL_ACTOR_COMMIT_FAIL 06_stale_recipient_generation_rejected' \
+              "$work/mutant.log"
+            printf 'DUAL_ACTOR_LIVENESS_MUTATION_DETECTED compiler=%s\n' "$CC"
+          fi
+          printf 'DUAL_ACTOR_16_EXECUTED_PASS compiler=%s mode=%s head=%s\n' \
+            "$CC" "$MODE" "$EXPECTED_HEAD"

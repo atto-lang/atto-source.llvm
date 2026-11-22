@@ -14,6 +14,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ast::*;
+use crate::actor_send_effect_graph::{audit_effect, EffectNode};
 use crate::diag::{Diagnostic, Pos};
 
 mod generator_lower;
@@ -893,6 +894,26 @@ pub fn check(p: &Program) -> R<TProgram> {
             }
             None => Type::Void,
         };
+        // Defense in depth: annotation/lowering passes must not be able to
+        // erase or alter an inbound contract after the parser checked it.
+        // A missing handler is never a valid receives T implementation.
+        if let Some(header) = a.receives {
+            let declared = res(header)?;
+            if a.receive.is_none() || declared != payload {
+                return Err(Diagnostic::new(a.pos, "E_ACTOR_RECEIVES",
+                    "actor receives contract disagrees with its concrete ActorMail<T> handler"));
+            }
+        }
+        if let Some(declared) = a.sends {
+            // Defense in depth: a forged/lowered AST must not introduce
+            // Payload(void), even though the parser rejects "sends void".
+            if let ActorSendEffect::Payload(payload_type) = declared {
+                if res(payload_type)? == Type::Void {
+                    return Err(Diagnostic::new(a.pos, "E_ACTOR_SEND_CONTRACT",
+                        "an actor's outbound DATA payload may not be void"));
+                }
+            }
+        }
         actors.push(ActorInfo {
             name: a.name.clone(),
             fields,
@@ -1189,6 +1210,58 @@ pub fn check(p: &Program) -> R<TProgram> {
     imports.sort();
     imports.dedup();
     let funcs: Vec<TFunc> = funcs.into_iter().map(|f| f.expect("every function index is defined")).collect();
+    // Typed IR audit, not lexical inspection: traverse every reachable call
+    // edge from each actor's handler and methods. CONTROL messages do not
+    // inhabit the application Send node. No recipient cardinality is implied.
+    // The same byte-pinned, independently unit-tested DATA graph closure is
+    // used in both frontends. Caller metadata is type-checked before this point.
+    let send_graph: Vec<EffectNode<Type>> = funcs.iter().map(|f| {
+        let sends = std::cell::RefCell::new(Vec::<Type>::new());
+        let calls = std::cell::RefCell::new(Vec::<u32>::new());
+        let _ = any_in_stmts(&f.body, &|node| {
+            match &node.e {
+                TExpr::Send { value, .. } => sends.borrow_mut().push(value.ty),
+                TExpr::Call(index, _) => calls.borrow_mut().push(*index),
+                _ => {}
+            }
+            false
+        });
+        EffectNode { sends: sends.into_inner(), calls: calls.into_inner() }
+    }).collect();
+    for (actor_index, actor) in p.actors.iter().enumerate() {
+        let Some(clause) = actor.sends else { continue };
+        // None is an *explicit* Never, not an omitted declaration.
+        let allowed: Option<Type> = match clause {
+            ActorSendEffect::Never => None,
+            ActorSendEffect::Payload(message_type) => Some(res(message_type)?),
+        };
+        let info = &g.actors[actor_index];
+        let mut roots = Vec::<u32>::new();
+        if let Some(entry) = info.receive_idx { roots.push(entry); }
+        roots.extend(info.methods.iter().map(|m| m.idx));
+        // Field expressions and their reachable helpers belong to this same
+        // outbound effect. A post-lowering initializer must not bypass it.
+        let mut initializers = Vec::<EffectNode<Type>>::new();
+        for (_, init) in &tactors[actor_index].inits {
+            let sends = std::cell::RefCell::new(Vec::<Type>::new());
+            let calls = std::cell::RefCell::new(Vec::<u32>::new());
+            let _ = any_in(init, &|node| {
+                match &node.e {
+                    TExpr::Send { value, .. } => sends.borrow_mut().push(value.ty),
+                    TExpr::Call(index, _) => calls.borrow_mut().push(*index),
+                    _ => {}
+                }
+                false
+            });
+            initializers.push(EffectNode {
+                sends: sends.into_inner(), calls: calls.into_inner(),
+            });
+        }
+        audit_effect(allowed, &send_graph, &roots, &initializers)
+            .map_err(|e| Diagnostic::new(actor.pos, "E_ACTOR_SEND_CONTRACT",
+                format!("actor '{}' has an invalid transitive DATA send effect: {e:?}",
+                    actor.name)))?;
+    }
     let strings = funcs
         .iter()
         .any(|f| f.params.contains(&Type::Str) || f.ret == Type::Str || f.locals.contains(&Type::Str) || any_in_stmts(&f.body, &uses_str))

@@ -35,6 +35,12 @@ struct Step {
 };
 
 struct Plan {
+    enum class Form { OwnedRegion, BorrowedLocal };
+    Form form = Form::OwnedRegion;
+    // A borrowed local has separate linear handle identity and never
+    // obtains the rights of an owning Pointer.alloc region.
+    std::string local_handle;
+    std::int64_t local_initial = 0;
     std::string owner;
     std::size_t count = 0;
     std::vector<Step> steps;

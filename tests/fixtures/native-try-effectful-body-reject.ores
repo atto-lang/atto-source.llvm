@@ -1,0 +1,7 @@
+fnc helper(): void { return; }
+pub fnc main(): int {
+  try {
+    helper();
+    return 1;
+  } catch (err) {} finally {}
+}
