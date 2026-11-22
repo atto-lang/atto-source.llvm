@@ -1,0 +1,16 @@
+import module deque from "atto.alloc/deque";
+// Expected successful guest exit: 0.
+pub fnc main(): int {
+  let mut deque.Deque q = deque.new_deque(3);
+  if !q.push_back(0) || !q.push_back(1) ||
+     !q.push_back(2) || q.push_back(9); do return 1; fi
+  if q.pop_front().unwrap() != 0; do return 2; fi
+  if !q.push_back(-4) || q.back().unwrap() != -4; do return 3; fi
+  if !q.reserve(5) || q.size() != 3; do return 4; fi
+  if q.pop_back().unwrap() != -4 || q.pop_front().unwrap() != 1; do return 5; fi
+  if !q.push_front(8) || q.pop_front().unwrap() != 8; do return 6; fi
+  if q.pop_front().unwrap() != 2 || !q.is_empty() ||
+     q.pop_back().is_some(); do return 7; fi
+  q.clear();
+  return 0;
+}

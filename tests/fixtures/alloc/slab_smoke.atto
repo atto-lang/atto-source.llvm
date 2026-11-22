@@ -1,0 +1,20 @@
+import module slab from "atto.alloc/slab";
+// Expected successful guest exit: 0; includes stale and cross-domain checks.
+pub fnc main(): int {
+  let mut slab.Slab slots = slab.new_slab(17, 2);
+  let slab.Handle old = slots.insert(0).unwrap();
+  let slab.Handle other = slots.insert(-7).unwrap();
+  if slots.size() != 2 || slots.read(old).unwrap() != 0; do return 1; fi
+  if slots.insert(99).is_ok(); do return 2; fi
+  if slots.remove(old).unwrap() != 0 || slots.contains(old); do return 3; fi
+  let slab.Handle replacement = slots.insert(44).unwrap();
+  if replacement.slot != old.slot ||
+     replacement.generation == old.generation ||
+     slots.contains(old); do return 4; fi
+  if !slots.contains(other) || slots.read(replacement).unwrap() != 44; do return 5; fi
+  slots.clear();
+  if slots.contains(replacement) || slots.size() != 0; do return 6; fi
+  slots.close();
+  if slots.insert(1).is_ok() || slots.contains(other); do return 7; fi
+  return 0;
+}

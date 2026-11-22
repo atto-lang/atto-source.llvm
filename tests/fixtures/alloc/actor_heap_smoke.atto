@@ -1,0 +1,19 @@
+import module actor_heap from "atto.alloc/actor_heap";
+// Logical word-heap checks only; not proof of physical arena isolation.
+pub fnc main(): int {
+  let mut actor_heap.ActorHeap h = actor_heap.new_actor_heap(19, 8, 3);
+  let actor_heap.HeapHandle a = h.allocate(3).unwrap();
+  let actor_heap.HeapHandle b = h.allocate(4).unwrap();
+  if !h.write(a, 2, -99) || h.read(a, 2).unwrap() != -99 ||
+     h.write(a, 3, 4); do return 1; fi
+  if h.allocate(2).is_ok() || h.in_use_words() != 7; do return 2; fi
+  if !h.release(a) || h.release(a) || h.contains(a); do return 3; fi
+  let actor_heap.HeapHandle c = h.allocate(2).unwrap();
+  if c.block != a.block || c.generation == a.generation ||
+     h.read(c, 0).unwrap() != 0 || h.in_use_words() != 7; do return 4; fi
+  if !h.contains(b) || h.contains(a); do return 5; fi
+  h.close();
+  if h.allocate(1).is_ok() || h.release(b) ||
+     h.in_use_words() != 0; do return 6; fi
+  return 0;
+}
