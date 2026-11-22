@@ -256,6 +256,7 @@ define module zorde as
     let payload_result = r.read_bytes(length);
     if payload_result.is_err(); do return Err("TruncatedPayload"); fi
     return Ok(new Frame(schema_id, schema_version, payload_result.unwrap()));
+  }
 
   // Generated codecs should bind one expected schema/version at the caller.
   // No arbitrary deserializer, reflection, or actor-capability admission.
@@ -324,6 +325,5 @@ define module zorde as
     let int zigzag = value.unwrap();
     if zigzag % 2 == 0; do return Ok(zigzag / 2); fi
     return Ok(-(zigzag / 2) - 1);
-  }
   }
 end
