@@ -1,0 +1,9 @@
+// LLVM-owned std macro producer. Compiler-only; no runtime evaluator.
+// Const<int> proves compile-time closure, not valid range/permissions.
+define pub macro const_retry_count(Const<int> count) -> Syntax<Expr> {
+  return quote(count);
+}
+
+define pub macro const_timeout_ns(Const<int> duration_ns) -> Syntax<Expr> {
+  return quote(duration_ns);
+}

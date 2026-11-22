@@ -1,0 +1,9 @@
+// LLVM-owned core macro producer. Compiler-only; no runtime evaluator.
+// Const<int> proves compile-time closure, not valid range/permissions.
+define pub macro const_int(Const<int> value) -> Syntax<Expr> {
+  return quote(value);
+}
+
+define pub macro splice_expr(Syntax<Expr> value) -> Syntax<Expr> {
+  return value;
+}
