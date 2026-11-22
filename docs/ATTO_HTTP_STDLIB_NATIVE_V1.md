@@ -8,7 +8,7 @@ request TE+CL conflict admission; nonnegative header/body byte budgets; and
 non-overflowing partial-frame boundaries. Source-only, freestanding and without
 ambient runtime authorization.
 
-LLVM's current native source-import linking is not established for this module.
+LLVM now stages a bounded **compiler-owned `std.http` wildcard namespace import slice** for scalar public free functions only.
 The canary concatenates the **actual .atto stdlib source** and a 46-case
 `main` into one native guest compilation unit, avoiding false claims of import
 support. `bash ci/test_http_stdlib_policy.sh` builds the native compiler,
@@ -45,3 +45,44 @@ the authored case count before accepting exit 42. No import-namespace linker
 is claimed here; the candidate source and canary are still concatenated
 as one unit. Native guest CI remains **NOT_EXECUTED** pending stepful runner
 admission; source-only parity is not compiled parity.
+
+
+## Real compiler-owned namespace import slice (2026-11-22)
+
+The LLVM native AOT entrypoint now recognizes this exact import shape:
+
+
+ `import * as http from "std.http";`
+
+The registered backend-owned source is embedded at compiler build time from
+`stdlib/http/message_policy.atto`. It is lexed and parsed as a **separate native
+Atto AST**, public `pub fnc` declarations are enumerated at file scope, and
+qualified calls (for example `http.status_valid(200)`) are bound to the matching
+compiler-owned function (internally `http_status_valid`) **before** the
+normal typed checker and LLVM IR emitter. This is not filesystem import
+resolution and is not concatenating library and test source.
+
+Unregistered namespaces, missing/duplicate import directives, private or
+unknown members, direct unqualified builtin symbols, namespace alias
+shadowing, freestanding import attempts, and unsupported `import module`
+syntax reject before native code emission. The dedicated
+`tests/http_stdlib/namespace_import_canary.atto` has **17** compiled-guest checks;
+`ci/test_http_namespace_import.sh` includes **eight** negative cases and an
+ambient shadow-file canary.
+
+**Limits:** this is not a generic import graph and does not yet implement
+`define pub module`, nested public modules, imported classes, cross-unit
+cycles, alias import of non-function values, or any network operation. Those
+features must continue to fail explicitly. `--freestanding-core` still rejects
+hosted HTTP imports. The prior 46-case same-unit HTTP policy canary is
+retained as a separate test to distinguish scalar policy from linked imports.
+
+The previous CI script contained a malformed `grep` expression and duplicated
+execution footer; it has been replaced and now creates an offline root
+Cargo lockfile, runs Rust compiler unit tests, builds the exact checked-out
+compiler and executes all 46 source-policy canaries. The separate namespace
+workflow step compiles/executes the real importer guest.
+
+All these cases are **AUTHORED / NOT_EXECUTED** until an exact-head Actions
+job has actual executed steps and passing guest receipts. See
+atto-platform-conformance#101 for 11-backend conformance tracking.
