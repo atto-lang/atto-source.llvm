@@ -31,7 +31,7 @@ const expectedNames = [
   "arena_rewind_target",
   "arena_tail_release_valid",
   "arena_can_close",
-  "arena_next_generation"
+  "arena_plan_next_generation"
 ];
 const definitions = exports.map(match => {
   const names = match[2].split(",").map(p => {
