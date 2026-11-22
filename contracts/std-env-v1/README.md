@@ -35,3 +35,7 @@ A trusted host interface must validate key names, check both coarse isolate ENV 
 Run: `sh scripts/test-native-host-env-v1.sh` with a C11 compiler.
 
 **Status: HOST-ONLY source candidate, NOT_EXECUTED on an admitted source-org runner; no `.atto` guest import/linking or LLVM AOT parity proof.**
+
+## Host-only CI coverage
+
+`.github/workflows/std-env-host-v1.yml` requests actual C11 host-model execution with GCC and Clang, each at O1 and O2, using AddressSanitizer/UBSan. A workflow queued, skipped, failed with no job steps, or rejected for unavailable minutes is **NOT_EXECUTED**. This CI does not certify .atto guest behavior or hard-real-time actor isolation.
