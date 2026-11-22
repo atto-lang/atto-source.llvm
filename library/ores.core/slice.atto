@@ -87,8 +87,9 @@ define module slice as
 
   // Source candidate only: LLVM Array<int>.get_copy()
   // must independently implement named-owner and Copy<int> checks.
-  // None never carries a borrowed element or a pointer to backing storage.
-  pub fnc get_copy_int(Array<int> values, int offset,
+  // The caller passes rt borrow array; the helper never consumes the Array owner.
+  // No borrowed element or pointer is returned, even when index is invalid.
+  pub fnc get_copy_int(borrow Array<int> values, int offset,
                        int count, int index): Option<int> {
     if !valid_window(offset, count, values.size); do
       return None;
@@ -98,15 +99,19 @@ define module slice as
     return values.get_copy(offset + relative);
   }
 
-  pub fnc first_copy_int(Array<int> values, int offset,
+  pub fnc first_copy_int(borrow Array<int> values, int offset,
                          int count): Option<int> {
-    return get_copy_int(values, offset, count, 0);
+    if !valid_window(offset, count, values.size); do return None; fi
+    if count == 0; do return None; fi
+    return values.get_copy(offset);
   }
 
-  pub fnc last_copy_int(Array<int> values, int offset,
+  pub fnc last_copy_int(borrow Array<int> values, int offset,
                         int count): Option<int> {
-    if count <= 0; do return None; fi
-    return get_copy_int(values, offset, count, count - 1);
+    if !valid_window(offset, count, values.size); do return None; fi
+    if count == 0; do return None; fi
+    // Validation establishes offset + count - 1 < values.size without overflow.
+    return values.get_copy(offset + count - 1);
   }
 
   // Validated nested window origin; invalid ranges never compute offset + sub.

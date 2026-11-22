@@ -57,3 +57,15 @@ normalization as in the candidate collection spec. `get_copy_int` uses
 `is_empty(count)` and `can_split_at(count,middle)` follow the sibling
 slice/iter/cmp logical-window API. Never conflate `valid_range` with
 `valid_endpoints` or raw with signed indexing.
+
+## Ownership correction — explicit borrowing
+
+`get_copy_int`, `first_copy_int` and `last_copy_int` now accept
+`borrow Array<int>`, not an owned `Array<int>`. Call with
+`rt borrow values`: passing an owned array by value consumes its unique
+owner under Atto's affine parameter rules. The checked-copy helpers must
+never move the owner merely to return `Option<int>` or `None`. First/last
+read directly from a validated borrowed array, avoiding an implicit reborrow
+or move through an intermediate helper. Access under an outstanding exclusive
+mutable loan must be rejected, even on out-of-bounds paths. Native LLVM must
+implement these semantics before the unadmitted guest fixture can pass.
