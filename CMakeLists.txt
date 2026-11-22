@@ -2228,6 +2228,9 @@ if(BUILD_TESTING)
     set_tests_properties(native_realtime_profile_cli PROPERTIES TIMEOUT 60)
     # Exact native LLVM source -> IR -> Clang -> guest scalar subset checks.
     # No source-to-effect-IR parity is claimed by this observable output test.
+    # Resolve the Clang driver here as well: the canonical find_program below
+    # runs later, so a fresh configure would otherwise pass an empty --clang.
+    find_program(ORE_SOURCE_I64_CLANG NAMES clang-18 clang-19 clang clang-17 clang-16 clang-15 clang-14)
     add_test(NAME native_rust_scalar_guest_parity
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rust_scalar_guest_parity.py"
