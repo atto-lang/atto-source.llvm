@@ -538,7 +538,7 @@ fn link_registered_http_import(
                 return Err("E_NATIVE_IMPORT_LIBRARY_EXPORT: missing function name".into());
             }
         }
-        match token.tok {
+        match &token.tok {
             Tok::LBrace => depth += 1,
             Tok::RBrace => depth = depth.saturating_sub(1),
             _ => {}
