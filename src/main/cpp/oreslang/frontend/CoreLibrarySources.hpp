@@ -119,6 +119,42 @@ inline const CoreLibrarySource* find_compiler_library_source(std::string_view ra
         core_provider_bit(CoreProviderRequirement::Allocator)
     };
 
+    static constexpr std::string_view kBitSetSource =
+#include "oreslang/frontend/GeneratedBitSetAtto.inc"
+    ;
+    static constexpr CoreLibrarySource kBitSet{
+        CompilerLibraryTier::Alloc,
+        "atto.alloc/bitset",
+        "bitset",
+        "@atto.alloc/bitset.atto",
+        kBitSetSource,
+        core_provider_bit(CoreProviderRequirement::Allocator)
+    };
+
+    static constexpr std::string_view kLinkedListSource =
+#include "oreslang/frontend/GeneratedLinkedListAtto.inc"
+    ;
+    static constexpr CoreLibrarySource kLinkedList{
+        CompilerLibraryTier::Alloc,
+        "atto.alloc/linked_list",
+        "linked_list",
+        "@atto.alloc/linked_list.atto",
+        kLinkedListSource,
+        core_provider_bit(CoreProviderRequirement::Allocator)
+    };
+
+    static constexpr std::string_view kMapSource =
+#include "oreslang/frontend/GeneratedMapAtto.inc"
+    ;
+    static constexpr CoreLibrarySource kMap{
+        CompilerLibraryTier::Alloc,
+        "atto.alloc/map",
+        "map",
+        "@atto.alloc/map.atto",
+        kMapSource,
+        core_provider_bit(CoreProviderRequirement::Allocator)
+    };
+
     if (raw == "atto.core/numeric" || raw == "atto.core/numeric.atto" ||
             raw == "ores.core/numeric" || raw == "ores.core/numeric.ores")
         return &kNumeric;
@@ -128,6 +164,15 @@ inline const CoreLibrarySource* find_compiler_library_source(std::string_view ra
     if (raw == "atto.alloc/int_buffer_bundle" || raw == "atto.alloc/int_buffer_bundle.atto" ||
             raw == "alloc/int_buffer_bundle" || raw == "alloc/int_buffer_bundle.ores")
         return &kIntBufferBundle;
+    if (raw == "atto.alloc/bitset" || raw == "atto.alloc/bitset.atto" ||
+            raw == "alloc/bitset" || raw == "alloc/bitset.ores")
+        return &kBitSet;
+    if (raw == "atto.alloc/linked_list" || raw == "atto.alloc/linked_list.atto" ||
+            raw == "alloc/linked_list" || raw == "alloc/linked_list.ores")
+        return &kLinkedList;
+    if (raw == "atto.alloc/map" || raw == "atto.alloc/map.atto" ||
+            raw == "alloc/map" || raw == "alloc/map.ores")
+        return &kMap;
     return nullptr;
 }
 
