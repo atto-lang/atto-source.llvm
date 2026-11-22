@@ -33,7 +33,7 @@ while IFS='|' read -r id path expected extra || [[ -n "${id:-}" ]]; do
     die "missing or symlinked .atto source: $id"
   positive_ids+=("$id"); positive_paths+=("$path"); expected_exits+=("$expected")
 done < "$manifest"
-[[ "${#positive_ids[@]}" -eq 38 ]] || die "expected 38 admitted native scalar cases"
+[[ "${#positive_ids[@]}" -eq 40 ]] || die "expected 40 admitted native scalar cases"
 
 while IFS='|' read -r id path needle extra || [[ -n "${id:-}" ]]; do
   [[ "$id" == \#* || -z "$id" ]] && continue
@@ -62,7 +62,7 @@ for path in "$manifest" "$negative_manifest" \
 done
 
 if [[ "$mode" == --inventory-only ]]; then
-  echo 'ATTO_LLVM_NATIVE_INVENTORY_ONLY positive=38 negative=5 (NO_COMPILER_EXECUTION)'
+  echo 'ATTO_LLVM_NATIVE_INVENTORY_ONLY positive=40 negative=5 (NO_COMPILER_EXECUTION)'
   exit 0
 fi
 [[ -x "$compiler" && ! -L "$compiler" ]] || die "missing non-symlink executable compiler: $compiler"
@@ -199,4 +199,4 @@ done
 # Two one-case guest ORES_TEST smokes are a separate gate (not TestSuite parity).
 ORESLANG_LLVMC="$compiler" CLANG="$clang_exe" ORES_NO_GC_IR_AUDIT="$auditor" \
   bash "$root/tests/atto_native_guest_receipts.sh"
-printf 'ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=38|optimizations=2|negative=8|guest_receipt_protocol=UNSUPPORTED\n'
+printf 'ATTO_LLVM_NATIVE_PARITY_SUBSET_EXECUTED|positive=40|optimizations=2|negative=8|guest_receipt_protocol=UNSUPPORTED\n'
