@@ -4,6 +4,9 @@ on:
     paths:
       - 'src/main.rs'
       - 'frontend/src/**'
+      - 'frontend/tests/core_ownership_boundary.rs'
+      - 'frontend/tests/fixtures/borrow_move_*.atto'
+      - 'library/ores.core/collections.atto'
       - 'Cargo.toml'
       - 'frontend/Cargo.toml'
       - 'stdlib/http/message_policy.atto'
@@ -30,9 +33,9 @@ jobs:
           cargo --version
           clang --version
           git hash-object stdlib/http/message_policy.atto
-      - name: Compile and execute 46 native HTTP scalar policy cases
+      - name: Compile checker/borrow tests and execute 46 native HTTP scalar policy cases
         run: bash ci/test_http_stdlib_policy.sh
-      - name: Compile linked namespace guest and reject 8 forbidden import cases
+      - name: Compile linked namespace guest and reject 9 forbidden import cases
         run: bash ci/test_http_namespace_import.sh
       - name: Evidence scope
         run: |
