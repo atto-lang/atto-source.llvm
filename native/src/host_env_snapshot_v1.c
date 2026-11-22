@@ -5,6 +5,7 @@
 #define MAX_KEYS 512u
 #define MAX_RULES 128u
 #define MAX_VALUE 16384u
+#define MAX_TOTAL_VALUE_BYTES 1048576u
 
 typedef struct {
     char *key;
@@ -176,6 +177,7 @@ atto_host_env_status_v1 atto_host_env_create_v1(
         env->items = calloc(entry_count, sizeof(*env->items));
         if (!env->items) { status = ATTO_ENV_V1_NO_MEMORY; goto failed; }
     }
+    size_t aggregate_bytes = 0;
     for (size_t i = 0; i < entry_count; ++i) {
         // No coarse capability: do not dereference a single host entry name,
         // even if the trusted snapshot points at inaccessible storage.
@@ -183,6 +185,7 @@ atto_host_env_status_v1 atto_host_env_create_v1(
         const char *key = entries[i].name;
         if (!valid_key(key) || !allowed_key(env, key)) continue;
         if (entries[i].value_length > MAX_VALUE ||
+            entries[i].value_length > MAX_TOTAL_VALUE_BYTES - aggregate_bytes ||
             !valid_utf8(entries[i].value, entries[i].value_length)) {
             status = ATTO_ENV_V1_INVALID; goto failed;
         }
@@ -200,6 +203,9 @@ atto_host_env_status_v1 atto_host_env_create_v1(
             memcpy(item->value, entries[i].value, entries[i].value_length);
         item->value[entries[i].value_length] = 0;
         item->length = entries[i].value_length;
+        // Only copied, authorized values contribute; denial never touches the
+        // source value pointer, including for this aggregate-budget check.
+        aggregate_bytes += item->length;
         ++env->length;
     }
     *out = env;
