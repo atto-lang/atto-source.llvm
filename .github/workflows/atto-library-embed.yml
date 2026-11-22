@@ -37,13 +37,18 @@ jobs:
           test "$(git hash-object stdlib/numeric.atto)" = "5ced991f1d49b3c2a60fdd72b9003c0a4d18cd72"
           test "$(git hash-object stdlib/alloc/int_buffer.atto)" = "25b3d4bc06a0c859aacadaf0795414027a076bdc"
           test "$(git hash-object stdlib/alloc/int_buffer_bundle.atto)" = "07c7083e099a18f1db7097f9639efc677070eb95"
+          test "$(git hash-object stdlib/alloc/bitset.atto)" = "dc7618c14a28b416ae7c3e96b5db0b0fc47bf314"
+          test "$(git hash-object stdlib/alloc/linked_list.atto)" = "f70cb1ac77efcef1734a526055655bfb2b1169bd"
+          test "$(git hash-object stdlib/alloc/map.atto)" = "3aeb43f429b33e66bf5145a0444a6f686dff3969"
       - name: Execute Rust generator tests and immutable checks
         run: |
           set -euo pipefail
           cargo test --locked --manifest-path tools/atto-library-embed/Cargo.toml
           cargo run --locked --manifest-path tools/atto-library-embed/Cargo.toml -- --check
-      - name: Compile C++17 literal inclusion probe
+      - name: Build and execute C++17 source-registry probe
         run: |
           set -euo pipefail
-          c++ -std=c++17 -Isrc/main/cpp -fsyntax-only tests/atto_library_embed_cpp17_probe.cpp
+          c++ -std=c++17 -Isrc/main/cpp tests/atto_library_embed_cpp17_probe.cpp -o "$RUNNER_TEMP/atto-alloc-registry-probe"
+          "$RUNNER_TEMP/atto-alloc-registry-probe"
+          echo "ATTO_ALLOC_SOURCE_REGISTRY=EXECUTED"
           echo "COMPILER_BACKED_GUEST_EXECUTION=NOT_EXECUTED"
