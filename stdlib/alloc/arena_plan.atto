@@ -44,7 +44,7 @@ pub fnc arena_can_close(int live_allocations, int live_loans, int pending_cleanu
 }
 
 // Generation 0 is reserved and wraparound is forbidden.
-pub fnc arena_next_generation(int current, int maximum): int {
+pub fnc arena_plan_next_generation(int current, int maximum): int {
   if current < 1 then return -1; fi
   if maximum < 1 then return -1; fi
   if current >= maximum then return -1; fi
