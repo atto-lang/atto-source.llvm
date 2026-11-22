@@ -1,0 +1,89 @@
+name: Native actor heaps on 32-bit and 64-bit hosts
+# Atto must run on 64-bit and 32-bit machines while keeping 32-bit heaps
+# everywhere. These jobs build and run the native actor heap runtime and the
+# checked ref32 LLVM lowering on real i686 and ARMv7 code, not just 64-bit.
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/native-heap-pointer-width.yml'
+      - 'src/main/cpp/oreslang/runtime/**'
+      - 'src/main/cpp/oreslang/types/ManagedRefLayoutPlan.hpp'
+      - 'src/main/cpp/oreslang/backend/ManagedRefLowering.hpp'
+      - 'tests/native_heap_pointer_width_gate.rs'
+      - 'tests/managed_ref_llvm_lowering_test.cpp'
+      - 'tests/managed_ref_llvm_e2e.rs'
+      - 'tests/managed_ref_llvm_e2e_harness.cpp'
+      - 'tests/actor_*_test.c*'
+      - 'tests/managed_ref*_test.cpp'
+      - 'tests/native_actor_*_test.cpp'
+      - 'tests/dop_layout_test.cpp'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  heap-runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - host: x86_64
+            bits: 64
+            packages: ''
+            args: '--cc gcc --cxx g++'
+          - host: i686
+            bits: 32
+            packages: 'gcc-multilib g++-multilib'
+            args: '--cc gcc --cxx g++ --flag -m32'
+          - host: armv7
+            bits: 32
+            packages: 'gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf qemu-user'
+            args: >-
+              --cc arm-linux-gnueabihf-gcc --cxx arm-linux-gnueabihf-g++
+              --runner qemu-arm --runner -L --runner /usr/arm-linux-gnueabihf
+    name: heap runtime (${{ matrix.host }}, ${{ matrix.bits }}-bit)
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install target toolchain
+        if: matrix.packages != ''
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.packages }}
+      - name: Build pointer-width gate
+        run: rustc --edition=2021 -D warnings tests/native_heap_pointer_width_gate.rs -o build-heap-width-gate
+      - name: Build and run every heap runtime test for this host
+        # The gate first proves the flags really produce ${{ matrix.bits }}-bit
+        # pointers, then fails on any build or run failure; nothing is skipped.
+        run: ./build-heap-width-gate --root . ${{ matrix.args }} --expect-pointer-bits ${{ matrix.bits }}
+
+  ref32-lowering-i686:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    name: ref32 LLVM lowering executed on i686
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install LLVM 18 and 32-bit runtime
+        run: sudo apt-get update && sudo apt-get install -y llvm-18-dev clang-18 gcc-multilib g++-multilib
+      - name: Build IR producer (verifies native64, i686, armv7 and wasm32 IR)
+        run: |
+          set -euo pipefail
+          LC=llvm-config-18
+          g++ -std=c++17 -O1 -Wall -Wextra -Wpedantic -Werror -Isrc/main/cpp \
+            -isystem "$($LC --includedir)" tests/managed_ref_llvm_lowering_test.cpp \
+            $($LC --ldflags) $($LC --libs core support) $($LC --system-libs) \
+            -o build-ref32-lowering
+          ./build-ref32-lowering
+      - name: Execute i686 ref32 IR against the fail-closed harness
+        run: |
+          set -euo pipefail
+          rustc --edition=2021 -D warnings tests/managed_ref_llvm_e2e.rs -o build-ref32-e2e
+          ./build-ref32-e2e --ir-producer ./build-ref32-lowering --clang clang++-18 \
+            --harness tests/managed_ref_llvm_e2e_harness.cpp \
+            --emit-target i686 --clang-arg -m32
+      - name: Execute native64 ref32 IR (control)
+        run: |
+          ./build-ref32-e2e --ir-producer ./build-ref32-lowering --clang clang++-18 \
+            --harness tests/managed_ref_llvm_e2e_harness.cpp

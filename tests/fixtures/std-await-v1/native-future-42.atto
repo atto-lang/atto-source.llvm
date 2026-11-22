@@ -1,0 +1,16 @@
+// Checked native Future<int> production pipeline; std.await is a unary
+// terminal adapter and uses precisely the same await ownership slot.
+async fnc source(): int {
+    return 20;
+}
+fnc plus_one(int value): int {
+    return value + 1;
+}
+fnc twice(int value): int {
+    return value * 2;
+}
+pub fnc main(): int {
+    let Future<int> pending = rt take source() |> plus_one() |> twice();
+    let int result = pending |> std.await;
+    return result;
+}

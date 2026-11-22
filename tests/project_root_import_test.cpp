@@ -133,11 +133,50 @@ note = "good"
     {
         const auto dir = temp / "project-root";
         write_text(dir/".ores.pkg.toml",
-                   "schema_version = \"1\"\n[project]\nroot = \"src\"\n");
-        write_text(dir/"main.ores", "");
-        write_text(dir/"lib.ores", "");
-        must_fail("project.root", "project.root",
-                  [&] { (void)resolve(dir/"main.ores", "+/lib"); });
+                   "schema_version = \"1\"\n[project]\nroot = \"application\"\n");
+        write_text(dir/"application/src/main.ores", "");
+        write_text(dir/"application/src/lib.atto", "");
+        if (resolve(dir/"application/src/main.ores", "+/src/lib") !=
+                fs::canonical(dir/"application/src/lib.atto"))
+            throw std::runtime_error("configured project.root did not select canonical file");
+    }
+    {
+        const auto dir = temp / "zed-package-marker";
+        write_text(dir/".ores.pkg.toml", "[package]\nname = 'consumer'\n");
+        write_text(dir/"src/main.atto", "");
+        write_text(dir/"src/lib.atto", "");
+        if (resolve(dir/"src/main.atto", "+/src/lib") !=
+                fs::canonical(dir/"src/lib.atto"))
+            throw std::runtime_error("native Zed marker did not authorize project-root import");
+    }
+    {
+        const auto dir = temp / "zed-missing-name";
+        write_text(dir/".ores.pkg.toml", "[package]\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"lib.atto", "");
+        must_fail("missing native identity", "Zed [package].name",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+        write_text(dir/".ores.pkg.toml", "[package]\nname = '../outside'\n");
+        must_fail("malformed native identity", "safe single identity",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+    }
+    {
+        const auto dir = temp / "project-root-traversal";
+        write_text(dir/".ores.pkg.toml",
+                   "schema_version = \"1\"\n[project]\nroot = \"../outside\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"lib.atto", "");
+        must_fail("configured root traversal", "project.root",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
+    }
+    {
+        const auto dir = temp / "project-root-duplicate";
+        write_text(dir/".ores.pkg.toml",
+                   "schema_version = \"1\"\n[project]\nroot = \"src\"\nroot = \"other\"\n");
+        write_text(dir/"main.atto", "");
+        write_text(dir/"lib.atto", "");
+        must_fail("duplicate configured root", "project.root",
+                  [&] { (void)resolve(dir/"main.atto", "+/lib"); });
     }
     {
         const auto dir = temp / "traversal";

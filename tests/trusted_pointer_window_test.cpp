@@ -22,7 +22,9 @@ void require(bool ok) { if (!ok) throw std::runtime_error("pointer test failure"
 int main() {
     const ActorHeapIdentity actor{10, 20, 30}, other_actor{10, 21, 30}, stale_epoch{10, 20, 29};
     const auto allocation = NativeRegionIdentity::supervisor_minted(7, 11, 13);
-    alignas(std::uint64_t) std::array<std::uint32_t, 4> values{{11, 22, 33, 44}};
+    // alignas(8), not alignas(std::uint64_t): that is 4 on i386 SysV, which
+    // leaves base+4 8-aligned half the time and admits the u64 probe below.
+    alignas(8) std::array<std::uint32_t, 4> values{{11, 22, 33, 44}};
     TrustedPointerWindow region(
         actor, allocation, values.data(), sizeof(values), TrustedPointerWindow::Mode::ReadWrite);
     require(region.region_identity() == allocation);

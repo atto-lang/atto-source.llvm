@@ -1,0 +1,39 @@
+// Actual LLVM AOT: two nominal receivers with the same method name.
+// expect-exit: 0
+// stdout-order: unordered
+// expect-stdout: 2
+// expect-stdout: 4
+use namespace workers;
+
+declare actor Foo1;
+declare actor Foo2;
+
+define actor Foo1 as
+    receive(ActorMail<int> mail): void {
+        stdio.println(self.process_value(mail.value));
+        return;
+    }
+end
+
+define actor Foo2 as
+    receive(ActorMail<int> mail): void {
+        stdio.println(self.process_value(mail.value));
+        return;
+    }
+end
+
+mtd (Foo1 self) process_value(int value): int {
+    return value + 1;
+}
+
+mtd (Foo2 self) process_value(int value): int {
+    return value * 2;
+}
+
+pub fnc main(): int {
+    val first = spawn Foo1();
+    val second = spawn Foo2();
+    first.send(1);
+    second.send(2);
+    return 0;
+}

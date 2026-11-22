@@ -8,6 +8,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -52,7 +53,7 @@ struct Operation {
     enum class Kind {
         Initialize, Read, Move, Drop, DropIfOwned,
         ReadObject, MoveObject, BorrowShared, BorrowExclusive,
-        ReleaseShared, ReleaseExclusive
+        ReleaseShared, ReleaseExclusive, Suspend
     };
     // A default-constructed instruction must never expose an indeterminate
     // enum (undefined behavior under optimizer/sanitizers). The empty place
@@ -134,6 +135,15 @@ inline void validate_disjoint_place_layout(const State& state) {
             // that marker only on the root segment; '$' never appears in a
             // user identifier or a field projection ("p.$a" stays rejected).
             if (at == 0 && key[at] == '$' && key.size() > 1) ++at;
+            // The ownership checker tracks a fieldless nominal object through
+            // one unspellable proof slot, '<owner>.$identity'. Admit exactly
+            // that compiler-owned leaf; any other '$' projection, or a path
+            // continuing below it, stays rejected.
+            constexpr std::string_view kIdentityLeaf = "$identity";
+            if (at > 0 && key.compare(at, std::string::npos, kIdentityLeaf) == 0) {
+                at = key.size();
+                continue;
+            }
             if (!valid_start(static_cast<unsigned char>(key[at])))
                 violation(key, "unproven CFG place projection syntax");
             ++at;
@@ -213,6 +223,16 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
                     item.second.possible = kMoved;
         return;
     }
+    // A suspended logical continuation cannot carry an active loan.
+    // Check every place before falling through to a place-specific operation.
+    if (op.kind == Operation::Kind::Suspend) {
+        for (const auto& entry : state) {
+            const auto& loan = entry.second;
+            if (loan.shared_loans || loan.exclusive_loan)
+                violation(entry.first, "borrow crosses suspension");
+        }
+        return;
+    }
     PlaceState& value = place(state, op.place);
     switch (op.kind) {
         case Operation::Kind::Initialize:
@@ -283,6 +303,7 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
             return;
         case Operation::Kind::ReadObject:
         case Operation::Kind::MoveObject:
+        case Operation::Kind::Suspend:
             break;
     }
     violation(op.place, "invalid CFG operation");
