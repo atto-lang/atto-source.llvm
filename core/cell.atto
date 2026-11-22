@@ -15,6 +15,24 @@ define module cell as
   pub fnc may_destroy(int state): bool {
     return state == 0;
   }
+  // These are conservative *admission decisions*, not loan objects.
+  // Actual rt borrow/take lifetime and actor ownership must be proven
+  // by this backend's compiler, before any program can use a Cell<T>.
+  pub fnc is_valid_state(int state): bool {
+    return state >= -1;
+  }
+  pub fnc may_owner_read(int state): bool {
+    return state >= 0;
+  }
+  pub fnc may_owner_write(int state): bool {
+    return state == 0;
+  }
+  pub fnc may_move_owner(int state): bool {
+    return state == 0;
+  }
+  pub fnc may_suspend_unpinned(int state): bool {
+    return state == 0;
+  }
   pub fnc borrow_shared_state(int state): Result<int, String> {
     if state < 0; do
       return Err("cell: exclusive borrow is active");
