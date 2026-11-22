@@ -124,10 +124,43 @@ static void invalid_generation(void) {
     assert(atomic_load(&e.reclaimed) == 1);
 }
 
+/* A host allocator supplies the cell and payload. The runtime itself uses
+ * no malloc/free: it calls the owner-provided callbacks at the exact edges. */
+static void heap_destroy(void* context, void* payload) {
+    struct Evidence* e = context;
+    assert(payload != NULL);
+    atomic_fetch_add(&e->destroyed, 1);
+    free(payload);
+}
+static void heap_reclaim(void* context, OresArcControlV1* control) {
+    struct Evidence* e = context;
+    assert(atomic_load(&e->destroyed) == 1);
+    atomic_fetch_add(&e->reclaimed, 1);
+    free(control);
+}
+static void physical_owner_release(void) {
+    struct Evidence e = {0};
+    OresArcControlV1* block = calloc(1, sizeof(*block));
+    int* payload = malloc(sizeof(*payload));
+    assert(block && payload);
+    *payload = 42;
+    assert(ores_arc_v1_init(block, 2, 99, payload, &e,
+                            heap_destroy, heap_reclaim));
+    assert(ores_arc_v1_downgrade(block, 2, 99));
+    assert(ores_arc_v1_release_strong(block, 2, 99));
+    assert(atomic_load(&e.destroyed) == 1);
+    assert(atomic_load(&e.reclaimed) == 0);
+    assert(!ores_arc_v1_upgrade(block, 2, 99));
+    assert(ores_arc_v1_release_weak(block, 2, 99));
+    /* No more block accesses: it was physically freed by the final weak. */
+    assert(atomic_load(&e.reclaimed) == 1);
+}
+
 int main(void) {
     basic_and_barrier();
     for (int i = 0; i < 100; i++) upgrade_release_race();
     invalid_generation();
+    physical_owner_release();
     puts("ATTO_ARC_ATOMIC_CONTROL_HOST_PASS");
     return 0;
 }
