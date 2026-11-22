@@ -113,4 +113,27 @@ for kind in clock timer interval; do
   fi
   echo "STD_TIME_CONST_MUT_SELF_COMPILE_REJECTED=$kind"
 done
+# Core ownership invariant: externally readable Duration/Instant fixed slots
+# remain immutable after construction, even from a writable val receiver.
+for kind in duration-nanos instant-ticks; do
+  negative="tests/fixtures/std-time-core-negative-$kind.atto"
+  test -f "$negative"
+  rejected="$work/core-fixed-$kind"
+  if "$compiler" "$negative" -o "$rejected" \
+    >"$work/core-$kind.stdout" 2>"$work/core-$kind.stderr"; then
+    echo "FAIL core time fixed-field mutation compiled: $kind" >&2
+    exit 1
+  fi
+  test ! -e "$rejected" || {
+    echo "FAIL core time field rejection left an artifact: $kind" >&2
+    exit 1
+  }
+  if ! grep -Eiq 'immutab|final|fixed|ownership|read-only' \
+     "$work/core-$kind.stdout" "$work/core-$kind.stderr"; then
+    echo "FAIL core time field rejected for unrelated compiler reason: $kind" >&2
+    sed -n '1,35p' "$work/core-$kind.stderr" >&2
+    exit 1
+  fi
+  echo "STD_TIME_CORE_FIXED_FIELD_REJECTED=$kind"
+done
 echo "STD_TIME_VERIFIED_GUEST_EXECUTED"
