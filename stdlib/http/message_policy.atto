@@ -1,0 +1,115 @@
+// LLVM-native Atto std/http message policy: source-owned, no OS or alloc.
+// This backend intentionally implements the numeric/body/framing layer alone;
+// String/header codecs and actor I/O have separate lowerings and lifecycle.
+// Never interpret these predicates as network permission or parsed authority.
+
+pub fnc http_status_valid(int status): bool {
+  return status >= 100 && status <= 599;
+}
+
+pub fnc http_status_success(int status): bool {
+  return status >= 200 && status <= 299;
+}
+
+pub fnc http_status_redirect(int status): bool {
+  return status >= 300 && status <= 399;
+}
+
+pub fnc http_status_client_error(int status): bool {
+  return status >= 400 && status <= 499;
+}
+
+pub fnc http_status_server_error(int status): bool {
+  return status >= 500 && status <= 599;
+}
+
+// For HEAD, a successful CONNECT tunnel, 1xx, 204, 205 and 304 no
+// HTTP response content is permitted. Tunnel octets aren't HTTP body bytes.
+pub fnc http_response_body_allowed(int status, bool is_head, bool is_connect): bool {
+  if http_status_valid(status) == false then return false; fi
+  if is_head then return false; fi
+  if status < 200 then return false; fi
+  if status == 204 then return false; fi
+  if status == 205 then return false; fi
+  if status == 304 then return false; fi
+  if is_connect then
+    if http_status_success(status) then return false; fi
+  fi
+  return true;
+}
+
+// Caller must tokenize and canonicalize all field names / values, reject
+// duplicate Content-Length, obs-fold, unsupported transfer codings, and
+// enforce connection retirement on parsing errors. This rejects TE+CL.
+pub fnc http_request_framing_allowed(bool transfer_encoding_present,
+                                     bool content_length_present,
+                                     bool transfer_final_chunked): bool {
+  if transfer_encoding_present then
+    if content_length_present then return false; fi
+    return transfer_final_chunked;
+  fi
+  return true;
+}
+
+// Use nonnegative bounded comparisons, not untrusted offset+length additions.
+pub fnc http_header_budget_allowed(int head_bytes, int header_count,
+                                   int head_limit, int field_limit): bool {
+  if head_bytes < 0 then return false; fi
+  if header_count < 0 then return false; fi
+  if head_limit < 0 then return false; fi
+  if field_limit < 0 then return false; fi
+  if head_bytes > head_limit then return false; fi
+  return header_count <= field_limit;
+}
+
+pub fnc http_body_bytes_allowed(int bytes, int body_limit): bool {
+  if bytes < 0 then return false; fi
+  if body_limit < 0 then return false; fi
+  return bytes <= body_limit;
+}
+
+// A bounded partial frame may be read only if all validated quantities fit.
+// Never add offset + length to test an untrusted buffer boundary.
+pub fnc http_frame_range_allowed(int offset, int length, int buffer_bytes,
+                                 int frame_limit): bool {
+  if offset < 0 then return false; fi
+  if length < 0 then return false; fi
+  if buffer_bytes < 0 then return false; fi
+  if frame_limit < 0 then return false; fi
+  if offset > buffer_bytes then return false; fi
+  if length > frame_limit then return false; fi
+  return length <= buffer_bytes - offset;
+}
+
+// Strict framing admission based on *raw* field counts from the transport.
+// Duplicate Content-Length or Transfer-Encoding, TE+CL, unsupported codings,
+// and a TE field without final chunked all fail closed. This function does not
+// parse wire headers or grant network authority.
+pub fnc http_request_framing_fields_allowed(
+    int content_length_fields, int transfer_encoding_fields,
+    bool final_chunked, bool unsupported_transfer_coding): bool {
+  if content_length_fields < 0 then return false; fi
+  if content_length_fields > 1 then return false; fi
+  if transfer_encoding_fields < 0 then return false; fi
+  if transfer_encoding_fields > 1 then return false; fi
+  if content_length_fields > 0 then
+    if transfer_encoding_fields > 0 then return false; fi
+  fi
+  if unsupported_transfer_coding then return false; fi
+  if transfer_encoding_fields == 0 then
+    if final_chunked then return false; fi
+    return true;
+  fi
+  return final_chunked;
+}
+
+// Subtraction-first chunk accounting. No attacker-controlled addition is
+// performed before bounds admission, and limits above 1GiB are rejected.
+pub fnc http_body_chunk_allowed(int consumed, int next_bytes, int max_bytes): bool {
+  if consumed < 0 then return false; fi
+  if next_bytes < 0 then return false; fi
+  if max_bytes < 0 then return false; fi
+  if max_bytes > 1073741824 then return false; fi
+  if consumed > max_bytes then return false; fi
+  return next_bytes <= max_bytes - consumed;
+}
