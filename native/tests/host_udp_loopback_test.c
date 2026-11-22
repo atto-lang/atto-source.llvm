@@ -6,9 +6,12 @@
 #include <time.h>
 static int granted = 1;
 static unsigned denied_port = 0;
+static unsigned denied_source_port = 0;
 static int authorize(void *context, unsigned port, int operation) {
     (void)context;
-    if (!granted || (operation == ATTO_UDP_SEND && port == denied_port)) return -EACCES;
+    if (!granted || (operation == ATTO_UDP_SEND && port == denied_port) ||
+        (operation == ATTO_UDP_PEER && port == denied_source_port))
+        return -EACCES;
     return 0;
 }
 static int read_next(atto_udp_loopback *s, uint8_t *buf, size_t cap, size_t *n, unsigned *p) {
@@ -46,6 +49,17 @@ int main(void) {
     assert(read_next(b,out,2,&n,&source)==-EMSGSIZE && out[0]==0xAA && n==0 && source==0);
     assert(atto_udp_loopback_send(a,(unsigned)bp,pkt,4,&sent)==0);
     assert(read_next(b,out,sizeof(out),&n,&source)==0 && n==4);
+    /* A revoked *sender* must never publish its already-received bytes. */
+    denied_source_port=(unsigned)ap;
+    assert(atto_udp_loopback_send(a,(unsigned)bp,pkt,4,&sent)==0);
+    out[0]=0xD4;
+    assert(read_next(b,out,sizeof(out),&n,&source)==-EACCES &&
+           n==0 && source==0 && out[0]==0xD4);
+    denied_source_port=0;
+    assert(atto_udp_loopback_send(a,(unsigned)bp,pkt,4,&sent)==0);
+    assert(read_next(b,out,sizeof(out),&n,&source)==0 &&
+           n==4 && source==(unsigned)ap);
+
     granted=0;
     assert(atto_udp_loopback_receive(b,out,sizeof(out),&n,&source)==-EACCES);
     assert(atto_udp_loopback_send(a,(unsigned)bp,pkt,4,&sent)==-EACCES);
