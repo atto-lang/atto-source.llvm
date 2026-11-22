@@ -6,6 +6,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include "oreslang/types/PointerIntHIR.hpp"
 #include "oreslang/types/FunctionEffects.hpp"
 #include "oreslang/types/FuturePipelineContract.hpp"
 #include "oreslang/types/NativeHasFutureContract.hpp"
@@ -44,7 +45,9 @@ struct Expression {
         Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
         LogicalAnd, LogicalOr, LogicalXor,
         Conditional,
-        Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field
+        Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field,
+        // Appended so existing native AST ordinals keep their identities.
+        ShiftLeft, ShiftRight, ShiftUnsignedRight
     };
     Kind kind;
     std::size_t offset = 0;
@@ -306,6 +309,10 @@ struct Statement {
 // All locals and ordinary statements precede guards; branch-local objects
 // and suspension remain unsupported until path-sensitive cleanup is proven.
 struct GuardedReturn {
+    // The new else-free 'guard cond { return value; }' is an early exit on
+    // FALSE. Legacy 'if cond { return value; } fi' returns on TRUE.
+    // Keep the polarity explicit: AST paths, typers and cleanup are shared.
+    bool return_on_false = false;
     std::unique_ptr<Expression> condition;
     std::unique_ptr<Expression> lhs; // stacked equality-only compatibility
     std::unique_ptr<Expression> rhs;
@@ -368,9 +375,7 @@ struct Function {
     bool exported = false;
     std::string method_owner; // compiler-owned class method privilege, never source syntax
     bool native_internal = false; // linker-owned private imported implementation
-    // Explicit compiler-owned host C u32 trampoline, never the guest i64 ABI.
-    // Only the browser v1 ABI version symbol is admitted in the first slice.
-    std::string c_export_u32_symbol;
+    bool foreign_import = false; // exact approved C symbol, declaration-only, never guest-implemented
     FunctionEffects declared_effects{};
     bool has_declared_effects = false;
     std::string return_sum;
@@ -447,8 +452,6 @@ struct ScalarGenerator {
 
 struct ModuleImport {
     bool selected_class = false;
-    // `import fnc name [as alias] from "path";` binds one pub function by name.
-    bool selected_function = false;
     std::string selected_module;
     std::string local_name;
     std::string path;
@@ -465,6 +468,13 @@ struct TypeConstraintDescriptor {
 };
 
 struct Program {
+    // Host compilation authority, injected by the trusted CLI/loader only.
+    // Source code cannot forge this bit; parsed programs default denied.
+    bool foreign_i64_granted = false;
+    // M2a: same nominal HIR is consumed by canonical parser, existing
+    // ownership checker and LLVM backend. No raw pointer-as-i64 may enter
+    // ordinary source Expression or ScalarType storage.
+    std::unique_ptr<pointer_int_aot::Plan> pointer_int_plan;
     std::vector<ModuleImport> imports;
     std::vector<CooperativeScalarLoop> cooperative_loops;
     std::vector<ScalarGenerator> generators;
@@ -486,12 +496,14 @@ struct Program {
 // is one zero-local actor lifecycle await in trusted zero-argument main:
 // direct/typed get_ready readiness or explicit ActorRef.get_done().
 Program parse_program(std::string_view source, bool experimental_owned_int = false,
-                      bool experimental_rt_scalar_loop = false);
+                      bool experimental_rt_scalar_loop = false,
+                      bool experimental_pointer_int_aot = false);
 
 // Internal module-linking stages: syntax trees are NOT admitted for codegen.
 // resolve_and_validate_program must run after all module names are resolved.
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int = false,
-                                 bool experimental_rt_scalar_loop = false);
+                                 bool experimental_rt_scalar_loop = false,
+                                 bool experimental_pointer_int_aot = false);
 void resolve_and_validate_program(Program& program);
 
 } // namespace oreslang

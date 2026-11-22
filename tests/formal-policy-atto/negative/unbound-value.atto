@@ -1,0 +1,4 @@
+// Resolving a missing lexical binding must fail before IR emission.
+pub fnc main(): int {
+  return missing_lexical_binding;
+}

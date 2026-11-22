@@ -1,0 +1,3 @@
+// Importing hosted std must fail before a freestanding image is generated.
+import module host from "stdlib/std/file.atto";
+pub fnc main(): int { return 42; }

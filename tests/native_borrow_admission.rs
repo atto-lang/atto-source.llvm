@@ -1,4 +1,4 @@
-//! Real compiler admission: thirty-one denials and four genuine IR controls.
+//! Real compiler admission with semantic diagnostics and genuine IR controls.
 use std::{
     collections::BTreeSet,
     env, fs,
@@ -214,6 +214,18 @@ fn check_case_with_suffix(
             status.success() && has_definition(&stdout),
             "{name}: missing real IR: {stderr}"
         );
+        if name == "valid-local-in-place-mutation" {
+            // Local i64 updates must not silently acquire a managed/heap
+            // allocator dependency. SSA/stack alloca remain allowed. This
+            // is an IR smoke gate, NOT proof of whole-program zero GC.
+            const ALLOCATORS: [&str; 6] =
+                ["@malloc(", "@calloc(", "@realloc(", "@GC_malloc(", "@ores_gc_alloc(", "@_Znwm("];
+            for line in stdout.lines() {
+                if line.contains("call") && ALLOCATORS.iter().any(|symbol| line.contains(symbol)) {
+                    panic!("{name}: scalar-only source emitted a heap/GC allocation call: {line}");
+                }
+            }
+        }
     }
 }
 
@@ -229,6 +241,8 @@ fn main() {
     let compiler = fs::canonicalize(&args[1]).expect("compiler path");
     let root = Scratch::new();
     let negatives = [
+        ("canonical-immutable-owner", include_str!("fixtures/audit-immutable-owner.atto"), "cannot mutably borrow immutable owner 'player'"),
+        ("canonical-overlapping-loans", include_str!("fixtures/audit-overlap.atto"), "conflicting active native borrow of 'box'"),
         ("mut-share-scalar-reject", "pub fnc main(): int { let int v = 42; return rt mut share v; }\n", "native rt mut share requires verified SharedMutex<T> capability"),
         ("mut-share-borrow-reject", "pub fnc main(): int { let int v = 42; return rt mut share (rt borrow v); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
         ("mut-share-parenthesized-owned-reject", "pub fnc main(): int { let int v = 42; return rt mut share (v); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
@@ -270,15 +284,20 @@ fn main() {
         ("generator-yield-loan-unsupported", "generator fnc values(): int { let int x = 1; yield rt borrow x; return; }\n", "bare native generator declaration requires 'generator*'"),
         ("canonical-borrowed-yield-unsupported", "gen* values(): Iterator<int> { yield rt borrow x; return; }\n", "expected integer literal"),
     ];
+    let denied = negatives.len();
     for (name, source, expected) in negatives {
         check_case(&compiler, &root.0, name, source, Some(expected));
     }
-    for (name, source) in [
+    let positives = [
+        ("canonical-mutable-owner", include_str!("fixtures/audit-mutable-owner.atto")),
+        ("valid-local-in-place-mutation", "pub fnc main(): int { let int count = 1; count = count + 1; return count; }\n"),
         ("valid-shared-borrow", "fnc read(borrow int x): int { return x; }\npub fnc main(): int { let int v = 42; return read(rt borrow v); }\n"),
         ("valid-exclusive-mutable-borrow", "fnc read(borrow mut int x): int { return x; }\npub fnc main(): int { let int v = 42; return read(rt mut borrow v); }\n"),
         ("valid-owned-scalar-call", "fnc consume(int x): int { return x; }\npub fnc main(): int { return consume(42); }\n"),
         ("valid-owned-constructor", "pub define class Box as let int value=start;\n  pub constructor(int start){return;}\n  pub read()->int{return self.value;}\nend\npub fnc main(): int { let Box box = new Box(42); return box.read(); }\n"),
-    ] {
+    ];
+    let admitted = positives.len();
+    for (name, source) in positives {
         check_case(&compiler, &root.0, name, source, None);
     }
     // Backward compatibility is intentional and must not silently become the
@@ -288,7 +307,7 @@ fn main() {
         "pub fnc main(): int { return 42; }\n", None, "ores",
     );
     println!(
-        "PASS AttoLang native borrow admission: thirty-one no-IR/no-artifact .atto denials, four .atto IR controls, one legacy .ores IR control"
+        "PASS AttoLang native borrow admission: {denied} no-IR/no-artifact .atto denials, {admitted} .atto IR controls, one legacy .ores IR control"
     );
 }
 

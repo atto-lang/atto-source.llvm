@@ -21,3 +21,19 @@
 ## Hard fail-closed limitations
 
 The primitive accepts an **already authenticated** FD and activation token from a runtime layer not implemented by this PR. It does not provide a guest API, async dispatch, built-in directory sync or process restart. No source mirroring or merge. Keep draft.
+
+## Audit: append-mode descriptor custody (2026-10-31)
+
+The preopened POSIX descriptor must not carry `O_APPEND`. On Linux, `pwrite`
+with `O_APPEND` may ignore the passed offset, violating WAL positional-write
+invariants. The host owner now rejects `F_GETFL` failure or `O_APPEND` during
+adoption, before retaining FD ownership. Negative fixtures verify rejection
+and that the caller still owns the denied FD. This guards one descriptor-flag
+hazard; it does NOT establish secure root confinement, no-symlink opening,
+FD exclusivity, parent-directory fsync, actor authorization, or durability.
+
+An additional *immediately-pre-write* `F_GETFL` check quarantines the WAL
+owner with `UnknownOutcome` when `O_APPEND` is enabled after admission (for
+example via a duplicated open-file description). The check is not atomic
+against a concurrent descriptor-flag mutation. Race-free exclusive physical
+FD custody and supervisor confinement remain mandatory.

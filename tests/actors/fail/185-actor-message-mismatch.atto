@@ -1,0 +1,9 @@
+// Must fail type check: bool payload does not match ActorMail<int>.
+define actor Receiver as
+    receive(ActorMail<int> mail): void { return; }
+end
+pub fnc main(): int {
+    val target = spawn Receiver();
+    target.send(true);
+    return 0;
+}

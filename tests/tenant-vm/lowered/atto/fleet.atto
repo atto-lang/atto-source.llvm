@@ -1,0 +1,53 @@
+// A whole program: main starts workers of two types, sends to them, and stops them.
+// Ordered traps unless it sees 1, 2, 3... in order, which is how a test can see delivery at all:
+// source has no output on this target, and references cannot leave main.
+fnc next_in_order(int seen, int n): int {
+  if (n eq seen + 1) { return n; } fi
+  return 9223372036854775807 + n;
+}
+define actor Ordered as {
+  let seen: int = 0;
+  pub fnc on_message(int n): int {
+    seen = next_in_order(seen, n);
+    return seen;
+  }
+}
+define actor Summer as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+pub fnc main(): int {
+  const a = spawn Ordered();
+  const b = spawn Ordered();
+  const c = spawn Summer();
+  a.send(1);
+  b.send(1);
+  a.send(2);
+  b.send(2);
+  a.send(3);
+  b.send(3);
+  a.send(4);
+  b.send(4);
+  a.send(5);
+  b.send(5);
+  a.send(6);
+  b.send(6);
+  a.send(7);
+  b.send(7);
+  a.send(8);
+  b.send(8);
+  a.send(9);
+  b.send(9);
+  a.send(10);
+  b.send(10);
+  c.send(100);
+  c.send(200);
+  c.send(300);
+  stop a;
+  stop b;
+  stop c;
+  return 43;
+}

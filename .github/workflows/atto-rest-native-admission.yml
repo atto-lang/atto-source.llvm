@@ -1,0 +1,46 @@
+name: LLVM real REST-status .atto AOT admission
+on:
+  pull_request:
+    paths:
+      - 'contracts/atto-rest-native-v1/**'
+      - 'tests/atto_rest_native_admission.sh'
+      - '.github/workflows/atto-rest-native-admission.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  real-llvm-guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify complete exact PR head and canonical REST fixture blob SHA
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet
+          git diff --cached --quiet
+          test "$(git hash-object contracts/atto-rest-native-v1/rest_status_scalar.atto)" = b1910c892f0ed21011bdcac334e094bd70c3aaf2
+          test "$(git hash-object contracts/atto-rest-native-v1/rest_http_actor_unimplemented.atto)" = d4d9c2fc50fc65c651cca445adb63e668c900f44
+          bash -n tests/atto_rest_native_admission.sh
+      - name: Install native LLVM compiler toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang llvm-dev cmake ninja-build
+      - name: Compile exact-source LLVM frontend and execute native Atto guest
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -G Ninja -S . -B "$RUNNER_TEMP/rest-native-llvm-build" -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$(llvm-config --cmakedir)"
+          cmake --build "$RUNNER_TEMP/rest-native-llvm-build" --target oreslang-llvmc --parallel 2
+          test -x "$RUNNER_TEMP/rest-native-llvm-build/oreslang-llvmc"
+          bash tests/atto_rest_native_admission.sh "$RUNNER_TEMP/rest-native-llvm-build/oreslang-llvmc"
+          echo 'NOT_EXECUTED: full REST HTTP server, actor dispatch, other backends, hard real-time proof'
