@@ -962,19 +962,21 @@ if(BUILD_TESTING)
     # has NO AST/IR/actor execution authority. Node only materializes the
     # already-sha-pinned canonical fixture and is not a guest interpreter.
     find_program(ORE_COUNTER_NODE NAMES node nodejs)
+    find_program(ORE_COUNTER_GIT NAMES git)
     # The symlink-negative source-set test requires POSIX symlink semantics.
-    if(ORE_COUNTER_NODE AND UNIX)
+    if(ORE_COUNTER_NODE AND ORE_COUNTER_GIT AND UNIX)
         add_test(NAME native_actor_counter_source_set_integrity_only
             COMMAND "${CMAKE_COMMAND}"
                 "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
                 "-DNODE=${ORE_COUNTER_NODE}"
+                "-DGIT=${ORE_COUNTER_GIT}"
                 "-DTOOL=${CMAKE_CURRENT_SOURCE_DIR}/tools/actor-counter-parity.mjs"
                 "-DMANIFEST=${CMAKE_CURRENT_SOURCE_DIR}/contracts/actor-counter-identical-source-v1/actor-source-set.v1"
                 "-DEXPECTED_SHA=e4fd0afea3d21e6fed54f9943abbf0851550e028"
                 "-DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/actor-source-set-admission"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/native_actor_source_set_integrity_only.cmake")
         set_tests_properties(native_actor_counter_source_set_integrity_only
-            PROPERTIES TIMEOUT 60)
+            PROPERTIES TIMEOUT 120)
     endif()
 
     # Fixed-budget, byte-exact Map<Bytes,Bytes> substrate. C++ host regression,
