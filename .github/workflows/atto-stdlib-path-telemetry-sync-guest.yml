@@ -8,6 +8,7 @@ on:
       - 'tests/fixtures/stdlib_path_telemetry_sync_v1.atto'
       - 'tests/fixtures/stdlib_alias_identity_v1.atto'
       - 'tests/fixtures/stdlib_pure_policy_parity_v1.atto'
+      - 'tests/native_borrow_alias_matrix.rs'
       - '.github/workflows/atto-stdlib-path-telemetry-sync-guest.yml'
   workflow_dispatch:
 permissions:
@@ -36,7 +37,8 @@ jobs:
             stdlib/std/path.atto stdlib/std/telemetry.atto stdlib/std/sync.atto \
             tests/fixtures/stdlib_path_telemetry_sync_v1.atto \
             tests/fixtures/stdlib_alias_identity_v1.atto \
-            tests/fixtures/stdlib_pure_policy_parity_v1.atto; do
+            tests/fixtures/stdlib_pure_policy_parity_v1.atto \
+            tests/native_borrow_alias_matrix.rs; do
             sha="$(git hash-object --no-filters -- "$path")"
             test "$sha" = "$(git rev-parse "HEAD:$path")"
             echo "LLVM_ATTO_STD_SOURCE_BLOB=$path:$sha"
@@ -184,6 +186,22 @@ jobs:
           "$RUNNER_TEMP/std-parity-134-sanitized"
           echo "LLVM_STD_POLICY_134_ASAN_UBSAN=EXECUTED"
           echo "LLVM_ATTO_STD_ASAN_UBSAN_GUEST=EXECUTED"
+      - name: Compile actual LLVM borrow checker and execute 144 canonical Atto alias cases
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc --version
+          rustc -O --edition=2021 tests/native_borrow_alias_matrix.rs \
+            -o "$RUNNER_TEMP/std-borrow-alias-matrix"
+          "$RUNNER_TEMP/std-borrow-alias-matrix" \
+            --compiler "$RUNNER_TEMP/std-backend/oreslang-llvmc" \
+            --clang "$(command -v clang)" \
+            --source-ext=atto \
+            | tee "$RUNNER_TEMP/std-borrow-alias-matrix.log"
+          grep -Fq \
+            'PASS borrow contract: accepted=60, rejected=84, Java=0, sanitized=false' \
+            "$RUNNER_TEMP/std-borrow-alias-matrix.log"
+          echo "ATTO_LLVM_CORE_BORROW_ALIAS_144=EXECUTED"
       - name: Preserve the evidence boundary
         if: always()
         run: |
