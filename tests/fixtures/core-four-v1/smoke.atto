@@ -45,6 +45,21 @@ pub fnc main(): int {
   if !cell.may_borrow_shared(0) || cell.may_borrow_exclusive(-1); do
     return 10;
   fi
+  if cell.may_borrow_shared(9223372036854775807); do
+    return 14;
+  fi
+  if cell.may_borrow_shared(-2) || cell.may_destroy(-1); do
+    return 15;
+  fi
+  if num.saturating_neg(-9223372036854775808) != 9223372036854775807; do
+    return 16;
+  fi
+  if num.saturating_abs(-9223372036854775808) != 9223372036854775807; do
+    return 17;
+  fi
+  if num.wrapping_neg(-9223372036854775808) != -9223372036854775808; do
+    return 18;
+  fi
   contracts.requires(contracts.check(true), "core contract precondition");
   contracts.ensures(true, "core contract postcondition");
   contracts.invariant(true, "core contract invariant");
