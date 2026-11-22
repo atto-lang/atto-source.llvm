@@ -15,9 +15,12 @@ is performed by these primitives.
   `InvalidOrder` **without touching the cell or expected value**.
 - Compare-exchange returns `Mismatch` with updated expected on failed comparison,
   including spurious weak-CAS failure; callers must loop when appropriate.
-- `fetch_add` and `fetch_sub` are explicitly wrapping atomic operations,
-  distinct from AttoLang's checked scalar arithmetic. `Atomic<bool>` does not
-  permit integer/bitwise fetch operations in this v1.
+- `fetch_add` and `fetch_sub` use checked CAS loops in the host
+  primitive and in the experimental signed-i64 AOT path. Overflow returns
+  `AtomicStatus::Overflow` in the host API (without modifying the cell or
+  previous-value output), or traps in compiled guests before any wrapped
+  update is published. A losing CAS retries arithmetic against the newly
+  observed value. `Atomic<bool>` does not permit integer/bitwise fetch operations.
 - The backend must require authenticated intrinsic identity before lowering;
   user-declared `Atomic` or foreign raw handles must not invoke this header.
 
@@ -330,3 +333,45 @@ deterministic compiled-path drops on exception/cancellation, full
 sealed actor state integration, same-actor concurrent receivers, and
 cross-backend parity have not been implemented or proven by these
 host and restricted Atomic AOT fixtures.
+
+## 2026-11-22 checked atomic arithmetic parity hardening (unverified branch)
+
+The Atto spec's atomic chapter requires **checked** signed `fetch_add` /
+`fetch_sub` that never publish overflow. This PR previously had three
+inconsistent implementations: Java checked arithmetic, but LLVM experimental
+`atomicrmw add/sub`, main LLVM `CreateAtomicRMW(Add)`, and wrapping C++ host
+`AtomicScalar<T>`. These are now reconciled in source:
+
+- The main LLVM `Atomic<int>.fetch_add` emits an overflow-checked CAS
+  retry loop instead of wrapping atomicrmw; invalid LLVM orders remain
+  compile-time rejected. The experimentally isolated LLVM AOT compiler
+  emits comparable `llvm.sadd.with.overflow.i64` or
+  `llvm.ssub.with.overflow.i64` + strong CAS loops.
+- `AtomicScalar<T>` host arithmetic returns `Overflow` without changing
+  the actual cell or the caller's previous-value output, and retries a
+  losing weak CAS with the latest observed value. All supported signed
+  and unsigned integral widths use checked arithmetic.
+- `tests/native_atomic_box_v1_test.cpp` now asserts that overflowing
+  signed/unsigned arithmetic does not publish. Additional unchanged-source
+  guest fixtures validate the generated IR and native overflow traps;
+  the old `atomicrmw add` presence is now an explicit test failure.
+
+A local, **standalone algorithm** C++20 test (not the GitHub source
+tree) executed with GCC 14 and Clang 17, both `-O2 -Wall -Wextra
+-Werror -fsanitize=undefined`, and passed 80,000 contended checked
+increments plus signed/unsigned overflow-without-publication cases.
+A separately assembled LLVM IR control-flow prototype compiled under
+Clang 17, returned 42 normally and trapped on overflowing add.
+
+**Those smoke runs do not prove this PR's exact compiler source compiles**
+or executes. The full LLVM 22 SDK, original source-tree build,
+`tests/atto_atomic_main_v1.sh`, `tests/atto_atomic_aot_v1.sh`,
+C++ host tests under ASan/UBSan/TSan, exact-head source blobs and actual
+native guest runs are still **NOT_EXECUTED** after this change.
+Any pre-existing private carrier PASS belongs to older source commits
+and must not be used to merge this patched head.
+
+Outstanding: compile and verify exact source with matching LLVM/Clang 22,
+prove no artifact for invalid orders and guest pointer escape, reconcile
+the standalone vs production atomic frontend, and complete Box<T> guest
+allocation/drop and actor concurrency semantics independently.
