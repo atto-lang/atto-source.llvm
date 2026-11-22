@@ -311,6 +311,7 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
         }
         case Expression::Kind::Copy:
         case Expression::Kind::Share:
+        case Expression::Kind::Cast: // Cast is checked static identity, but operand may move.
         case Expression::Kind::Negate:
         case Expression::Kind::LogicalNot:
             check_value(*expr.left, locals, functions);
@@ -446,6 +447,7 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
             return;
         case Expression::Kind::Negate:
         case Expression::Kind::LogicalNot:
+        case Expression::Kind::Cast:
         case Expression::Kind::Copy:
         case Expression::Kind::Share:
             check_pure_guard(*expr.left, locals, functions);
@@ -535,6 +537,7 @@ void check_caught_throw_scalar_read(const Expression& expr, Locals& locals,
         }
         case Expression::Kind::Negate:
         case Expression::Kind::LogicalNot:
+        case Expression::Kind::Cast:
             check_caught_throw_scalar_read(*expr.left, locals, functions);
             return;
         case Expression::Kind::Add:

@@ -30,6 +30,8 @@ pub struct TargetHeaders {
     /// Imported module aliases. Imports are not resolved or linked here.
     pub imports: Vec<String>,
     pub actors: Vec<String>,
+    /// Parse-only private actor state schemas; never ordinary actor fields.
+    pub actor_state_attachments: Vec<ActorStateAttachment>,
     /// Real concrete actor syntax trees parsed by the production parser.
     /// Bodies are parsed but NOT typechecked for the new out-of-line profile.
     pub definitions: Vec<ActorDecl>,
@@ -41,6 +43,22 @@ pub struct TargetHeaders {
     /// Balanced top-level fnc body spans: (opening brace, after brace).
     pub function_body_spans: Vec<(usize, usize)>,
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActorStateAttachment {
+    pub owner: String,
+    pub pos: Pos,
+    pub fields: Vec<AttachedStateField>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AttachedStateField {
+    pub name: String,
+    pub kind: String,
+    pub writable: bool,
+    pub initialized: bool,
+    pub pos: Pos,
+}
+
 struct Cursor<'a> { toks: &'a [Token], i: usize }
 impl Cursor<'_> {
     fn tok(&self) -> &Tok { &self.toks[self.i.min(self.toks.len()-1)].tok }
@@ -164,6 +182,73 @@ impl Cursor<'_> {
         Ok((ReceiverHeader { owner, name, arity, params, return_type, mutable, public, pos }, start, end))
     }
 
+    /// Parse only. A successful attachment does NOT authorize any native
+    /// state allocation, guest critical loan or receiver execution.
+    fn actor_state_attachment(&mut self, pos: Pos) -> R<ActorStateAttachment> {
+        self.expect_word("on")?;
+        self.expect_word("actor")?;
+        let owner = self.ident()?;
+        self.expect_word("as")?;
+        self.expect(&Tok::LBrace, "expected '{' for attached actor state")?;
+        let mut fields: Vec<AttachedStateField> = Vec::new();
+        while !self.take(&Tok::RBrace) {
+            if *self.tok() == Tok::Eof {
+                return Err(self.err("E_EOF", "unclosed actor state schema"));
+            }
+            if fields.len() >= 128 {
+                return Err(self.err("E_SOURCE_LIMIT", "actor state has more than 128 fields"));
+            }
+            let pos = self.pos();
+            let writable = if self.take_word("let") { true }
+                else if self.take_word("val") { false }
+                else { return Err(self.err("E_SYNTAX", "state fields require let or val")); };
+            let kind = match self.word() {
+                Some("int") => "int",
+                Some("bool") => "bool",
+                _ => return Err(self.err("E_UNSUPPORTED_TYPE",
+                    "attached actor state supports only scalar int/bool preflight")),
+            };
+            self.next();
+            let name = self.ident()?;
+            let initialized = if self.take(&Tok::Colon) || self.take(&Tok::Assign) {
+                if kind == "bool" {
+                    if !self.take_word("true") && !self.take_word("false") {
+                        return Err(self.err("E_SYNTAX", "expected bool literal"));
+                    }
+                } else {
+                    let negative = self.take(&Tok::Minus);
+                    let valid = match self.tok() {
+                        Tok::Int(Some(n)) => *n <= i64::MAX as u64,
+                        Tok::Int(None) => negative,
+                        _ => false,
+                    };
+                    if !valid {
+                        return Err(self.err("E_SYNTAX", "expected signed i64 literal"));
+                    }
+                    self.next();
+                }
+                true
+            } else { false };
+            self.expect(&Tok::Semi, "expected ';' after actor state field")?;
+            if !writable && !initialized {
+                return Err(Diagnostic::new(pos, "E_STATE",
+                    "immutable val state requires a declaration initializer"));
+            }
+            if fields.iter().any(|f| f.name == name) {
+                return Err(Diagnostic::new(pos, "E_DUPLICATE",
+                    format!("duplicate protected field '{name}'")));
+            }
+            fields.push(AttachedStateField {
+                name, kind: kind.to_string(), writable, initialized, pos,
+            });
+        }
+        if fields.is_empty() {
+            return Err(Diagnostic::new(pos, "E_STATE",
+                "actor state attachment requires at least one field"));
+        }
+        Ok(ActorStateAttachment {owner, pos, fields})
+    }
+
     /// Parse a concrete "define actor Foo as ... end" using the existing
     /// production parser. The delimiter scan observes braces so an "end"
     /// inside a method body does not truncate the actor declaration.
@@ -237,7 +322,8 @@ pub fn parse_target_declarations(toks: &[Token]) -> R<TargetHeaders> {
             out.namespace = Some(c.ident()?);
             c.expect(&Tok::Semi, "expected ';' after namespace")?;
         } else if c.take_word("import") {
-            if !out.actors.is_empty() || !out.receivers.is_empty() {
+            if !out.actors.is_empty() || !out.receivers.is_empty() ||
+                !out.actor_state_attachments.is_empty() || !out.definitions.is_empty() {
                 return Err(c.err("E_SYNTAX", "module imports must precede actor declarations"));
             }
             c.expect_word("module")?;
@@ -253,12 +339,21 @@ pub fn parse_target_declarations(toks: &[Token]) -> R<TargetHeaders> {
             c.expect(&Tok::Semi, "expected ';' after module import")?;
             out.imports.push(alias);
         } else if c.take_word("define") {
-            let actor = c.definition(c.i - 1)?;
-            if out.definitions.iter().any(|other| other.name == actor.name) {
-                return Err(Diagnostic::new(actor.pos, "E_DUPLICATE",
-                    format!("duplicate concrete actor definition '{}'", actor.name)));
+            if c.take_word("state") {
+                let attached = c.actor_state_attachment(pos)?;
+                if out.actor_state_attachments.iter().any(|a| a.owner == attached.owner) {
+                    return Err(Diagnostic::new(pos,"E_DUPLICATE",
+                        "duplicate protected actor state attachment"));
+                }
+                out.actor_state_attachments.push(attached);
+            } else {
+                let actor = c.definition(c.i - 1)?;
+                if out.definitions.iter().any(|other| other.name == actor.name) {
+                    return Err(Diagnostic::new(actor.pos, "E_DUPLICATE",
+                        format!("duplicate concrete actor definition '{}'", actor.name)));
+                }
+                out.definitions.push(actor);
             }
-            out.definitions.push(actor);
         } else if c.take_word("declare") {
             c.expect_word("actor")?;
             let name = c.ident()?;
@@ -286,6 +381,26 @@ pub fn parse_target_declarations(toks: &[Token]) -> R<TargetHeaders> {
             }
         }
         decls += 1;
+    }
+    for state in &out.actor_state_attachments {
+        let actor = out.definitions.iter().find(|a| a.name == state.owner);
+        if actor.is_none() && !out.actors.contains(&state.owner) {
+            return Err(Diagnostic::new(state.pos,"E_UNBOUND",
+                format!("state actor '{}' is not declared", state.owner)));
+        }
+        if let Some(actor) = actor {
+            if !actor.fields.is_empty() {
+                return Err(Diagnostic::new(state.pos, "E_DUPLICATE",
+                    "inline actor fields cannot coexist with protected state attachment"));
+            }
+            for field in &state.fields {
+                if actor.methods.iter().any(|m| m.name == field.name) ||
+                    field.name == "receive" {
+                    return Err(Diagnostic::new(field.pos, "E_DUPLICATE",
+                        "state field conflicts with actor method"));
+                }
+            }
+        }
     }
     for receiver in &out.receivers {
         if !out.actors.contains(&receiver.owner) {

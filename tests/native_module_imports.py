@@ -176,6 +176,15 @@ def main():
         # package-manifest integration they must emit no LLVM IR, regardless
         # of whether the quoted selector is local or a pinned dependency.
         ('namespace-local-unlinked', 'import namespace billing as pay from "+/"; pub fnc main():int{return pay.answer();}', library, 'NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED'),
+        # Canonical package shorthand and named module pkg selectors are
+        # independently recognized but MUST fail before LLVM output until
+        # verified manifest+lockfile public-export linking is integrated.
+        ('package-shorthand-unlinked', "import pkg 'z'; pub fnc main():int{return 0;}", library, 'package namespace imports require a verified package-export linker'),
+        ('package-aliased-unlinked', "import pkg 'advanced-math' as math; pub fnc main():int{return 0;}", library, 'package namespace imports require a verified package-export linker'),
+        ('package-module-unlinked', "import module Math from pkg 'z'; pub fnc main():int{return 0;}", library, 'package namespace imports require a verified package-export linker'),
+        ('package-quoted-required', 'import pkg z; pub fnc main():int{return 0;}', library, 'package namespace import requires a quoted package identity'),
+        ('package-alias-required', "import pkg 'advanced-math'; pub fnc main():int{return 0;}", library, 'package namespace import requires explicit as alias'),
+
         ('namespace-pinned-unlinked', 'import namespace billing as pay from "checkout"; pub fnc main():int{return pay.answer();}', library, 'NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED'),
         ('namespace-traversal-selector', 'import namespace billing as pay from "../other"; pub fnc main():int{return 0;}', library, 'invalid native namespace package alias'),
         ('namespace-empty-selector', 'import namespace billing as pay from ""; pub fnc main():int{return 0;}', library, 'namespace package selector'),

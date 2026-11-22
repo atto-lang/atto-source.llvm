@@ -18,8 +18,8 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
-#ifdef ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE
 #include <errno.h>
+#ifdef ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE
 /* Only compiled in the isolated fault-injection CTest; absent in production. */
 static _Atomic int fail_next_carrier_create;
 void ores_native_actor_scheduler_test_fail_next_create(void) {
@@ -1142,15 +1142,12 @@ void ores_native_actor_scheduler_signal_turn_gate(OresNativeActorScheduler* s) {
     unlock(s);
 }
 
-OresNativeActorRef ores_native_actor_scheduler_spawn(
-    OresNativeActorScheduler* s, size_t i) {
+/* Requires scheduler lock. No actor identity is consumed until the caller
+ * has completed any requested physical-carrier admission barrier. */
+static OresNativeActorRef spawn_locked(OresNativeActorScheduler* s, size_t i) {
     OresNativeActorRef missing = {0, 0, 0};
-    if (!s) return missing;
-    lock(s);
-    if (s->retired || i >= s->actor_count || s->actors[i].spawned) {
-        unlock(s);
+    if (s->retired || i >= s->actor_count || s->actors[i].spawned)
         return missing;
-    }
     ActorLane* a = &s->actors[i];
     a->spawned = 1;
     /* A fresh incarnation must not inherit an older actor's cache hint. */
@@ -1162,7 +1159,54 @@ OresNativeActorRef ores_native_actor_scheduler_spawn(
         (uint64_t)i,
         a->generation
     };
-    OresNativeActorRef ref = {s->domain, (uint64_t)i, a->generation};
+    return (OresNativeActorRef){s->domain, (uint64_t)i, a->generation};
+}
+
+OresNativeActorRef ores_native_actor_scheduler_spawn(
+    OresNativeActorScheduler* s, size_t i) {
+    OresNativeActorRef missing = {0, 0, 0};
+    if (!s) return missing;
+    lock(s);
+    OresNativeActorRef ref = spawn_locked(s, i);
+    unlock(s);
+    return ref;
+}
+
+/* Java/Graal parity opt-in. First actor of a domain acquires one native
+ * pthread and waits for that carrier's run-loop check-in BEFORE publishing
+ * an ActorRef. Further idle actors reuse the same worker. Real runnable
+ * pressure may grow the scheduler up to the configured worker_count.
+ * On pthread_create failure no actor slot/generation is consumed. */
+OresNativeActorRef ores_native_actor_scheduler_spawn_ready(
+    OresNativeActorScheduler* s, size_t i) {
+    OresNativeActorRef missing = {0, 0, 0};
+    if (!s) return missing;
+    lock(s);
+    OresNativeActorRef ref = missing;
+    if (!s->retired && i < s->actor_count && !s->actors[i].spawned
+            && ensure_workers_locked(s, 1)) {
+        /* pthread_create success alone is insufficient: wait until one
+         * carrier has entered its actual scheduler loop. Other workers may
+         * still be attaching; idle ActorRefs must not wait for all of them.
+         * This is a bounded admission wait, not a host busy-spin. */
+        if (s->carriers_checked_in == 0) {
+            struct timespec deadline;
+            if (clock_gettime(CLOCK_REALTIME, &deadline) == 0) {
+                deadline.tv_sec += 30;
+                while (!s->retired && s->carriers_checked_in == 0) {
+                    int rc = pthread_cond_timedwait(
+                        &s->drained, &s->lock, &deadline);
+                    if (rc == ETIMEDOUT) break;
+                    if (rc != 0) abort();
+                }
+            }
+        }
+        /* A stalled/failed OS start cannot publish an unusable ActorRef.
+         * An unready worker remains scheduler-owned for eventual check-in
+         * or VM retirement; never detach or reclaim it behind its back. */
+        if (!s->retired && s->carriers_checked_in != 0)
+            ref = spawn_locked(s, i);
+    }
     unlock(s);
     return ref;
 }

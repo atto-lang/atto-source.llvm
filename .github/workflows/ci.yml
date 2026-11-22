@@ -33,6 +33,9 @@ jobs:
           git diff --quiet --exit-code
           test -z "$(git ls-files --others --exclude-standard)"
           echo "EXACT_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+          test "$(git hash-object tests/fixtures/numeric-v1/math-i64-ok.ores)" = "6d02ef593be9888364cc6f64c1c42224dcebbdb9"
+          test "$(git hash-object tests/fixtures/numeric-v1/math-i64-abs-min.ores)" = "f9064fc2ee79a2356dc062841330466c3d0df9c7"
+          test "$(git hash-object tests/fixtures/numeric-v1/math-i64-neg-min.ores)" = "c1d1bff1971351814d8161c36c5a5e18d5ae9e26"
       - name: Install LLVM toolchain and native linker
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang llvm-dev python3
       - name: Configure
