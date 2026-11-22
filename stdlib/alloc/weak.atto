@@ -51,4 +51,25 @@ define module weak as
     return current + 1;
   }
 
+
+  // Backend guest smoke of policy only; true upgrade requires atomic runtime.
+  pub fnc self_test(): bool {
+    let WeakKey key = new WeakKey(7, 2, 3);
+    if !may_upgrade(key, 7, 2, 3, 1, false); do
+      return false;
+    fi
+    if may_upgrade(key, 8, 2, 3, 1, false) ||
+       may_upgrade(key, 7, 3, 3, 1, false) ||
+       may_upgrade(key, 7, 2, 4, 1, false) ||
+       may_upgrade(key, 7, 2, 3, 0, false) ||
+       may_upgrade(key, 7, 2, 3, 1, true) ||
+       may_upgrade(key, 7, 2, 3, 1048576, false); do
+      return false;
+    fi
+    return next_generation(3) == 4 &&
+           next_generation(2147483647) == 0 &&
+           may_reclaim_control(0, 0, false, true) &&
+           !may_reclaim_control(0, 1, false, true);
+  }
+
 end
