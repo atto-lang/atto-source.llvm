@@ -33,7 +33,7 @@ test("JSON parser has explicit numeric, Unicode, duplicate-key and quota guards"
   for (const invariant of [
     "keys_equal", "hex4", "55296", "56319", "56320", "57343",
     "1048576", "262144", "keys.size >= 128",
-    "capture", "read_string(false)", "read_string(true)",
+    "capture", "read_string(false)", "read_string(true)", "key_comparisons >= 65536",
     "IntegerRange", "floor = -9223372036854775807",
     "if negative; do floor = floor - 1; fi",
     "decode_i32", "parse(String text)", "stringify(Document document)",
@@ -70,7 +70,7 @@ test("Java compiler-owned registry and test-vector counts, when present", () => 
     assert.ok(registry.includes('"' + name + '.atto"'));
   }
   const suite = read("src/test/java/dev/oreslang/runtime/NativeAttoMetricsJsonZordeTest.java");
-  const cases = { metrics: 18, json: 33, zorde: 29 };
+  const cases = { metrics: 18, json: 36, zorde: 29 };
   for (const [name, count] of Object.entries(cases)) {
     const fixture = read("src/test/resources/stdlib-parity/metrics-json-zorde/" + name + ".atto");
     const actual = (fixture.match(/stdio\.println\(/g) || []).length;
