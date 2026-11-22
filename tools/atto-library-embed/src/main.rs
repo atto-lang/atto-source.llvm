@@ -11,13 +11,22 @@ struct Source {
     delimiter: &'static str,
     blob: &'static str,
 }
-const SOURCES: [Source; 3] = [
+const SOURCES: [Source; 6] = [
     Source { file: "stdlib/numeric.atto",
         output: "src/main/cpp/oreslang/frontend/GeneratedNumericAtto.inc",
         delimiter: "ATTO_NUMERIC", blob: "5ced991f1d49b3c2a60fdd72b9003c0a4d18cd72" },
     Source { file: "stdlib/alloc/int_buffer.atto",
         output: "src/main/cpp/oreslang/frontend/GeneratedIntBufferAtto.inc",
         delimiter: "ATTO_INT_BUFFER", blob: "25b3d4bc06a0c859aacadaf0795414027a076bdc" },
+    Source { file: "stdlib/alloc/bitset.atto",
+        output: "src/main/cpp/oreslang/frontend/GeneratedBitSetAtto.inc",
+        delimiter: "ATTO_BITSET", blob: "dc7618c14a28b416ae7c3e96b5db0b0fc47bf314" },
+    Source { file: "stdlib/alloc/linked_list.atto",
+        output: "src/main/cpp/oreslang/frontend/GeneratedLinkedListAtto.inc",
+        delimiter: "ATTO_LINKLIST", blob: "f70cb1ac77efcef1734a526055655bfb2b1169bd" },
+    Source { file: "stdlib/alloc/map.atto",
+        output: "src/main/cpp/oreslang/frontend/GeneratedMapAtto.inc",
+        delimiter: "ATTO_INTMAP", blob: "3aeb43f429b33e66bf5145a0444a6f686dff3969" },
     Source { file: "stdlib/alloc/int_buffer_bundle.atto",
         output: "src/main/cpp/oreslang/frontend/GeneratedIntBufferBundleAtto.inc",
         delimiter: "ATTO_INT_BUNDLE", blob: "07c7083e099a18f1db7097f9639efc677070eb95" },
