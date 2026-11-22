@@ -7,7 +7,7 @@
 // actor ownership, synchronization, generation checks, and no awaits while held.
 define module cell as
   pub fnc may_borrow_shared(int state): bool {
-    return state >= 0;
+    return state >= 0 && state < 9223372036854775807;
   }
   pub fnc may_borrow_exclusive(int state): bool {
     return state == 0;
