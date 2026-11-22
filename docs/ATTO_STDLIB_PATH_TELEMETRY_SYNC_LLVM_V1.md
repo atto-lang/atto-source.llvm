@@ -43,3 +43,13 @@ The new `tests/fixtures/stdlib_alias_identity_v1.atto` imports `std/`, `atto.std
 Independent JS transpilation of the current LLVM `.atto` policy bodies executed **44/44** source-fixture conditions successfully; this is only a model/reference check. The seven alias calls also statically resolve to the three canonical registry identities. Actual LLVM compilation, generated-link identity and runtime guest behavior are still NOT_EXECUTED.
 
 A source-free GitHub carrier probe in `streempilot-test/browser-studio-e2e` (run 44954374211) had zero executed job steps, while the LLVM source-org hosted runs are queued. The private carrier security holds remain unresolved. No source transfer was attempted.
+
+## 2026-11-22 shared 134-vector compiler-guest gate
+
+Added `tests/fixtures/stdlib_pure_policy_parity_v1.atto`, a full 134-condition, single-`return 0` Atto guest based on the independently versioned [atto-platform-conformance #577](https://github.com/atto-lang/atto-platform-conformance/pull/577). LLVM maintains its OWN `stdlib/std/path.atto`, `sync.atto` and `telemetry.atto` implementations. The behavior contract's Git blob is `3d9e9d5308a4cd0a99d811570f8c80e77b7219b7`.
+
+The exact-head GitHub workflow now requires compilation, linkage and **real execution** of the new fixture at `clang -O0` and `clang -O2`, plus a separate ASan/UBSan-instrumented guest run. It also pins the new fixture's Git blob. Prior 44-vector native guest, alias identity, shadowing, unknown-module denial, and freestanding-target rejection checks remain mandatory.
+
+An independent interpreter of the current LLVM-owned Atto policy bodies produced the expected answers for **134/134** new shared vectors and the existing 44-case source suite. This is a restricted source-model check only; until exact-head runner steps execute the LLVM compiler and guest, native parity remains **NOT_EXECUTED**.
+
+This candidate does **not** implement genuine scheduler locks, OS filesystem handles, or OTLP exporting. Keep draft until stepful target execution and independent review.
