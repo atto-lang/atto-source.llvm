@@ -48,7 +48,7 @@ define module zorde as
 
     // Unsigned 31-bit canonical LEB128, atomically admitted.
     pub write_varuint(mut self)(int value): bool {
-      if value < 0; do return false; fi
+      if value < 0 || value > 2147483647; do return false; fi
       let int probe = value;
       let int needed = 1;
       while probe >= 128; do
@@ -222,8 +222,8 @@ define module zorde as
   // Explicit schema dispatch stays with the source-generated codec.
   pub fnc encode_frame(int schema_id, int schema_version,
                        Array<int> payload): Result<Array<int>, String> {
-    if schema_id < 1 || schema_version < 1 ||
-       schema_version > 2147483647 ||
+    if schema_id < 1 || schema_id > 2147483647 ||
+       schema_version < 1 || schema_version > 2147483647 ||
        payload.size > 1048540; do return Err("InvalidFrame"); fi
     let mut Writer out = new Writer(1048576);
     if !out.write_byte(90) || !out.write_byte(79) ||
@@ -277,7 +277,8 @@ define module zorde as
   // No arbitrary deserializer, reflection, or actor-capability admission.
   pub fnc decode_frame_for(int schema_id, int schema_version,
                            Array<int> wire): Result<Frame, String> {
-    if schema_id < 1 || schema_version < 1; do
+    if schema_id < 1 || schema_id > 2147483647 ||
+       schema_version < 1 || schema_version > 2147483647; do
       return Err("InvalidExpectedSchema");
     fi
     let decoded = decode_frame(wire);
@@ -319,7 +320,7 @@ define module zorde as
     fi
     let int encoded = 0;
     if value < 0; do
-      encoded = (-value) * 2 - 1;
+      encoded = (-value - 1) * 2 + 1;
     else
       encoded = value * 2;
     fi
