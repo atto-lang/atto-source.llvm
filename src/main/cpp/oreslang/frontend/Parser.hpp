@@ -40,11 +40,12 @@ struct Expression {
     enum class Kind {
         Integer, Boolean, String, Console, Variable,
         Negate, LogicalNot,
-        Add, Subtract, Multiply, Remainder,
+        Add, Subtract, Multiply, Remainder, Modulo, BitXor,
         Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
         LogicalAnd, LogicalOr, LogicalXor,
         Conditional,
-        Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field
+        Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field,
+        ShiftLeft, ShiftRight, ShiftUnsignedRight
     };
     Kind kind;
     std::size_t offset = 0;
@@ -69,7 +70,31 @@ struct Expression {
     std::vector<GenericTypeArgument> type_arguments;
     bool type_arguments_present = false;
     mutable std::string sum_type;
+    // Records a compiler-produced caller-side trap; never collapse this to
+    // an ordinary Some constructor without independently proving its operand.
+    bool trap_origin = false;
 };
+
+// Phase-one native trap supports only total integer-expression structure.
+// Arithmetic overflow remains a terminal panic. This predicate deliberately
+// rejects calls, variables, dereferences, nested sums, host/actor effects,
+// suspension and all non-integer values until effect and cleanup IR is proven.
+inline bool native_trap_pure_integer(const Expression& e, std::size_t depth = 0) {
+    if (depth > 64) return false;
+    switch (e.kind) {
+        case Expression::Kind::Integer: return true;
+        case Expression::Kind::Negate:
+            return e.left && native_trap_pure_integer(*e.left, depth + 1);
+        case Expression::Kind::Add:
+        case Expression::Kind::Subtract:
+        case Expression::Kind::Multiply:
+            return e.left && e.right &&
+                native_trap_pure_integer(*e.left, depth + 1) &&
+                native_trap_pure_integer(*e.right, depth + 1);
+        default: return false;
+    }
+}
+
 
 struct Parameter {
     enum class Mode { Value, Borrow, BorrowMut };
@@ -276,7 +301,7 @@ struct ActorFieldWrite {
 };
 
 struct Statement {
-    enum class Kind { Call, FieldWrite, ScalarWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled, ForEach, ForIndex, Return };
+    enum class Kind { Call, FieldWrite, ScalarWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled, ForEach, ForIndex, Return, UsingTelemetrySpan };
     Kind kind;
     // Scoped scalar or readonly leaf record. ForEach uses an implicit element
     // binding (no initializer); expression is its named array source and
@@ -285,6 +310,9 @@ struct Statement {
     std::unique_ptr<Expression> expression;
     std::string receiver;
     std::string field;
+    // UsingTelemetrySpan: literal operation name, alias is compile-time-only;
+    // no guest-visible pointer, dynamic handle or actor message transfer.
+    std::string telemetry_operation;
     // ForIndex: branch_local initializer, condition and checked next value.
     std::unique_ptr<Expression> loop_step;
     // Dedicated compiler intrinsic, never lowered as a guest-callable
@@ -368,6 +396,9 @@ struct Function {
     bool exported = false;
     std::string method_owner; // compiler-owned class method privilege, never source syntax
     bool native_internal = false; // linker-owned private imported implementation
+    // Explicit compiler-owned host C u32 trampoline, never the guest i64 ABI.
+    // Only the browser v1 ABI version symbol is admitted in the first slice.
+    std::string c_export_u32_symbol;
     FunctionEffects declared_effects{};
     bool has_declared_effects = false;
     std::string return_sum;
@@ -444,9 +475,22 @@ struct ScalarGenerator {
 
 struct ModuleImport {
     bool selected_class = false;
+    // `import fnc name [as alias] from "path";` binds one pub function by name.
+    bool selected_function = false;
     std::string selected_module;
     std::string local_name;
     std::string path;
+    std::size_t offset = 0;
+};
+
+// Syntax-only namespace import. No host, AOT or guest namespace authority is
+// obtained from a parsed source string. The backend must reject this record
+// until a verified v2 package manifest/lockfile graph supplies immutable
+// source ownership, pins and typed physical-provider resolution.
+struct NamespaceImportSyntax {
+    std::string namespace_name;
+    std::string local_name;
+    std::string package_selector;
     std::size_t offset = 0;
 };
 
@@ -461,6 +505,7 @@ struct TypeConstraintDescriptor {
 
 struct Program {
     std::vector<ModuleImport> imports;
+    std::vector<NamespaceImportSyntax> namespace_imports;
     std::vector<CooperativeScalarLoop> cooperative_loops;
     std::vector<ScalarGenerator> generators;
     std::string namespace_name;
@@ -487,6 +532,10 @@ Program parse_program(std::string_view source, bool experimental_owned_int = fal
 // resolve_and_validate_program must run after all module names are resolved.
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int = false,
                                  bool experimental_rt_scalar_loop = false);
+// HOST-ONLY preparatory AST: caller must supply already authenticated frozen
+// source bytes, and only the verified package graph may consume the result.
+// Unlike parse_program(), this must never authorize IR or guest execution.
+Program parse_verified_namespace_source_unresolved(std::string_view authenticated_source);
 void resolve_and_validate_program(Program& program);
 
 } // namespace oreslang

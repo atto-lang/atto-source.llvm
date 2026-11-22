@@ -1,0 +1,45 @@
+name: Atto actor scoped grant exact-head native host gate
+on:
+  pull_request:
+    paths:
+      - "src/main/cpp/oreslang/runtime/ActorIsolationAccessV1.hpp"
+      - "tests/actor_isolation_access_*"
+      - "scripts/test_actor_isolation_access_v1.sh"
+      - "CMakeLists.txt"
+      - ".github/workflows/atto-actor-grant-host-gate.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  actor-grant-host-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Checkout exact PR head without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Execute Clang, GCC, CTest and sanitizer gates (HOST ONLY)
+        shell: bash
+        env:
+          ATTO_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$ATTO_EXPECTED_HEAD"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          CXX=clang++ sh scripts/test_actor_isolation_access_v1.sh
+          CXX=g++ sh scripts/test_actor_isolation_access_v1.sh
+          cmake -S . -B "$RUNNER_TEMP/atto-grant-host" \
+            -DATTO_ACTOR_ACCESS_HOST_ONLY=ON -DCMAKE_CXX_COMPILER=clang++
+          cmake --build "$RUNNER_TEMP/atto-grant-host" --parallel 2
+          ctest --test-dir "$RUNNER_TEMP/atto-grant-host" --output-on-failure
+          clang++ -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror \
+            -UNDEBUG -pthread -fsanitize=address,undefined \
+            -fno-omit-frame-pointer -I src/main/cpp \
+            tests/actor_isolation_access_scoped_test.cpp \
+            -o "$RUNNER_TEMP/atto-grant-scoped-sanitized"
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            "$RUNNER_TEMP/atto-grant-scoped-sanitized"
+          echo "ATTO_HOST_ONLY_ACTOR_SCOPED_GRANT_EXECUTED_HEAD=$ATTO_EXPECTED_HEAD"
+          echo "HOST_ONLY_NOT_ATTO_COMPILED_GUEST_NOT_VOLUCRO_SANDBOX"
