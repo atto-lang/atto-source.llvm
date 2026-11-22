@@ -45,6 +45,9 @@ pub routine main(): void {
   samples; `sum` and `count` are bounded at 2,147,483,647 and rejected
   observations increment a saturating diagnostic count.
 - `valid_name` checks an ASCII metric name up to 128 Unicode scalars.
+- `Counter.snapshot()` and `Histogram.snapshot()` produce detached values
+  suitable for a later async exporter. Histograms copy both bounds and
+  bucket counts; subsequent observations do not mutate previous snapshots.
 - Each mutable instance is owned by one actor/task and is **not** an atomic,
   shared, lock-free, distributed or concurrent registry. A collector actor may
   own instances and export detached snapshots later. No I/O, implicit logging
@@ -99,6 +102,10 @@ separately specified codecs.
 - `Writer` has a 1..1,048,576 byte upper bound with atomic
   `write_byte`, `write_varuint`, `write_bytes` and
   `write_length_delimited`. `finish` detaches its result.
+- `checked_reader(bytes)` and `checked_writer(maximum)` are the
+  fail-closed, `Result`-returning public factories for untrusted input.
+  The direct `reader`/`writer` constructors are for already-trusted
+  inputs and can fail when given invalid input.
 - `Reader` validates incoming octets, detaches them, reports truncated,
   overlong and overflowing varuints without advancing its cursor and
   preserves position for invalid length-delimited reads.
@@ -136,6 +143,15 @@ ZigZag31(-1073741824):
 - LLVM: the source-only workflow verifies the checked-in .atto files. LLVM
   native compiled guest execution, semantic checks and target AOT remain
   **NOT_VERIFIED** until separately executed.
+- On 2026-11-22 a locally executed source-free Node reference model
+  passed 10,039 numerical/vector assertions (canonical varuint31,
+  malformed varuint, ZigZag31 and signed-i64 JSON integer admission).
+  This is **not** execution of compiled Atto files.
+- A stepful private runner has been observed at
+  `canonical-cloud-test/legacy-mirror-guard-e2e`, run 45038441021
+  (2026-11-22), but Atto PR #1787/#885 currently have **no approved
+  exact-tree source-export/test-plan authorization** for that destination.
+  Therefore no Atto source has been copied cross-organization.
 - None of this establishes zero-GC behavior, production OpenTelemetry
   parity or complete cross-compiler serialization compatibility.
 - Alternate private-carrier CI requires independently authorized source
