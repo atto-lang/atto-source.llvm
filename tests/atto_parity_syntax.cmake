@@ -74,6 +74,29 @@ function(reject_case name text needle)
   set(failures ${failures} PARENT_SCOPE)
 endfunction()
 
+# Verify target-specific fail-closed admission before LLVM IR can be emitted.
+# Profile checks must not count a generic parse failure as a valid rejection:
+# the emitted diagnostic must name the unsupported safety proof.
+function(reject_target_case name text needle)
+  set(dir "${work}/${name}")
+  file(MAKE_DIRECTORY "${dir}")
+  file(WRITE "${dir}/main.atto" "${text}")
+  execute_process(
+    COMMAND "${BUILD}/oreslang-llvmc" ${ARGN} "${dir}/main.atto"
+    RESULT_VARIABLE status OUTPUT_VARIABLE stdout ERROR_VARIABLE stderr)
+  if(status EQUAL 0 OR NOT stdout STREQUAL "")
+    fail_case("${name}: target compiler admitted prohibited loop")
+  else()
+    string(FIND "${stderr}" "${needle}" at)
+    if(at EQUAL -1)
+      fail_case("${name}: expected target admission diagnostic '${needle}', got ${stderr}")
+    else()
+      message(STATUS "PASS ${name}")
+    endif()
+  endif()
+  set(failures ${failures} PARENT_SCOPE)
+endfunction()
+
 run_case(end_scalar_newline "${fixtures}/end_scalar_newline.atto" 42)
 run_case(end_scalar_marker "${fixtures}/end_scalar_marker.atto" 42)
 run_case(if_then "${fixtures}/if_then.atto" 0)
@@ -82,6 +105,10 @@ run_case(expect_ok "${fixtures}/expect_ok.atto" 42)
 run_case(expect_err "${fixtures}/expect_err.atto" nonzero)
 run_case(import_fnc "${fixtures}/import_fnc/main.atto" 0)
 run_case(attolang_equality "${fixtures}/attolang_equality.atto" 0)
+run_case(do_ifnot_unless "${fixtures}/do_ifnot_unless.atto" 7)
+run_case(do_ifnot_loop_break "${fixtures}/do_ifnot_loop_break.atto" 3)
+run_case(do_unless_loop_break "${fixtures}/do_unless_loop_break.atto" 4)
+run_case(do_ifnot_nested_loops "${fixtures}/do_ifnot_nested_loops.atto" 2)
 # Real compiler + LLVM IR + clang + process exit status, not parser-only fixtures.
 run_case(comma_body_fnc_routine "${fixtures}/comma_body_fncs.atto" 42)
 run_case(comma_body_mtd "${fixtures}/comma_body_methods.atto" 42)
@@ -121,7 +148,7 @@ reject_case(end_scalar_compact_missing_delimiter
   "native compact end-delimited callable requires '::'")
 reject_case(end_scalar_reject_unlowered_if
   "fnc add_one(int x) -> int :: if x > 0 then return x + 1; fi end\nfnc main(): int { return add_one(41); }\n"
-  "expected int expression")
+  "value if/ifnot/unless branch must produce a value")
 reject_case(end_scalar_reject_missing_end
   "fnc add_one(int x) -> int :: return x + 1;\n"
   "native comma expression body requires a single terminal result")
@@ -149,6 +176,39 @@ reject_case(stdout_write_two_args
 reject_case(stdout_unknown_member
   "fnc main(): void {\n  stdio.stdout.flush(\"a\");\n  return;\n}\n"
   "unsupported native stdio.stdout operation")
+reject_case(scalar_loop_rejects_host_effects
+  "pub fnc main(): int { let int i = 0; loop { stdio.stdout.write(i); break; } return i; }\n"
+  "native scalar loop requires pure scalar writes and structured loop control")
+reject_case(scalar_loop_rejects_owned_resources
+  "pub fnc main(): int { loop { let int inner = 1; break; } return 0; }\n"
+  "native scalar loop requires pure scalar writes and structured loop control")
+
+reject_case(scalar_loop_rejects_early_return
+  "pub fnc main(): int { loop { do ifnot false then return 4; fi } return 0; }\n"
+  "native scalar loop requires pure scalar writes and structured loop control")
+reject_case(scalar_loop_rejects_unscoped_continue
+  "pub fnc main(): int { do ifnot false then continue; fi return 0; }\n"
+  "native break/continue in conditional arms requires verified loop continuation lowering")
+reject_target_case(scalar_loop_denied_hard_rt
+  "pub fnc main(): int { loop { break; } return 0; }\n"
+  "requires WCET/termination" "--profile=native-hard-rt")
+reject_target_case(scalar_loop_denied_wasm32
+  "pub fnc main(): int { loop { break; } return 0; }\n"
+  "requires WCET/termination" "--target=wasm32")
+reject_target_case(scalar_loop_denied_cortex_m
+  "pub fnc main(): int { loop { break; } return 0; }\n"
+  "requires WCET/termination" "--target=thumbv7m-none-eabi")
+
+reject_case(ifnot_break_requires_native_continuation
+  "pub fnc main(): int { do ifnot false then break; fi return 0; }\n"
+  "native break/continue in conditional arms requires verified loop continuation lowering")
+reject_case(unless_value_break_not_an_expression
+  "pub fnc main(): int { return unless true then break else 7 fi; }\n"
+  "value if/ifnot/unless branch must produce a value")
+reject_case(ifnot_missing_else_value
+  "pub fnc main(): int { return ifnot false then 7 fi; }\n"
+  "expected 'else'")
+
 reject_case(if_semicolon_requires_then
   "fnc main(): int {\n  if 1 == 1; return 1; fi\n  return 0;\n}\n"
   "expected 'then'")

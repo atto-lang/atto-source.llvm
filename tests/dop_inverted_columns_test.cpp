@@ -350,4 +350,35 @@ int main() {
             check(fuzz.get_row(expected.handle) == std::make_tuple(expected.x, expected.y, expected.z));
         }
     }
+    // push() must grow geometrically. Reserving exactly row + 1 reallocated and
+    // copied every column on every insert, turning a bulk build into O(n^2).
+    // Count distinct backing buffers of one column over a 32k-row build: a
+    // geometric policy needs about log2(n) of them, an exact policy needs n.
+    {
+        oreslang::dop::InvertedColumns<float, std::uint32_t> bulk;
+        constexpr std::size_t rows = std::size_t{1} << 15;
+        const float* last_buffer = nullptr;
+        std::size_t reallocations = 0;
+        std::vector<oreslang::dop::InvertedColumns<float, std::uint32_t>::Handle> handles;
+        handles.reserve(rows);
+        for (std::size_t i = 0; i < rows; ++i) {
+            handles.push_back(bulk.push(static_cast<float>(i), static_cast<std::uint32_t>(i)));
+            auto loan = bulk.borrow_read<0>();
+            const float* buffer = loan.span().data();
+            if (buffer != last_buffer) { ++reallocations; last_buffer = buffer; }
+        }
+        check(bulk.size() == rows);
+        check(reallocations <= 40);
+        // Growth must not disturb logical rows or handles.
+        for (std::size_t i = 0; i < rows; i += 997)
+            check(bulk.get<0>(handles[i]) == static_cast<float>(i) &&
+                  bulk.get<1>(handles[i]) == static_cast<std::uint32_t>(i));
+        // Swap-delete churn reuses slots without growing the slot table.
+        for (std::size_t i = 0; i < 1024; ++i) {
+            bulk.erase_swap(handles[i]);
+            handles[i] = bulk.push(-1.0f, 0);
+        }
+        check(bulk.size() == rows);
+        for (std::size_t i = 0; i < 1024; ++i) check(bulk.get<0>(handles[i]) == -1.0f);
+    }
 }

@@ -135,6 +135,7 @@ impl Gate {
         self.boot_trap(&trap_image)?;
         self.compiler_rejections()?;
         self.auditor_self_test(&startup)?;
+        self.injected_helper_negative(&startup)?;
         Ok(())
     }
 
@@ -393,6 +394,58 @@ impl Gate {
             "a hosted object linked into the no-libc image; the link is not freestanding".into()
         })?;
         self.pass("no-libc link refuses a hosted object");
+        Ok(())
+    }
+
+    /// Mutate the actual compiler-produced guest IR, compile the injected
+    /// function into ARM object code, then prove BOTH the object auditor and
+    /// no-libc linker reject a previously unknown generated runtime helper.
+    /// This is stronger than grepping a handwritten negative fixture.
+    fn injected_helper_negative(&mut self, startup: &Path) -> GateResult<()> {
+        const HELPER: &str = "atto_backend_injected_helper";
+        const PROBE: &str = "atto_backend_injected_probe";
+        let original = std::fs::read_to_string(self.work.join("guest.ll"))
+            .map_err(|e| format!("read exact compiler IR before mutation: {e}"))?;
+        let ir = format!("{original}\n\ndeclare i64 @{HELPER}(i64)\n\
+            define i64 @{PROBE}(i64 %value) {{\n\
+            entry:\n\
+              %result = call i64 @{HELPER}(i64 %value)\n\
+              ret i64 %result\n\
+            }}\n");
+        require(audit::ir_external_declarations(&ir).contains(&HELPER.to_string()), || {
+            "LLVM IR declaration auditor missed injected backend helper".into()
+        })?;
+        self.pass("IR auditor rejects a compiler-output mutation with an undeclared helper");
+
+        let path = self.work.join("guest-injected.ll");
+        write(&path, &ir)?;
+        let object = self.work.join("guest-injected.o");
+        let mut clang = self.clang_arm();
+        clang.args(["-Wno-override-module", "-x", "ir", "-c"])
+            .arg(&path).arg("-o").arg(&object);
+        require_ok(exec(&mut clang, None)?, "clang mutated LLVM guest IR")?;
+        let symbols = self.nm(&object)?;
+        require(symbols.iter().any(|s| s.kind == 'U' && s.name == HELPER), || {
+            "mutated ARM object did not retain the unknown injected helper".into()
+        })?;
+        let violations = audit::audit_guest_object(&symbols);
+        require(violations.iter().any(|v| v.contains(HELPER)), || {
+            format!("object symbol auditor missed injected helper: {violations:?}")
+        })?;
+        self.pass("ARM object auditor rejects unknown generated runtime helper");
+
+        // --gc-sections would otherwise discard this intentionally unused
+        // function. Force it live, proving the actual no-libc link fails.
+        let mut linker = Command::new(&self.tools.ld_lld);
+        linker.arg("-T").arg(self.fixtures.join("lm3s6965.ld"))
+            .arg("--gc-sections").arg(format!("--undefined={PROBE}"))
+            .arg(startup).arg(&object)
+            .arg("-o").arg(self.work.join("helper-injected.elf"));
+        let out = exec(&mut linker, None)?;
+        require(out.status.is_some_and(|s| s != 0) && out.stderr.contains(HELPER), || {
+            format!("injected helper unexpectedly linked without an OS (status {:?}): {}",out.status,out.stderr)
+        })?;
+        self.pass("no-libc linker rejects reachable compiler-output helper injection");
         Ok(())
     }
 

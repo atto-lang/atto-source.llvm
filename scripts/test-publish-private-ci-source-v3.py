@@ -1135,6 +1135,69 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                 self.assertFalse(any("/git/blobs/" in route for route in calls),
                                  "unsafe source path caused private blob read")
 
+    def test_full_tree_total_byte_budget_denies_before_any_blob_read(self):
+        # The publisher admits 2,048 files, but their *aggregate declared
+        # bytes* remain subject to the independent 40 MiB cap. A rejected
+        # snapshot must not fetch even its first private source blob.
+        seen = []
+        head = "9" * 40
+        entries = [
+            {"path": f"src/large-{index:04}.cpp", "type": "blob",
+             "mode": "100644", "sha": BLOB, "size": v3.MAX_FILE}
+            for index in range(5)
+        ]
+        self.assertLess(len(entries), v3.MAX_FILES)
+        self.assertGreater(sum(item["size"] for item in entries), v3.MAX_TOTAL)
+
+        def api(route, method="GET", payload=None):
+            seen.append(route)
+            if route == f"repos/{v3.SOURCE_REPO}/git/commits/{head}":
+                return {"sha": head, "tree": {"sha": SOURCE_TREE}}
+            if route == f"repos/{v3.SOURCE_REPO}/git/trees/{SOURCE_TREE}?recursive=1":
+                return {"sha": SOURCE_TREE, "truncated": False, "tree": entries}
+            raise AssertionError(f"unexpected API access: {route}")
+
+        with (
+            patch.object(v3, "verify_source_pr", return_value=v3.SOURCE_REPO_ID),
+            patch.object(v3, "gh_api", side_effect=api),
+        ):
+            with self.assertRaisesRegex(v3.Denied, "bounded capacity"):
+                v3.exact_source_tree(669, head)
+        self.assertFalse(any("/git/blobs/" in value for value in seen))
+
+    def test_truncated_and_excessive_recursive_git_trees_deny_before_blob_read(self):
+        # GitHub may return a partial recursive tree. Never treat one as
+        # complete; nor read blobs when tree entry metadata exceeds its
+        # independent 4,096-entry bound. These fixtures have no source bytes.
+        head = "9" * 40
+        attempts = (
+            ("truncated", [{"path": "src/ok.cpp", "type": "blob",
+                            "mode": "100644", "sha": BLOB, "size": len(DATA)}], True),
+            ("too_many_entries", [
+                {"path": f"src/e{index:05}.cpp", "type": "blob",
+                 "mode": "100644", "sha": BLOB, "size": len(DATA)}
+                for index in range(v3.MAX_TREE_ENTRIES + 1)
+            ], False),
+        )
+        for name, entries, truncated in attempts:
+            with self.subTest(name=name):
+                seen = []
+                def api(route, method="GET", payload=None):
+                    seen.append(route)
+                    if route == f"repos/{v3.SOURCE_REPO}/git/commits/{head}":
+                        return {"sha": head, "tree": {"sha": SOURCE_TREE}}
+                    if route == f"repos/{v3.SOURCE_REPO}/git/trees/{SOURCE_TREE}?recursive=1":
+                        return {"sha": SOURCE_TREE, "truncated": truncated, "tree": entries}
+                    raise AssertionError(f"unexpected API access: {route}")
+
+                with (
+                    patch.object(v3, "verify_source_pr", return_value=v3.SOURCE_REPO_ID),
+                    patch.object(v3, "gh_api", side_effect=api),
+                ):
+                    with self.assertRaisesRegex(v3.Denied, "incomplete or exceeds safety"):
+                        v3.exact_source_tree(669, head)
+                self.assertFalse(any("/git/blobs/" in value for value in seen))
+
     def test_source_tree_rejects_oversized_declared_blob_before_blob_read(self):
         seen = []
         def api(route, method="GET", payload=None):

@@ -1,0 +1,16 @@
+// Tenant ownership and monotonic pull cursor are inseparable admission checks.
+pub fnc pull_ok(int requester, int owner, int local_cursor, int server_cursor): int {
+  if (requester < 0) { return 0; } fi
+  if (owner < 0) { return 0; } fi
+  if (requester < owner) { return 0; } fi
+  if (requester > owner) { return 0; } fi
+  if (local_cursor < 0) { return 0; } fi
+  if (server_cursor < local_cursor) { return 0; } fi
+  return 1;
+}
+pub fnc main(): int {
+  return 41 + pull_ok(1,1,3,3)
+    + 10 * pull_ok(2,1,3,4) + 10 * pull_ok(0,1,3,4)
+    + 10 * pull_ok(1,1,4,3) + 10 * pull_ok(1,1,-1,3)
+    + 10 * pull_ok(-1,1,0,0);
+}

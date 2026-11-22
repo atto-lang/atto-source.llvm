@@ -8,7 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-enum { ROUNDS = 128, SENDS = 64, PREFILL = 8 };
+enum { ROUNDS = 128, SENDS = 64, PREFILL = 8, MAX_PRODUCERS = 15 };
 static void check(int condition) { if (!condition) abort(); }
 typedef struct {
     OresNativeActorScheduler* scheduler;
@@ -105,16 +105,34 @@ int main(void) {
             atomic_store(&race.admitted[payload], 1);
             atomic_fetch_add(&race.accepted, 1);
         }
-        check(ores_test_barrier_init(&race.start, 3) == 0);
-        RaceSender first = {&race, PREFILL + 1, PREFILL + (SENDS - PREFILL) / 2,
-                            round & 3u};
-        RaceSender second = {&race, first.last + 1, SENDS, (round >> 2) & 3u};
-        pthread_t producer_a, producer_b, stop_thread;
-        check(pthread_create(&producer_a, NULL, sender, &first) == 0);
-        check(pthread_create(&producer_b, NULL, sender, &second) == 0);
+        /*
+         * Exercise the intended 3..15 producer contention range against the
+         * same stop linearization point (plus one independent STOP thread).
+         * Each producer owns a disjoint ticket range, so losses, duplicates,
+         * and admitted-but-undelivered messages remain individually visible.
+         * Retain a fixed total of SENDS to keep the accounting bounded.
+         */
+        const unsigned producers =
+            (round % 3u == 0u) ? 3u : (round % 3u == 1u) ? 8u : 15u;
+        check(producers <= MAX_PRODUCERS);
+        check(ores_test_barrier_init(&race.start, producers + 1u) == 0);
+        RaceSender payloads[MAX_PRODUCERS] = {0};
+        pthread_t send_threads[MAX_PRODUCERS];
+        for (unsigned p = 0; p < producers; ++p) {
+            const unsigned first =
+                PREFILL + 1u + (SENDS - PREFILL) * p / producers;
+            const unsigned last =
+                PREFILL + (SENDS - PREFILL) * (p + 1u) / producers;
+            check(first <= last && last <= SENDS);
+            payloads[p] = (RaceSender){
+                &race, first, last, (round + 3u * p) & 3u
+            };
+            check(pthread_create(&send_threads[p], NULL, sender, &payloads[p]) == 0);
+        }
+        pthread_t stop_thread;
         check(pthread_create(&stop_thread, NULL, stopper, &race) == 0);
-        check(pthread_join(producer_a, NULL) == 0);
-        check(pthread_join(producer_b, NULL) == 0);
+        for (unsigned p = 0; p < producers; ++p)
+            check(pthread_join(send_threads[p], NULL) == 0);
         check(pthread_join(stop_thread, NULL) == 0);
         check(ores_test_barrier_destroy(&race.start) == 0);
         check(atomic_load(&race.errors) == 0);

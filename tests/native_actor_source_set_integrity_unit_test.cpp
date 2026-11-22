@@ -1,4 +1,4 @@
-#include "oreslang/frontend/ActorSourceSetAdmission.hpp"
+#include "oreslang/frontend/ActorDeclaredHeaderAdmission.hpp"
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -25,6 +25,53 @@ int main() {
         check(source_set_hex_sha("ce013625030ba8dba906f756967f9e9ca394464a"), "valid SHA");
         check(!source_set_hex_sha("CE013625030BA8DBA906F756967F9E9CA394464A") &&
               !source_set_hex_sha("ce013625030ba8dba906f756967f9e9ca394464"), "bad SHA admitted");
+        // Lexed header witnesses must ignore comments and quoted braces,
+        // while rejecting unexpected declarations after the expected form.
+        {
+            ActorHeaderTokens header(
+                "use namespace counter; /* header */ declare pub actor Counter "
+                "implements CounterContract; // trusted actor identity\n");
+            require_actor_header_namespace(header, "counter");
+            header.expect_all({"declare", "pub", "actor", "Counter",
+                               "implements", "CounterContract", ";"});
+            header.finish();
+        }
+        {
+            ActorHeaderTokens header("namespace counter; pub mtd (Counter c) "
+                                     "echo(int n): int { return n; }");
+            require_actor_header_namespace(header, "counter");
+            header.expect_all({"pub", "mtd", "(", "Counter", "c", ")", "echo",
+                               "(", "int", "n", ")", ":", "int"});
+            header.body_only();
+        }
+        auto rejects = [](const std::string& source) {
+            try {
+                ActorHeaderTokens header(source);
+                require_actor_header_namespace(header, "counter");
+                header.expect_all({"declare", "pub", "actor", "Counter",
+                                   "implements", "CounterContract", ";"});
+                header.finish();
+                return false;
+            } catch (const std::runtime_error&) {
+                return true;
+            }
+        };
+        check(rejects("namespace counter; declare pub actor Counter "
+                      "implements CounterContract; pub fnc extra(): int {return 0;}"),
+              "extra declaration escaped actor header gate");
+        check(rejects("namespace spoof; declare pub actor Counter "
+                      "implements CounterContract;"),
+              "wrong namespace escaped actor header gate");
+        check(rejects("namespace counter; pub declare actor Counter "
+                      "implements CounterContract;"),
+              "public modifier spoof escaped actor header gate");
+        {
+            ActorHeaderTokens t("namespace counter; pub fnc main(): void "
+                                "{ stdio.out.write(\"not a } brace\"); }");
+            require_actor_header_namespace(t, "counter");
+            t.expect_all({"pub", "fnc", "main", "(", ")", ":", "void"});
+            t.body_only();
+        }
         std::cout << "ACTOR_SOURCE_SET_HOST_ADMISSION_UNIT_PASS NO_AST_NO_IR_NO_GUEST\n";
         return 0;
     } catch (const std::exception& e) {

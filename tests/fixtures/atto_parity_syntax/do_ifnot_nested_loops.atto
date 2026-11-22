@@ -1,0 +1,18 @@
+// Nearest-loop break/continue, with owner-free integer loop state.
+pub fnc main(): int {
+  let int outer = 0;
+  let int inner = 0;
+  let int total = 0;
+  loop {
+    outer = outer + 1;
+    do unless outer < 3 then break; fi
+    inner = 0;
+    loop {
+      inner = inner + 1;
+      do ifnot inner eq 2 then continue; fi
+      total = total + 1;
+      break;
+    }
+  }
+  return total;
+}

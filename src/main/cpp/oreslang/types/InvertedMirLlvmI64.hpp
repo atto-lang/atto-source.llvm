@@ -69,7 +69,8 @@ public:
         if (capacity == 0 || capacity > 256)
             throw std::invalid_argument("experimental MIR LLVM columns capacity must be 1..256");
     }
-    std::string build(const Module& module, const I64PairIrOperands& args) {
+    std::string build(const Module& module, const I64PairIrOperands& args,
+                      bool wasm32_entry = false) {
         // A compiler may reuse this emitter for several functions/units.
         // Each build is an independent verified MIR lowering transaction.
         // Never carry prior SSA names, input cursors or return values into
@@ -108,8 +109,11 @@ public:
                 actions[actions.size() - 2].kind != OpKind::ReadField)
             throw std::logic_error("MIR LLVM requires terminal field read before close");
         code_ = "; typed MIR, experimental local i64 pair LLVM IR; no external row handles\n";
+        if (wasm32_entry)
+            code_ += "target triple = \"wasm32-unknown-unknown\"\n";
         code_ += "declare void @llvm.trap()\n";
-        code_ += "define i32 @main() {\nentry:\n";
+        code_ += wasm32_entry ? "define i64 @main() {\nentry:\n"
+                              : "define i32 @main() {\nentry:\n";
         emit("%length = alloca i64");
         emit("store i64 0, ptr %length");
         emit("%alive = alloca i1");
@@ -188,10 +192,15 @@ public:
         }
         if (pushes_ != args.rows.size() || writes_ != args.writes.size())
             throw std::invalid_argument("unused MIR LLVM operands");
-        // Side effects are represented in checked column stack storage; return
-        // the last field read (or zero), matching the prototype's i32 test ABI.
-        const auto result = temp(); emit(result + " = trunc i64 " + last_read_ + " to i32");
-        emit("ret i32 " + result);
+        // Preserve the full i64 scalar value in the wasm32 guest ABI. Native
+        // host tests retain their historical process-exit i32 ABI.
+        if (wasm32_entry) {
+            emit("ret i64 " + last_read_);
+        } else {
+            const auto result = temp();
+            emit(result + " = trunc i64 " + last_read_ + " to i32");
+            emit("ret i32 " + result);
+        }
         code_ += "}\n";
         return code_;
     }
@@ -199,5 +208,9 @@ public:
 inline std::string emit_native_i64_pair_ir(const Module& verified,
                                            const I64PairIrOperands& inputs) {
     return I64PairLlvmEmitter(verified.capacity()).build(verified, inputs);
+}
+inline std::string emit_wasm32_i64_pair_ir(const Module& verified,
+                                           const I64PairIrOperands& inputs) {
+    return I64PairLlvmEmitter(verified.capacity()).build(verified, inputs, true);
 }
 } // namespace oreslang::dop::mir

@@ -1,0 +1,2 @@
+// Heap-backed dynamic collections require an explicit allocator; scalar freestanding lane denies them.
+pub fnc main(): int { val data = Array.of(1, 2, 3); return 42; }

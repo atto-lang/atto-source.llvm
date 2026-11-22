@@ -115,6 +115,13 @@ public:
     constexpr bool is_null() const noexcept { return encoded_ == 0; }
     constexpr storage_type storage() const noexcept { return encoded_; }
 
+    // Re-read a word previously stored in a 4-byte guest field. This is NOT a
+    // proof: the bits may be stale or forged, and every dereference must still
+    // validate them against the owning heap (bounds, liveness, generation).
+    static constexpr ActorManagedRef from_storage(storage_type word) noexcept {
+        return ActorManagedRef{word};
+    }
+
     friend constexpr bool operator==(ActorManagedRef a, ActorManagedRef b) noexcept {
         return a.encoded_ == b.encoded_;
     }
