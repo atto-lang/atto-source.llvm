@@ -194,8 +194,28 @@ define module zorde as
     }
   end
 
+  // The direct constructors are for already-trusted bounded input.
+  // On untrusted input, use the checked factories to receive Result errors
+  // rather than triggering a constructor failure.
   pub fnc writer(int maximum): Writer { return new Writer(maximum); }
   pub fnc reader(Array<int> bytes): Reader { return new Reader(bytes); }
+
+  pub fnc checked_writer(int maximum): Result<Writer, String> {
+    if maximum < 1 || maximum > 1048576; do
+      return Err("InvalidWriterCapacity");
+    fi
+    return Ok(new Writer(maximum));
+  }
+
+  pub fnc checked_reader(Array<int> bytes): Result<Reader, String> {
+    if bytes.size > 1048576; do return Err("InputLimit"); fi
+    for (let int i = 0; i < bytes.size; i = i + 1) {
+      if bytes.get(i) < 0 || bytes.get(i) > 255; do
+        return Err("InvalidWireByte");
+      fi
+    }
+    return Ok(new Reader(bytes));
+  }
 
   // v1 wire: ASCII ZORD, format version 1, schema-id varuint,
   // schema-version varuint, payload length varuint, then payload.
@@ -223,24 +243,19 @@ define module zorde as
     if wire.size < 8 || wire.size > 1048576; do
       return Err("InvalidFrameSize");
     fi
-    // Reader constructor is a checked/throwing boundary. Preflight *all*
-    // octets here to preserve the Result contract for untrusted input.
-    for (let int i = 0; i < wire.size; i = i + 1) {
-      if wire.get(i) < 0 || wire.get(i) > 255; do
-        return Err("InvalidWireByte");
-      fi
-    }
-    // Check the source before transferring it into the detached Reader.
-    if wire.get(0) != 90 || wire.get(1) != 79 ||
-       wire.get(2) != 82 || wire.get(3) != 68 ||
-       wire.get(4) != 1; do
+    // Reject arbitrary integers before indexing, and check every byte
+    // via the Result factory. The frame decoder cannot invoke rt.fail.
+    let checked = checked_reader(wire);
+    if checked.is_err(); do return Err("InvalidWireByte"); fi
+    let mut Reader r = checked.unwrap();
+    let prefix = r.read_bytes(5);
+    if prefix.is_err(); do return Err("TruncatedHeader"); fi
+    let Array<int> header = prefix.unwrap();
+    if header.get(0) != 90 || header.get(1) != 79 ||
+       header.get(2) != 82 || header.get(3) != 68 ||
+       header.get(4) != 1; do
       return Err("InvalidMagicOrVersion");
     fi
-    let mut Reader r = new Reader(wire);
-    // Reader cursor is private; consume exact five-byte header.
-    for (let int i = 0; i < 5; i = i + 1) {
-      let ignored = r.read_byte();
-    }
     let schema_result = r.read_varuint();
     let version_result = r.read_varuint();
     let length_result = r.read_varuint();
