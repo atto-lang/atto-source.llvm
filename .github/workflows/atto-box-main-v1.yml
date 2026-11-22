@@ -10,6 +10,8 @@ on:
       - 'src/main/cpp/oreslang/types/SendSyncContract.hpp'
       - 'tests/native_send_sync_contract_test.cpp'
       - 'tests/atto_box_main_v1.sh'
+      - 'tests/alloc-parity-llvm-v1.sh'
+      - 'tests/alloc-parity-llvm-v1.tsv'
       - 'tests/atto_box_main_v1_oracle_test.sh'
       - 'tests/atto-box-main-v1/**'
       - '.github/workflows/atto-box-main-v1.yml'
@@ -23,6 +25,8 @@ on:
       - 'src/main/cpp/oreslang/types/SendSyncContract.hpp'
       - 'tests/native_send_sync_contract_test.cpp'
       - 'tests/atto_box_main_v1.sh'
+      - 'tests/alloc-parity-llvm-v1.sh'
+      - 'tests/alloc-parity-llvm-v1.tsv'
       - 'tests/atto_box_main_v1_oracle_test.sh'
       - 'tests/atto-box-main-v1/**'
       - '.github/workflows/atto-box-main-v1.yml'
@@ -50,7 +54,7 @@ jobs:
           export PATH="/usr/lib/llvm-18/bin:$PATH"
           cmake -S . -B /tmp/atto-box-main-build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DLLVM_DIR=/usr/lib/llvm-18/cmake
           cmake --build /tmp/atto-box-main-build --target oreslang-llvmc -j2
-          bash tests/atto_box_main_v1.sh /tmp/atto-box-main-build/oreslang-llvmc
+          bash tests/alloc-parity-llvm-v1.sh /tmp/atto-box-main-build/oreslang-llvmc
           ATTO_BOX_SANITIZE=1 bash tests/atto_box_main_v1.sh /tmp/atto-box-main-build/oreslang-llvmc
           g++ -std=c++17 -O2 -Wall -Wextra -Werror -Isrc/main/cpp tests/native_send_sync_contract_test.cpp -o /tmp/atto-send-sync
           /tmp/atto-send-sync
