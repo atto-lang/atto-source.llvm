@@ -54,6 +54,7 @@ const char* to_string(Status s) noexcept {
         case Status::SignalHandlerLost: return "SignalHandlerLost";
         case Status::ActorRestarted: return "ActorRestarted";
         case Status::ActorTerminated: return "ActorTerminated";
+        case Status::ConfidentialComputeUnavailable: return "ConfidentialComputeUnavailable";
     }
     return "Unknown";
 }
@@ -1269,6 +1270,11 @@ TenantVmHost::~TenantVmHost() {
 VmOpenResult TenantVmHost::open(VmSpec spec) {
     VmOpenResult out;
     const auto refuse = [&](Status status) { out.status = status; return out; };
+    // A private mmap cage is not a hardware TEE. This host has no verified
+    // hardware quote/TCB verifier, freshness binding or secret release. Deny
+    // before allocation/tenant publication; never silently open a plain VM.
+    if (spec.require_confidential_compute)
+        return refuse(Status::ConfidentialComputeUnavailable);
     const VmLimits& l = spec.limits;
     if (!valid_tenant_id(spec.tenant_id) || !valid_module(spec.module) || l.heap_bytes == 0 ||
         l.heap_bytes > kAddressableBytes - (std::uint64_t{1} << 20) || l.max_actors == 0 ||

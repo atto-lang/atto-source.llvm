@@ -915,6 +915,55 @@ impl Parser {
         Ok(params)
     }
 
+    /// The restricted browser frontend accepts scalar return-first headers.
+    /// The marker is contextual; a separated '< -' is *not* a declaration.
+    fn return_first_marker_here(&self) -> bool {
+        if !matches!(self.peek(), Tok::Ident(_)) {
+            return false;
+        }
+        if *self.peek_at(1) == Tok::Bullet {
+            return true;
+        }
+        if *self.peek_at(1) == Tok::Lt && *self.peek_at(2) == Tok::Minus {
+            let left = self.toks[(self.i + 1).min(self.toks.len() - 1)].pos;
+            let right = self.toks[(self.i + 2).min(self.toks.len() - 1)].pos;
+            return left.line == right.line && right.col == left.col + 1;
+        }
+        false
+    }
+
+    fn consume_return_first_marker(&mut self) -> R<()> {
+        if self.eat(&Tok::Bullet) {
+            return Ok(());
+        }
+        if *self.peek() == Tok::Lt && *self.peek_at(1) == Tok::Minus {
+            let lt = self.pos();
+            let minus = self.toks[(self.i + 1).min(self.toks.len() - 1)].pos;
+            if lt.line != minus.line || minus.col != lt.col + 1 {
+                return Err(Diagnostic::new(minus, "E_SYNTAX",
+                    "return-first '<-' must be contiguous"));
+            }
+            self.advance();
+            self.advance();
+            return Ok(());
+        }
+        Err(self.expected("return-first '<-' or U+2022 '•'"))
+    }
+
+    fn parse_return_first_body(&mut self) -> R<Vec<Stmt>> {
+        if *self.peek() == Tok::LBrace {
+            return self.parse_block();
+        }
+        // Explicit begin/end and bare statements/end use ordinary statement
+        // semantics, with no implicit return from the last expression.
+        self.eat_word("begin");
+        let statements = self.parse_stmts_until(&["end"])?;
+        self.expect_word("end")?;
+        self.eat(&Tok::Dot);
+        self.eat(&Tok::Semi);
+        Ok(statements)
+    }
+
     fn parse_func(&mut self) -> R<Func> {
         if *self.peek() == Tok::At {
             return Err(unsupported(self.pos(), "annotations"));
@@ -938,7 +987,11 @@ impl Parser {
                 return Err(unsupported(self.pos(), &format!("'{m}' callables")));
             }
         }
-        if !(self.eat_word("fnc") || self.eat_word("routine")) {
+        let named_keyword = self.eat_word("fnc") || self.eat_word("routine");
+        // Return-first is a declaration-only context. Keep '<' and '-' as
+        // independent expression tokens: 1<-2 remains 1 < -2.
+        let return_first = self.return_first_marker_here();
+        if !named_keyword && !return_first {
             if let Some(w) = self.word_at(0) {
                 if UNSUPPORTED_STMT.contains(&w) || matches!(w, "val" | "let" | "const") {
                     return Err(unsupported(self.pos(), &format!("top-level '{w}'")));
@@ -947,15 +1000,22 @@ impl Parser {
             return Err(Diagnostic::new(
                 self.pos(),
                 "E_TOPLEVEL",
-                format!("expected a 'fnc' declaration, found {}", describe(self.peek())),
+                format!("expected a 'fnc' or return-first declaration, found {}", describe(self.peek())),
             ));
         }
-        let is_generator = if *self.peek() == Tok::Star {
+        let is_generator = if named_keyword && *self.peek() == Tok::Star {
             self.advance();
             self.expect_word("gen")?;
             true
         } else {
             false
+        };
+        let prefix_type = if return_first {
+            let ty = self.parse_type()?;
+            self.consume_return_first_marker()?;
+            Some(ty)
+        } else {
+            None
         };
         let (name, pos) = self.ident("a function name")?;
         if *self.peek() == Tok::Lt {
@@ -963,13 +1023,25 @@ impl Parser {
         }
         self.expect(Tok::LParen, "'('")?;
         let params = self.parse_params()?;
-        let ret = self.parse_return_spec()?;
+        let ret = if let Some(ty) = prefix_type {
+            if matches!(self.peek(), Tok::Arrow | Tok::Colon) {
+                return Err(Diagnostic::new(self.pos(), "E_SYNTAX",
+                    "return-first callable cannot declare a second result type"));
+            }
+            ty
+        } else {
+            self.parse_return_spec()?
+        };
         if is_generator && ret != Type::GeneratorInt {
             return Err(Diagnostic::new(pos, "E_TYPE",
                 "a 'fnc *gen' declaration must return Generator<int> in this frontend stage"));
         }
         self.in_generator = is_generator;
-        let body = self.parse_block()?;
+        let body = if prefix_type.is_some() {
+            self.parse_return_first_body()?
+        } else {
+            self.parse_block()?
+        };
         self.in_generator = false;
         let _ = start;
         Ok(Func {
@@ -1101,7 +1173,13 @@ impl Parser {
             self.terminator()?;
             return Ok(Stmt::YieldFrom(source, pos));
         }
-        let word = self.word_at(0).map(str::to_owned);
+        // Statement-position '^' is the return alias. This frontend does not
+        // yet lower expression-position XOR; keep that syntax distinct.
+        let word = if *self.peek() == Tok::Caret {
+            Some("return".to_owned())
+        } else {
+            self.word_at(0).map(str::to_owned)
+        };
         match word.as_deref() {
             Some("val" | "const" | "let") => {
                 let s = self.parse_binding()?;
@@ -1143,6 +1221,13 @@ impl Parser {
             }
             Some("return") => {
                 self.advance();
+                if self.is_word("match") {
+                    if self.in_generator {
+                        return Err(Diagnostic::new(pos, "E_RETURN",
+                            "generator cannot return a match value"));
+                    }
+                    return self.parse_return_match(pos);
+                }
                 let at_end = matches!(self.peek(), Tok::Semi | Tok::RBrace)
                     || matches!(self.word_at(0), Some("fi" | "end" | "done" | "elif" | "elseif" | "else"));
                 let value = if at_end { None } else { Some(self.parse_expr()?) };
@@ -1407,6 +1492,53 @@ impl Parser {
         Ok(Stmt::If { arms, otherwise, pos })
     }
 
+    /// A value-producing return-position match reuses the existing checked
+    /// exhaustive Match lowering rather than creating a second evaluator.
+    fn parse_return_match(&mut self, pos: Pos) -> R<Stmt> {
+        self.expect_word("match")?;
+        let subject = self.parse_expr()?;
+        self.expect_word("over")?;
+        let mut arms = Vec::new();
+        while !self.is_word("end") {
+            if *self.peek() == Tok::Eof {
+                return Err(Diagnostic::new(self.pos(), "E_EOF",
+                    "expected 'end' to close return match"));
+            }
+            self.grow(1)?;
+            let apos = self.pos();
+            self.expect_word("on")?;
+            let pattern = self.parse_pattern()?;
+            let guard = if self.eat_word("when") {
+                Some(self.parse_expr()?)
+            } else {
+                None
+            };
+            self.expect(Tok::Arrow, "'->' in a return match arm")?;
+            let braced = *self.peek() == Tok::LBrace;
+            let body = if braced {
+                self.parse_block()?
+            } else {
+                let value = self.parse_expr()?;
+                vec![Stmt::Return(Some(value), apos)]
+            };
+            arms.push(MatchArm { pattern, guard, body, pos: apos });
+            if braced {
+                self.eat(&Tok::Comma);
+            } else if !self.eat(&Tok::Comma) && !self.is_word("end") {
+                return Err(Diagnostic::new(self.pos(), "E_SYNTAX",
+                    "expected ',' between return match value arms"));
+            }
+        }
+        self.expect_word("end")?;
+        self.height -= arms.len() as u32;
+        if arms.is_empty() {
+            return Err(Diagnostic::new(pos, "E_SYNTAX",
+                "return match requires at least one arm"));
+        }
+        self.terminator()?;
+        Ok(Stmt::Match { subject, arms, pos })
+    }
+
     /// Java Parser.parseMatch. Canonical `match x over on P -> { } end`
     /// (or `over { on P { } }`); legacy `match [first] x [;] P -> { } end`
     /// with `else` as the catch-all. `do match` requires `over`.
@@ -1549,15 +1681,10 @@ impl Parser {
                         if next != "when" && next != "_" {
                             return Err(unsupported(pos, "typed binding patterns ('Type name')"));
                         }
-                        if next == "when" {
-                            // Java parses `name when` as the typed binding
-                            // pattern `name when` and then fails; mirror that.
-                            return Err(Diagnostic::new(
-                                self.pos(),
-                                "E_SYNTAX",
-                                "a binding pattern cannot take a 'when' guard",
-                            ));
-                        }
+                        // A binding followed by 'when' is a guarded
+                        // binder, not a typed pattern. parse_match and
+                        // parse_return_match will read the guard in the arm
+                        // scope, after the bound name is introduced.
                     }
                     if w.chars().next().is_some_and(|c| c.is_uppercase()) {
                         return Err(unsupported(pos, "constructor patterns"));
@@ -2185,6 +2312,7 @@ fn describe(t: &Tok) -> String {
                 Tok::Colon => ":",
                 Tok::ColonColon => "::",
                 Tok::Arrow => "->",
+                Tok::Bullet => "•",
                 Tok::Dot => ".",
                 Tok::Assign => "=",
                 Tok::EqEq => "==",
@@ -2206,6 +2334,7 @@ fn describe(t: &Tok) -> String {
                 Tok::Pipe => "|",
                 Tok::PipeGt => "|>",
                 Tok::Amp => "&",
+                Tok::Caret => "^",
                 Tok::At => "@",
                 _ => "?",
             };

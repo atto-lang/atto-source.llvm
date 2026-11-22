@@ -1,0 +1,3 @@
+// Must fail closed: actor pipeline roles and typed forwarding are not executable.
+define transform-pipe actor Transform as
+end

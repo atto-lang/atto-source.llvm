@@ -1,0 +1,7 @@
+// A user-defined native class may not shadow the reserved ActorGroup intrinsic.
+define class ActorGroup as
+  let int value = 0;
+end
+pub fnc main(): int {
+  return 0;
+}

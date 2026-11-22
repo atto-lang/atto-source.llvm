@@ -29,5 +29,7 @@ jobs:
         run: bash ci/test_native_actors.sh
       - name: Compile and execute shared HTTP/FS pure-policy guest through LLVM native AOT
         run: bash ci/test_hosted_policy_guest.sh
+      - name: Compile and execute guarded return-match and caret native scalar guests
+        run: bash ci/test_guarded_return_match_native.sh
       - name: Verify scalar and native actor AOT exact source receipts
         run: python3 -m unittest discover -s tests -p 'test_llvm_*receipt.py' -v

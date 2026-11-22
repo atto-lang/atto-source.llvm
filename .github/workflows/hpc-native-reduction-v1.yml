@@ -1,0 +1,91 @@
+name: Atto HPC restricted i64 native guest O0/O2
+on:
+  pull_request:
+    paths:
+      - 'tests/fixtures/hpc-reduction-v1/**'
+      - 'tests/fixtures/task-v1-negative/**'
+      - 'tests/hpc_reduction_native_v1.rs'
+      - 'tests/hpc_i64_differential_v1.rs'
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
+      - 'src/main/cpp/oreslang/runtime/SourceTaskRuntime.c'
+      - 'scripts/compile-aot.sh'
+      - 'scripts/audit_no_gc_ir.rs'
+      - '.github/workflows/hpc-native-reduction-v1.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  hpc-i64-aot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout PR head without persistent credentials
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Admit exact source HEAD
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          echo "HPC_SOURCE_SHA=$EXPECTED_HEAD"
+          echo "HPC_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Install native LLVM build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends llvm-dev clang ninja-build cmake
+          rustc --version
+          clang --version | head -n 1
+      - name: Build real native compiler and no-GC IR auditor
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --target oreslang-llvmc oreslang-no-gc-ir-audit-build --parallel 2
+          test -x build/oreslang-llvmc
+          test -x build/oreslang-no-gc-ir-audit
+      - name: Run bounded Rust harness with real Atto IR and native binaries
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          rustc --edition=2021 -D warnings tests/hpc_reduction_native_v1.rs -o "$RUNNER_TEMP/atto-hpc-reduction-gate"
+          "$RUNNER_TEMP/atto-hpc-reduction-gate" | tee "$RUNNER_TEMP/atto-hpc-reduction-v1.log"
+          test "$(grep -c '^ATTO_HPC_I64_GUEST_PASS ' "$RUNNER_TEMP/atto-hpc-reduction-v1.log")" -eq 4
+          grep -q '^ATTO_HPC_I64_GATE_PASS .*executed_guest_cases=4 negative_cases=4' "$RUNNER_TEMP/atto-hpc-reduction-v1.log"
+      - name: Rust numerical oracle and ABI observer unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc --edition=2021 -D warnings --test tests/hpc_i64_differential_v1.rs -o "$RUNNER_TEMP/atto-hpc-rust-unit"
+          "$RUNNER_TEMP/atto-hpc-rust-unit" | tee "$RUNNER_TEMP/atto-hpc-rust-unit.log"
+          grep -q 'test result: ok. 3 passed; 0 failed' "$RUNNER_TEMP/atto-hpc-rust-unit.log"
+      - name: Execute full-width native i64 differential guests at O0 and O2
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          rustc --edition=2021 -D warnings tests/hpc_i64_differential_v1.rs -o "$RUNNER_TEMP/atto-hpc-i64-differential"
+          "$RUNNER_TEMP/atto-hpc-i64-differential" | tee "$RUNNER_TEMP/atto-hpc-i64-differential.log"
+          test "$(grep -c '^ATTO_HPC_I64_DIFF_VECTOR_PASS ' "$RUNNER_TEMP/atto-hpc-i64-differential.log")" -eq 214
+          test "$(grep -c '^ATTO_HPC_I64_DIFFERENTIAL_PASS ' "$RUNNER_TEMP/atto-hpc-i64-differential.log")" -eq 2
+          grep -q '^ATTO_HPC_I64_DIFFERENTIAL_GATE_PASS .*executions=214 negative_cases=0' "$RUNNER_TEMP/atto-hpc-i64-differential.log"
+      - name: Retain source-local output; no parity or SIMD promotion
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: atto-hpc-i64-native-gate
+          path: |
+            ${{ runner.temp }}/atto-hpc-reduction-v1.log
+            ${{ runner.temp }}/atto-hpc-rust-unit.log
+            ${{ runner.temp }}/atto-hpc-i64-differential.log
+          if-no-files-found: ignore

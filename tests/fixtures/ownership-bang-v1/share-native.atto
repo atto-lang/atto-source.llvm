@@ -1,0 +1,1 @@
+pub fnc main(): int { return share! 41 + 1; }

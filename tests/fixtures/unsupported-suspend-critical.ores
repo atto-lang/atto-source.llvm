@@ -1,0 +1,4 @@
+// Legacy alias is parsed but not compiled until native continuations exist.
+pub suspend critical fnc pending(): int {
+  return 1;
+}

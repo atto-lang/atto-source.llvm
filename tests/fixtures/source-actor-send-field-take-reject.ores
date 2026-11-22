@@ -1,0 +1,18 @@
+define class Pair as
+  pub let int value = 42;
+end
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+pub fnc main(): int {
+  let Pair p = new Pair();
+  const worker = spawn Worker();
+  worker.send(rt take p.value);
+  worker.send(p.value);
+  stop worker;
+  return 43;
+}

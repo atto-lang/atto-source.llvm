@@ -1,0 +1,104 @@
+{
+  "schema": "attolang.gpu-actor-opencl-uncertain-enqueue-audit/1",
+  "recordedAt": "2026-11-10",
+  "source": {
+    "repository": "ores-truffle-oreslang/oreslang-source.llvm",
+    "branch": "audit/gpu-opencl-uncertain-enqueue-20261110",
+    "stackedOn": "ores-truffle-oreslang/oreslang-source.llvm#1667",
+    "blobs": {
+      "src/main/cpp/oreslang/runtime/OpenClProvider.hpp": "0dc83a240f5841c42e12e5e79c93a4cd4a44ad7f",
+      "src/main/cpp/oreslang/runtime/GpuActorOpenClProviderV2.hpp": "7759ca51047d29db04128a695388f0bd592a3ad9",
+      "tests/gpu_actor_opencl_provider_v2_test.cpp": "44e8319b9d0b2095b34c42e7b6f27f28306a287d",
+      "tests/opencl_provider_g3_test.cpp": "28b51e72f9a3bc82f67a754eb44d21c792c7c58b",
+      "tests/gpu_actor_provider_bridge_v1_test.cpp": "ab847cd09d64b714ada72a15409eeda7b64c8566",
+      "src/main/cpp/oreslang/runtime/OpenClSystemApi.hpp": "36792e75a02cc3d1c7e9a9be17e6d5a75cfea269"
+    }
+  },
+  "carrier": {
+    "repository": "scintilla-run/scintilla-run-e2e",
+    "branch": "carrier/gpu-opencl-uncertain-enqueue-20261110",
+    "head": "02cb75884dc5aae276e9c03ea66b5ee29021e8b4",
+    "workflow": ".github/workflows/gpu-opencl-uncertain-enqueue-carrier.yml",
+    "runId": 42952096758,
+    "jobId": 130298528395,
+    "url": "https://github.com/scintilla-run/scintilla-run-e2e/actions/runs/42952096758",
+    "exactSourceBlobChecks": true,
+    "tokenFreeCrossOrgMirror": true,
+    "compile": {
+      "gccWithAsanUbsan": "PASS",
+      "clangStrict": "PASS",
+      "physicalNativeProbeBuild": "PASS"
+    },
+    "executed": {
+      "v2HostAssertionsPerCompiler": 128,
+      "v1HostAssertionsPerCompiler": 6329,
+      "v1LogicalActors": 1024,
+      "v1MockTurns": 4096,
+      "preexistingOpenClG3SuiteGccSanitizers": "PASS"
+    }
+  },
+  "riskFindings": [
+    {
+      "id": "OPENCL-AUDIT-01",
+      "severity": "critical",
+      "status": "fixed-host",
+      "finding": "exception or null event after native upload call could trigger pre-enqueue abort and deallocation despite device command possibly accepted",
+      "fix": "mark enqueue attempt before API call, retain exact operation/loans/quota under quarantine until trusted worker proves queue quiescence"
+    },
+    {
+      "id": "OPENCL-AUDIT-02",
+      "severity": "critical",
+      "status": "fixed-host",
+      "finding": "kernel or download enqueue could throw after device acceptance, yet host could immediately complete fences as failure and free buffers",
+      "fix": "UnknownEnqueue state retains staging and device buffers; explicit trusted worker quiescence recovery only"
+    },
+    {
+      "id": "OPENCL-AUDIT-03",
+      "severity": "high",
+      "status": "fixed-host",
+      "finding": "failed physically quiescent upload could never close because provider observer required non-null Operation handle",
+      "fix": "locally authenticated failed terminal receipt after recovery without falsely declaring DefinitelyNotSubmitted"
+    },
+    {
+      "id": "OPENCL-AUDIT-04",
+      "severity": "high",
+      "status": "fixed-host",
+      "finding": "retired provider could replay a locally terminal event receipt",
+      "fix": "invalidate active provider-local event on physical retirement"
+    }
+  ],
+  "negativeCases": [
+    "upload-throw-before-accept",
+    "upload-throw-after-simulated-accept",
+    "kernel-throw-before-accept",
+    "kernel-throw-after-simulated-accept",
+    "download-throw-before-accept",
+    "download-throw-after-simulated-accept",
+    "quiescence-false-buffer-retained",
+    "quiescence-true-worker-recovers",
+    "no-state-commit-on-recovery",
+    "provider-token-stale-after-retirement",
+    "preexisting-G3-lifecycle",
+    "V1-concurrent-quarantine"
+  ],
+  "physicalGpu": {
+    "attempted": true,
+    "available": false,
+    "exitCode": 77,
+    "stderrMarker": "GPU_ACTOR_V2_NO_GPU_RUNTIME no-compatible-GPU; no CPU fallback",
+    "gpuKernelExecuted": false,
+    "nativeDeviceEventVerified": false,
+    "cpuFallback": false
+  },
+  "releaseBlockers": [
+    "legacy V0 host Boolean completion API not yet access-controlled",
+    "no crash-durable quarantine or device-reset proof",
+    "worker-only clFinish can block; supervised worker not integrated",
+    "GPU-equipped hardware run not executed",
+    "compiled AttoLang GPU actor typed body MIR/AOT absent",
+    "five-backend parity not executed"
+  ],
+  "proofScope": "exact native host source against injected fake OpenCL API; driver/kernel simulation is NOT physical execution",
+  "readyForProduction": false,
+  "draftOnly": true
+}

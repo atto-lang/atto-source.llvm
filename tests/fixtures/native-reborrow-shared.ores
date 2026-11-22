@@ -1,0 +1,4 @@
+fnc inspect(borrow int x): int { return x + 1; }
+fnc forwarded(borrow int x): int { return inspect(rt borrow x) + x; }
+fnc wrapper(int x): int { return forwarded(rt borrow x); }
+pub fnc main(): int { return wrapper(40); }
