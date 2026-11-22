@@ -7,6 +7,7 @@ on:
       - 'stdlib/std/sync.atto'
       - 'tests/fixtures/stdlib_path_telemetry_sync_v1.atto'
       - 'tests/fixtures/stdlib_alias_identity_v1.atto'
+      - 'tests/fixtures/stdlib_pure_policy_parity_v1.atto'
       - '.github/workflows/atto-stdlib-path-telemetry-sync-guest.yml'
   workflow_dispatch:
 permissions:
@@ -34,7 +35,8 @@ jobs:
           for path in \
             stdlib/std/path.atto stdlib/std/telemetry.atto stdlib/std/sync.atto \
             tests/fixtures/stdlib_path_telemetry_sync_v1.atto \
-            tests/fixtures/stdlib_alias_identity_v1.atto; do
+            tests/fixtures/stdlib_alias_identity_v1.atto \
+            tests/fixtures/stdlib_pure_policy_parity_v1.atto; do
             sha="$(git hash-object --no-filters -- "$path")"
             test "$sha" = "$(git rev-parse "HEAD:$path")"
             echo "LLVM_ATTO_STD_SOURCE_BLOB=$path:$sha"
@@ -69,6 +71,23 @@ jobs:
             "$RUNNER_TEMP/std-guest-O$opt"
             echo "LLVM_ATTO_STD_REAL_GUEST=EXECUTED opt=$opt"
           done
+      - name: Compile and run all 134 shared Atto std policy vectors at O0 and O2
+        shell: bash
+        run: |
+          set -euo pipefail
+          compiler="$RUNNER_TEMP/std-backend/oreslang-llvmc"
+          fixture=tests/fixtures/stdlib_pure_policy_parity_v1.atto
+          "$compiler" --target=host "$fixture" > "$RUNNER_TEMP/std-parity-134.ll"
+          test -s "$RUNNER_TEMP/std-parity-134.ll"
+          grep -Eq '^define i64 @__oreslang_guest_main\\(' "$RUNNER_TEMP/std-parity-134.ll"
+          grep -Eq '^define i32 @main\\(' "$RUNNER_TEMP/std-parity-134.ll"
+          for opt in 0 2; do
+            clang "-O$opt" -x ir "$RUNNER_TEMP/std-parity-134.ll" \
+              -o "$RUNNER_TEMP/std-parity-134-O$opt"
+            "$RUNNER_TEMP/std-parity-134-O$opt"
+            echo "LLVM_STD_POLICY_134_NATIVE_GUEST=EXECUTED opt=$opt"
+          done
+
       - name: Prove aliases share one compiler-owned unit in an executed Atto native guest
         shell: bash
         run: |
@@ -159,6 +178,11 @@ jobs:
             -x ir "$RUNNER_TEMP/std-guest.ll" \
             -o "$RUNNER_TEMP/std-guest-sanitized"
           "$RUNNER_TEMP/std-guest-sanitized"
+          clang -O1 -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -x ir "$RUNNER_TEMP/std-parity-134.ll" \
+            -o "$RUNNER_TEMP/std-parity-134-sanitized"
+          "$RUNNER_TEMP/std-parity-134-sanitized"
+          echo "LLVM_STD_POLICY_134_ASAN_UBSAN=EXECUTED"
           echo "LLVM_ATTO_STD_ASAN_UBSAN_GUEST=EXECUTED"
       - name: Preserve the evidence boundary
         if: always()
