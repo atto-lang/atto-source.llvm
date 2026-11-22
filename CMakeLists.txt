@@ -5610,6 +5610,14 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_ownership_bang_borrow_call_guest
         ownership-bang-v1/borrow-call-accept.atto
         --run 42 --clang "${ORE_CLANG}")
+    # Compile and actually execute both mutable-loan spellings through the
+    # production LLVM frontend; borrow return values and take are checked.
+    oreslang_contract_test(native_ownership_bang_borrow_mut_canonical_guest
+        ownership-bang-v1/borrow-mut-canonical-native.atto
+        --run 42 --clang "${ORE_CLANG}")
+    oreslang_contract_test(native_ownership_bang_borrow_mut_compatible_guest
+        ownership-bang-v1/borrow-mut-compatible-native.atto
+        --run 42 --clang "${ORE_CLANG}")
 
     # Optimization is an ABI/ownership-sensitive boundary: require both
     # unoptimized and optimized real native runs (not just IR shape tests).
@@ -5628,6 +5636,12 @@ if(BUILD_TESTING)
             --run 42 --clang "${ORE_CLANG}" --opt-level "${mode}")
         oreslang_contract_test(native_ownership_bang_borrow_call_O${mode}
             ownership-bang-v1/borrow-call-accept.atto
+            --run 42 --clang "${ORE_CLANG}" --opt-level "${mode}")
+        oreslang_contract_test(native_ownership_bang_borrow_mut_canonical_O${mode}
+            ownership-bang-v1/borrow-mut-canonical-native.atto
+            --run 42 --clang "${ORE_CLANG}" --opt-level "${mode}")
+        oreslang_contract_test(native_ownership_bang_borrow_mut_compatible_O${mode}
+            ownership-bang-v1/borrow-mut-compatible-native.atto
             --run 42 --clang "${ORE_CLANG}" --opt-level "${mode}")
     endforeach()
 
@@ -5670,6 +5684,8 @@ if(BUILD_TESTING)
         native_ownership_bang_take_guest
         native_ownership_bang_share_guest
         native_ownership_bang_borrow_call_guest
+        native_ownership_bang_borrow_mut_canonical_guest
+        native_ownership_bang_borrow_mut_compatible_guest
         native_ownership_bang_take_sanitizer_runtime_smoke
         native_ownership_bang_borrow_sanitizer_runtime_smoke
         native_ownership_bang_use_after_move_reject
@@ -5681,7 +5697,9 @@ if(BUILD_TESTING)
             native_ownership_bang_copy_spaced_O${mode}
             native_ownership_bang_take_O${mode}
             native_ownership_bang_share_O${mode}
-            native_ownership_bang_borrow_call_O${mode})
+            native_ownership_bang_borrow_call_O${mode}
+            native_ownership_bang_borrow_mut_canonical_O${mode}
+            native_ownership_bang_borrow_mut_compatible_O${mode})
     endforeach()
     set_tests_properties(${_ownership_bang_contracts}
         PROPERTIES FIXTURES_REQUIRED native_ownership_bang_git_pins)
@@ -9928,6 +9946,13 @@ target_include_directories(atto-checked-actor-ir PRIVATE
   "${LLVM_INCLUDE_DIRS}"
 )
 target_link_libraries(atto-checked-actor-ir PRIVATE ${ORE_LLVM_LIBS})
+
+# This source-only gate deliberately does NOT certify a Channel<int> guest.
+# It proves the native lexical rejection boundary on exact C++17 host code.
+enable_testing()
+add_executable(atto-channel-int-lexical-gate tests/channel_int_lexical_gate.cpp)
+target_include_directories(atto-channel-int-lexical-gate PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+add_test(NAME atto-channel-int-lexical-gate COMMAND atto-channel-int-lexical-gate)
 
 # Host-runtime actor slab heap (Offset32 + Handle32); no LLVM dependency.
 # See docs/ACTOR_SLAB_HEAP.md. Not compiled .atto allocation evidence.

@@ -9,6 +9,10 @@ mod guard_negative;
 mod pointer_positive;
 #[path = "rust_native_e2e/pointer_negative.rs"]
 mod pointer_negative;
+#[path = "rust_native_e2e/pointer_local_positive.rs"]
+mod pointer_local_positive;
+#[path = "rust_native_e2e/pointer_local_negative.rs"]
+mod pointer_local_negative;
 #[path = "rust_native_e2e/static_ffi.rs"]
 mod static_ffi;
 #[path = "rust_native_e2e/ffi_normal_positive.rs"]
@@ -148,6 +152,8 @@ fn main() {
     guard_negative::run(&mut h);
     pointer_positive::run(&mut h);
     pointer_negative::run(&mut h);
+    pointer_local_positive::run(&mut h);
+    pointer_local_negative::run(&mut h);
     static_ffi::run(&mut h);
     ffi_normal_positive::run(&mut h);
     ffi_normal_negative::run(&mut h);

@@ -9,6 +9,14 @@
  * No GC, shared guest pointers or callbacks that expose arena addresses.
  * This C module is host/runtime infrastructure, NOT the Atto stdlib.
  */
+/* This runtime executes native actor callbacks inside pthreads sharing one
+ * process. Do not allow a caller to request SIGSEGV confinement and silently
+ * receive only actor-owned heaps/mailboxes. That guarantee requires a worker
+ * process boundary and a separate supervisor/IPC implementation. */
+#if defined(ATTO_REQUIRE_PROCESS_ISOLATED_ACTORS)
+#error "pthread actor runtime cannot contain native SIGSEGV; use a process-isolated actor runtime"
+#endif
+
 #define _POSIX_C_SOURCE 200809L
 #include <inttypes.h>
 #include <pthread.h>
