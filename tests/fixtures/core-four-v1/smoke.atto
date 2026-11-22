@@ -33,6 +33,15 @@ pub fnc main(): int {
   if num.saturating_mul(-9223372036854775808, -1) != 9223372036854775807; do
     return 9;
   fi
+  if num.wrapping_mul(-9223372036854775808, -1) != -9223372036854775808; do
+    return 11;
+  fi
+  if num.wrapping_mul(9223372036854775807, 9223372036854775807) != 1; do
+    return 12;
+  fi
+  if num.wrapping_mul(7, -6) != -42; do
+    return 13;
+  fi
   if !cell.may_borrow_shared(0) || cell.may_borrow_exclusive(-1); do
     return 10;
   fi
