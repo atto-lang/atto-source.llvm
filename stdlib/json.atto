@@ -78,7 +78,9 @@ define module json as
         let int ch = self.source.get(self.index);
         self.index = self.index + 1;
         if ch == 34; do return true; fi
-        if ch < 32; do return false; fi
+        // String.codepoints() may expose a lone host UTF-16 surrogate.
+        if ch < 32 || (ch >= 55296 && ch <= 57343) ||
+           ch > 1114111; do return false; fi
         if ch != 92; do
           self.decoded.add(ch);
         else
