@@ -18,7 +18,7 @@ while IFS=$'\t' read -r case_id phase outcome path; do
   [[ -z "$case_id" || "$case_id" == \#* ]] && continue
   test "$phase" = "guest" && test "$outcome" = "PASS"
   case "$case_id:$path" in
-    lexical.normal_return_once:tests/atto-box-main-v1/return-get.atto|\
+    lexical.normal_return_once:tests/atto-box-main-v1/return-get.atto) ;;
     lexical.early_return_once:tests/atto-box-main-v1/return-early.atto) ;;
     *) echo "unapproved LLVM lexical guest proof mapping" >&2; exit 1 ;;
   esac
