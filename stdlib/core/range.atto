@@ -1,0 +1,71 @@
+// LLVM-owned Atto source; independent of other compiler repository implementations.
+// Freestanding signed-i64 interval policy. No allocation, clocks, or host calls.
+// Half-open intervals [start,end) and inclusive intervals [start,end] are distinct.
+// Invalid/descending bounds are empty; no endpoint +/- 1 is required.
+define module range as
+  pub fnc is_empty(int start, int end): bool {
+    return start >= end;
+  }
+  pub fnc is_empty_inclusive(int start, int end): bool {
+    return start > end;
+  }
+  pub fnc contains(int start, int end, int value): bool {
+    return start <= value && value < end;
+  }
+  pub fnc contains_inclusive(int start, int end, int value): bool {
+    return start <= value && value <= end;
+  }
+  pub fnc overlaps(int left_start, int left_end, int right_start, int right_end): bool {
+    if is_empty(left_start, left_end) || is_empty(right_start, right_end); do
+      return false;
+    fi
+    return left_start < right_end && right_start < left_end;
+  }
+  pub fnc overlaps_inclusive(int left_start, int left_end, int right_start, int right_end): bool {
+    if is_empty_inclusive(left_start, left_end) || is_empty_inclusive(right_start, right_end); do
+      return false;
+    fi
+    return left_start <= right_end && right_start <= left_end;
+  }
+  pub fnc clamp_inclusive(int value, int start, int end): Result<int, String> {
+    if start > end; do
+      return Err("range: inverted bounds");
+    fi
+    if value < start; do
+      return Ok(start);
+    fi
+    if value > end; do
+      return Ok(end);
+    fi
+    return Ok(value);
+  }
+  // The returned predicate is for one NEXT position, not for the current one.
+  // Guard before addition so the check itself never overflows signed i64.
+  pub fnc can_step_forward(int current, int end, int step): bool {
+    if step <= 0 || current >= end; do
+      return false;
+    fi
+    if current > 0 && current > 9223372036854775807 - step; do
+      return false;
+    fi
+    return current + step < end;
+  }
+  pub fnc can_step_forward_inclusive(int current, int end, int step): bool {
+    if step <= 0 || current >= end; do
+      return false;
+    fi
+    if current > 0 && current > 9223372036854775807 - step; do
+      return false;
+    fi
+    return current + step <= end;
+  }
+  pub fnc can_step_backward_inclusive(int current, int end, int step): bool {
+    if step <= 0 || current <= end; do
+      return false;
+    fi
+    if current < 0 && current < -9223372036854775808 + step; do
+      return false;
+    fi
+    return current - step >= end;
+  }
+end
