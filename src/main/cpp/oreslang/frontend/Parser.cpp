@@ -418,8 +418,9 @@ public:
         // '[' / ']' are plain tokens: only the GPU launch geometry and the
         // GPU kernel body envelope consume them; anywhere else the parser
         // rejects them before IR exactly like any other unexpected symbol.
-        // '&' and '^' serve the Pointer<int> HIR scanner and caret returns.
-        if (std::string_view("(){}[],:;+-*/%=.<>@?!&^").find(ch) != std::string_view::npos) {
+        // '^' is the caret return marker. '&' stays an unsupported token:
+        // there is no address-of, and the lexer rejects it before parsing.
+        if (std::string_view("(){}[],:;+-*/%=.<>@?!^").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -5157,6 +5158,13 @@ private:
         if (token_.text == "pipe")
             fail("actor pipe expressions require typed roles, supervisor "
                  "exclusion, bounded edge transport and ownership lowering");
+        // '^' is lexed only for the statement-level caret return. After a
+        // complete expression it would be infix XOR, which this backend does
+        // not lower: keep legacy's reserved-token diagnostic.
+        if (token_.kind == Kind::Symbol && token_.text == "^")
+            throw std::runtime_error("'^' is reserved and is not AttoLang source syntax; "
+                                     "use Integer.bitXor(a, b) at byte "
+                                     + std::to_string(token_.offset));
         return value;
     }
 
@@ -5376,13 +5384,6 @@ private:
             ~DepthGuard() { --depth; }
         } depth_guard{expression_depth_};
 
-        if (token_.kind == Kind::Symbol && (token_.text == "&" || token_.text == "*")) {
-            // '&' address-of and unary '*' dereference are never AttoLang
-            // pointer syntax. Preserve binary '*' multiplication and '&&'.
-            // Symbol tokens only: the string literal "*" lexes as text `*`.
-            fail("native pointer syntax forbids unary '&' address-of and "
-                 "unary '*' dereference; use checked Pointer<T> methods");
-        }
         if (token_.text == "trap") {
             const auto offset = token_.offset;
             advance();
@@ -7369,7 +7370,9 @@ private:
                              arg->left->kind == Expression::Kind::Integer));
                     });
             if (!approved)
-                throw std::runtime_error("using ffi requires one directly admitted static foreign i64 call");
+                throw std::runtime_error(fn.declared_effects.has(FunctionEffect::Ffi)
+                    ? "using ffi requires one directly admitted static foreign i64 call"
+                    : "using effects require transitive call summaries");
             // This first direct-call M1 profile admits literal arguments only.
             // Check their mathematical sum before any native C code executes:
             // neither an untrusted foreign function nor signed C overflow is
