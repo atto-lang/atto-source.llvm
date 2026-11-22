@@ -1,0 +1,4 @@
+// expect-exit: 10
+// LLVM keeps the pre-v1 core/numeric unit as a migration alias.
+import module numeric from "core/numeric";
+pub fnc main(): int { return numeric.clamp_int(99, 0, 10); }

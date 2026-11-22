@@ -1,0 +1,41 @@
+// core/cmp: freestanding three-way comparison and ordering helpers.
+define module cmp as
+
+  // -1 when a < b, 0 when equal, 1 when a > b.
+  pub fnc compare(int a, int b): int {
+    if a < b; do
+      return 0 - 1;
+    fi
+    if a > b; do
+      return 1;
+    fi
+    return 0;
+  }
+
+  pub fnc between(int value, int lower, int upper): bool {
+    return value >= lower && value <= upper;
+  }
+
+  pub fnc min3(int a, int b, int c): int {
+    let int m = a;
+    if b < m; do
+      m = b;
+    fi
+    if c < m; do
+      m = c;
+    fi
+    return m;
+  }
+
+  pub fnc max3(int a, int b, int c): int {
+    let int m = a;
+    if b > m; do
+      m = b;
+    fi
+    if c > m; do
+      m = c;
+    fi
+    return m;
+  }
+
+end
