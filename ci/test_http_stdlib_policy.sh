@@ -2,6 +2,12 @@
 # Exact-checked-out-source native Atto HTTP scalar guest; never a host emulation.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+[[ "$(git hash-object -- stdlib/http/message_policy.atto)" == "f88b78313432bce067223cc1853024bfd9b97c90" ]] || {
+  echo "FAIL: compiled LLVM std.http policy source blob has drifted" >&2; exit 1;
+}
+[[ "$(git hash-object -- tests/http_stdlib/message_policy_canary.atto)" == "9bae8fa1d359e193f47f9df43ee83ef12a7f4b77" ]] || {
+  echo "FAIL: LLVM HTTP scalar guest fixture blob has drifted" >&2; exit 1;
+}
 
 # Root Cargo.toml has only path dependencies; generate its lockfile offline,
 # then enforce the generated local package graph for both tests and release.
