@@ -23,7 +23,7 @@ const SOURCES: [Source; 6] = [
         delimiter: "ATTO_INT_BUNDLE", blob: "07c7083e099a18f1db7097f9639efc677070eb95" },
     Source { file: "stdlib/alloc/heap.atto",
         output: "src/main/cpp/oreslang/frontend/GeneratedHeapAtto.inc",
-        delimiter: "ATTO_HEAP", blob: "b58c3365b9118d0ff6b3c383cf580df289683fa0" },
+        delimiter: "ATTO_HEAP", blob: "115e09bcf2a51ddfe927b81381544e7ebec68d95" },
     Source { file: "stdlib/alloc/arena.atto",
         output: "src/main/cpp/oreslang/frontend/GeneratedArenaAtto.inc",
         delimiter: "ATTO_ARENA", blob: "ae18bb071331f7d8e4919b5ebc47d0402212721f" },
