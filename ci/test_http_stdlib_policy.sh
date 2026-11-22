@@ -13,6 +13,8 @@ cd "$(dirname "$0")/.."
 # then enforce the generated local package graph for both tests and release.
 cargo generate-lockfile --offline
 cargo test --locked --offline --release --bin atto-llvm
+# Independently execute the native Rust frontend's real .atto ownership checker.
+cargo test --manifest-path frontend/Cargo.toml --locked --offline --release --test core_ownership_boundary
 cargo build --locked --offline --release --bin atto-llvm
 
 expected_cases=46
