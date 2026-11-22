@@ -146,6 +146,20 @@ int main(int argc, char** argv) {
             // validator ABI is always (ptr, ptr, i64 span, i32 stored).
             includes("type { i64, i32 }");
             includes("load i32");
+            // The source field must be admitted by a conditional branch
+            // BEFORE any attempt to dereference its i32 encoded bits.
+            const auto guard_at = printed.find("br i1 %ref32.source.valid");
+            const auto first_load_at = printed.find("%ref32.encoded = load i32");
+            require(guard_at != std::string::npos &&
+                    first_load_at != std::string::npos &&
+                    guard_at < first_load_at,
+                    "source ref32 field read precedes source arena bounds check");
+            includes("ref32.source.bounds");
+            includes("ref32.source.read");
+            includes("ref32.source.delta");
+            includes("ref32.source.fits");
+            includes("ref32.arena.no_wrap");
+            includes("ref32.source.valid");
             includes("ref32.proof");
             includes("ref32.bounds");
             includes("ref32.deref");
@@ -173,6 +187,23 @@ int main(int argc, char** argv) {
                 ++conversions;
             }
             require(conversions == 2, "expected one checked base conversion per accessor");
+            // Same target pointer width must be used for the source field.
+            const std::string source_conv = "%ref32.source.address = ptrtoint ptr ";
+            std::size_t source_conversions = 0;
+            for (std::size_t at = printed.find(source_conv);
+                 at != std::string::npos;
+                 at = printed.find(source_conv, at + 1)) {
+                const auto eol = printed.find('\n', at);
+                const auto line = printed.substr(at, eol - at);
+                require(line.size() >= want_width.size() &&
+                        line.compare(line.size() - want_width.size(),
+                                     want_width.size(), want_width) == 0,
+                        "source ref32 address conversion has wrong pointer width");
+                ++source_conversions;
+            }
+            require(source_conversions == 2,
+                    "expected source address guard in both load and store");
+
             if (target.pointer_bits == 32) {
                 // 32-bit: base is widened for the i64 checks, the access end
                 // is capped by the 32-bit address space, and GEP receives the
