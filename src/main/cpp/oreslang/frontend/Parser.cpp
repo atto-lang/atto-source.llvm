@@ -5192,7 +5192,18 @@ private:
                 value.statements.push_back(std::move(deferred));
                 continue;
             }
-            if (accept("stop")) {
+            // stop! is a contiguous contextual alias of graceful stop,
+            // not a force-stop, cancellation or a new actor capability.
+            // Preserve exactly the existing ActorAction::Kind::Stop lowering.
+            if (token_.text == "stop") {
+                const std::size_t stop_offset = token_.offset;
+                advance();
+                if (token_.text == "!" && token_.offset == stop_offset + 4) {
+                    advance();
+                    if (token_.offset == stop_offset + 5 &&
+                            (token_.kind == Kind::Identifier || token_.text == "!"))
+                        fail("stop! requires an operand boundary; stop!name and stop!! are invalid");
+                }
                 if (!value.done_await_actor.empty())
                     fail("actor effects after await get_done are unsupported");
                 value.actor_stops.push_back(identifier());
