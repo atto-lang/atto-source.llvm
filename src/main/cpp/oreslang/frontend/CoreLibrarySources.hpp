@@ -155,6 +155,54 @@ inline const CoreLibrarySource* find_compiler_library_source(std::string_view ra
         0u  // Pure policies only. No physical allocation authority.
     };
 
+    static constexpr std::string_view kPoolSource =
+#include "oreslang/frontend/GeneratedPoolAtto.inc"
+    ;
+    static constexpr CoreLibrarySource kPool{
+        CompilerLibraryTier::Alloc,
+        "atto.alloc/pool",
+        "pool",
+        "@atto.alloc/pool.atto",
+        kPoolSource,
+        core_provider_bit(CoreProviderRequirement::Allocator)
+    };
+
+    static constexpr std::string_view kArcSource =
+#include "oreslang/frontend/GeneratedArcAtto.inc"
+    ;
+    static constexpr CoreLibrarySource kArc{
+        CompilerLibraryTier::Alloc,
+        "atto.alloc/arc",
+        "arc",
+        "@atto.alloc/arc.atto",
+        kArcSource,
+        core_provider_bit(CoreProviderRequirement::Allocator)
+    };
+
+    static constexpr std::string_view kWeakSource =
+#include "oreslang/frontend/GeneratedWeakAtto.inc"
+    ;
+    static constexpr CoreLibrarySource kWeak{
+        CompilerLibraryTier::Alloc,
+        "atto.alloc/weak",
+        "weak",
+        "@atto.alloc/weak.atto",
+        kWeakSource,
+        core_provider_bit(CoreProviderRequirement::Allocator)
+    };
+
+    if (raw == "atto.alloc/pool" || raw == "atto.alloc/pool.atto" ||
+            raw == "alloc/pool" || raw == "alloc/pool.ores" ||
+            raw == "alloc/pool.atto")
+        return &kPool;
+    if (raw == "atto.alloc/arc" || raw == "atto.alloc/arc.atto" ||
+            raw == "alloc/arc" || raw == "alloc/arc.ores" ||
+            raw == "alloc/arc.atto")
+        return &kArc;
+    if (raw == "atto.alloc/weak" || raw == "atto.alloc/weak.atto" ||
+            raw == "alloc/weak" || raw == "alloc/weak.ores" ||
+            raw == "alloc/weak.atto")
+        return &kWeak;
     if (raw == "atto.alloc/heap" || raw == "atto.alloc/heap.atto" ||
             raw == "alloc/heap" || raw == "alloc/heap.ores" ||
             raw == "alloc/heap.atto")
