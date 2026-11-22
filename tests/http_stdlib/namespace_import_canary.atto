@@ -1,0 +1,23 @@
+// Compiler-packaged source-unit import, NOT .atto string concatenation.
+// Success exit 42; each distinct failing case exits non-42.
+import * as http from "std.http";
+pub fnc main(): int {
+  if http.status_valid(200) != true then return 101; fi
+  if http.status_valid(99) != false then return 102; fi
+  if http.status_valid(600) != false then return 103; fi
+  if http.status_success(299) != true then return 104; fi
+  if http.status_redirect(302) != true then return 105; fi
+  if http.status_client_error(404) != true then return 106; fi
+  if http.status_server_error(503) != true then return 107; fi
+  if http.response_body_allowed(204, false, false) != false then return 108; fi
+  if http.response_body_allowed(200, true, false) != false then return 109; fi
+  if http.response_body_allowed(200, false, false) != true then return 110; fi
+  if http.request_framing_fields_allowed(1, 1, true, false) != false then return 111; fi
+  if http.request_framing_fields_allowed(0, 1, true, false) != true then return 112; fi
+  if http.request_framing_fields_allowed(2, 0, false, false) != false then return 113; fi
+  if http.header_budget_allowed(8192, 64, 8192, 64) != true then return 114; fi
+  if http.frame_range_allowed(11, 10, 20, 10) != false then return 115; fi
+  if http.body_chunk_allowed(7, 1, 8) != true then return 116; fi
+  if http.body_chunk_allowed(7, 2, 8) != false then return 117; fi
+  return 42;
+}
