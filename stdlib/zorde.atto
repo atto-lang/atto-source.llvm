@@ -1,0 +1,198 @@
+// std/zorde -- schema-identified, bounded deterministic binary envelope.
+// Not serde. AOT-friendly: explicit schema IDs and source-authored codecs;
+// no reflection, capability/actor/pointer serialization, host callbacks or I/O.
+// Schema-specific field encoders/decoders are intentionally separate.
+define module zorde as
+  pub define class Frame as
+    let int schema_id;
+    let int schema_version;
+    let Array<int> payload;
+
+    // Factory-only construction after full byte and version admission.
+    constructor(int schema_id, int schema_version, Array<int> payload) {
+      self.schema_id = schema_id;
+      self.schema_version = schema_version;
+      self.payload = payload;
+    }
+    pub schema(): int { return self.schema_id; }
+    pub version(): int { return self.schema_version; }
+    // Detached snapshot: caller may not mutate frame-owned bytes.
+    pub bytes(): Array<int> {
+      let mut Array<int> out = new Array<int>();
+      for (let int i = 0; i < self.payload.size; i = i + 1) {
+        out.add(self.payload.get(i));
+      }
+      return out;
+    }
+    pub length(): int { return self.payload.size; }
+  end
+
+  pub define class Writer as
+    let int maximum;
+    let mut Array<int> content = new Array<int>();
+
+    pub constructor(int maximum) {
+      if maximum < 1 || maximum > 1048576; do
+        rt fail("zorde: writer maximum must be 1..1048576");
+      fi
+      self.maximum = maximum;
+    }
+
+    pub write_byte(mut self)(int value): bool {
+      if value < 0 || value > 255 || self.content.size >= self.maximum; do
+        return false;
+      fi
+      self.content.add(value);
+      return true;
+    }
+
+    // Unsigned 31-bit canonical LEB128, atomically admitted.
+    pub write_varuint(mut self)(int value): bool {
+      if value < 0; do return false; fi
+      let int probe = value;
+      let int needed = 1;
+      while probe >= 128; do
+        probe = probe / 128;
+        needed = needed + 1;
+      done
+      if needed > self.maximum - self.content.size; do return false; fi
+      let int remaining = value;
+      while remaining >= 128; do
+        self.content.add((remaining % 128) + 128);
+        remaining = remaining / 128;
+      done
+      self.content.add(remaining);
+      return true;
+    }
+
+    // All-or-nothing append. Invalid byte or quota does not mutate writer.
+    pub write_bytes(mut self)(Array<int> values): bool {
+      if values.size > self.maximum - self.content.size; do return false; fi
+      for (let int i = 0; i < values.size; i = i + 1) {
+        if values.get(i) < 0 || values.get(i) > 255; do return false; fi
+      }
+      for (let int i = 0; i < values.size; i = i + 1) {
+        self.content.add(values.get(i));
+      }
+      return true;
+    }
+    pub size(): int { return self.content.size; }
+    pub finish(): Array<int> {
+      let mut Array<int> copy = new Array<int>();
+      for (let int i = 0; i < self.content.size; i = i + 1) {
+        copy.add(self.content.get(i));
+      }
+      return copy;
+    }
+  end
+
+  pub define class Reader as
+    let Array<int> content;
+    let mut int position = 0;
+
+    pub constructor(Array<int> bytes) {
+      if bytes.size > 1048576; do rt fail("zorde: oversized reader"); fi
+      let mut Array<int> detached = new Array<int>();
+      for (let int i = 0; i < bytes.size; i = i + 1) {
+        let int value = bytes.get(i);
+        if value < 0 || value > 255; do
+          rt fail("zorde: nonbyte input");
+        fi
+        detached.add(value);
+      }
+      self.content = detached;
+    }
+
+    pub remaining(): int { return self.content.size - self.position; }
+    pub read_byte(mut self)(): Result<int, String> {
+      if self.position >= self.content.size; do return Err("Truncated"); fi
+      let int value = self.content.get(self.position);
+      self.position = self.position + 1;
+      return Ok(value);
+    }
+
+    // Failed/truncated/noncanonical varuint leaves cursor unchanged.
+    pub read_varuint(mut self)(): Result<int, String> {
+      let int value = 0;
+      let int multiplier = 1;
+      for (let int i = 0; i < 5; i = i + 1) {
+        if i >= self.content.size - self.position; do
+          return Err("TruncatedVaruint");
+        fi
+        let int byte_value = self.content.get(self.position + i);
+        let int digit = byte_value % 128;
+        if i == 4 && (digit > 7 || byte_value >= 128); do
+          return Err("VaruintOverflow");
+        fi
+        if i > 0 && digit == 0 && byte_value < 128; do
+          return Err("NonCanonicalVaruint");
+        fi
+        value = value + digit * multiplier;
+        if byte_value < 128; do
+          self.position = self.position + i + 1;
+          return Ok(value);
+        fi
+        if i < 4; do multiplier = multiplier * 128; fi
+      }
+      return Err("VaruintOverflow");
+    }
+  end
+
+  pub fnc writer(int maximum): Writer { return new Writer(maximum); }
+  pub fnc reader(Array<int> bytes): Reader { return new Reader(bytes); }
+
+  // v1 wire: ASCII ZORD, format version 1, schema-id varuint,
+  // schema-version varuint, payload length varuint, then payload.
+  // Explicit schema dispatch stays with the source-generated codec.
+  pub fnc encode_frame(int schema_id, int schema_version,
+                       Array<int> payload): Result<Array<int>, String> {
+    if schema_id < 1 || schema_version < 1 ||
+       schema_version > 2147483647 ||
+       payload.size > 1048540; do return Err("InvalidFrame"); fi
+    let mut Writer out = new Writer(1048576);
+    if !out.write_byte(90) || !out.write_byte(79) ||
+       !out.write_byte(82) || !out.write_byte(68) ||
+       !out.write_byte(1) || !out.write_varuint(schema_id) ||
+       !out.write_varuint(schema_version) ||
+       !out.write_varuint(payload.size) ||
+       !out.write_bytes(payload); do
+      return Err("FrameTooLargeOrInvalidByte");
+    fi
+    return Ok(out.finish());
+  }
+
+  // Reject trailing bytes, noncanonical varints, unknown versions and quota
+  // overrun before exposing a detached payload to user code.
+  pub fnc decode_frame(Array<int> wire): Result<Frame, String> {
+    if wire.size < 8 || wire.size > 1048576; do
+      return Err("InvalidFrameSize");
+    fi
+    let mut Reader r = new Reader(wire);
+    if wire.get(0) != 90 || wire.get(1) != 79 ||
+       wire.get(2) != 82 || wire.get(3) != 68 ||
+       wire.get(4) != 1; do
+      return Err("InvalidMagicOrVersion");
+    fi
+    // Reader cursor is private; consume exact five-byte header.
+    for (let int i = 0; i < 5; i = i + 1) {
+      let ignored = r.read_byte();
+    }
+    let schema_result = r.read_varuint();
+    let version_result = r.read_varuint();
+    let length_result = r.read_varuint();
+    if schema_result.is_err() || version_result.is_err() ||
+       length_result.is_err(); do return Err("MalformedHeader"); fi
+    let int schema_id = schema_result.unwrap();
+    let int schema_version = version_result.unwrap();
+    let int length = length_result.unwrap();
+    if schema_id < 1 || schema_version < 1 ||
+       length > 1048540 || length != r.remaining(); do
+      return Err("InvalidSchemaOrLength");
+    fi
+    let mut Array<int> payload = new Array<int>();
+    for (let int i = 0; i < length; i = i + 1) {
+      payload.add(wire.get(wire.size - length + i));
+    }
+    return Ok(new Frame(schema_id, schema_version, payload));
+  }
+end
