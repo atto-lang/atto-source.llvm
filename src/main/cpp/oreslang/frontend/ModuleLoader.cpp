@@ -87,11 +87,26 @@ public:
             // while imported source units are combined.
             if (!unit.program.inverted_structs.empty() || unit.program.inverted_main)
                 fail(unit, "DOP_INVERTED_CROSS_UNIT_UNSUPPORTED: linked inverted owner needs checked schema/owner identity");
+            // A file-scoped `use namespace foo;` header is source metadata,
+            // NOT `import namespace`, package federation, or a module wrapper.
+            // Admit it only for already-supported explicit file function imports.
+            // Nominal classes, actor state and type/package ownership still need
+            // verified namespace v2 linkage and must fail closed here.
+            if (!unit.program.namespace_name.empty() &&
+                    (!unit.program.module.empty() ||
+                     !unit.program.classes.empty() ||
+                     !unit.program.actors.empty() ||
+                     !unit.program.sum_types.empty() ||
+                     !unit.program.contracts.empty() ||
+                     !unit.program.conforms.empty() ||
+                     !unit.program.type_only_declarations.empty() ||
+                     !unit.program.type_constraint_descriptors.empty())) {
+                fail(unit, "NAMESPACE_FUNCTION_ONLY: linked source namespace supports only plain top-level fnc declarations");
+            }
             if (!unit.program.type_only_declarations.empty() ||
-                    !unit.program.type_constraint_descriptors.empty() ||
-                    !unit.program.namespace_name.empty()) {
+                    !unit.program.type_constraint_descriptors.empty()) {
                 fail(unit,
-                    "native linked type-only declarations/namespaces require checked cross-unit type identity lowering");
+                    "native linked type-only declarations require checked cross-unit type identity lowering");
             }
             if (!unit.program.contracts.empty() || !unit.program.conforms.empty())
                 fail(unit, "native linked contract conformance requires checked cross-unit contract identity lowering");
