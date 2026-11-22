@@ -2,7 +2,7 @@
   "schema": "atto.backend-local.arena-policy.v1",
   "backend": "atto-source.llvm",
   "source": "stdlib/alloc/arena_plan.atto",
-  "source_git_blob_sha": "c50ab2da48d57f2156abb69ec3dc83614341090d",
+  "source_git_blob_sha": "e42af976b5ec0846c86e0ed8dfee3d9d6e34056d",
   "status": "SOURCE_ONLY_NOT_EXECUTED_BY_NATIVE_ATTO_COMPILER",
   "i64_arguments": "Decimal strings represent exact signed 64-bit integers; JSON numbers restricted to safe integer range.",
   "semantics": "Policy admission only. No ownership/loan/heap/handle authority, allocation, destructor or source-level guest runtime is certified.",
@@ -332,7 +332,7 @@
     },
     {
       "id": "arena-31",
-      "fn": "arena_next_generation",
+      "fn": "arena_plan_next_generation",
       "args": [
         1,
         4
@@ -341,7 +341,7 @@
     },
     {
       "id": "arena-32",
-      "fn": "arena_next_generation",
+      "fn": "arena_plan_next_generation",
       "args": [
         3,
         4
@@ -350,7 +350,7 @@
     },
     {
       "id": "arena-33",
-      "fn": "arena_next_generation",
+      "fn": "arena_plan_next_generation",
       "args": [
         4,
         4
@@ -359,7 +359,7 @@
     },
     {
       "id": "arena-34",
-      "fn": "arena_next_generation",
+      "fn": "arena_plan_next_generation",
       "args": [
         0,
         4
@@ -368,7 +368,7 @@
     },
     {
       "id": "arena-35",
-      "fn": "arena_next_generation",
+      "fn": "arena_plan_next_generation",
       "args": [
         1,
         0
@@ -377,7 +377,7 @@
     },
     {
       "id": "arena-36",
-      "fn": "arena_next_generation",
+      "fn": "arena_plan_next_generation",
       "args": [
         -1,
         4
@@ -386,7 +386,7 @@
     },
     {
       "id": "arena-37",
-      "fn": "arena_next_generation",
+      "fn": "arena_plan_next_generation",
       "args": [
         "9223372036854775806",
         "9223372036854775807"
@@ -395,7 +395,7 @@
     },
     {
       "id": "arena-38",
-      "fn": "arena_next_generation",
+      "fn": "arena_plan_next_generation",
       "args": [
         "9223372036854775807",
         "9223372036854775807"
