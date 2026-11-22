@@ -62,7 +62,9 @@ error:
 int atto_udp_loopback_port(atto_udp_loopback *s) {
     int rc = gate(s);
     if (rc) return rc;
-    rc = s->fd < 0 ? -EBADF : (int)s->selected_port;
+    rc = s->fd < 0 ? -EBADF :
+        admission(s, s->requested_port, ATTO_UDP_LOCAL);
+    if (!rc) rc = (int)s->selected_port;
     pthread_mutex_unlock(&s->lock);
     return rc;
 }
@@ -133,10 +135,20 @@ int atto_udp_loopback_close(atto_udp_loopback *s) {
     pthread_mutex_unlock(&s->lock);
     return rc;
 }
-void atto_udp_loopback_destroy(atto_udp_loopback *s) {
-    if (!s) return;
-    (void)atto_udp_loopback_close(s);
-    /* Host must guarantee no concurrent users before destroying the mutex. */
-    pthread_mutex_destroy(&s->lock);
+int atto_udp_loopback_destroy(atto_udp_loopback *s) {
+    if (!s) return 0;
+    /* A concurrent operation may be holding the trusted permission callback.
+     * Never free the mutex or storage if it is still inside that operation.
+     * The host must have fenced new users before attempting final destruction.
+     */
+    int rc = gate(s);
+    if (rc) return rc;
+    int fd = s->fd;
+    s->fd = -1;
+    pthread_mutex_unlock(&s->lock);
+    if (fd >= 0) (void)close(fd);
+    rc = pthread_mutex_destroy(&s->lock);
+    if (rc) return -rc; /* fail closed: quarantine/retry, not use-after-free */
     free(s);
+    return 0;
 }
