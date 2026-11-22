@@ -7,10 +7,10 @@ import {spawnSync} from 'node:child_process';
 const read=path=>readFileSync(new URL(path,import.meta.url),'utf8');
 const MIN=-(1n<<63n), MAX=(1n<<63n)-1n;
 const MASK=(1n<<64n)-1n, wrap=n=>BigInt.asIntN(64,n);
-const range=read('../stdlib/core/range.atto');
-const cell=read('../stdlib/core/cell.atto');
-const num=read('../stdlib/core/num.atto');
-const contracts=read('../stdlib/core/contracts.atto');
+const range=read('../core/range.atto');
+const cell=read('../core/cell.atto');
+const num=read('../core/num.atto');
+const contracts=read('../core/contracts.atto');
 const manifest=JSON.parse(read('../contracts/core-four-v1.json'));
 function add(a,b) {
   if(b>0n && a>MAX-b) return MIN+(a-(MAX-b)-1n);

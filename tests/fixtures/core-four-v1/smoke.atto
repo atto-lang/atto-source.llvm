@@ -1,10 +1,10 @@
 // LLVM-owned Atto source; independent of other compiler repository implementations.
 // Compile and execute using the real Atto compiler; expected process exit: 42.
 // Not certified by the existence of this file or by a host-language model.
-import module range from "std/core/range";
-import module num from "std/core/num";
-import module cell from "std/core/cell";
-import module contracts from "std/core/contracts";
+import module range from "core/range";
+import module num from "core/num";
+import module cell from "core/cell";
+import module contracts from "core/contracts";
 pub fnc main(): int {
   if !range.contains(1, 5, 4) || range.contains(1, 5, 5); do
     return 1;
