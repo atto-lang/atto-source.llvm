@@ -1,0 +1,4 @@
+// A linkable library fragment is not a successful standalone process.
+pub fnc helper(): int {
+    return 0;
+}

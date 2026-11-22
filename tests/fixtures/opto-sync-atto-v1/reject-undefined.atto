@@ -1,0 +1,2 @@
+// Compile-negative: unknown guard may never be replaced with a host fallback.
+pub fnc main(): int { return missing_commit_proof(2,2,2); }

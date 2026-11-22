@@ -1,0 +1,5 @@
+pub fnc main(): int {
+ const original: int = 40;
+ val moved: int = rt take original;
+ return original + moved;
+}

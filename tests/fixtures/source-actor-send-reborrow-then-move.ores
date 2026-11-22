@@ -1,0 +1,16 @@
+fnc observe(borrow int v): int { return v - 1; }
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+pub fnc main(): int {
+  const worker = spawn Worker();
+  const count: int = 2;
+  worker.send(observe(rt borrow count));
+  worker.send(rt take count);
+  stop worker;
+  return 43;
+}

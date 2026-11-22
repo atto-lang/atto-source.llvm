@@ -1,0 +1,106 @@
+{
+  "schema": "atto-llvm-disjoint-field-place-parity-v1",
+  "source_backend": "atto-lang/atto-source.rs",
+  "source_pr": 477,
+  "source_head_sha": "4a623a2b41dc29d08ab15753011f6cfb85f6106e",
+  "llvm_status": "staged-only-not-native-guest-verified",
+  "admission": "NOT_EXECUTED",
+  "cases": [
+    {
+      "path": "fail/field-mut-ref-reject-immutable-field.atto",
+      "kind": "negative",
+      "expected_error": "E_IMMUTABLE",
+      "expected_exit": null
+    },
+    {
+      "path": "fail/field-mut-ref-reject-immutable-root.atto",
+      "kind": "negative",
+      "expected_error": "E_BORROW",
+      "expected_exit": null
+    },
+    {
+      "path": "fail/field-mut-ref-reject-nested-class-target.atto",
+      "kind": "negative",
+      "expected_error": "E_UNSUPPORTED",
+      "expected_exit": null
+    },
+    {
+      "path": "fail/field-mut-ref-reject-nested-projection.atto",
+      "kind": "negative",
+      "expected_error": "E_BORROW",
+      "expected_exit": null
+    },
+    {
+      "path": "fail/field-mut-ref-reject-overlap-owner-read.atto",
+      "kind": "negative",
+      "expected_error": "E_BORROW",
+      "expected_exit": null
+    },
+    {
+      "path": "fail/field-mut-ref-reject-overlap-owner-write.atto",
+      "kind": "negative",
+      "expected_error": "E_BORROW",
+      "expected_exit": null
+    },
+    {
+      "path": "fail/field-mut-ref-reject-owner-take.atto",
+      "kind": "negative",
+      "expected_error": "E_BORROW",
+      "expected_exit": null
+    },
+    {
+      "path": "fail/field-mut-ref-reject-shared-exclusive-overlap.atto",
+      "kind": "negative",
+      "expected_error": "E_BORROW",
+      "expected_exit": null
+    },
+    {
+      "path": "fail/field-mut-ref-reject-two-writers-same-field.atto",
+      "kind": "negative",
+      "expected_error": "E_BORROW",
+      "expected_exit": null
+    },
+    {
+      "path": "fail/field-mut-ref-reject-val-alias.atto",
+      "kind": "negative",
+      "expected_error": "E_BORROW",
+      "expected_exit": null
+    },
+    {
+      "path": "pass/field-mut-ref-int-write-through.atto",
+      "kind": "positive",
+      "expected_error": null,
+      "expected_exit": 42
+    },
+    {
+      "path": "pass/field-mut-ref-read-updated-value.atto",
+      "kind": "positive",
+      "expected_error": null,
+      "expected_exit": 42
+    },
+    {
+      "path": "pass/field-mut-ref-scoped-expiry.atto",
+      "kind": "positive",
+      "expected_error": null,
+      "expected_exit": 42
+    },
+    {
+      "path": "pass/field-mut-ref-sibling-shared-loan.atto",
+      "kind": "positive",
+      "expected_error": null,
+      "expected_exit": 42
+    },
+    {
+      "path": "pass/field-mut-ref-string-write-through.atto",
+      "kind": "positive",
+      "expected_error": null,
+      "expected_exit": 42
+    },
+    {
+      "path": "pass/field-mut-ref-two-disjoint-writers.atto",
+      "kind": "positive",
+      "expected_error": null,
+      "expected_exit": 42
+    }
+  ]
+}

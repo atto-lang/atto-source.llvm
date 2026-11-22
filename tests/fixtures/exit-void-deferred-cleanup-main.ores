@@ -1,0 +1,7 @@
+// Void fallthrough must run cleanup and return zero without an i64 ABI leak.
+fnc cleanup(): void {
+    return;
+}
+pub routine main(): void {
+    defer cleanup();
+}

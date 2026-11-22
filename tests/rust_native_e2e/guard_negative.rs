@@ -14,6 +14,15 @@ pub fn run(h: &mut Harness) {
     h.negative("guard_rejects_double_exit",
         "pub fnc main(): int { guard false { ^ 7; ^ 8; } ^ 42; }\n",
         &[], None);
+    h.negative("mutex_bare_class_constructor",
+        "pub fnc main(): int { return Mutex<int>(0); }\n",
+        &[], Some("E_NEW_REQUIRED"));
+    h.negative("mutex_new_runtime_unimplemented",
+        "pub fnc main(): int { return new Mutex<int>(0); }\n",
+        &[], Some("E_LOCK_UNSUPPORTED"));
+    h.negative("mutex_nested_generic_without_new",
+        "pub fnc main(): int { return Mutex<Result<int,string>>(0); }\n",
+        &[], Some("E_NEW_REQUIRED"));
     h.negative("suspending_native_await_rejected",
         "pub suspends fnc main(): int { let Task<int> pending = task { ^ 41; }; val answer: int = await pending; ^ answer; }\n",
         &[], Some("suspension-aware borrow checking"));

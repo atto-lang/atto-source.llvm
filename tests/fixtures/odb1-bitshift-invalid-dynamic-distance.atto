@@ -1,0 +1,6 @@
+// Must compile but trap at runtime: computed count still requires the 0..63 guard.
+pub fnc main(): int {
+  let int base = 32;
+  let int invalid = base + 32;
+  return 1 <<< invalid;
+}

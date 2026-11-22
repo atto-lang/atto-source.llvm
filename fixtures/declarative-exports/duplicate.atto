@@ -1,0 +1,5 @@
+export pub Foo;
+export pub class Foo;
+define class Foo as
+end
+fnc main(): int { return 42; }
