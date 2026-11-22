@@ -19,7 +19,8 @@ for path in \
   stdlib/std/websocket.atto \
   stdlib/std/quic.atto \
   stdlib/std/compute.atto \
-  tests/stdlib/websocket_quic_compute_smoke.atto; do
+  tests/stdlib/websocket_quic_compute_smoke.atto \
+  tests/stdlib/protocol_boundaries.atto; do
   test -f "$path" && test ! -L "$path"
   cp -- "$path" "$work/$path"
   test "$(git hash-object -- "$path")" = "$(git hash-object -- "$work/$path")"
@@ -55,12 +56,44 @@ entry="$work/tests/stdlib/websocket_quic_compute_smoke.atto"
 compile_ir positive "$entry"
 run_native positive 0
 
+boundary="$work/tests/stdlib/protocol_boundaries.atto"
+compile_ir boundaries "$boundary"
+run_native boundaries 0
+
+# Executable negative: change exactly one native Atto boundary predicate.
+# The final case must return its 109 status code rather than the success marker.
+sed 's/compute_upload_admit(0, 1, 1, false, true)/compute_upload_admit(0, 1, 1, true, true)/' \
+  "$boundary" > "$work/tests/stdlib/boundary-mutation.atto"
+grep -Fq 'compute_upload_admit(0, 1, 1, true, true)' \
+  "$work/tests/stdlib/boundary-mutation.atto"
+compile_ir boundary-mutation "$work/tests/stdlib/boundary-mutation.atto"
+run_native boundary-mutation 109
+
 # Tamper an exact .atto assertion; guest must fail with its own case number.
 sed 's/quic_varint_octet(15293, 2, 0) != 123 then return 12; fi/quic_varint_octet(15293, 2, 0) != 124 then return 12; fi/' \
   "$entry" > "$work/tests/stdlib/mutated.atto"
 grep -Fq '!= 124 then return 12; fi' "$work/tests/stdlib/mutated.atto"
 compile_ir mutation "$work/tests/stdlib/mutated.atto"
 run_native mutation 12
+
+# Build the actual compiled guest IR under ASan and UBSan, not a host model.
+# Fail closed if the toolchain cannot compile and execute the instrumented guest.
+for label in positive boundaries; do
+  exe="$work/$label-sanitized.exe"
+  "$clang" -x ir -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
+    "$work/$label.ll" -o "$exe"
+  status=0
+  ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+    UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+    timeout 30s "$exe" > "$work/$label-sanitized.out" \
+      2> "$work/$label-sanitized.err" || status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "LLVM_ATTO_SANITIZED_GUEST_FAILED:$label exit=$status" >&2
+    cat "$work/$label-sanitized.err" >&2
+    exit 1
+  fi
+  echo "ATTO_NATIVE_STD_SANITIZERS_EXECUTED label=$label exit=0"
+done
 
 # Unknown imported function must be compiler rejection, never fallback.
 sed 's/quic_encoding_min_width/quic_missing_min_width/g' \
@@ -83,4 +116,4 @@ if "$compiler" --target=host "$entry" \
 fi
 test ! -s "$work/missing-file.ll"
 test -s "$work/missing-file.stderr"
-echo "ATTO_NATIVE_STD_LLVM_GATE guest_cases=37 run_modes=O0,O2 negative_runtime=12 negative_imports=2"
+echo "ATTO_NATIVE_STD_LLVM_GATE guest_cases=146 run_modes=O0,O2 asan=1 ubsan=1 negative_runtime=12,109 negative_imports=2"
