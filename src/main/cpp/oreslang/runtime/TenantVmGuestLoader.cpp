@@ -152,7 +152,8 @@ std::string sha256_hex(const void* data, std::size_t size) {
     return std::string(text, 64);
 }
 
-LoadedGuest load_guest_library(const std::string& path, const std::string& expected) {
+LoadedGuest load_guest_library_checked(const std::string& path, const std::string& expected,
+                                        GuestPreloadVerifier verifier, void* context) {
     LoadedGuest out;
     const int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
     if (fd < 0) {
@@ -168,6 +169,14 @@ LoadedGuest load_guest_library(const std::string& path, const std::string& expec
     }
     if (sha256_hex(bytes.data(), bytes.size()) != expected) {
         out.error = "guest library does not match its digest";
+        return out;
+    }
+    // This is the exact byte buffer later copied into the sealed execution
+    // image. Never reopen a path for signature validation: it can be swapped.
+    // The callback is invoked BEFORE any code is mapped or its module exports
+    // resolved, and its result is not a guest bearer capability.
+    if (verifier && !verifier(bytes.data(), bytes.size(), context)) {
+        out.error = "guest library signed admission rejected";
         return out;
     }
     std::string name;
@@ -193,6 +202,12 @@ LoadedGuest load_guest_library(const std::string& path, const std::string& expec
     out.module = module;
     out.owner = owner;
     return out;
+}
+
+LoadedGuest load_guest_library(const std::string& path, const std::string& expected) {
+    // Backward-compatible ABI-v4 loader. It does NOT grant privileged I/O,
+    // which must instead pass the mandatory signed admission and v5 gates.
+    return load_guest_library_checked(path, expected, nullptr, nullptr);
 }
 
 } // namespace oreslang::runtime::vm

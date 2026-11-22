@@ -40,6 +40,15 @@ endif()
 add_test(NAME tenant_vm_test COMMAND tenant_vm_test)
 set_tests_properties(tenant_vm_test PROPERTIES TIMEOUT 300)
 
+# Security substrate only: checks live turn identity predicates and actor-private
+# Offset32 bounds. This is NOT an admitted guest ABI-v5 filesystem test.
+add_executable(tenant_vm_fs_turn_auth_test tenant_vm_fs_turn_auth_test.cpp)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(tenant_vm_fs_turn_auth_test PRIVATE -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+endif()
+add_test(NAME tenant_vm_fs_turn_auth_host_only COMMAND tenant_vm_fs_turn_auth_test)
+set_tests_properties(tenant_vm_fs_turn_auth_host_only PROPERTIES TIMEOUT 15)
+
 # Host-only policy preflight. This is not a hardware TEE attestation test.
 add_executable(tenant_vm_confidential_attestation_preflight_test
     confidential_attestation_preflight_test.cpp)
@@ -187,4 +196,62 @@ if(WAT2WASM AND WASM2C AND WASM_RT_INCLUDE AND LOWER_CLANG AND Python3_FOUND)
         add_test(NAME tenant_vm_source_isolation COMMAND tenant_vm_lowered_test "${GEN}" atto_actor_state_is_private_and_durable)
         set_tests_properties(tenant_vm_source_main tenant_vm_source_fleet tenant_vm_source_isolation PROPERTIES TIMEOUT 300)
     endif()
+endif()
+
+# Trusted scheduler-to-real-broker actor-incarnation lifecycle test. All
+# filesystem I/O here is initiated by trusted host test code; there is no
+# guest ABI-v5 filesystem callback and no compiled Atto .atto FS guest.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(tenant_vm_fs_lifecycle_test
+        fs_lifecycle_test.cpp
+        "${ROOT}/src/main/cpp/oreslang/runtime/TenantVm.cpp"
+        "${ROOT}/native/src/host_fs_async.c"
+        "${ROOT}/native/src/host_fs_broker.c")
+    target_include_directories(tenant_vm_fs_lifecycle_test PRIVATE
+        "${ROOT}/src/main/cpp" "${ROOT}/native/include")
+    target_link_libraries(tenant_vm_fs_lifecycle_test PRIVATE tenant_vm_guests Threads::Threads)
+    add_test(NAME tenant_vm_fs_lifecycle_host_only COMMAND tenant_vm_fs_lifecycle_test)
+    set_tests_properties(tenant_vm_fs_lifecycle_host_only PROPERTIES TIMEOUT 45)
+endif()
+
+# Host-only, ABI-v5-shaped async FS adapter with synthetic trusted scheduler
+# witness and real six-layer Linux broker. No .atto guest or live v5 callbacks.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(tenant_vm_fs_host_dispatch_test
+        fs_host_dispatch_test.cpp
+        "${ROOT}/native/src/host_fs_async.c"
+        "${ROOT}/native/src/host_fs_broker.c")
+    target_include_directories(tenant_vm_fs_host_dispatch_test PRIVATE
+        "${ROOT}/src/main/cpp" "${ROOT}/native/include")
+    target_link_libraries(tenant_vm_fs_host_dispatch_test PRIVATE Threads::Threads)
+    if(TENANT_VM_SANITIZE)
+        target_compile_options(tenant_vm_fs_host_dispatch_test PRIVATE
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(tenant_vm_fs_host_dispatch_test PRIVATE -fsanitize=address,undefined)
+    endif()
+    add_test(NAME tenant_vm_fs_host_dispatch_host_only COMMAND tenant_vm_fs_host_dispatch_test)
+    set_tests_properties(tenant_vm_fs_host_dispatch_host_only PROPERTIES TIMEOUT 30)
+endif()
+
+# Host-only signature admission test for the existing sealed-image loader.
+# The fixture is a C ABI-v4 .so, NOT a compiled .atto guest; v5 remains
+# explicitly unsupported by the live TenantVM runtime.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+    add_library(tenant_vm_signed_fs_fixture SHARED signed_fs_guest.c)
+    target_include_directories(tenant_vm_signed_fs_fixture PRIVATE "${ROOT}/src/main/cpp")
+    set_target_properties(tenant_vm_signed_fs_fixture PROPERTIES PREFIX "" OUTPUT_NAME "signed_fs_fixture")
+    add_executable(tenant_vm_signed_fs_loader_test
+        signed_fs_loader_test.cpp
+        "${ROOT}/src/main/cpp/oreslang/runtime/TenantVmGuestLoader.cpp"
+        "${ROOT}/src/main/cpp/oreslang/runtime/TenantVmSignedFsLoader.cpp"
+        "${ROOT}/native/src/host_fs_signed_ceiling.c"
+        "${ROOT}/native/src/host_fs_broker.c")
+    target_include_directories(tenant_vm_signed_fs_loader_test PRIVATE
+        "${ROOT}/src/main/cpp" "${ROOT}/native/include")
+    target_link_libraries(tenant_vm_signed_fs_loader_test PRIVATE OpenSSL::Crypto Threads::Threads ${CMAKE_DL_LIBS})
+    add_dependencies(tenant_vm_signed_fs_loader_test tenant_vm_signed_fs_fixture)
+    add_test(NAME tenant_vm_signed_fs_loader_host_only
+        COMMAND tenant_vm_signed_fs_loader_test "$<TARGET_FILE:tenant_vm_signed_fs_fixture>")
+    set_tests_properties(tenant_vm_signed_fs_loader_host_only PROPERTIES TIMEOUT 30)
 endif()
