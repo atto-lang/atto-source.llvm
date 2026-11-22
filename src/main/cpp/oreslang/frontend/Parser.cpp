@@ -762,6 +762,56 @@ public:
                     fail("native namespace import limit exceeded (32)");
                 continue;
             }
+            if (accept("const")) {
+                // Recognize typed const selectors without misrepresenting
+                // values as runtime module imports. No LLVM IR is authorized
+                // until the typed constant linker + env startup lifecycle exist.
+                const std::size_t offset = token_.offset;
+                std::vector<NativeConstImportSyntax> selections;
+                do {
+                    if (token_.text == "*")
+                        fail("native import const requires named selections, not wildcard");
+                    NativeConstImportSyntax selected;
+                    selected.offset = offset;
+                    selected.source_name = identifier();
+                    selected.local_name = accept("as")
+                        ? identifier() : selected.source_name;
+                    if (module_names_.count(selected.local_name) ||
+                            function_import_names_.count(selected.local_name) ||
+                            !module_names_.insert(selected.local_name).second)
+                        fail("duplicate imported constant binding '" + selected.local_name + "'");
+                    selections.push_back(std::move(selected));
+                    if (selections.size() > 256)
+                        fail("native imported constant binding limit exceeded (256)");
+                } while (accept(","));
+                require("from");
+                const bool pkg = accept("pkg");
+                if (token_.kind != Kind::String)
+                    fail("native const import requires a quoted source selector");
+                const std::string path(token_.text);
+                if (path.empty() || path.size() > 4096)
+                    fail("native const import source selector must contain 1..4096 bytes");
+                for (unsigned char ch : path)
+                    if (ch < 32 || ch == 127 || ch == '\\')
+                        fail("native const import source contains control/escape character");
+                const bool relative = path.rfind("./", 0) == 0 ||
+                                      path.rfind("../", 0) == 0;
+                const bool file_suffix = path.size() >= 5 &&
+                                         path.substr(path.size() - 5) == ".atto";
+                if ((pkg && relative) || (!pkg && !relative &&
+                        (path.find('.') == std::string::npos || file_suffix ||
+                         path.find('/') != std::string::npos)))
+                    fail("native const imports require ./file.atto or dotted package selector");
+                advance();
+                require(";");
+                for (auto& selected : selections) {
+                    selected.path = path;
+                    program.const_imports.push_back(std::move(selected));
+                }
+                if (program.const_imports.size() > 256)
+                    fail("native imported constant binding limit exceeded (256)");
+                continue;
+            }
             if (accept("fnc")) {
                 // Java-compatible named function import: `import fnc a, b from "p";`
                 // or `import fnc a as b from "p";`. One import record per name;
@@ -6879,6 +6929,10 @@ void resolve_and_validate_program(Program& program) {
     // A host-only, parsed namespace AST is not a codegen authorization.
     // Prevent callers of the general validator from taking a parsed v2
     // namespace source around the default frontend's executable gate.
+    if (!program.const_imports.empty())
+        throw std::runtime_error(
+            "CONST_LINKER_UNSUPPORTED: native typed constant imports require "
+            "checked export kinds and startup-capable value linkage");
     if (!program.namespace_imports.empty() ||
             (!program.namespace_name.empty() &&
                 (!program.functions.empty() || !program.classes.empty() ||
