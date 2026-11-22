@@ -9819,6 +9819,28 @@ if(BUILD_TESTING AND UNIX)
 endif()
 
 
+# Native atomic Arc/Weak control ABI. Host-only verification (not .atto
+# compiler lowering): the control storage is supplied by its owner, and
+# the last weak callback performs physical reclamation.
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(atto-arc-control-v1-host-test
+        tests/native_arc_control_v1_test.c
+        src/main/cpp/oreslang/runtime/ArcControlV1.c)
+    target_include_directories(atto-arc-control-v1-host-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(atto-arc-control-v1-host-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(atto-arc-control-v1-host-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(atto-arc-control-v1-host-test PRIVATE Threads::Threads)
+    add_test(NAME native_arc_atomic_control_v1_host_only
+        COMMAND atto-arc-control-v1-host-test)
+    set_tests_properties(native_arc_atomic_control_v1_host_only PROPERTIES
+        PASS_REGULAR_EXPRESSION "ATTO_ARC_ATOMIC_CONTROL_HOST_PASS"
+        TIMEOUT 30)
+endif()
+
 # Allocation-free bounded pool primitive, host-only (NOT compiled .atto guest).
 # Keep separate from native guest compiler/actor parity CI claims.
 if(BUILD_TESTING)
