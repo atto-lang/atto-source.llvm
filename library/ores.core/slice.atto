@@ -16,8 +16,24 @@ define module slice as
     return length + index;
   }
 
+  // A raw index is already normalized and must be nonnegative.
+  // This matches the sibling core/slice logical-window convention.
   pub fnc valid_index(int index, int length): bool {
+    return index >= 0 && length >= 0 && index < length;
+  }
+
+  // Candidate collection indexing accepts -len <= index < len.
+  // Distinct from valid_index to avoid overloading the meaning of "valid".
+  pub fnc valid_signed_index(int index, int length): bool {
     return normalize_index(index, length) >= 0;
+  }
+
+  pub fnc is_empty(int count): bool {
+    return count == 0;
+  }
+
+  pub fnc can_split_at(int count, int middle): bool {
+    return count >= 0 && middle >= 0 && middle <= count;
   }
 
   // Explicit half-open endpoints permit [0,length], including an empty

@@ -47,3 +47,13 @@ The sibling LLVM PR #872 introduces `core/slice.atto` with integer-array
 algorithms and `valid_range(offset,count,length)`; reconcile its algorithm
 contents rather than creating competing semantics or requiring shared source
 bytes between backends.
+
+## Raw vs normalized indexing
+
+`valid_index(i,n)` checks only raw nonnegative indices in `[0,n)`;
+`valid_signed_index(i,n)` accepts `[-n,n)` and applies negative
+normalization as in the candidate collection spec. `get_copy_int` uses
+`normalize_index`, so negative relative indexes still return owned copies.
+`is_empty(count)` and `can_split_at(count,middle)` follow the sibling
+slice/iter/cmp logical-window API. Never conflate `valid_range` with
+`valid_endpoints` or raw with signed indexing.
