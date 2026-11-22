@@ -45,7 +45,7 @@ pub routine main(): void {
   samples; `sum` and `count` are bounded at 2,147,483,647 and rejected
   observations increment a saturating diagnostic count.
 - `valid_name` checks an ASCII metric name up to 128 Unicode scalars.
-- `Counter.snapshot()` and `Histogram.snapshot()` produce detached values
+- `Counter.snapshot()`, `Gauge.snapshot()`, and `Histogram.snapshot()` produce detached values
   suitable for a later async exporter. Histograms copy both bounds and
   bucket counts; subsequent observations do not mutate previous snapshots.
 - Each mutable instance is owned by one actor/task and is **not** an atomic,
@@ -99,7 +99,8 @@ The `ZORD` marker is a **backend-local experimental transport envelope**,
 not a finalized ecosystem-wide Zorde wire standard. Schema payloads require
 separately specified codecs.
 
-- `Writer` has a 1..1,048,576 byte upper bound with atomic
+- `Writer` has a 1..1,048,576 byte upper bound, strictly bounded
+  unsigned varuint31 fields (0..2,147,483,647), and atomic
   `write_byte`, `write_varuint`, `write_bytes` and
   `write_length_delimited`. `finish` detaches its result.
 - `checked_reader(bytes)` and `checked_writer(maximum)` are the
@@ -109,11 +110,12 @@ separately specified codecs.
 - `Reader` validates incoming octets, detaches them, reports truncated,
   overlong and overflowing varuints without advancing its cursor and
   preserves position for invalid length-delimited reads.
-- `encode_frame`, `decode_frame`, `decode_frame_for` check quotas,
+- `encode_frame`, `decode_frame`, `decode_frame_for` check 31-bit
+  schema-ID and schema-version limits, quotas,
   exact length, canonical varuint, expected schema and version. Their
   invalid-input API reports `Err`, not host runtime fallback.
 - `encode_bool_frame` / `decode_bool_frame`: exactly one 0/1 octet.
-- `encode_i31_frame` / `decode_i31_frame`: signed
+- `encode_i31_frame` / `decode_i31_frame`: overflow-safe signed
   `[-1,073,741,824, 1,073,741,823]` ZigZag31, canonical varuint.
   This is intentionally not a general signed i64 codec.
 - No serialization of capabilities, actor references, pointer handles,
@@ -134,6 +136,9 @@ ZigZag31(-1073741824):
 ## Verification — evidence must remain separate
 
 - Source-only: `node --test tests/std-metrics-json-zorde-source-contract.test.mjs`.
+  Portable reference vectors live in
+  `contracts/std-metrics-json-zorde-source-v1.json`; Java fixture count
+  is 36 metrics + 36 JSON + 55 Zorde = **127 expected outputs**.
   The test checks source structure, interface safety bounds and independent
   reference varuint vectors. It **cannot** establish compiled Atto semantics.
 - Java/GraalVM: `mvn -B -ntp -Dores.runtime.carriers=native
@@ -143,12 +148,14 @@ ZigZag31(-1073741824):
 - LLVM: the source-only workflow verifies the checked-in .atto files. LLVM
   native compiled guest execution, semantic checks and target AOT remain
   **NOT_VERIFIED** until separately executed.
-- On 2026-11-22 a locally executed source-free Node reference model
-  passed 10,039 numerical/vector assertions (canonical varuint31,
-  malformed varuint, ZigZag31 and signed-i64 JSON integer admission).
-  This is **not** execution of compiled Atto files.
+- On 2026-11-22 an in-process source-free JavaScript reference oracle
+  passed **30,012 arithmetic assertions** for canonical varuint31 and
+  ZigZag31; the committed portable reference contract independently passed
+  **60 vector assertions** in a separate audit. Neither is execution of
+  compiled Atto files.
 - A stepful private runner has been observed at
-  `canonical-cloud-test/legacy-mirror-guard-e2e`, run 45038441021
+  `canonical-cloud-test/legacy-mirror-guard-e2e` (repository ID
+  `1343162432`), run 45038441021
   (2026-11-22), but Atto PR #1787/#885 currently have **no approved
   exact-tree source-export/test-plan authorization** for that destination.
   Therefore no Atto source has been copied cross-organization.
