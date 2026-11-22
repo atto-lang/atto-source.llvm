@@ -1287,18 +1287,24 @@ int main(int argc, char** argv) {
 
         if (ast.inverted_main) {
             // Bounded production two-i64 stack owner only; no escaping
-            // handles, async/actor lifetime, or target/RT guarantees.
+            // handles, async/actor lifetime or cross-target RT guarantees.
+            // wasm32 lowers the SAME parser-verified MIR and owner close,
+            // but exports the full signed i64 through main:()->i64.
+            // No fallback interpreter, native heap, or actor ABI is added.
             if (experimental_owned_int || experimental_rt_scalar_loop ||
-                    wasm32_target || cortex_m_target || native_hard_rt_profile ||
+                    cortex_m_target || native_hard_rt_profile ||
                     rt_check_only || rt_report_seen || rt_entry_seen ||
                     tree_shake || !tree_shake_roots.empty() ||
                     constraint_descriptors_only || library_profile_seen ||
                     allocator_provider_seen)
                 throw std::runtime_error(
-                    "production inverted i64 slice requires plain host compilation without extra owner, RT or target flags");
+                    "production inverted i64 slice requires plain host or wasm32 compilation without extra owner, RT or profile flags");
             const auto verified = oreslang::dop::mir::verify_production_inverted_i64(ast);
-            const auto llvm_ir = oreslang::dop::mir::emit_native_i64_pair_ir(
-                verified.mir, verified.operands);
+            const auto llvm_ir = wasm32_target
+                ? oreslang::dop::mir::emit_wasm32_i64_pair_ir(
+                    verified.mir, verified.operands)
+                : oreslang::dop::mir::emit_native_i64_pair_ir(
+                    verified.mir, verified.operands);
             std::cout << llvm_ir;
             std::cout.flush();
             if (coreLog) coreLog->dump(stderr);
