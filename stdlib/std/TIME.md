@@ -61,3 +61,20 @@ teardown, clock-domain mismatch, AOT and overflow. A source-only review or
 host-language arithmetic model is not an executed Atto guest test.
 
 Upstream context: atto-lang/atto-spec#47; atto-lang/atto-source.rs#226.
+
+### Current LLVM stage-0 execution gate (not yet a guest parity receipt)
+
+The example now uses a single `import module time from "std/time"` and
+module-qualified `time.*` factories. Exact fixture Git blob
+`4937c0d975b4d87ea65cb93957175b6ba557b5c1` equals Java's.
+`ci/test_std_time_guest_admission.sh` builds the **real** checked native
+`atto-llvm` compiler and attempts a native executable of this module.
+It verifies an ELF, full 52-pass output and artifact SHA on success.
+An unsupported typed compiler error with no artifact exits **78**, keeping
+the separate AOT guest job **red** instead of claiming supported parity.
+The native timer queue host test never substitutes for this guest job.
+
+The protected `main` private-source export allowlist does not approve the
+previous `sonus-auris-test/atto-ci` carrier. Any listed carrier still
+requires separate authenticated exact source/destination export approval,
+reader/retention review and complete tree verification before mirroring.
