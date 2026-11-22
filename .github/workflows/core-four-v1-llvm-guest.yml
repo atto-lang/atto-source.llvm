@@ -1,0 +1,79 @@
+name: Atto core-four real LLVM native guest O0 and O2 exact-head
+on:
+  pull_request:
+    paths:
+      - 'core/**'
+      - 'src/main/cpp/oreslang/frontend/CoreLibrarySources.hpp'
+      - 'src/main/cpp/oreslang/frontend/GeneratedCore*Atto.inc'
+      - 'src/main/cpp/oreslang/frontend/ModuleLoader.cpp'
+      - 'tests/core_four_registry_host_test.cpp'
+      - 'tests/fixtures/core-four-v1/**'
+      - 'scripts/test-core-four-llvm-native.sh'
+      - 'scripts/run-core-four-guest.mjs'
+      - 'CMakeLists.txt'
+      - '.github/workflows/core-four-v1-llvm-guest.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  core-four-native-aot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout exact triggering source HEAD
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Check SHA, tree, source blobs and clean checkout
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          echo "CORE_FOUR_LLVM_HEAD=$EXPECTED_HEAD"
+          echo "CORE_FOUR_LLVM_TREE=$(git rev-parse 'HEAD^{tree}')"
+          for name in range cell contracts num; do
+            echo "CORE_FOUR_LLVM_BLOB:$name=$(git rev-parse "HEAD:core/$name.atto")"
+          done
+      - name: Install real LLVM/Clang/Rust/Node compiler dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang llvm-dev cmake ninja-build rustc nodejs
+          clang --version | head -1
+          llvm-config --version
+          rustc --version
+          node --version
+      - name: Configure closed embedded Atto registry and build compiler
+        env:
+          BUILD_DIR: ${{ runner.temp }}/atto-core-four-build
+        run: |
+          set -euo pipefail
+          cmake -G Ninja -S . -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTING=ON -DLLVM_DIR="$(llvm-config --cmakedir)"
+          cmake --build "$BUILD_DIR" --target \
+            oreslang-llvmc oreslang-no-gc-ir-audit-build \
+            atto-core-four-registry-host-test --parallel 2
+          test -x "$BUILD_DIR/oreslang-llvmc"
+          test -x "$BUILD_DIR/oreslang-no-gc-ir-audit"
+          sha256sum "$BUILD_DIR/oreslang-llvmc" "$BUILD_DIR/oreslang-no-gc-ir-audit"
+          ctest --test-dir "$BUILD_DIR" -R '^atto_core_four_closed_registry_host_only$' \
+            --output-on-failure
+      - name: Compile, audit, link and execute checked-in Atto guests O0/O2
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          ORESLANG_LLVMC: ${{ runner.temp }}/atto-core-four-build/oreslang-llvmc
+          ORES_NO_GC_IR_AUDIT: ${{ runner.temp }}/atto-core-four-build/oreslang-no-gc-ir-audit
+        run: |
+          set -euo pipefail
+          bash scripts/test-core-four-llvm-native.sh | tee "$RUNNER_TEMP/core-four-llvm-native-receipt.txt"
+          grep -F 'CORE_FOUR_LLVM_LOCAL_GUEST_PASS' "$RUNNER_TEMP/core-four-llvm-native-receipt.txt" | grep -F 'O0|'
+          grep -F 'CORE_FOUR_LLVM_LOCAL_GUEST_PASS' "$RUNNER_TEMP/core-four-llvm-native-receipt.txt" | grep -F 'O2|'
+          grep -F 'CORE_FOUR_LLVM_LOCAL_MATRIX_PASS' "$RUNNER_TEMP/core-four-llvm-native-receipt.txt"
+      - name: Mark limits of evidence
+        if: always()
+        run: |
+          echo 'Native LLVM compiler guest test, not JIT/.NET/Wasm parity nor independent evidence attestation.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Queued or zero-step jobs are NOT_EXECUTED.' >> "$GITHUB_STEP_SUMMARY"
