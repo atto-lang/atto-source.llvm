@@ -38,5 +38,5 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
           cmake --build build --parallel 2 --target oreslang-llvmc
           test -x build/oreslang-llvmc
-      - name: Compile 3 imported .atto libraries and execute 37-case guest
+      - name: Compile three Atto libraries and execute 146 guest cases O0/O2/ASan/UBSan
         run: bash tests/stdlib/native_guest_llvm.sh build/oreslang-llvmc clang
