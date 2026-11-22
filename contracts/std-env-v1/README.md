@@ -24,3 +24,14 @@ A trusted host interface must validate key names, check both coarse isolate ENV 
 ## Controlled positive guest fixture
 
 `positive_get.atto` requires a deterministic trusted host injection of `ATTO_ENV_EMPTY=""` and `ATTO_ENV_FLAG="true"`, with `ATTO_ENV_ABSENT` explicitly unset. Grant only scoped `ATTO_ENV_*` keys and explicitly deny `ATTO_ENV_SECRET_KEY`. The target is exit code 42, checking present-empty versus missing, nonempty filtering, required-key errors, strict boolean parsing and fallback. Do not use ambient process environment to synthesize a passing result; the compiler must execute the actual .atto guest. **NOT_EXECUTED.**
+
+## New LLVM native host-side prerequisite
+
+- `native/include/atto/host_env_snapshot_v1.h`, `native/src/host_env_snapshot_v1.c`: explicit, per-isolate environment snapshot backed by independently provided allow/deny key rules and a coarse host ENV capability; no ambient `getenv`, `environ`, filesystem or Java access.
+- Initialization validates bounded key names (128 ASCII bytes), UTF-8 values (16 KiB), duplicate keys and grants; it copies only admitted values. Guest hot-path `get` and `has` use preallocated storage (no per-call heap allocations). Denied and absent are different outcomes.
+- Host `revoke` scrubs retained value copies; `destroy` retires allocations. The trusted embedder **must serialize and quiesce readers before revoke/destroy**. Do not advertise this staging adapter as a real-time-safe concurrent guest capability without actor-generation fencing.
+- `native/tests/host_env_snapshot_v1_test.c` and `scripts/test-native-host-env-v1.sh` cover explicit deny-before-read, an invalid denied pointer, snapshot-copy stability, missing versus present-empty, insufficient output buffer, malformed UTF-8, duplicates and retirement.
+
+Run: `sh scripts/test-native-host-env-v1.sh` with a C11 compiler.
+
+**Status: HOST-ONLY source candidate, NOT_EXECUTED on an admitted source-org runner; no `.atto` guest import/linking or LLVM AOT parity proof.**
