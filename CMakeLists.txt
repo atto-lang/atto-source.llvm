@@ -5108,6 +5108,20 @@ if(BUILD_TESTING)
     set_tests_properties(native_dop_precompiled_kernel_region_host_only
         PROPERTIES TIMEOUT 20)
 
+    # Zero-heap, bounded observations for precompiled AOT AoS/SoA advice.
+    # Host-only: does not generate guest probes, JIT, relayout or certify GC.
+    add_executable(oreslang-dop-aot-layout-trace-test
+        tests/dop_aot_layout_trace_test.cpp)
+    target_include_directories(oreslang-dop-aot-layout-trace-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-dop-aot-layout-trace-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-dop-aot-layout-trace-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_dop_aot_layout_trace_host_only
+        COMMAND oreslang-dop-aot-layout-trace-test)
+    set_tests_properties(native_dop_aot_layout_trace_host_only
+        PROPERTIES TIMEOUT 20)
+
     # Host-only physical AoS/SoA/AoSoA storage and checked opaque row identity.
     # No guest Ref<T> lowering or actor execution authority is implied.
     add_executable(oreslang-dop-checked-region-test tests/dop_checked_region_test.cpp)
