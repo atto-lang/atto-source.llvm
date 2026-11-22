@@ -30,6 +30,11 @@ static int success_batch(unsigned count, uint64_t incarnation) {
                   arena, &turn, &refs[i], 0) == (int64_t)(80 + i));
         reverse[i] = &refs[count - i - 1];
     }
+    /* Even incarnations simulate a supervisor sealing admission while the
+     * already admitted native owner turn is still active. New reads/writes
+     * must stop, but its compiler-inserted destructor path must finish. */
+    if ((incarnation & 1u) == 0)
+        ores_actor_region_v1_retire(arena);
     /* The original pointers retain domain/generation evidence until the
      * runtime has authenticated all N distinct owners in this active turn. */
     ores_actor_region_v1_compiler_finish(arena, &turn, reverse, count);
