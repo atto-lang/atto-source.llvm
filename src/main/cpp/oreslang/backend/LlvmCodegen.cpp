@@ -331,7 +331,8 @@ llvm::Value* lower(const Expression& expr,
                                       expr.left->name + "." + expr.name + ".read");
         case Expression::Kind::NativeAtomicCall: {
             if (!expr.left || expr.left->kind != Expression::Kind::Variable ||
-                    (expr.name != "load" && expr.name != "fetch_add") ||
+                    (expr.name != "load" && expr.name != "fetch_add" &&
+                     expr.name != "fetch_sub") ||
                     expr.arguments.size() != (expr.name == "load" ? 0u : 1u))
                 throw std::runtime_error("ATTO_ATOMIC_MAIN_V1_REJECT: invalid atomic lowering authority");
             const auto found = storage.find(expr.left->name);
@@ -379,7 +380,9 @@ llvm::Value* lower(const Expression& expr,
             current->setAlignment(llvm::Align(8));
             current->setAtomic(llvm::AtomicOrdering::Monotonic);
             auto* intrinsic = native_intrinsic_declaration(
-                module, llvm::Intrinsic::sadd_with_overflow, {i64});
+                module, expr.name == "fetch_add"
+                    ? llvm::Intrinsic::sadd_with_overflow
+                    : llvm::Intrinsic::ssub_with_overflow, {i64});
             auto* pair = builder.CreateCall(
                 intrinsic, {current, delta}, "atto.atomic.checked.pair");
             auto* next = builder.CreateExtractValue(
