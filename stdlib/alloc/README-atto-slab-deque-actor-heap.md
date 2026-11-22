@@ -21,3 +21,12 @@ Contents are an initial scalar policy contract, independently maintained
 here. Generalized `T` payload storage requires compiler-checked take/drop,
 loan lifetimes and a verified native allocation ABI. Existing LLVM runtime
 actor-heap PRs, including #553, must be reconciled before execution claims.
+
+## Per-instance identity hardening v2
+
+Numeric actor incarnation, domain, slot and generation coordinates are insufficient
+to bind a handle to a specific allocation container. New logical handles carry a
+fresh per-container private reference-identity token checked before slot access.
+Tests cover identical-numeric cross-container handles and fabricated tokens.
+No claim of compiler-executed `is` semantics, actor ownership, or physical memory
+fences is made until the LLVM guest tests have really executed.

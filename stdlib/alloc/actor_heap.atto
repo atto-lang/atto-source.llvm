@@ -5,18 +5,31 @@
 // run deterministic cleanup, and fence outstanding native loans/turns.
 // Handles are metadata scoped to the owning heap object, NOT authorization.
 define module actor_heap as
+  // Per-heap logical identity: numeric incarnations alone can collide.
+  // This does not replace backend-authenticated actor and carrier identity.
+  pub define class OwnerToken as
+    pub constructor() { return; }
+  end
+
   pub define class HeapHandle as
+    let OwnerToken owner_token;
     pub val int incarnation;
     pub val int block;
     pub val int generation;
-    pub constructor(int incarnation, int block, int generation) {
+    pub constructor(OwnerToken owner_token, int incarnation, int block, int generation) {
+      self.owner_token = owner_token;
       self.incarnation = incarnation;
       self.block = block;
       self.generation = generation;
     }
+
+    pub matches_owner(OwnerToken expected): bool {
+      return self.owner_token is expected;
+    }
   end
 
-  pub define class Block as
+  // Metadata is internal; callers must not mutate block generation or extents.
+  define class Block as
     pub val int start;
     pub val int extent;
     let mut int requested;
@@ -52,6 +65,7 @@ define module actor_heap as
   end
 
   pub define class ActorHeap as
+    let OwnerToken owner_token = new OwnerToken();
     let int incarnation;
     let int capacity_words;
     let int max_blocks;
@@ -89,7 +103,7 @@ define module actor_heap as
           block.activate(count);
           self.charged_words = self.charged_words + block.extent;
           self.live_blocks = self.live_blocks + 1;
-          return Ok(new HeapHandle(self.incarnation, i, block.token()));
+          return Ok(new HeapHandle(self.owner_token, self.incarnation, i, block.token()));
         fi
       }
       if self.blocks.size >= self.max_blocks ||
@@ -101,11 +115,12 @@ define module actor_heap as
       self.blocks.add(new Block(start, count));
       self.charged_words = self.charged_words + count;
       self.live_blocks = self.live_blocks + 1;
-      return Ok(new HeapHandle(self.incarnation, self.blocks.size - 1, 1));
+      return Ok(new HeapHandle(self.owner_token, self.incarnation, self.blocks.size - 1, 1));
     }
 
     pub contains(HeapHandle handle): bool {
-      if self.closed || handle.incarnation != self.incarnation ||
+      if self.closed || !handle.matches_owner(self.owner_token) ||
+         handle.incarnation != self.incarnation ||
          handle.block < 0 || handle.block >= self.blocks.size ||
          handle.generation < 1; do
         return false;

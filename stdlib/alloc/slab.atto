@@ -3,19 +3,33 @@
 // This first version stores int values. Typed/owned payload storage requires
 // compiler-proven move/drop/borrow semantics before generalizing to Slab<T>.
 define module slab as
+  // Each slab creates a fresh reference-identity token. Public construction of
+  // another token does not reveal or reproduce the private instance token.
+  pub define class OwnerToken as
+    pub constructor() { return; }
+  end
+
   pub define class Handle as
+    let OwnerToken owner_token;
     pub val int domain;
     pub val int slot;
     pub val int generation;
 
-    pub constructor(int domain, int slot, int generation) {
+    pub constructor(OwnerToken owner_token, int domain, int slot, int generation) {
+      self.owner_token = owner_token;
       self.domain = domain;
       self.slot = slot;
       self.generation = generation;
     }
+
+    // Identity must be checked before numeric slot and generation checks.
+    pub matches_owner(OwnerToken expected): bool {
+      return self.owner_token is expected;
+    }
   end
 
   pub define class Slab as
+    let OwnerToken owner_token = new OwnerToken();
     let int domain;
     let int limit;
     let mut Array<int> values = new Array<int>();
@@ -44,7 +58,7 @@ define module slab as
         self.values.set(index, value);
         self.occupied.set(index, true);
         self.live_count = self.live_count + 1;
-        return Ok(new Handle(self.domain, index, self.generations.get(index)));
+        return Ok(new Handle(self.owner_token, self.domain, index, self.generations.get(index)));
       fi
       if self.values.size >= self.limit; do return Err("Full"); fi
       let int index = self.values.size;
@@ -53,11 +67,12 @@ define module slab as
       self.occupied.add(true);
       self.next_free.add(-1);
       self.live_count = self.live_count + 1;
-      return Ok(new Handle(self.domain, index, 1));
+      return Ok(new Handle(self.owner_token, self.domain, index, 1));
     }
 
     pub contains(Handle handle): bool {
-      if self.closed || handle.domain != self.domain ||
+      if self.closed || !handle.matches_owner(self.owner_token) ||
+         handle.domain != self.domain ||
          handle.slot < 0 || handle.slot >= self.values.size ||
          handle.generation < 1; do
         return false;

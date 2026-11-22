@@ -12,6 +12,17 @@ pub fnc main(): int {
      replacement.generation == old.generation ||
      slots.contains(old); do return 4; fi
   if !slots.contains(other) || slots.read(replacement).unwrap() != 44; do return 5; fi
+  // Same numeric domain/slot/generation must NOT make a handle transferable.
+  let mut slab.Slab shadow = slab.new_slab(17, 2);
+  let slab.Handle shadow_first = shadow.insert(3).unwrap();
+  let slab.Handle shadow_second = shadow.insert(4).unwrap();
+  if slots.contains(shadow_second) || shadow.contains(other) ||
+     slots.replace(shadow_second, 123); do return 8; fi
+  let slab.Handle fabricated = new slab.Handle(new slab.OwnerToken(),
+                                                 17, other.slot, other.generation);
+  if slots.contains(fabricated) || shadow.contains(fabricated) ||
+     slots.read(fabricated).is_ok(); do return 9; fi
+  if !shadow.contains(shadow_first) || slots.read(other).unwrap() != -7; do return 10; fi
   slots.clear();
   if slots.contains(replacement) || slots.size() != 0; do return 6; fi
   slots.close();

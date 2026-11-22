@@ -11,6 +11,11 @@ pub fnc main(): int {
   if !q.push_front(8) || q.pop_front().unwrap() != 8; do return 6; fi
   if q.pop_front().unwrap() != 2 || !q.is_empty() ||
      q.pop_back().is_some(); do return 7; fi
+  if q.reserve(2) || !q.reserve(5) || q.capacity() != 5 ||
+     q.pop_front().is_some() || q.pop_back().is_some(); do return 8; fi
+  if !q.push_front(0) || !q.push_back(-2147483647) ||
+     q.front().unwrap() != 0 || q.back().unwrap() != -2147483647; do return 9; fi
   q.clear();
+  if !q.is_empty() || q.front().is_some(); do return 10; fi
   return 0;
 }
