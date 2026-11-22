@@ -1,0 +1,82 @@
+name: AttoLang native GPU source MIR host-only
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'src/main/cpp/oreslang/frontend/GpuLaunchSourceMir.hpp'
+      - 'src/main/cpp/oreslang/frontend/GpuKernelSourceLink.hpp'
+      - 'src/main/cpp/oreslang/frontend/GpuKernelBodyHir.hpp'
+      - 'tests/gpu_kernel_body_hir_test.cpp'
+      - 'src/main/cpp/oreslang/runtime/GpuTypedLaunchIr.hpp'
+      - 'tests/gpu_kernel_source_link_test.cpp'
+      - 'tests/atto_gpu_kernel_source_link_admission.cmake'
+      - 'tests/gpu_kernel_source_link_harness_selftest.sh'
+      - 'tests/gpu_source_launch_mir_test.cpp'
+      - 'tests/gpu_source_mir_adversarial_test.cpp'
+      - 'tests/gpu_native_negative_harness_selftest.sh'
+      - 'tests/atto_gpu_explicit_launch_admission.cmake'
+      - 'scripts/verify-gpu-native-source-mir.sh'
+      - '.github/workflows/gpu-native-source-mir.yml'
+      - 'CMakeLists.txt'
+permissions:
+  contents: read
+jobs:
+  host-source-mir:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Verify native source MIR host proof at exact PR head
+        env:
+          EXPECTED_GPU_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          bash scripts/verify-gpu-native-source-mir.sh |
+            tee "$RUNNER_TEMP/atto-gpu-source-mir-host-receipt.txt"
+      - name: Upload host-only receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpu-source-mir-host-${{ github.event.pull_request.head.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/atto-gpu-source-mir-host-receipt.txt
+          if-no-files-found: warn
+          retention-days: 7
+  native-compiler-source-link-negative:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Compile LLVM frontend and execute source-only negative CTests
+        shell: bash
+        env:
+          EXPECTED_GPU_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_GPU_HEAD_SHA"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          source_tree="$(git rev-parse 'HEAD^{tree}')"
+          echo "evidence_class=COMPILER_PROCESS_NEGATIVE_ONLY"
+          echo "source_head=$EXPECTED_GPU_HEAD_SHA"
+          echo "source_tree=$source_tree"
+          echo "run_id=${{ github.run_id }}"
+          echo "run_attempt=${{ github.run_attempt }}"
+          echo "gpu_guest_executed=false"
+          echo "physical_gpu_executed=false"
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y ninja-build llvm-18-dev clang-18
+          llvm-config-18 --version
+          cmake -S . -B "$RUNNER_TEMP/atto-gpu-native-compiler" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$(llvm-config-18 --cmakedir)"
+          cmake --build "$RUNNER_TEMP/atto-gpu-native-compiler" \
+            --target oreslang-llvmc --parallel 2
+          sha256sum "$RUNNER_TEMP/atto-gpu-native-compiler/oreslang-llvmc"
+          ctest --test-dir "$RUNNER_TEMP/atto-gpu-native-compiler" \
+            --output-on-failure \
+            -R '^native_atto_gpu_(explicit_launch_source_admission|kernel_source_link_compiler_negative)$'
+          echo "GPU_NATIVE_COMPILER_NEGATIVE_PASS: no device code permitted"

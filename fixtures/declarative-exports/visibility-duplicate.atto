@@ -1,0 +1,4 @@
+export pub fnc calculate;
+export pub[pkg] fnc calculate;
+fnc calculate(): int { return 42; }
+fnc main(): int { return calculate(); }

@@ -29,7 +29,8 @@ CASES = {
     # callable declarations and inside nested blocks.
     "gpu-callable": (
         "pub gpu fnc kernel(): int { return 42; }",
-        "native gpu/quantum boundary unsupported",
+        # A gpu fnc is a typed kernel signature (void only); never CPU code.
+        "GPU-LAUNCH-001: GPU kernel must return void; no implicit CPU fallback",
     ),
     "cpu-callable": (
         "pub cpu fnc kernel(): int { return 42; }",
@@ -148,7 +149,122 @@ CASES = {
         "pub fnc main(): int { recover 42; return 0; }",
         "native exceptional-control boundary unsupported",
     ),
+    # G0: reserve unsafe without ever emitting source-level native IR.
+    "unsafe-callable": (
+        "pub unsafe fnc main(): int { return 42; }",
+        "unsafe is reserved until checked unsafe effects and backend lowering exist",
+    ),
+    "unsafe-block": (
+        "pub fnc main(): int { unsafe { return 42; } }",
+        "unsafe is reserved until checked unsafe effects and backend lowering exist",
+    ),
+    "unsafe-identifier": (
+        "pub fnc unsafe(): int { return 42; }",
+        "unsafe is reserved until checked unsafe effects and backend lowering exist",
+    ),
+    "unsafe-parameter": (
+        "pub fnc main(int unsafe): int { return 42; }",
+        "unsafe is reserved until checked unsafe effects and backend lowering exist",
+    ),
+    "unsafe-template-interpolation": (
+        "pub fnc main(): int { return `value ${unsafe}`; }",
+        "unsafe is reserved until checked unsafe effects and backend lowering exist",
+    ),
+    "unsafe-nested-template-interpolation": (
+        "pub fnc main(): int { return `outer ${`inner ${unsafe}`}`; }",
+        "unsafe is reserved until checked unsafe effects and backend lowering exist",
+    ),
+    "unsafe-after-cr-comment": (
+        "pub fnc main(): int { return 42; } // ordinary comment\runsafe",
+        "unsafe is reserved until checked unsafe effects and backend lowering exist",
+    ),
+    "unsafe-after-crlf-comment": (
+        "pub fnc main(): int { return 42; } // ordinary comment\r\nunsafe",
+        "unsafe is reserved until checked unsafe effects and backend lowering exist",
+    ),
+    "unsafe-in-template-after-cr-comment": (
+        "pub fnc main(): int { return `value ${42 // comment\runsafe}`; }",
+        "unsafe is reserved until checked unsafe effects and backend lowering exist",
+    ),
+    "unsafe-after-valid-function": (
+        "pub fnc main(): int { return 42; } unsafe",
+        "unsafe is reserved until checked unsafe effects and backend lowering exist",
+    ),
+    "unsafe-qualified-member": (
+        "pub fnc main(): int { return std.unsafe.memory.read(); }",
+        "unsafe is reserved until checked unsafe effects and backend lowering exist",
+    ),
 }
+
+
+# Native imports are supported by this frontend. The reserved unsafe
+# stdlib must fail before any source graph resolution or LLVM IR emission.
+UNSAFE_IMPORT_PATHS = (
+    "ores.std/unsafe",
+    "ores.std/unsafe/ffi",
+    "std/unsafe",
+    "std/unsafe/native",
+    "ores.std.unsafe.memory",
+    "std.unsafe.ffi",
+    "ores.std:unsafe",
+    "std:unsafe.ffi",
+    "std/./unsafe/ffi",
+    "std/lib/../unsafe/native",
+    "ores.std//unsafe/memory",
+    "./std/unsafe/ffi",
+    "../ores.std/unsafe/native",
+    "pkg/../std/unsafe/memory",
+)
+for index, path in enumerate(UNSAFE_IMPORT_PATHS):
+    CASES[f"unsafe-stdlib-import-{index}"] = (
+        f'import module native_ops from "{path}"; pub fnc main():int{{return 42;}}',
+        "native unsafe standard-library import unavailable in guest domains",
+    )
+# The same import must not be disguised by a local module alias.
+CASES["unsafe-stdlib-import-alias"] = (
+    'import module ffi as innocuous from "ores.std/unsafe/ffi"; '
+    'pub fnc main():int{return 42;}',
+    "native unsafe standard-library import unavailable in guest domains",
+)
+
+# Bound native lexical admission consistently with Java/.NET/Forge.
+# The template lexer has a separate block-comment scanner.
+CASES.update({
+    "native-block-comment-overdepth": (
+        "pub fnc main(): int { " + "/*" * 129 + "unsafe" + "*/" * 129 +
+        " return 42; }",
+        "block comment nesting exceeds 128",
+    ),
+    "unsafe-after-nested-comment": (
+        "pub fnc main(): int { return 42; } " +
+        "/*" * 128 + "unsafe" + "*/" * 128 + " unsafe",
+        "unsafe is reserved until checked unsafe effects and backend lowering exist",
+    ),
+    "unsafe-after-lf-comment": (
+        "pub fnc main(): int { return 42; } // comment\nunsafe",
+        "unsafe is reserved until checked unsafe effects and backend lowering exist",
+    ),
+    "native-template-comment-overdepth": (
+        "pub fnc main(): int { return `test ${42 " +
+        "/*" * 129 + "unsafe" + "*/" * 129 + "}`; }",
+        "native template block comment nesting exceeds 128",
+    ),
+})
+
+# Safe ordinary program text and longer identifiers must not be rejected as
+# unsafe. These fixtures require actual compilation and emitted LLVM IR.
+SAFE_CASES = {
+    "unsafe-comment": "pub fnc main(): int { /* unsafe */ return 42; }",
+    "unsafe-nested-comment-boundary": (
+        "pub fnc main(): int { " + "/*" * 128 + "unsafe" +
+        "*/" * 128 + " return 42; }"
+    ),
+    "unsafe-identifier-prefix": (
+        "fnc unsafe_helper(): int { return 42; } "
+        "pub fnc main(): int { return unsafe_helper(); }"
+    ),
+}
+
 
 
 def main():
@@ -169,6 +285,30 @@ def main():
                     or diagnostic not in result.stderr):
                 raise AssertionError(
                     f"{name}: expected rejection without LLVM IR, "
+                    f"returncode={result.returncode}, "
+                    f"stdout={result.stdout!r}, stderr={result.stderr!r}"
+                )
+            if name in ("unsafe-template-interpolation",
+                        "unsafe-nested-template-interpolation",
+                        "unsafe-in-template-after-cr-comment",
+                        "unsafe-after-cr-comment", "unsafe-after-crlf-comment",
+                        "unsafe-after-lf-comment", "unsafe-after-nested-comment"):
+                expected_byte = source.index("unsafe", source.index("${")) if "template" in name else source.rindex("unsafe")
+                if f"at byte {expected_byte}" not in result.stderr:
+                    raise AssertionError(
+                        f"{name}: unsafe diagnostic must use absolute source byte "
+                        f"{expected_byte}; got {result.stderr!r}"
+                    )
+
+        for name, source in SAFE_CASES.items():
+            fixture = pathlib.Path(tmp) / ("valid-" + name + ".ores")
+            fixture.write_text(source + "\n", encoding="utf-8")
+            result = subprocess.run(
+                [sys.argv[1], str(fixture)],
+                capture_output=True, text=True, check=False, timeout=20)
+            if result.returncode != 0 or not result.stdout.strip():
+                raise AssertionError(
+                    f"{name}: valid safe program was rejected or emitted no IR, "
                     f"returncode={result.returncode}, "
                     f"stdout={result.stdout!r}, stderr={result.stderr!r}"
                 )

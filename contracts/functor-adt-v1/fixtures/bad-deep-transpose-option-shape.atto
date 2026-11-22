@@ -1,0 +1,4 @@
+// Must reject: Option<Result<Option<T>,E>>.transpose retains two Option layers.
+fnc invalid(Option<Result<Option<int>,String>> value): Result<Option<int>,String> {
+  return value.transpose();
+}

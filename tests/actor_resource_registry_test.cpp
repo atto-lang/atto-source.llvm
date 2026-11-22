@@ -1,6 +1,7 @@
 #include "oreslang/runtime/ActorResourceRegistry.hpp"
 #include "oreslang/runtime/LogicalMutex.hpp"
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <memory>
@@ -269,6 +270,84 @@ int main() {
         assert(called == 1);
     }
 
+    // Deterministic native analogue of Java's cancel-after-dequeue race.
+    // An actor's terminal STOP/Task cancellation is not proof that a
+    // scheduler-owned grant has returned its physical mutex permit.
+    for (std::uint64_t incarnation = 1; incarnation <= 64; ++incarnation) {
+        ActorResourceRegistry cancelledGrant(63, incarnation);
+        oreslang::runtime::LogicalMutex<int> gate(19);
+        auto ownerToken = gate.request();
+        auto queuedToken = gate.request();
+        assert(gate.owns(ownerToken.token));
+        assert(!gate.owns(queuedToken.token));
+        std::atomic<int> arenaDrops{0};
+        cancelledGrant.register_resource(Kind::native_allocation,
+                                         [&] { ++arenaDrops; });
+        auto claim = cancelledGrant.acquire_handoff();
+        ActorResourceRegistry foreignGrant(63, incarnation);
+        const auto foreignClaim = foreignGrant.acquire_handoff();
+        std::atomic<bool> afterDequeue{false};
+        std::atomic<bool> allowReclaim{false};
+        std::thread grantCarrier([&] {
+            // The actual physical logical-mutex dequeue happens HERE.
+            // Retain the selected grant on this carrier without publishing
+            // it to the waiting Task until cancellation/reclaim is settled.
+            auto selected = gate.release(ownerToken.token);
+            assert(selected == queuedToken.token);
+            afterDequeue.store(true, std::memory_order_release);
+            const auto deadline = std::chrono::steady_clock::now()
+                                  + std::chrono::seconds(3);
+            while (!allowReclaim.load(std::memory_order_acquire)
+                    && std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::yield();
+            }
+            // Cancellation on a different carrier revoked the selected
+            // (but unpublished) token. No grant can be delivered afterward.
+            assert(!gate.owns(selected));
+            cancelledGrant.release_handoff(claim);
+        });
+        const auto deadline = std::chrono::steady_clock::now()
+                              + std::chrono::seconds(2);
+        while (!afterDequeue.load(std::memory_order_acquire)
+                && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::yield();
+        }
+        assert(afterDequeue.load(std::memory_order_acquire));
+        cancelledGrant.retire();
+        assert(cancelledGrant.try_reclaim().status == Reclaim::busy);
+        assert(arenaDrops.load() == 0);
+        assert(gate.owns(queuedToken.token));
+        assert(!gate.release(queuedToken.token));  // cancel after dequeue, before publish
+        assert(!gate.owns(queuedToken.token));
+        assert(cancelledGrant.try_reclaim().status == Reclaim::busy);
+        assert(arenaDrops.load() == 0);
+
+        // Handoff tickets are incarnation- and role-scoped. A mismatched
+        // release must not forge physical settlement.
+        bool wrongRole = false;
+        try { cancelledGrant.release_loan(claim); }
+        catch (const std::logic_error&) { wrongRole = true; }
+        assert(wrongRole);
+        assert(cancelledGrant.try_reclaim().status == Reclaim::busy);
+        // A same-identity foreign registry's first handoff ticket must not
+        // drain this physically dequeued grant while its carrier is paused.
+        bool foreignRejected = false;
+        try { cancelledGrant.release_handoff(foreignClaim); }
+        catch (const std::logic_error&) { foreignRejected = true; }
+        assert(foreignRejected);
+        assert(cancelledGrant.try_reclaim().status == Reclaim::busy);
+        assert(arenaDrops.load() == 0);
+        foreignGrant.release_handoff(foreignClaim);
+        foreignGrant.retire();
+        assert(foreignGrant.try_reclaim().status == Reclaim::complete);
+        allowReclaim.store(true, std::memory_order_release);
+        grantCarrier.join();
+        assert(cancelledGrant.try_reclaim().status == Reclaim::complete);
+        assert(arenaDrops.load() == 1);
+        assert(cancelledGrant.try_reclaim().status == Reclaim::complete);
+        assert(arenaDrops.load() == 1);
+    }
+
     ActorResourceRegistry bounded(17, 1, 1);
     bounded.register_resource(Kind::socket, [] {});
     rejected = false;
@@ -277,6 +356,58 @@ int main() {
     assert(rejected);
     bounded.retire();
     assert(bounded.try_reclaim().status == Reclaim::complete);
+
+    // AF03/AF05: registered resource callbacks execute only after actor
+    // admission has been fenced, and successful registrations are each
+    // delivered exactly once even when retirement races eight host callers.
+    for (std::uint64_t round=0; round<64; ++round) {
+        ActorResourceRegistry registrationRace(9300 + round, 1, 8);
+        std::array<std::atomic<bool>,8> accepted{};
+        std::array<std::atomic<unsigned>,8> delivered{};
+        std::array<std::thread,8> writers;
+        std::atomic<bool> go{false};
+        for (std::size_t i=0; i<writers.size(); ++i) {
+            writers[i] = std::thread([&,i] {
+                while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
+                try {
+                    registrationRace.register_resource(Kind::timer, [&,i] {
+                        delivered[i].fetch_add(1, std::memory_order_release);
+                    });
+                    accepted[i].store(true, std::memory_order_release);
+                } catch (const std::logic_error&) {
+                    // Retirement linearized first: no registration accepted.
+                }
+            });
+        }
+        go.store(true, std::memory_order_release);
+        registrationRace.retire();
+        for (auto& writer : writers) writer.join();
+        const auto retired = registrationRace.try_reclaim();
+        assert(retired.status == Reclaim::complete);
+        assert(registrationRace.try_reclaim().status == Reclaim::complete);
+        for (std::size_t i=0; i<writers.size(); ++i)
+            assert(delivered[i].load(std::memory_order_acquire) ==
+                (accepted[i].load(std::memory_order_acquire) ? 1u : 0u));
+    }
+
+    // AF13/AF16: a resource callback can retire a DIFFERENT actor registry.
+    // The source registry must not hold its own lock while executing closers.
+    ActorResourceRegistry parentCascade(9400, 1, 2);
+    ActorResourceRegistry childCascade(9401, 1, 2);
+    std::atomic<unsigned> parentCalled{0}, childCalled{0};
+    childCascade.register_resource(Kind::file, [&] { ++childCalled; });
+    parentCascade.register_resource(Kind::ffi_callback, [&] {
+        assert(parentCascade.phase() == Phase::closing);
+        childCascade.retire();
+        const auto result = childCascade.try_reclaim();
+        assert(result.status == Reclaim::complete && result.closed == 1);
+        ++parentCalled;
+    });
+    parentCascade.retire();
+    assert(parentCascade.try_reclaim().status == Reclaim::complete);
+    assert(parentCascade.try_reclaim().status == Reclaim::complete);
+    assert(parentCalled == 1 && childCalled == 1);
+    assert(childCascade.try_reclaim().status == Reclaim::complete);
 
     ActorResourceRegistry tokenBound(18, 1, 1);
     std::vector<ActorResourceRegistry::Ticket> outstanding;

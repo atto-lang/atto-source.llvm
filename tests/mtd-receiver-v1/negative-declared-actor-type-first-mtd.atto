@@ -1,0 +1,13 @@
+// Valid AttoLang source: two distinct actor types share method name foo.
+// LLVM native actor subset cannot yet lower receiver-defined actor methods.
+// Diagnostic must name missing backend capability, not claim invalid grammar.
+declare actor Foo1;
+declare actor Foo2;
+
+mtd (Foo1 self) foo(): void {
+  return;
+}
+
+mtd (Foo2 self) foo(): void {
+  return;
+}

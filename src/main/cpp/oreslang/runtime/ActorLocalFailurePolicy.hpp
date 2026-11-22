@@ -21,6 +21,12 @@ struct ActorLocalHookReply {
 
 using ActorLocalHook = ActorLocalHookReply (*)(void*, EffectStatus) noexcept;
 
+// An actor's on_panic is observation only: no return value or capability to
+// consume, downgrade, retry or conceal the PANIC from its parent supervisor.
+// Invoke only after unwind on a PROVEN safe execution lane; do not invoke this
+// on an exhausted native/host stack or from an untrusted guest callback.
+using ActorLocalPanicObserver = void (*)(void*, EffectStatus) noexcept;
+
 // Local hooks may escalate a failure, independently of lexical cleanup's
 // first-terminal-wins policy. ProcessExit must never hide a failing actor.
 constexpr unsigned actor_local_effect_rank(EffectKind kind) noexcept {
@@ -74,6 +80,26 @@ inline ActorLocalDispatch dispatch_actor_local_unhandled(
         terminal = callback;
     }
     return {true, false, terminal};
+}
+
+/**
+ * Optional non-recovering on_panic observer after lexical cleanup.
+ * The caller is responsible for verifying an independent, stack-safe lane and
+ * for publishing the original panic on the parent's priority CONTROL path
+ * regardless of observer availability. Skipping an unsafe observer must never
+ * skip supervisor delivery. No heap allocation or guest method lowering here.
+ */
+inline ActorLocalDispatch observe_actor_panic_on_safe_lane(
+        EffectStatus failure,
+        void* state,
+        ActorLocalPanicObserver on_panic) noexcept {
+    failure = normalize_effect(failure);
+    if (failure.kind != EffectKind::Panic || on_panic == nullptr)
+        return {false, false, failure};
+    on_panic(state, failure);
+    // The original panic is immutable for supervision, even if the observer
+    // records diagnostics. No callback result exists that could mark Handled.
+    return {true, false, failure};
 }
 
 } // namespace oreslang

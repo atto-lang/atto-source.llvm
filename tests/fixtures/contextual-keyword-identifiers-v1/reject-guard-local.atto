@@ -1,0 +1,2 @@
+// expect: expected non-keyword identifier
+pub fnc main(): int { val int guard = 1; return guard; }

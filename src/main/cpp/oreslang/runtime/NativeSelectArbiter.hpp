@@ -12,6 +12,35 @@
 
 namespace oreslang::runtime {
 
+namespace detail {
+/**
+ * One TLS commit chain shared by *all* NativeSelectArbiter<Capacity> instances.
+ * Per-specialization TLS misses A<2> -> B<3> -> A<2> cycles and may deadlock.
+ * The opaque state pointer is compared, never dereferenced.
+ */
+struct NativeSelectCommitScope final {
+    const void* state;
+    NativeSelectCommitScope* previous;
+    inline static thread_local NativeSelectCommitScope* active = nullptr;
+
+    explicit NativeSelectCommitScope(const void* value) noexcept
+        : state(value), previous(active) {
+        active = this;
+    }
+    ~NativeSelectCommitScope() noexcept { active = previous; }
+    NativeSelectCommitScope(const NativeSelectCommitScope&) = delete;
+    NativeSelectCommitScope& operator=(const NativeSelectCommitScope&) = delete;
+
+    static void reject_reentry(const void* value) {
+        for (auto* scope = active; scope; scope = scope->previous) {
+            if (scope->state == value)
+                throw std::logic_error(
+                    "select commit callback must not re-enter its arbiter");
+        }
+    }
+};
+} // namespace detail
+
 /**
  * Host/runtime arbitration primitive for a future native static-select lowering.
  *
@@ -61,10 +90,16 @@ private:
         std::exception_ptr cleanup_failure;
     };
 
+    using CommitScope = detail::NativeSelectCommitScope;
+    static void reject_commit_reentry(const State* state) {
+        CommitScope::reject_reentry(state);
+    }
+
     static void record_cleanup_failure(
             const std::shared_ptr<State>& state,
             std::exception_ptr failure) {
         if (!failure) return;
+        reject_commit_reentry(state.get());
         std::lock_guard<std::mutex> guard(state->mutex);
         if (!state->cleanup_failure) state->cleanup_failure = std::move(failure);
     }
@@ -85,6 +120,7 @@ private:
     }
 
     static bool cancel_state(const std::shared_ptr<State>& state) {
+        reject_commit_reentry(state.get());
         std::array<std::function<void()>, Capacity> callbacks{};
         std::size_t callback_count = 0;
         {
@@ -113,6 +149,7 @@ private:
     static bool try_win_state(const std::shared_ptr<State>& state,
                               std::size_t index,
                               Commit&& commit) {
+        reject_commit_reentry(state.get());
         if (index >= Capacity) return false;
 
         std::array<std::function<void()>, Capacity> callbacks{};
@@ -129,6 +166,7 @@ private:
             // and must not re-enter this select arbiter. Channel adapters use
             // the lock order arbiter -> one channel; readiness notifications
             // must never call into the arbiter while holding the channel lock.
+            CommitScope commit_scope(state.get());
             if (!static_cast<bool>(std::forward<Commit>(commit)()))
                 return false;
 
@@ -174,6 +212,7 @@ public:
             if (!revoke) throw std::invalid_argument("select revoker is empty");
             auto state = state_;
             if (!state) throw std::logic_error("empty select registration");
+            NativeSelectArbiter::reject_commit_reentry(state.get());
 
             std::function<void()> immediate;
             {
@@ -219,6 +258,7 @@ public:
         bool is_winner() const {
             auto state = state_;
             if (!state) return false;
+            NativeSelectArbiter::reject_commit_reentry(state.get());
             std::lock_guard<std::mutex> guard(state->mutex);
             return state->terminal == Terminal::Won &&
                    state->winner == index_ &&
@@ -269,6 +309,7 @@ public:
     }
 
     Registration register_case(std::size_t index) {
+        reject_commit_reentry(state_.get());
         if (index >= Capacity)
             throw std::out_of_range("select case index exceeds capacity");
         std::lock_guard<std::mutex> guard(state_->mutex);
@@ -290,22 +331,26 @@ public:
     }
 
     std::optional<std::size_t> winner() const {
+        reject_commit_reentry(state_.get());
         std::lock_guard<std::mutex> guard(state_->mutex);
         if (state_->terminal != Terminal::Won) return std::nullopt;
         return state_->winner;
     }
 
     bool is_cancelled() const {
+        reject_commit_reentry(state_.get());
         std::lock_guard<std::mutex> guard(state_->mutex);
         return state_->terminal == Terminal::Cancelled;
     }
 
     bool has_cleanup_failure() const {
+        reject_commit_reentry(state_.get());
         std::lock_guard<std::mutex> guard(state_->mutex);
         return bool(state_->cleanup_failure);
     }
 
     std::exception_ptr cleanup_failure() const {
+        reject_commit_reentry(state_.get());
         std::lock_guard<std::mutex> guard(state_->mutex);
         return state_->cleanup_failure;
     }
@@ -316,6 +361,7 @@ public:
      * leaked loser: each must become zero when its producer supplies arm().
      */
     std::size_t unarmed_loser_count() const {
+        reject_commit_reentry(state_.get());
         std::lock_guard<std::mutex> guard(state_->mutex);
         std::size_t count = 0;
         for (const auto& slot : state_->slots)

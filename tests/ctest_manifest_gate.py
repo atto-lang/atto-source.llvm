@@ -35,6 +35,7 @@ CRITICAL_TESTS = (
     "native_contract_harness_python_O",
     "native_contract_harness_python_OO",
     "native_contract_positive_object_verifies",
+    "native_scalar_generic_source_execution",
     "constant_main",
     "native_rt_while_loop_failclosed",
     "native_actor_owned_heap_contract",
@@ -63,7 +64,7 @@ CRITICAL_TESTS = (
     "native_borrow_alias_matrix_sanitizer",
 )
 
-TIMED_TESTS = frozenset(CRITICAL_TESTS[:4])
+TIMED_TESTS = frozenset((*CRITICAL_TESTS[:4], "native_scalar_generic_source_execution"))
 # Bind critical CTest *names* to the real commands in CMakeLists.txt. A
 # fabricated suite containing 'python -c pass' under a critical name is not
 # evidence that the native compiler/actor/supervisor tests were registered.
@@ -118,6 +119,22 @@ def require_real_critical_command(name: str, command: list[str]) -> None:
     This is deliberately a manifest check, not binary provenance or evidence
     that the command executed. Full CTest and independent CI remain mandatory.
     """
+    if name == "native_scalar_generic_source_execution":
+        # Pin the exact interpreter, source harness, compiler, and Clang
+        # arguments. A synthetic command under the same CTest name does not
+        # prove native generic lowering or executable guest behavior.
+        clang_names = {"clang", *(f"clang-{version}" for version in range(14, 20))}
+        if (len(command) != 6 or not python_program(command[0])
+                or not command[1].endswith("/tests/native_scalar_generic_source_execution.py")
+                or not Path(command[1]).is_absolute()
+                or command[2] != "--compiler"
+                or not Path(command[3]).is_absolute()
+                or Path(command[3]).name != "oreslang-llvmc"
+                or command[4] != "--clang"
+                or not Path(command[5]).is_absolute()
+                or Path(command[5]).name not in clang_names):
+            raise ManifestFailure("native scalar generic CTest does not execute real LLVM/Clang guest harness")
+        return
     if name in VISIBILITY_NEGATIVE_FIXTURES or name == VISIBILITY_POSITIVE:
         positive = name == VISIBILITY_POSITIVE
         fixture = ("class-public-field-read-native.ores" if positive
@@ -215,7 +232,8 @@ UNSAFE_PROPERTIES = frozenset((
 
 
 def check_manifest(manifest: object, *, min_tests: int = 250,
-                   required: tuple[str, ...] = CRITICAL_TESTS) -> int:
+                   required: tuple[str, ...] = CRITICAL_TESTS,
+                   build_dir: Path | None = None) -> int:
     if not isinstance(manifest, dict) or not isinstance(manifest.get("tests"), list):
         raise ManifestFailure("CTest JSON must have a tests array")
     version = manifest.get("version")
@@ -332,6 +350,20 @@ def check_manifest(manifest: object, *, min_tests: int = 250,
                 raise ManifestFailure(f"critical CTest timeout is unsafe: {name}")
         # Validate actual CMake test executables and fixtures, not names alone.
         require_real_critical_command(name, command)
+        # During real CI, verify that critical native test executables and
+        # the source compiler are built in the inspected tree. A binary of
+        # the right basename in /tmp is not the reviewed CMake target.
+        if build_dir is not None:
+            binaries = [command[0]] if name in NATIVE_EXECUTABLES else []
+            if "--compiler" in command:
+                binaries.append(option_value(command, "--compiler", name))
+            for binary in binaries:
+                target = Path(binary)
+                if (not target.is_absolute()
+                        or not target.resolve(strict=False).is_relative_to(
+                            build_dir.resolve(strict=False))):
+                    raise ManifestFailure(
+                        f"critical CTest binary escapes configured build directory: {name}")
     return len(tests)
 
 
@@ -355,7 +387,7 @@ def main() -> int:
         document = json.loads(probe.stdout)
     except json.JSONDecodeError as exc:
         raise ManifestFailure("CTest did not provide valid JSON") from exc
-    count = check_manifest(document, min_tests=args.min_tests)
+    count = check_manifest(document, min_tests=args.min_tests, build_dir=build)
     print(f"CTEST_MANIFEST_GATE=PASS tests={count} critical={len(CRITICAL_TESTS)}")
     return 0
 
