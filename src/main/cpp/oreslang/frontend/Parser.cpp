@@ -1270,8 +1270,11 @@ public:
             program.imports.push_back(std::move(imported));
         }
         if (token_.text == "namespace" ||
-            (token_.text == "use" && peek_next().text == "namespace"))
+            (token_.text == "use" && peek_next().text == "namespace")) {
+            if (!program.namespace_name.empty())
+                fail("NAMESPACE_DUPLICATE: only one file-level namespace header is permitted");
             fail("NAMESPACE_HEADER_ORDER: namespace header must precede imports and declarations");
+        }
         bool wrapped_module = false;
         if (token_.text == "import")
             fail("native contract imports require a validated cross-unit linker");

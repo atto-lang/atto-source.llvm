@@ -38,8 +38,30 @@ for f in void-value-negative.atto void-return-negative.atto bool-truthiness-nega
   fi
   [[ ! -s "$work/rejected.ll" ]] || fail "$f left partial LLVM IR"
   [[ -s "$work/negative.err" ]] || fail "$f had no compiler diagnostic"
-  grep -Eiq 'error|invalid|unsupported|type|range|overflow' "$work/negative.err" ||
-    fail "$f failed without a compiler-owned diagnostic"
+  # A generic nonzero exit is not an admission proof. Require fixture-
+  # appropriate source diagnostics, especially for header-order errors.
+  case "$f" in
+    namespace-late-negative.atto)
+      grep -Fq 'NAMESPACE_HEADER_ORDER' "$work/negative.err" ||
+        fail "$f did not reject the post-import namespace header"
+      ;;
+    namespace-duplicate-negative.atto)
+      grep -Fq 'NAMESPACE_DUPLICATE' "$work/negative.err" ||
+        fail "$f did not reject the duplicate namespace header"
+      ;;
+    wrong-arg-negative.atto)
+      grep -Eiq 'type|argument|int|bool|mismatch' "$work/negative.err" ||
+        fail "$f did not diagnose the bool-to-int argument"
+      ;;
+    u64-outside-int-negative.atto|i64-literal-overflow-negative.atto)
+      grep -Eiq 'range|overflow|literal|integer|int64|int' "$work/negative.err" ||
+        fail "$f did not diagnose the integer literal outside the int domain"
+      ;;
+    *)
+      grep -Eiq 'error|invalid|unsupported|type|void|bool|int|expected' "$work/negative.err" ||
+        fail "$f did not produce a recognized compile-time error"
+      ;;
+  esac
   echo "CORE_TYPES_LLVM_COMPILE_REJECTED=$f"
 done
 echo "CORE_TYPES_LLVM_GUEST=4_EXECUTED_8_REJECTED"
