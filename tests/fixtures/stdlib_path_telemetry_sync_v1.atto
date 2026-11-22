@@ -29,5 +29,15 @@ pub fnc main(): int {
   if !sync.barrier_last_arrival(3, 4, false) then return 22; fi
   if sync.next_epoch_admissible(2147483647, 0) then return 23; fi
   if !sync.sem_return_admissible(3, 2, 5, true) then return 24; fi
+  if !path.relative_join_budget_admissible(4, 4, 1, 1) then return 25; fi
+  if path.relative_join_budget_admissible(4093, 4, 1, 1) then return 26; fi
+  if path.relative_join_budget_admissible(3, 3, 256, 1) then return 27; fi
+  if path.extension_offset_admissible(4, 0) then return 28; fi
+  if !path.extension_offset_admissible(4, 1) then return 29; fi
+  if path.extension_offset_admissible(4, 3) then return 30; fi
+  if !path.windows_device_3(99, 111, 110) then return 31; fi
+  if !path.windows_device_4(99, 111, 109, 50) then return 32; fi
+  if path.windows_device_4(99, 111, 109, 48) then return 33; fi
+  if path.windows_device_3(97, 98, 99) then return 34; fi
   return 0;
 }
