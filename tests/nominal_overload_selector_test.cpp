@@ -1,4 +1,5 @@
 #include "oreslang/frontend/NominalOverloadSelector.hpp"
+#include "oreslang/frontend/CallableSelector.hpp"
 #include <stdexcept>
 #include <vector>
 
@@ -145,5 +146,18 @@ int main() {
             {"first", "x", {a}}, {"second", "x", {b}}
         });
     });
+    // AOT method lowering injects a self argument, but the source overload
+    // slot must count only caller-visible values. The injected receiver is
+    // never a primitive/enum discriminator, and malformed IR fails closed.
+    check(native_source_value_arity(0, false) == 0);
+    check(native_source_value_arity(1, true) == 0);
+    check(native_source_value_arity(2, true) == 1);
+    check(native_source_value_arity(3, true) == 2);
+    must_reject([&] { (void)native_source_value_arity(0, true); });
+    check(native_function_slot("read", native_source_value_arity(1, true))
+            == native_function_slot("read", 0));
+    check(native_function_slot("read", native_source_value_arity(3, true))
+            == native_function_slot("read", 2));
+    check(native_function_slot("read", 0) != native_function_slot("read", 1));
     return 0;
 }

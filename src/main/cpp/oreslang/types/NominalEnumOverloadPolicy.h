@@ -14,8 +14,6 @@ namespace oreslang::types::overloads {
 inline constexpr std::size_t MaxSameArityCandidates = 128;
 inline constexpr std::size_t MaxOverloadArity = 64;
 
-inline constexpr std::size_t MaxSameArityCandidates = 128;
-inline constexpr std::size_t MaxOverloadArity = 64;
 inline constexpr std::size_t MaxEnumCases = 1024;
 inline constexpr std::size_t MaxEnumPayloadFields = 64;
 
@@ -124,27 +122,6 @@ inline void validateSignatureShape(const Signature& value) {
     }
 }
 
-// Signature is a public aggregate. Every public policy entrypoint must
-// revalidate caller-built values, not merely trust signature() factory calls.
-// This is shape validation, NOT authentication of a resolved enum symbol ID.
-inline void validateSignatureShape(const Signature& value) {
-    if (value.name.empty() || value.arity() > MaxOverloadArity)
-        throw std::invalid_argument("invalid nominal enum overload signature shape");
-    for (const Position& position : value.positions) {
-        if (position.id.empty())
-            throw std::invalid_argument("empty nominal overload position identity");
-        switch (position.kind) {
-            case Kind::Primitive:
-                if (!isPrimitive(position.id))
-                    throw std::invalid_argument("unknown nominal primitive identity");
-                break;
-            case Kind::Enum:
-                break;
-            default:
-                throw std::invalid_argument("unknown nominal overload position kind");
-        }
-    }
-}
 
 inline PairStatus compare(const Signature& left, const Signature& right) {
     validateSignatureShape(left);

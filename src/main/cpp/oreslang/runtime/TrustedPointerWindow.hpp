@@ -95,8 +95,13 @@ private:
         const auto base = reinterpret_cast<std::uintptr_t>(s.base);
         // The host must supply a genuine mapped object/region, not an integer
         // address. Validate arithmetic *before* constructing a C++ pointer.
+        // Natural *size* alignment, not alignof(T): i386 SysV gives uint64_t
+        // alignof 4, so `% alignof(T)` admitted offset-4 u64 accesses there
+        // that every 64-bit host rejects. The same guest access must have
+        // the same verdict on every host, and an 8-byte access straddling a
+        // cache line is a split lock on x86 and non-atomic on ARMv7.
         if (offset > std::numeric_limits<std::uintptr_t>::max() - base ||
-            ((base + offset) % alignof(T)) != 0)
+            ((base + offset) % sizeof(T)) != 0)
             throw std::invalid_argument("unaligned/overflowing native pointer");
     }
     template<class T> static constexpr bool valid_mmio_type() {

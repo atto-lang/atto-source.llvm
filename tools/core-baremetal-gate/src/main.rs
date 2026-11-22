@@ -1,6 +1,6 @@
-//! Bare-metal `ores.core` gate.
+//! Bare-metal `atto.core` gate.
 //!
-//! Compiles an `ores.core`-only Oreslang program for `thumbv7m-none-eabi`,
+//! Compiles an `atto.core`-only AttoLang `.atto` program for `thumbv7m-none-eabi`,
 //! links it with a tiny platform startup into a static image that has no
 //! libc, compiler-rt, allocator, RTOS or actor runtime, audits the result,
 //! and boots it on QEMU's Cortex-M3 board. It also proves the checks are not
@@ -135,6 +135,7 @@ impl Gate {
         self.boot_trap(&trap_image)?;
         self.compiler_rejections()?;
         self.auditor_self_test(&startup)?;
+        self.injected_helper_negative(&startup)?;
         Ok(())
     }
 
@@ -158,7 +159,7 @@ impl Gate {
 
     /// Oreslang source -> LLVM IR -> ARM object, with IR and object audits.
     fn compile_guest(&mut self) -> GateResult<PathBuf> {
-        let source = self.fixtures.join("app.ores");
+        let source = self.fixtures.join("app.atto");
         let out = exec(
             Command::new(&self.tools.compiler)
                 .arg(format!("--target={TARGET}"))
@@ -166,7 +167,7 @@ impl Gate {
                 .arg(&source),
             None,
         )?;
-        require(out.status == Some(0), || format!("ores.core guest failed to compile:\n{}", out.stderr))?;
+        require(out.status == Some(0), || format!("atto.core guest failed to compile:\n{}", out.stderr))?;
         let ir = out.stdout;
         require(ir.contains(&format!("target triple = \"{TARGET}\"")), || {
             "guest IR lacks the thumbv7m-none-eabi triple".into()
@@ -174,13 +175,13 @@ impl Gate {
         require(!ir.contains("@main("), || "guest IR defines a hosted main entry point".into())?;
         let externals = audit::ir_external_declarations(&ir);
         require(externals.is_empty(), || {
-            format!("ores.core guest IR declares external functions: {externals:?}")
+            format!("atto.core guest IR declares external functions: {externals:?}")
         })?;
         let hatches = audit::ir_escape_hatches(&ir);
         require(hatches.is_empty(), || {
-            format!("ores.core guest IR reaches the host without a declaration: {hatches:?}")
+            format!("atto.core guest IR reaches the host without a declaration: {hatches:?}")
         })?;
-        self.pass("ores.core guest compiles to IR with no external declarations, globals or assembly");
+        self.pass("atto.core .atto guest compiles to IR with no external declarations, globals or assembly");
 
         // thumbv7m-none-eabi must default to the core profile: compiling without
         // the flag has to produce the same module, so the default cannot drift.
@@ -280,7 +281,7 @@ impl Gate {
         require(out.status == Some(0) && console.contains(PASS_LINE) && !unexpected, || {
             format!("bare-metal run did not pass (status {:?}):\n{}{}", out.status, out.stdout, out.stderr)
         })?;
-        self.pass("QEMU Cortex-M3 boots the ores.core image: 6 result vectors incl. entry(5) == 42");
+        self.pass("QEMU Cortex-M3 boots the atto.core .atto image: 6 result vectors incl. entry(5) == 42");
         Ok(())
     }
 
@@ -307,15 +308,33 @@ impl Gate {
     fn compiler_rejections(&mut self) -> GateResult<()> {
         let cases: &[(&str, &str, &str, &str)] = &[
             (
-                "ores.std import under the core profile",
+                "atto.std import under the core profile",
+                "core",
+                "import module testing from \"atto.std/testing\";\npub fnc p(int x): int { return x; }\n",
+                "atto.std",
+            ),
+            (
+                "legacy ores.std import under the core profile",
                 "core",
                 "import module testing from \"ores.std/testing\";\npub fnc p(int x): int { return x; }\n",
                 "ores.std",
             ),
             (
+                "unknown atto.core import",
+                "core",
+                "import module missing from \"atto.core/missing\";\npub fnc p(int x): int { return x; }\n",
+                "unknown compiler-owned atto.core module",
+            ),
+            (
+                "path traversal inside atto.core import",
+                "core",
+                "import module numeric from \"atto.core/../numeric\";\npub fnc p(int x): int { return x; }\n",
+                "unknown compiler-owned atto.core module",
+            ),
+            (
                 "transitive allocator requirement without a granted provider",
                 "core",
-                "import module b from \"alloc/int_buffer_bundle\";\npub fnc p(int x): int { return b.marker(); }\n",
+                "import module b from \"atto.alloc/int_buffer_bundle\";\npub fnc p(int x): int { return b.marker(); }\n",
                 "allocator",
             ),
             (
@@ -332,11 +351,11 @@ impl Gate {
             ),
         ];
         write(
-            &self.work.join("local.ores"),
+            &self.work.join("local.atto"),
             "define module local as\n  pub fnc answer(int x): int { return x; }\nend\n",
         )?;
         for (index, (label, profile, text, needle)) in cases.iter().enumerate() {
-            let source = self.work.join(format!("reject_{index}.ores"));
+            let source = self.work.join(format!("reject_{index}.atto"));
             write(&source, text)?;
             let out = exec(
                 Command::new(&self.tools.compiler)
@@ -375,6 +394,58 @@ impl Gate {
             "a hosted object linked into the no-libc image; the link is not freestanding".into()
         })?;
         self.pass("no-libc link refuses a hosted object");
+        Ok(())
+    }
+
+    /// Mutate the actual compiler-produced guest IR, compile the injected
+    /// function into ARM object code, then prove BOTH the object auditor and
+    /// no-libc linker reject a previously unknown generated runtime helper.
+    /// This is stronger than grepping a handwritten negative fixture.
+    fn injected_helper_negative(&mut self, startup: &Path) -> GateResult<()> {
+        const HELPER: &str = "atto_backend_injected_helper";
+        const PROBE: &str = "atto_backend_injected_probe";
+        let original = std::fs::read_to_string(self.work.join("guest.ll"))
+            .map_err(|e| format!("read exact compiler IR before mutation: {e}"))?;
+        let ir = format!("{original}\n\ndeclare i64 @{HELPER}(i64)\n\
+            define i64 @{PROBE}(i64 %value) {{\n\
+            entry:\n\
+              %result = call i64 @{HELPER}(i64 %value)\n\
+              ret i64 %result\n\
+            }}\n");
+        require(audit::ir_external_declarations(&ir).contains(&HELPER.to_string()), || {
+            "LLVM IR declaration auditor missed injected backend helper".into()
+        })?;
+        self.pass("IR auditor rejects a compiler-output mutation with an undeclared helper");
+
+        let path = self.work.join("guest-injected.ll");
+        write(&path, &ir)?;
+        let object = self.work.join("guest-injected.o");
+        let mut clang = self.clang_arm();
+        clang.args(["-Wno-override-module", "-x", "ir", "-c"])
+            .arg(&path).arg("-o").arg(&object);
+        require_ok(exec(&mut clang, None)?, "clang mutated LLVM guest IR")?;
+        let symbols = self.nm(&object)?;
+        require(symbols.iter().any(|s| s.kind == 'U' && s.name == HELPER), || {
+            "mutated ARM object did not retain the unknown injected helper".into()
+        })?;
+        let violations = audit::audit_guest_object(&symbols);
+        require(violations.iter().any(|v| v.contains(HELPER)), || {
+            format!("object symbol auditor missed injected helper: {violations:?}")
+        })?;
+        self.pass("ARM object auditor rejects unknown generated runtime helper");
+
+        // --gc-sections would otherwise discard this intentionally unused
+        // function. Force it live, proving the actual no-libc link fails.
+        let mut linker = Command::new(&self.tools.ld_lld);
+        linker.arg("-T").arg(self.fixtures.join("lm3s6965.ld"))
+            .arg("--gc-sections").arg(format!("--undefined={PROBE}"))
+            .arg(startup).arg(&object)
+            .arg("-o").arg(self.work.join("helper-injected.elf"));
+        let out = exec(&mut linker, None)?;
+        require(out.status.is_some_and(|s| s != 0) && out.stderr.contains(HELPER), || {
+            format!("injected helper unexpectedly linked without an OS (status {:?}): {}",out.status,out.stderr)
+        })?;
+        self.pass("no-libc linker rejects reachable compiler-output helper injection");
         Ok(())
     }
 

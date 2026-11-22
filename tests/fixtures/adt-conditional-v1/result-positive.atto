@@ -1,0 +1,5 @@
+pub fnc main():int {
+    val Result<int,String> success = true ? Ok(42) : Err("bad");
+    val Result<int,String> failure = false ? Ok(0) : Err("bad");
+    return success.is_ok() && success.unwrap_or(0) == 42 && failure.is_err() ? 0 : 1;
+}

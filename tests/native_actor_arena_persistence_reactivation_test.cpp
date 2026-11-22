@@ -6,6 +6,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstdlib>
+#include <unistd.h> // mkdtemp on macOS
 #include <filesystem>
 #include <iostream>
 #include <string>
