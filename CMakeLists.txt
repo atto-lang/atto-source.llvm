@@ -48,6 +48,20 @@ option(ATTO_SOURCE_IDS_HOST_ONLY
   "Build only the standalone native source-ID descriptor verification" OFF)
 if(ATTO_SOURCE_IDS_HOST_ONLY)
   include(CTest)
+
+  # Source-free registry metadata contract. This validates classification and
+  # canonical identity only; it does not prove guest/LLVM lowering.
+  add_executable(atto_core_type_registry_v1_host_test
+    tests/core_type_registry_v1_test.cpp)
+  target_include_directories(atto_core_type_registry_v1_host_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+  target_compile_features(atto_core_type_registry_v1_host_test PRIVATE cxx_std_17)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(atto_core_type_registry_v1_host_test PRIVATE
+      -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+  endif()
+  add_test(NAME core_type_registry_v1_host_metadata_only
+    COMMAND atto_core_type_registry_v1_host_test)
   add_executable(atto_source_id_v1_host_test
     tests/native_source_identity_v1_test.cpp)
   target_include_directories(atto_source_id_v1_host_test PRIVATE
