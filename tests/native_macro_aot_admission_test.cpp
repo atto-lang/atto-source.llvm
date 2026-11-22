@@ -283,5 +283,37 @@ pub fnc main(): int { return 42; }
         + "pub fnc main(): int { return literal!(const "
         + negatives + "- 1); }");
 
+    // Typed constant imports are parsed into a distinct, non-executable
+    // ledger. Source-unit identity and typed value/startup linking must be
+    // verified before code generation can consume it.
+    {
+        const std::string source =
+            "import const status_valid as ok, status_extra from \"std.http\"; "
+            "pub fnc main():int{return 42;}";
+        auto syntax = oreslang::parse_unresolved_program(source);
+        check(syntax.const_imports.size() == 2);
+        check(syntax.imports.empty());
+        check(syntax.const_imports[0].source_name == "status_valid");
+        check(syntax.const_imports[0].local_name == "ok");
+        check(syntax.const_imports[0].path == "std.http");
+        check(syntax.const_imports[1].source_name == "status_extra");
+        check(syntax.const_imports[1].local_name == "status_extra");
+
+        bool blocked = false;
+        try { (void)parse_program(source); }
+        catch (const std::exception& error) {
+            blocked = std::string(error.what()).find("CONST_LINKER_UNSUPPORTED")
+                != std::string::npos;
+        }
+        check(blocked);
+    }
+    {
+        const auto syntax = oreslang::parse_unresolved_program(
+            "import const status_valid as ok from pkg \"std.http\"; "
+            "pub fnc main():int{return 0;}");
+        check(syntax.const_imports.size() == 1);
+        check(syntax.const_imports[0].path == "std.http");
+    }
+
     return 0;
 }
