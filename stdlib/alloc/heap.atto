@@ -30,13 +30,16 @@ define module heap as
   }
 
   pub fnc heap_can_reclaim(bool sealed, bool drops_complete,
-                           int committed, int pending, int active_loans,
-                           int continuations, int io_leases, int producer_admissions) -> bool {
+                           int committed, int pending, int active_turns,
+                           int active_loans, int continuations, int io_leases,
+                           int producer_admissions) -> bool {
     if sealed == false || drops_complete == false then return false; fi
-    if committed < 0 || pending < 0 || active_loans < 0 then return false; fi
-    if continuations < 0 || io_leases < 0 || producer_admissions < 0 then return false; fi
-    return committed == 0 && pending == 0 && active_loans == 0 &&
-           continuations == 0 && io_leases == 0 && producer_admissions == 0;
+    if committed < 0 || pending < 0 || active_turns < 0 then return false; fi
+    if active_loans < 0 || continuations < 0 then return false; fi
+    if io_leases < 0 || producer_admissions < 0 then return false; fi
+    return committed == 0 && pending == 0 && active_turns == 0 &&
+           active_loans == 0 && continuations == 0 && io_leases == 0 &&
+           producer_admissions == 0;
   }
 
 end
