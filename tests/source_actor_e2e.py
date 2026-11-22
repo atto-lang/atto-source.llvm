@@ -17,6 +17,8 @@ def run(cmd, **kw):
 def expected_prefix_last(name, actor_index, processed):
     if processed == 0:
         return 0
+    if name == "actor-logical-frame-aot-two-actors.atto":
+        return [1, 42][actor_index] if processed else 0
     if name == "source-actor-fifo-ten.ores":
         value = 0
         for n in range(1, processed + 1):
@@ -46,6 +48,9 @@ def parse_actor_receipt(line):
     expected = {
         "constructor_on_worker", "released", "ready",
         "accepted", "processed", "abandoned", "last",
+        # Failed-receive accounting (#1819): turns that completed, turns
+        # that failed, and the last typed failure code.
+        "successful", "failed", "failure_code",
     }
     fields = {}
     for field in parts[1:]:
@@ -119,6 +124,7 @@ def main():
         ("source-actor-fifo-ten.ores", 1, 10, 2853116705),
         ("source-actor-scoped-owned-i64.ores", 1, 8, 1004),
         ("source-actor-two-owned-heaps.ores", 2, 4, None),
+        ("actor-logical-frame-aot-two-actors.atto", 2, 1, None),
         ("source-actor-interleaved-stop.ores", 2, None, None),
         ("source-actor-send-moved-value.ores", 1, 2, 3),
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
@@ -206,6 +212,10 @@ def main():
             assert guest.stdout.startswith("; ModuleID"), name
             assert "call i64 @oreslang_source_actor_spawn_id(" in guest.stdout, name
             assert "oreslang_source_actor_stop_id" in guest.stdout, name
+            # These are executable LLVM AOT call sites, not just external declarations.
+            for op in ("push", "store_i64", "load_i64", "pop"):
+                symbol = f"call i32 @oreslang_source_actor_frame_{op}("
+                assert symbol in guest.stdout, (name, "missing generated actor frame operation", symbol)
             if name not in {
                 "source-actor-spawn-stop.ores",
                 "source-actor-await-done.ores",
@@ -271,6 +281,7 @@ def main():
                 str(runtime / "NativeOresVM.c"),
                 str(runtime / "NativeActorFuture.c"),
                 str(runtime / "SourceActorBootstrap.c"),
+                str(runtime / "NativeActorLogicalFramesV1.c"),
                 str(runtime / "NativeExecutionContextStore.c"),
                 str(runtime / "NativeContinuationStore.c"),
                 str(runtime / "NativeAwaitTraceBridge.c"),
@@ -281,7 +292,8 @@ def main():
             linked = run(command)
             assert linked.returncode == 0, (name, linked.stderr)
             executed = run([str(exe)])
-            assert executed.returncode == 43, (name, executed.returncode, executed.stderr)
+            expected_exit = 42 if name == "actor-logical-frame-aot-two-actors.atto" else 43
+            assert executed.returncode == expected_exit, (name, executed.returncode, executed.stderr)
             vm_lines = [line for line in executed.stderr.splitlines()
                         if "SOURCE_ACTOR_VM_ROUTING_VERIFIED" in line]
             assert len(vm_lines) == 1 and (
