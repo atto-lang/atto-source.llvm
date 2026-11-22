@@ -2,6 +2,12 @@
 # Native .atto imported-source execution, not concatenated guest source or host simulation.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+[[ "$(git hash-object -- stdlib/http/message_policy.atto)" == "f88b78313432bce067223cc1853024bfd9b97c90" ]] || {
+  echo "FAIL: compiler-owned LLVM std.http source blob has drifted" >&2; exit 1;
+}
+[[ "$(git hash-object -- tests/http_stdlib/namespace_import_canary.atto)" == "4a63850b44189a77f7bed1dc9e83f3596187c6a0" ]] || {
+  echo "FAIL: imported HTTP guest fixture blob has drifted" >&2; exit 1;
+}
 cargo generate-lockfile --offline
 cargo build --locked --offline --release --bin atto-llvm
 compiler="$(pwd)/target/release/atto-llvm"
