@@ -41,7 +41,7 @@ struct CoreTypeInfo {
     }
 };
 
-inline constexpr auto kCoreTypeRegistry = std::to_array<CoreTypeInfo>({
+inline constexpr CoreTypeInfo kCoreTypeRegistry[] = {
     {"int","core/primitive/i64",CoreTypeScope::Core,CoreTypeKind::Type,0,0,CoreOwnership::Copy,CoreAllocation::None,CoreDropPolicy::None,CoreSendPolicy::Always,CoreLoweringStatus::NativeScalar},
     {"Int","core/primitive/i64",CoreTypeScope::Core,CoreTypeKind::Type,0,0,CoreOwnership::Copy,CoreAllocation::None,CoreDropPolicy::None,CoreSendPolicy::Always,CoreLoweringStatus::ContractOnly},
     {"i64","core/primitive/i64",CoreTypeScope::Core,CoreTypeKind::Type,0,0,CoreOwnership::Copy,CoreAllocation::None,CoreDropPolicy::None,CoreSendPolicy::Always,CoreLoweringStatus::NativeScalar},
@@ -81,7 +81,7 @@ inline constexpr auto kCoreTypeRegistry = std::to_array<CoreTypeInfo>({
     {"HashMap","alloc/hash_map/HashMap",CoreTypeScope::Explicit,CoreTypeKind::Type,2,2,CoreOwnership::Owned,CoreAllocation::AllocatorRequired,CoreDropPolicy::OwnedStorage,CoreSendPolicy::PayloadDependent,CoreLoweringStatus::ContractOnly},
     {"HashSet","alloc/hash_set/HashSet",CoreTypeScope::Explicit,CoreTypeKind::Type,1,1,CoreOwnership::Owned,CoreAllocation::AllocatorRequired,CoreDropPolicy::OwnedStorage,CoreSendPolicy::PayloadDependent,CoreLoweringStatus::ContractOnly},
     {"Entry","alloc/map/Entry",CoreTypeScope::Explicit,CoreTypeKind::Type,2,2,CoreOwnership::PayloadDependent,CoreAllocation::None,CoreDropPolicy::AllInitializedMembers,CoreSendPolicy::PayloadDependent,CoreLoweringStatus::ContractOnly}
-});
+};
 
 inline const CoreTypeInfo* core_type_info(std::string_view name) noexcept {
     for (const auto& entry : kCoreTypeRegistry)
