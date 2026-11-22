@@ -218,11 +218,17 @@ private:
                             ? "unknown compiler-owned atto.alloc module '" :
                               "unknown compiler-owned alloc module '") + raw + "'");
                 }
+                // std/ is a hosted capability boundary. A freestanding
+                // core profile may never obtain std via an alias or transitive
+                // compiler-owned import, regardless of the module's contents.
+                if (library->tier == frontend::CompilerLibraryTier::Std && !host)
+                    fail(current,
+                        "hosted compiler-owned std/* requires --target=host");
                 if (current.compiler_owned_library &&
                         !frontend::compiler_library_dependency_allowed(
                             current.compiler_library_tier, library->tier))
                     fail(current,
-                        "compiler-owned ores.core modules may not depend on alloc/*");
+                        "compiler-owned core/alloc dependency tier violation");
                 const std::string unit_id(library->unit_id);
                 const auto known = paths.find(unit_id);
                 selected = known == paths.end() ? units.size() : known->second;
