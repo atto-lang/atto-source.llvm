@@ -1,6 +1,6 @@
 // Generated from stdlib/std/telemetry.atto; do not edit manually.
 // source Git blob SHA-1: 2a339892995922e0064fc903fd264d9efd5e9b26
-R"ATTO_STD_TELEMETRY(// LLVM-owned native Atto std/telemetry snapshot/admission policies.
+R"ATTO_STD_TLM(// LLVM-owned native Atto std/telemetry snapshot/admission policies.
 // No wire parsing, OTLP I/O, JIT patching, clocks or host tracing in source.
 // Native AOT may only toggle probes compiled into the exact code generation.
 define module telemetry as
@@ -55,4 +55,4 @@ define module telemetry as
     return count + 1;
   }
 end
-)ATTO_STD_TELEMETRY"
+)ATTO_STD_TLM"
