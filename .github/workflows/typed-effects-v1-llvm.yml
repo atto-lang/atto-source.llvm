@@ -1,0 +1,23 @@
+name: Typed effects v1 LLVM bootstrap (not native guest parity)
+on:
+  pull_request:
+    paths:
+      - 'src/effect_check.rs'
+      - 'src/main.rs'
+      - '.github/workflows/typed-effects-v1-llvm.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  typed-ir:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1e6e67dc7c1e9271cb6a01da943b21a6df9a4db8 # stable
+      - name: Compile Rust frontend and execute typed IR effect tests (not guest execution)
+        run: |
+          cargo test --bin atto-llvm effect_check -- --nocapture
+          cargo test --bin atto-llvm native_main_is_direct_i64_call -- --nocapture
