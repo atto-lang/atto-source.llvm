@@ -52,6 +52,8 @@ pub enum Tok {
     Pipe,
     PipeGt,
     Amp,
+    /// Contextual return alias at the beginning of a statement.
+    Caret,
     At,
     Eof,
 }
@@ -309,7 +311,7 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
             ('>', _) => (Tok::Gt, 1),
             ('*', _) => (Tok::Star, 1),
             ('/', _) => (Tok::Slash, 1),
-            ('%', _) | ('^', _) => {
+            ('%', _) => {
                 return Err(Diagnostic::new(
                     pos,
                     "E_UNSUPPORTED",
@@ -320,6 +322,7 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
             ('|', Some('>')) => (Tok::PipeGt, 2),
             ('|', _) => (Tok::Pipe, 1),
             ('&', _) => (Tok::Amp, 1),
+            ('^', _) => (Tok::Caret, 1),
             ('@', _) => (Tok::At, 1),
             ('`', _) => {
                 return Err(Diagnostic::new(
