@@ -1,0 +1,68 @@
+name: Rust LLVM scalar sync-task exact-head native guests
+on:
+  pull_request:
+    paths:
+      - 'frontend/src/**'
+      - 'frontend/tests/task_sync_cancel_admission.rs'
+      - 'src/main.rs'
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'tests/sync_task_native_cpp_gate.py'
+      - 'tests/rust_sync_task_e2e.rs'
+      - '.github/workflows/rust-sync-task-native-e2e.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  scalar-inline-native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Pin source and require toolchain
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD HEAD^{tree}
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          test -z "$(git status --porcelain --untracked-files=normal)"
+          git diff --quiet HEAD --
+          cargo --version
+          rustc --version
+          clang --version
+      - name: Compile parser tests, checked Rust LLVM emitter, and native guest driver
+        run: |
+          set -euo pipefail
+          cargo test --manifest-path frontend/Cargo.toml --test task_sync_cancel_admission --locked
+          cargo build --release --bin atto-llvm
+          rustc --edition=2021 -O tests/rust_sync_task_e2e.rs -o /tmp/atto-sync-task-e2e
+          /tmp/atto-sync-task-e2e "$(pwd)/target/release/atto-llvm" "$(command -v clang)"
+      - name: Evidence boundary
+        run: |
+          echo 'SYNC_TASK_RUST_LLVM_SCALAR=REAL_NATIVE_GUEST'
+          echo 'SUSPENDING_TASKS_AND_NATIVE_CPP_FRONTEND=NOT_PROVEN'
+  cpp-inline-keyword-guard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Build production C++ compiler with LLVM18
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD HEAD^{tree}
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          test -z "$(git status --porcelain --untracked-files=normal)"
+          git diff --quiet HEAD --
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq llvm-18-dev clang-18 lld-18 libzstd-dev cmake
+          cmake -S . -B build/cpp-sync -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm
+          cmake --build build/cpp-sync --target oreslang-llvmc -j2
+          python3 tests/sync_task_native_cpp_gate.py "$(pwd)/build/cpp-sync/oreslang-llvmc"
+      - name: Evidence boundary
+        run: |
+          echo 'NATIVE_CPP_SYNC_TASK=EXPLICIT_UNSUPPORTED_NO_IR'
+          echo 'NATIVE_CPP_INLINE_GUEST_EXECUTION=NOT_IMPLEMENTED'

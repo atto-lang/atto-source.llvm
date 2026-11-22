@@ -19,10 +19,12 @@ argp.add_argument("--javac", default="javac")
 argp.add_argument("--llvm-bridge")
 argp.add_argument("--llvm-include")
 argp.add_argument("--clangxx", default="clang++")
-args = argp.parse_args()
-GENERATOR = Path(args.generator).resolve()
-FIXTURE = Path(args.fixture).resolve()
-BASE = FIXTURE.read_text(encoding="utf-8")
+# This is an executable cross-backend harness requiring CLI arguments, not
+# a standalone parameterless unit test. Module discovery must not parse argv.
+args = None
+GENERATOR = None
+FIXTURE = None
+BASE = None
 
 
 def run(command, timeout=120):
@@ -30,6 +32,8 @@ def run(command, timeout=120):
                           timeout=timeout, check=False)
 
 
+@unittest.skipIf(__name__ != "__main__",
+                 "ObjectStorage integration requires --backend, --generator and --fixture")
 class ObjectM1CompilerGuests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="atto-object-m1-")
@@ -151,4 +155,8 @@ class ObjectM1CompilerGuests(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    args = argp.parse_args()
+    GENERATOR = Path(args.generator).resolve()
+    FIXTURE = Path(args.fixture).resolve()
+    BASE = FIXTURE.read_text(encoding="utf-8")
     unittest.main(verbosity=2, argv=[__file__])

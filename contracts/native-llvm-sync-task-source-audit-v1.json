@@ -1,0 +1,61 @@
+{
+  "schema": "atto.llvm.sync-task-current-source-provenance.v1",
+  "status": "EXTERNALLY_EXECUTED_TESTS_WITH_OPEN_GOVERNANCE_AND_RECEIPT_HOLD",
+  "source_snapshot": {
+    "repository": "atto-lang/atto-source.llvm",
+    "commit": "42b1f0c4223a93e36914cbfc12b2a5c6d06737b4",
+    "git_tree": "65f506a92f6d33eb01402b7b439afaa7473f57a2",
+    "git_blob_count": 217,
+    "scope": "exact source preceding this receipt-only code/test update",
+    "critical_blobs": {
+      "frontend/src/parser.rs": "dab18a1c9e40d5ce3467e7697b414429fa84ddfd",
+      "frontend/src/check.rs": "437e2abb919c37cd72f173d1bda48886677df921",
+      "frontend/src/wasm.rs": "85e972fd9f031319559c693ed6e4f3c6fdb059c9",
+      "src/main.rs": "6d47b9787bd79eba75ebe3a417663d926dfdcbd4",
+      "frontend/src/bin/attoc.rs": "55109e2958848b2e7229359d2988ae84d85cb551",
+      "frontend/tests/attoc_cli_smoke.rs": "343cdc79d704ed8856715fb56f8b2baa47290367",
+      "tests/rust_sync_task_e2e.rs": "9b7a363ec4c5522782bda611de9b64ae072f60a1",
+      "src/main/cpp/oreslang/frontend/Parser.cpp": "a82a3e3c50987072fc3ab5da14749535fb6687ad",
+      "tests/sync_task_native_cpp_gate.py": "88147c4bc2c221bd50361eb75465a10b55ba54fd"
+    }
+  },
+  "historical_receipts": {
+    "policy": "IMMUTABLE_OLD_EXECUTION_SNAPSHOTS_NOT_CURRENT_CODE_CLAIMS",
+    "git_blobs": {
+      "contracts/native-llvm-aot-v1.json": "f46dbc38b78b7d891229b9e543661fb397e72b9f",
+      "contracts/native-llvm-aot-hardening-v1.json": "e3914edcd5a6d7c885c504f56c6f6edafe83e716",
+      "contracts/native-llvm-nominal-sealed-hardening-v1.json": "17416105b9604afc190668414ef3d10fd908012f",
+      "contracts/native-llvm-target-mtd-v1.json": "62a95b145ab596db38cbf2068f1e92c6b5399934"
+    }
+  },
+  "external_execution": {
+    "carrier_repository": "opto-sync/atto-ci",
+    "carrier_commit": "1c9783db46d059edb78a76d7d2a9d1c51da9f8b8",
+    "run": "https://github.com/opto-sync/atto-ci/actions/runs/44810676918",
+    "original_git_tree_reconstructed": true,
+    "source_blobs_verified": 217,
+    "overall_conclusion": "failure",
+    "passed_job_count": 7,
+    "failed_job_count": 1,
+    "passed_scopes": [
+      "full rust frontend and native compiler unit tests",
+      "11 positive and 15 negative compiled LLVM sync-task native guests with sanitizers",
+      "C++ LLVM 18 compiler build; 6 C++ fail-closed sync-task cases; 50 native guests",
+      "GCC/Clang x Debug/Release process-isolation CTest"
+    ],
+    "failing_scope": "historical Python receipt discovery: three stale current-file comparisons and one CLI-only module import"
+  },
+  "governance": {
+    "source_main_protected_at_audit": false,
+    "source_check_runs_at_audit": 0,
+    "source_export_authorized": false,
+    "carrier_export_retention_approved": false,
+    "carrier_is_required_source_check": false,
+    "review_of_current_source_head_verified": false,
+    "issue_links": [
+      "https://github.com/atto-lang/atto-source.llvm/issues/196",
+      "https://github.com/atto-lang/atto-source.llvm/issues/234"
+    ],
+    "status": "HOLD_PENDING_INDEPENDENT_ADMIN_AND_SECURITY_REVIEW"
+  }
+}
