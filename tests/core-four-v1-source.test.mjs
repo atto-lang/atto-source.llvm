@@ -58,14 +58,14 @@ test('borrow admission saturates and never claims compiler-enforced Cell',()=>{
   for (const name of [
     'is_valid_state', 'may_owner_read', 'may_owner_write',
     'may_move_owner', 'may_suspend_unpinned'
-  ]) assert.match(cell, new RegExp('pub fnc '+name+'\\\\(int state\\\\): bool'));
+  ]) assert.match(cell, new RegExp('pub fnc '+name+'\\(int state\\): bool'));
   assert.match(cell,/return state >= -1/);
   assert.match(cell,/return state >= 0/);
   assert.ok((cell.match(/return state == 0;/g) || []).length >= 4);
-  assert.match(read('../tests/fixtures/core-four-v1/smoke.atto'),/cell\\.may_suspend_unpinned\\(1\\)/);
+  assert.match(read('../tests/fixtures/core-four-v1/smoke.atto'),/cell\.may_suspend_unpinned\(1\)/);
   for (const name of ['borrow-use-after-take','borrow-escape']) {
     const source=read('../tests/fixtures/core-four-v1/'+name+'.atto');
-    assert.match(source,/import module cell from "core\\/cell"/);
+    assert.match(source,/import module cell from "core\/cell"/);
     assert.match(source,name==='borrow-escape'?/borrow!|rt borrow/:/take!|rt take/);
   }
 });
