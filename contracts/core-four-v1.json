@@ -1,0 +1,46 @@
+{
+  "schema": "attolang.core-four.v1",
+  "status": "IMPLEMENTED_SOURCE_NOT_GUEST_VERIFIED",
+  "modules": [
+    "core/range",
+    "core/cell",
+    "core/contracts",
+    "core/num"
+  ],
+  "integer_width": 64,
+  "signed_overflow": "checked_returns_Err;saturating_clamps;wrapping_modulo_2_64",
+  "range": {
+    "half_open": "[start,end) is empty for start>=end",
+    "inclusive": "[start,end] is empty for start>end",
+    "step": "strictly_positive;guard_before_arithmetic;no_MAX_plus_one"
+  },
+  "cell": {
+    "scope": "BORROW_STATE_POLICY_ONLY",
+    "state": "-1 exclusive;0 idle;1..MAX shared count",
+    "non_capability": "No Cell<T>, RefCell<T>, reference issuance, actor ownership, or lifetime guarantees until compiler gates are verified"
+  },
+  "contracts": {
+    "failure": "rt fail;trappable;never optimized out",
+    "eval": "single guest argument evaluation"
+  },
+  "fixtures": {
+    "tests/fixtures/core-four-v1/smoke.atto": "guest exit 42",
+    "tests/fixtures/core-four-v1/contract-failure.atto": "guest must fail; never exit 42"
+  },
+  "evidence_requirements": [
+    "source SHA",
+    "compiler build SHA",
+    "guest import resolution",
+    "parse",
+    "typecheck",
+    "AOT/JIT guest exit",
+    "negative trap",
+    "ownership/lifetime negatives"
+  ],
+  "prohibit": [
+    "source_presence_as_guest_pass",
+    "host_oracle_as_compiler_pass",
+    "skipped_or_zero_step_as_pass"
+  ],
+  "backend": "llvm"
+}
