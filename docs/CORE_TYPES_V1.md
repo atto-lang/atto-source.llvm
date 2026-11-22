@@ -11,3 +11,7 @@ This is this backend's independently maintained `core/types.atto` source, not an
 **Status:** staged source and fixture only. No successful exact-head guest run or negative diagnostic has been established. No source tree exported to another org. This PR is draft until executed CI evidence and importer/linker behavior are verified.
 
 **Independence:** preserve API/behavioral compatibility; implementation is backend-owned and can diverge physically.
+
+## Namespace-only source layout
+
+The canonical Atto `.atto` file uses the file-level `use namespace types;` declaration and public top-level functions, **not** `define module types`. Namespace is source identity, not a dependency import: consumers must use an explicit static import. This changes no runtime allocation or intrinsic guarantee. Parsing, linked guest execution and negative fixture rejection are distinct gates and remain NOT_EXECUTED until the compiler actually runs.
