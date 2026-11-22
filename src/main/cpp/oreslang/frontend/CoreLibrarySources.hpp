@@ -119,6 +119,42 @@ inline const CoreLibrarySource* find_compiler_library_source(std::string_view ra
         core_provider_bit(CoreProviderRequirement::Allocator)
     };
 
+    static constexpr std::string_view kAlignedSource =
+#include "oreslang/frontend/GeneratedAlignedAtto.inc"
+    ;
+    static constexpr CoreLibrarySource kAligned{
+        CompilerLibraryTier::Alloc,
+        "atto.alloc/aligned",
+        "aligned",
+        "@atto.alloc/aligned.atto",
+        kAlignedSource,
+        0u
+    };
+
+    static constexpr std::string_view kStatsSource =
+#include "oreslang/frontend/GeneratedStatsAtto.inc"
+    ;
+    static constexpr CoreLibrarySource kStats{
+        CompilerLibraryTier::Alloc,
+        "atto.alloc/stats",
+        "stats",
+        "@atto.alloc/stats.atto",
+        kStatsSource,
+        core_provider_bit(CoreProviderRequirement::Allocator)
+    };
+
+    static constexpr std::string_view kSecureSource =
+#include "oreslang/frontend/GeneratedSecureAtto.inc"
+    ;
+    static constexpr CoreLibrarySource kSecure{
+        CompilerLibraryTier::Alloc,
+        "atto.alloc/secure",
+        "secure",
+        "@atto.alloc/secure.atto",
+        kSecureSource,
+        core_provider_bit(CoreProviderRequirement::Allocator)
+    };
+
     if (raw == "atto.core/numeric" || raw == "atto.core/numeric.atto" ||
             raw == "ores.core/numeric" || raw == "ores.core/numeric.ores")
         return &kNumeric;
@@ -128,6 +164,15 @@ inline const CoreLibrarySource* find_compiler_library_source(std::string_view ra
     if (raw == "atto.alloc/int_buffer_bundle" || raw == "atto.alloc/int_buffer_bundle.atto" ||
             raw == "alloc/int_buffer_bundle" || raw == "alloc/int_buffer_bundle.ores")
         return &kIntBufferBundle;
+    if (raw == "atto.alloc/aligned" || raw == "atto.alloc/aligned.atto" ||
+            raw == "alloc/aligned")
+        return &kAligned;
+    if (raw == "atto.alloc/stats" || raw == "atto.alloc/stats.atto" ||
+            raw == "alloc/stats")
+        return &kStats;
+    if (raw == "atto.alloc/secure" || raw == "atto.alloc/secure.atto" ||
+            raw == "alloc/secure")
+        return &kSecure;
     return nullptr;
 }
 
