@@ -14,4 +14,19 @@ define module testing_scalar as
   pub fnc combine_status(int first, int second): int {
     return first != 0 ? 1 : (second != 0 ? 1 : 0);
   }
+
+  // Strict comparisons: equality is not sufficient for these assertions.
+  pub fnc greater_than_int(int actual, int lower_bound): int {
+    return actual > lower_bound ? 0 : 1;
+  }
+
+  pub fnc less_than_int(int actual, int upper_bound): int {
+    return actual < upper_bound ? 0 : 1;
+  }
+
+  // Inclusive range; explicitly rejects inverted bounds. No endpoint
+  // arithmetic, so the test is safe even at signed-i64 boundaries.
+  pub fnc in_range_int(int actual, int lower_bound, int upper_bound): int {
+    return lower_bound > upper_bound ? 1 : (actual < lower_bound ? 1 : (actual > upper_bound ? 1 : 0));
+  }
 end
