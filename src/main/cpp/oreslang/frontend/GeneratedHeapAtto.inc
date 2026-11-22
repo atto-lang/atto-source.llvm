@@ -1,5 +1,5 @@
 // Generated from stdlib/alloc/heap.atto; do not edit manually.
-// source Git blob SHA-1: b58c3365b9118d0ff6b3c383cf580df289683fa0
+// source Git blob SHA-1: 115e09bcf2a51ddfe927b81381544e7ebec68d95
 R"ATTO_HEAP(// Compiler-owned Atto alloc tier: source implements policy, not physical authority.
 // Real native allocation still requires a provider and compiler-verified lifetimes.
 define module heap as
@@ -32,13 +32,16 @@ define module heap as
   }
 
   pub fnc heap_can_reclaim(bool sealed, bool drops_complete,
-                           int committed, int pending, int active_loans,
-                           int continuations, int io_leases, int producer_admissions) -> bool {
+                           int committed, int pending, int active_turns,
+                           int active_loans, int continuations, int io_leases,
+                           int producer_admissions) -> bool {
     if sealed == false || drops_complete == false then return false; fi
-    if committed < 0 || pending < 0 || active_loans < 0 then return false; fi
-    if continuations < 0 || io_leases < 0 || producer_admissions < 0 then return false; fi
-    return committed == 0 && pending == 0 && active_loans == 0 &&
-           continuations == 0 && io_leases == 0 && producer_admissions == 0;
+    if committed < 0 || pending < 0 || active_turns < 0 then return false; fi
+    if active_loans < 0 || continuations < 0 then return false; fi
+    if io_leases < 0 || producer_admissions < 0 then return false; fi
+    return committed == 0 && pending == 0 && active_turns == 0 &&
+           active_loans == 0 && continuations == 0 && io_leases == 0 &&
+           producer_admissions == 0;
   }
 
 end
