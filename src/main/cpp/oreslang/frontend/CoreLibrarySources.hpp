@@ -16,7 +16,8 @@ enum class CoreProviderRequirement : std::uint32_t {
 
 enum class CompilerLibraryTier : std::uint8_t {
     Core,
-    Alloc
+    Alloc,
+    Std
 };
 
 constexpr std::uint32_t core_provider_bit(CoreProviderRequirement requirement) noexcept {
@@ -69,15 +70,34 @@ inline bool is_reserved_alloc_import(std::string_view raw) noexcept {
         raw == "alloc" || raw.rfind("alloc/", 0) == 0;
 }
 
+// Only these three reviewed, compiler-owned std modules are admitted. This
+// closed registry MUST NOT admit a filesystem path or arbitrary std/* unit.
+inline bool is_registered_std_import(std::string_view raw) noexcept {
+    constexpr std::string_view prefixes[] = {"std/", "atto.std/", "ores.std/"};
+    for (const auto prefix : prefixes) {
+        if (raw.rfind(prefix, 0) != 0) continue;
+        const auto stem = raw.substr(prefix.size());
+        return stem == "path" || stem == "path.atto" ||
+               stem == "sync" || stem == "sync.atto" ||
+               stem == "telemetry" || stem == "telemetry.atto";
+    }
+    return false;
+}
+
 inline bool is_reserved_compiler_library_import(std::string_view raw) noexcept {
-    return is_reserved_core_import(raw) || is_reserved_alloc_import(raw);
+    return is_reserved_core_import(raw) || is_reserved_alloc_import(raw) ||
+           is_registered_std_import(raw);
 }
 
 inline bool compiler_library_dependency_allowed(
         CompilerLibraryTier importer,
         CompilerLibraryTier dependency) noexcept {
-    return importer == CompilerLibraryTier::Alloc ||
-        dependency == CompilerLibraryTier::Core;
+    // Core may depend on Core only. Alloc may depend on Core or Alloc.
+    // A hosted Std module may depend on any compiler-owned tier.
+    return dependency == CompilerLibraryTier::Core ||
+        (importer == CompilerLibraryTier::Alloc &&
+         dependency == CompilerLibraryTier::Alloc) ||
+        importer == CompilerLibraryTier::Std;
 }
 
 inline const CoreLibrarySource* find_compiler_library_source(std::string_view raw) noexcept {
@@ -119,6 +139,28 @@ inline const CoreLibrarySource* find_compiler_library_source(std::string_view ra
         core_provider_bit(CoreProviderRequirement::Allocator)
     };
 
+    static constexpr std::string_view kStdPathSource =
+#include "oreslang/frontend/GeneratedStdPathAtto.inc"
+    ;
+    static constexpr CoreLibrarySource kStdPath{
+        CompilerLibraryTier::Std, "atto.std/path", "path",
+        "@atto.std/path.atto", kStdPathSource, 0u
+    };
+    static constexpr std::string_view kStdTelemetrySource =
+#include "oreslang/frontend/GeneratedStdTelemetryAtto.inc"
+    ;
+    static constexpr CoreLibrarySource kStdTelemetry{
+        CompilerLibraryTier::Std, "atto.std/telemetry", "telemetry",
+        "@atto.std/telemetry.atto", kStdTelemetrySource, 0u
+    };
+    static constexpr std::string_view kStdSyncSource =
+#include "oreslang/frontend/GeneratedStdSyncAtto.inc"
+    ;
+    static constexpr CoreLibrarySource kStdSync{
+        CompilerLibraryTier::Std, "atto.std/sync", "sync",
+        "@atto.std/sync.atto", kStdSyncSource, 0u
+    };
+
     if (raw == "atto.core/numeric" || raw == "atto.core/numeric.atto" ||
             raw == "ores.core/numeric" || raw == "ores.core/numeric.ores")
         return &kNumeric;
@@ -128,6 +170,14 @@ inline const CoreLibrarySource* find_compiler_library_source(std::string_view ra
     if (raw == "atto.alloc/int_buffer_bundle" || raw == "atto.alloc/int_buffer_bundle.atto" ||
             raw == "alloc/int_buffer_bundle" || raw == "alloc/int_buffer_bundle.ores")
         return &kIntBufferBundle;
+    if (is_registered_std_import(raw)) {
+        const std::size_t slash = raw.find('/');
+        if (slash == std::string_view::npos) return nullptr;
+        const auto stem = raw.substr(slash + 1);
+        if (stem == "path" || stem == "path.atto") return &kStdPath;
+        if (stem == "telemetry" || stem == "telemetry.atto") return &kStdTelemetry;
+        if (stem == "sync" || stem == "sync.atto") return &kStdSync;
+    }
     return nullptr;
 }
 
@@ -141,6 +191,12 @@ inline const CoreLibrarySource* find_alloc_library_source(
         std::string_view raw) noexcept {
     const auto* source = find_compiler_library_source(raw);
     return source && source->tier == CompilerLibraryTier::Alloc ? source : nullptr;
+}
+
+inline const CoreLibrarySource* find_std_library_source(
+        std::string_view raw) noexcept {
+    const auto* source = find_compiler_library_source(raw);
+    return source && source->tier == CompilerLibraryTier::Std ? source : nullptr;
 }
 
 inline CoreClosureRequirements infer_core_closure_requirements(
