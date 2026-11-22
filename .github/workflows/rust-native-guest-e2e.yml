@@ -1,0 +1,41 @@
+name: Rust driver executes native Atto LLVM guests
+on:
+  pull_request:
+    paths:
+      - 'tests/rust_native_e2e.rs'
+      - 'tests/rust_native_e2e/**'
+      - '.github/workflows/rust-native-guest-e2e.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compiled-native-atto:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Require Rust toolchain and pin checked-out commit
+        run: |
+          set -euo pipefail
+          rustc --version
+          git rev-parse HEAD HEAD^{tree}
+          git diff --quiet HEAD --
+          rustc --edition=2021 -O tests/rust_native_e2e.rs -o /tmp/atto-rust-native-e2e
+      - name: Install real LLVM18 and Clang18
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq llvm-18-dev clang-18 lld-18 libzstd-dev cmake
+      - name: Build actual LLVM compiler and execute Atto native guests
+        run: |
+          set -euo pipefail
+          cmake -S . -B build/rust-native -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm
+          cmake --build build/rust-native --target oreslang-llvmc -j2
+          /tmp/atto-rust-native-e2e "$(pwd)/build/rust-native/oreslang-llvmc" /usr/bin/clang-18
+      - name: Evidence boundary
+        run: |
+          echo 'RUST_TEST_DRIVER=EXECUTED_SOURCE_COMPILED_NATIVE_GUEST'
+          echo 'GENERAL_FFI_OTHER_BACKEND_PARITY=NOT_PROVEN'

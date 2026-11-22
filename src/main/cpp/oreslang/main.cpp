@@ -1,5 +1,6 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/StaticFfiI64Aot.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/ModuleLoader.hpp"
@@ -195,8 +196,12 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
 int main(int argc, char** argv) {
     bool experimental_owned_int = false;
     bool experimental_rt_scalar_loop = false;
+    bool experimental_pointer_int_aot = false;
+    bool experimental_static_ffi_i64 = false;
+    bool static_ffi_i64_capability = false;
     bool wasm32_target = false;
     bool cortex_m_target = false;
+    bool tenant_vm_guest = false;
     bool target_seen = false;
     bool native_hard_rt_profile = false;
     bool profile_seen = false;
@@ -211,8 +216,6 @@ int main(int argc, char** argv) {
     std::string rt_entry = "main/0";
     std::string rt_report_path;
     bool tree_shake = false;
-    bool isolate_entry_seen = false;
-    std::string isolate_entry;
     std::vector<std::string> tree_shake_roots;
     const char* path = nullptr;
     // Host-only severity policy: last CLI flag overrides the environment.
@@ -279,6 +282,8 @@ int main(int argc, char** argv) {
             constraint_descriptors_only = true;
         } else if (arg.rfind("--core-log-level=", 0) == 0) {
             coreLogLevel = arg.substr(std::string_view("--core-log-level=").size());
+        } else if (arg == "--guest-abi=tenant-vm") {
+            tenant_vm_guest = true;
         } else if (arg == "--no-core-log") {
             coreLogLevel = "off";
         } else if (arg == "--experimental-rt-scalar-loop") {
@@ -286,14 +291,24 @@ int main(int argc, char** argv) {
                 std::cerr << "duplicate rt scalar loop option\n"; return 2;
             }
             experimental_rt_scalar_loop = true;
+        } else if (arg == "--experimental-static-ffi-i64-aot") {
+            if (experimental_static_ffi_i64) {
+                std::cerr << "duplicate static FFI i64 AOT option\n"; return 2;
+            }
+            experimental_static_ffi_i64 = true;
+        } else if (arg == "--ffi-grant=atto.math.i64.v1") {
+            if (static_ffi_i64_capability) {
+                std::cerr << "duplicate static FFI capability\n"; return 2;
+            }
+            static_ffi_i64_capability = true;
+        } else if (arg == "--experimental-pointer-int-aot") {
+            if (experimental_pointer_int_aot) {
+                std::cerr << "duplicate Pointer<int> AOT option\n"; return 2;
+            }
+            experimental_pointer_int_aot = true;
         } else if (arg == "--experimental-owned-int") {
             if (experimental_owned_int) { std::cerr << "duplicate owned-int option\n"; return 2; }
             experimental_owned_int = true;
-        } else if (arg.rfind("--isolate-entry=", 0) == 0) {
-            if (isolate_entry_seen) { std::cerr << "duplicate isolate entry\n"; return 2; }
-            isolate_entry_seen = true;
-            isolate_entry = arg.substr(std::string("--isolate-entry=").size());
-            if (isolate_entry.empty()) { std::cerr << "empty isolate entry\n"; return 2; }
         } else if (arg == "--tree-shake") {
             if (tree_shake) { std::cerr << "duplicate tree-shake option\n"; return 2; }
             tree_shake = true;
@@ -365,16 +380,10 @@ int main(int argc, char** argv) {
     if (constraint_descriptors_only &&
             (tree_shake || !tree_shake_roots.empty() || native_hard_rt_profile ||
              rt_check_only || rt_entry_seen || rt_report_seen ||
-             experimental_owned_int || experimental_rt_scalar_loop ||
+             experimental_owned_int || experimental_rt_scalar_loop || experimental_pointer_int_aot ||
+             experimental_static_ffi_i64 || static_ffi_i64_capability ||
              target_seen || allocator_provider_seen)) {
         std::cerr << "constraint-descriptors is a metadata-only mode and cannot be combined with execution/codegen options\n";
-        return 2;
-    }
-    if (isolate_entry_seen && (tree_shake || !tree_shake_roots.empty() ||
-            wasm32_target || cortex_m_target || experimental_owned_int ||
-            experimental_rt_scalar_loop || native_hard_rt_profile ||
-            bounded_allocator_provider || rt_check_only || rt_report_seen)) {
-        std::cerr << "isolate entry supports only ordinary host scalar codegen\n";
         return 2;
     }
     if (!tree_shake && !tree_shake_roots.empty()) {
@@ -396,7 +405,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--guest-abi=tenant-vm] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--experimental-pointer-int-aot] [--experimental-static-ffi-i64-aot] [--ffi-grant=atto.math.i64.v1] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -430,10 +439,65 @@ int main(int argc, char** argv) {
         if (native_hard_rt_profile && experimental_owned_int)
             throw std::runtime_error("native-hard-rt profile rejects experimental owned heap lowering");
 
+        if (experimental_static_ffi_i64) {
+            // Test-only static native C i64 ABI; never implies actor FFI, imported
+            // modules, signed supervisor authorization or production permissions.
+            if (!experimental_static_ffi_i64 || !static_ffi_i64_capability ||
+                    experimental_pointer_int_aot || wasm32_target || cortex_m_target ||
+                    tenant_vm_guest || experimental_owned_int ||
+                    experimental_rt_scalar_loop || bounded_allocator_provider ||
+                    tree_shake || !tree_shake_roots.empty() || native_hard_rt_profile ||
+                    rt_check_only || rt_entry_seen || rt_report_seen ||
+                    constraint_descriptors_only) {
+                throw std::runtime_error(
+                    "static FFI i64 AOT proof requires explicit grant and isolated --target=host");
+            }
+            const auto ir = oreslang::static_ffi_i64_aot::compile(text);
+            std::cout << ir;
+            std::cout.flush();
+            return 0;
+        }
+
+        if (experimental_pointer_int_aot) {
+            // Pointer M2a now enters the same canonical native lexer,
+            // typed Program HIR, shared ownership checker and LLVM emitter.
+            // Its admitted grammar remains a closed-world nonescaping stack
+            // specialization until full Pointer<T> lowering is verified.
+            if (static_ffi_i64_capability ||
+                    wasm32_target || cortex_m_target || tenant_vm_guest ||
+                    experimental_owned_int || experimental_rt_scalar_loop ||
+                    bounded_allocator_provider || tree_shake ||
+                    !tree_shake_roots.empty() || native_hard_rt_profile ||
+                    rt_check_only || rt_entry_seen || rt_report_seen ||
+                    constraint_descriptors_only) {
+                throw std::runtime_error(
+                    "Pointer<int> AOT M1 requires isolated --target=host "
+                    "without ownership, scheduler, RT, FFI grant, tree shaking or allocator overrides");
+            }
+            // Normal native frontend Program -> ownership checker -> LLVM
+            // emission, not the M1 standalone source-to-IR shortcut.
+            auto ast = oreslang::parse_program(text, false, false, true);
+            const auto ir = oreslang::emit_verified_llvm_ir(ast);
+            std::cout << ir;
+            std::cout.flush();
+            return 0;
+        }
+
+        // A normal source unit may receive exactly one compiler-approved native
+        // C i64 symbol through its semantic FFI gate. This temporary CLI grant
+        // is NOT a signed supervisor capability or a foreign-actor permission.
+        if (static_ffi_i64_capability &&
+                (wasm32_target || cortex_m_target || tenant_vm_guest ||
+                 native_hard_rt_profile || rt_check_only || rt_entry_seen ||
+                 rt_report_seen || tree_shake || !tree_shake_roots.empty() ||
+                 experimental_owned_int || experimental_rt_scalar_loop ||
+                 experimental_pointer_int_aot || bounded_allocator_provider))
+            throw std::runtime_error(
+                "normal static FFI i64 requires host AOT with isolated approved linker grant");
         auto ast = oreslang::load_native_program(
             path, text, source_identity, experimental_owned_int,
             experimental_rt_scalar_loop, !wasm32_target && !cortex_m_target,
-            admitted_provider_bits);
+            admitted_provider_bits, static_ffi_i64_capability);
         source_module = ast.module;
         source_namespace = ast.namespace_name;
 
@@ -751,7 +815,7 @@ int main(int argc, char** argv) {
             // so unsupported target features cannot hide in unreachable code.
             (void)oreslang::emit_verified_llvm_ir(
                 ast, wasm32_target, cortex_m_target,
-                bounded_allocator_provider);
+                bounded_allocator_provider, tenant_vm_guest);
 
             // The shipped pass is deliberately function-only. Richer Program
             // owners have hidden semantic/ABI roots that are not represented
@@ -763,7 +827,7 @@ int main(int argc, char** argv) {
         }
         std::cout << oreslang::emit_verified_llvm_ir(
                 ast, wasm32_target, cortex_m_target,
-                bounded_allocator_provider, isolate_entry);
+                bounded_allocator_provider, tenant_vm_guest);
         std::cout.flush();
         if (coreLog) coreLog->dump(stderr);
         return 0;

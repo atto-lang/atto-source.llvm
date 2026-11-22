@@ -140,6 +140,12 @@ int main() {
                                 schema[field].bytes <= segment.bytes - loc.byte_offset,
                                 "mixed-width field exceeds segment");
                         const auto absolute = plan.absolute_address(row,field);
+                        // This result is a checked physical offset, not a
+                        // zero-copy loan or permission to mutate foreign state.
+                        std::uint64_t no_throw = UINT64_MAX;
+                        require(plan.try_absolute_address(row,field,&no_throw) &&
+                                no_throw == absolute,
+                                "nonthrowing RT lookup differs from source layout");
                         require(absolute % schema[field].alignment == 0,
                                 "unnaturally aligned native actor field");
                         for (std::uint64_t byte = 0; byte < schema[field].bytes; ++byte) {
@@ -148,6 +154,15 @@ int main() {
                         }
                     }
                 }
+                std::uint64_t unchanged = 0xfedcba9876543210ULL;
+                require(!plan.try_absolute_address(capacity,0,&unchanged) &&
+                        unchanged == 0xfedcba9876543210ULL,
+                        "out-of-bounds RT lookup changed output");
+                require(!plan.try_absolute_address(0,4,&unchanged) &&
+                        unchanged == 0xfedcba9876543210ULL,
+                        "unknown field RT lookup changed output");
+                require(!plan.try_absolute_address(0,0,nullptr),
+                        "null result accepted by RT lookup");
                 rejects<std::out_of_range>([&]{ (void)plan.address(capacity,0); });
                 rejects<std::out_of_range>([&]{ (void)plan.address(0,4); });
             }

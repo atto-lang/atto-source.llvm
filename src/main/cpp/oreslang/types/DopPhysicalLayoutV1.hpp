@@ -55,6 +55,40 @@ public:
     }
 
 private:
+    // Strict Unicode scalar names encoded as UTF-8. No normalization, no NUL,
+    // no overlong encodings, surrogates or out-of-range scalar values.
+    // This is metadata validation only, not source-language identifier syntax.
+    static bool valid_name(const std::string& value) {
+        if (value.empty() || value.size() > 1024) return false;
+        for (std::size_t i = 0; i < value.size();) {
+            const auto lead = static_cast<unsigned char>(value[i]);
+            if (lead == 0) return false;
+            if (lead < 0x80) { ++i; continue; }
+            std::size_t trailing = 0;
+            std::uint32_t scalar = 0;
+            std::uint32_t minimum = 0;
+            if (lead >= 0xC2 && lead <= 0xDF) {
+                trailing = 1; scalar = lead & 0x1F; minimum = 0x80;
+            } else if (lead >= 0xE0 && lead <= 0xEF) {
+                trailing = 2; scalar = lead & 0x0F; minimum = 0x800;
+            } else if (lead >= 0xF0 && lead <= 0xF4) {
+                trailing = 3; scalar = lead & 0x07; minimum = 0x10000;
+            } else {
+                return false;
+            }
+            if (trailing >= value.size() - i) return false;
+            for (std::size_t j = 1; j <= trailing; ++j) {
+                const auto part = static_cast<unsigned char>(value[i + j]);
+                if (part < 0x80 || part > 0xBF) return false;
+                scalar = (scalar << 6) | (part & 0x3F);
+            }
+            if (scalar < minimum || scalar > 0x10FFFF ||
+                (scalar >= 0xD800 && scalar <= 0xDFFF)) return false;
+            i += trailing + 1;
+        }
+        return true;
+    }
+
     static HeterogeneousLayout translate(LayoutKind kind) {
         switch (kind) {
         case LayoutKind::aos: return HeterogeneousLayout::AoS;
@@ -78,9 +112,7 @@ private:
         std::vector<FieldSpec> specs;
         specs.reserve(fields.size());
         for (const auto& field : fields) {
-            if (field.name.empty() || field.name.size() > 1024 ||
-                field.name.find('\0') != std::string::npos ||
-                !names.insert(field.name).second)
+            if (!valid_name(field.name) || !names.insert(field.name).second)
                 throw std::invalid_argument("invalid or duplicate typed field name");
             specs.push_back({field.bytes, field.alignment});
         }
