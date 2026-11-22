@@ -172,6 +172,42 @@ inline const CoreLibrarySource* find_compiler_library_source(
         0u
     };
 
+    static constexpr std::string_view kMathSource =
+#include "oreslang/frontend/GeneratedMathAtto.inc"
+    ;
+    static constexpr CoreLibrarySource kMath{
+        CompilerLibraryTier::Core,
+        "atto.core/math",
+        "math",
+        "@atto.core/math.atto",
+        kMathSource,
+        0u
+    };
+
+    static constexpr std::string_view kHashSource =
+#include "oreslang/frontend/GeneratedHashAtto.inc"
+    ;
+    static constexpr CoreLibrarySource kHash{
+        CompilerLibraryTier::Core,
+        "atto.core/hash",
+        "hash",
+        "@atto.core/hash.atto",
+        kHashSource,
+        0u
+    };
+
+    static constexpr std::string_view kCellSource =
+#include "oreslang/frontend/GeneratedCellAtto.inc"
+    ;
+    static constexpr CoreLibrarySource kCell{
+        CompilerLibraryTier::Core,
+        "atto.core/cell",
+        "cell",
+        "@atto.core/cell.atto",
+        kCellSource,
+        0u
+    };
+
     static constexpr std::string_view kIntBufferSource =
 #include "oreslang/frontend/GeneratedIntBufferAtto.inc"
     ;
@@ -221,6 +257,15 @@ inline const CoreLibrarySource* find_compiler_library_source(
     if (raw == "atto.core/numeric" || raw == "atto.core/numeric.atto" ||
             raw == "ores.core/numeric" || raw == "ores.core/numeric.ores")
         return &kNumeric;
+    if (raw == "atto.core/math" || raw == "atto.core/math.atto" ||
+            raw == "ores.core/math")
+        return &kMath;
+    if (raw == "atto.core/hash" || raw == "atto.core/hash.atto" ||
+            raw == "ores.core/hash")
+        return &kHash;
+    if (raw == "atto.core/cell" || raw == "atto.core/cell.atto" ||
+            raw == "ores.core/cell")
+        return &kCell;
     if (raw == "atto.alloc/int_buffer" || raw == "atto.alloc/int_buffer.atto" ||
             raw == "alloc/int_buffer" || raw == "alloc/int_buffer.ores")
         return &kIntBuffer;
