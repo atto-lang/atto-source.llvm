@@ -173,3 +173,24 @@ ZigZag31(-1073741824):
 4. Alloc-backed `JsonValue`, lossless numeric tokens and streaming decoder,
    without shadowing the active Java `alloc/json` PR series.
 5. Bounded labeled metrics/registries, actor collector and async exporter.
+
+
+## Core loan-safety preflight and compiler borrow boundary
+
+- `core/borrow_admission.atto` is a bounded unique-owner loan-state
+  **diagnostic/runtime preflight** with a 65,535-reader quota, not the
+  compiler borrow checker and not an owner/borrow capability.
+- `contracts/core-borrow-preflight-v1.json` pins 13 scalar truth-table
+  states; `tests/core-borrow-preflight-source.test.mjs` checks the source
+  preflight and explicitly forbids source-only borrow PASS.
+- `tests/fixtures/core-borrow-v1/` contains 2 compiler-positive and 4 compile-negative Atto guest fixtures with exact Git blob SHA pins and expected typed ownership diagnostics. These are NOT_EXECUTED until the real compiler/linker is exercised.
+- The compiler remains responsible for readonly/exclusive provenance,
+  last-use/CFG lifetime, no move under a live loan, nonescaping return,
+  actor/task/await boundaries, exception/cancel cleanup and no generated
+  guest artifact for rejected source. A helper returning `true` never
+  authorizes bypassing those checks.
+- Histogram snapshot construction now validates the bucket inventory,
+  copies caller-owned arrays and keeps the constructor module-private.
+  This prevents mutable aliases at the stdlib boundary independent of
+  whether an implicit-borrow migration profile is available.
+- LLVM carries core source candidate and checked loan fixtures; actual linking/LLVM guest execution remains pending.
