@@ -4,6 +4,9 @@ on:
     paths:
       - 'stdlib/numeric.atto'
       - 'stdlib/alloc/**'
+      - 'stdlib/std/path.atto'
+      - 'stdlib/std/telemetry.atto'
+      - 'stdlib/std/sync.atto'
       - 'tools/atto-library-embed/**'
       - 'src/main/cpp/oreslang/frontend/Generated*Atto.inc'
       - 'src/main/cpp/oreslang/frontend/CoreLibrarySources.hpp'
@@ -37,6 +40,9 @@ jobs:
           test "$(git hash-object stdlib/numeric.atto)" = "5ced991f1d49b3c2a60fdd72b9003c0a4d18cd72"
           test "$(git hash-object stdlib/alloc/int_buffer.atto)" = "25b3d4bc06a0c859aacadaf0795414027a076bdc"
           test "$(git hash-object stdlib/alloc/int_buffer_bundle.atto)" = "07c7083e099a18f1db7097f9639efc677070eb95"
+          test "$(git hash-object --no-filters stdlib/std/path.atto)" = "adde8472c218d9a5a6d0644fd9ccefc80cf3d8f6"
+          test "$(git hash-object --no-filters stdlib/std/telemetry.atto)" = "2a339892995922e0064fc903fd264d9efd5e9b26"
+          test "$(git hash-object --no-filters stdlib/std/sync.atto)" = "8805fd7ac43200102e08c95a367419e6e201c1d6"
       - name: Execute Rust generator tests and immutable checks
         run: |
           set -euo pipefail
@@ -45,5 +51,8 @@ jobs:
       - name: Compile C++17 literal inclusion probe
         run: |
           set -euo pipefail
-          c++ -std=c++17 -Isrc/main/cpp -fsyntax-only tests/atto_library_embed_cpp17_probe.cpp
+          c++ -std=c++17 -Wall -Wextra -Werror -Isrc/main/cpp \
+            tests/atto_library_embed_cpp17_probe.cpp -o "$RUNNER_TEMP/atto-library-embed-probe"
+          "$RUNNER_TEMP/atto-library-embed-probe"
+          echo "ATTO_STD_CLOSED_REGISTRY_CPP17_PROBE=EXECUTED"
           echo "COMPILER_BACKED_GUEST_EXECUTION=NOT_EXECUTED"
