@@ -40,6 +40,10 @@ public:
         Plan plan;
         need("pub"); need("fnc"); need("main"); need("("); need(")");
         need(":"); need("int"); need("{");
+        // Use the canonical lexer for both owning and local-ref modes.
+        if (token().text == "let" && at_ + 1 < tokens_.size() &&
+                tokens_[at_ + 1].text != "mut")
+            return parse_local();
         need("let"); need("mut"); need("Pointer"); need("<"); need("int"); need(">");
         plan.owner = identifier();
         if (plan.owner == "Pointer" || plan.owner == "main" || plan.owner == "int")
@@ -99,6 +103,87 @@ public:
     }
 
 private:
+    // Deliberately narrow local-place read lease. The parser and verifier
+    // cannot turn a raw integer or a copied handle into pointer authority.
+    void local_operation(std::string_view operation) {
+        if (take("rt")) {
+            need(operation);
+            return;
+        }
+        const auto begin = token().offset;
+        need(operation);
+        if (token().text != "!" || token().offset != begin + operation.size())
+            reject("ownership bang must be adjacent to " +
+                   std::string(operation), token().offset);
+        need("!");
+    }
+
+    Plan parse_local() {
+        Plan plan;
+        plan.form = Plan::Form::BorrowedLocal;
+        plan.count = 1;
+        need("let");
+        plan.owner = identifier();
+        if (plan.owner == "main" || plan.owner == "Pointer" ||
+                plan.owner == "int" || plan.owner == "return" ||
+                plan.owner == "rt" || plan.owner == "ref" ||
+                plan.owner == "deref" || plan.owner == "unref")
+            reject("reserved local place identifier", token().offset);
+        need(":"); need("int"); need("=");
+        const auto offset = token().offset;
+        const auto value = unsigned_literal();
+        if (value > static_cast<std::uint64_t>(
+                std::numeric_limits<std::int64_t>::max()))
+            reject("local int initializer exceeds signed i64", offset);
+        plan.local_initial = static_cast<std::int64_t>(value);
+        need(";");
+
+        need("val"); need("Pointer"); need("<"); need("int"); need(">");
+        plan.local_handle = identifier();
+        if (plan.local_handle == plan.owner ||
+                plan.local_handle == "main" || plan.local_handle == "Pointer" ||
+                plan.local_handle == "int" || plan.local_handle == "return" ||
+                plan.local_handle == "rt" || plan.local_handle == "ref" ||
+                plan.local_handle == "deref" || plan.local_handle == "unref")
+            reject("forged or shadowing local pointer identifier", token().offset);
+        need("="); local_operation("ref");
+        need(plan.owner); need(";");
+
+        need("val");
+        Step scalar;
+        scalar.kind = Step::Kind::Scalar;
+        scalar.name = identifier();
+        if (scalar.name == plan.owner || scalar.name == plan.local_handle ||
+                scalar.name == "main" || scalar.name == "Pointer" ||
+                scalar.name == "int" || scalar.name == "return" ||
+                scalar.name == "rt" || scalar.name == "ref" ||
+                scalar.name == "deref" || scalar.name == "unref")
+            reject("duplicate or reserved immutable local", token().offset);
+        need("="); local_operation("deref");
+        need(plan.local_handle); need(";");
+        scalar.value = std::make_unique<Expr>();
+        scalar.value->kind = Expr::Kind::Read;
+        scalar.value->index = 0;
+        scalar.value->known = plan.local_initial;
+        const auto result_name = scalar.name;
+        plan.steps.push_back(std::move(scalar));
+
+        local_operation("unref");
+        need(plan.local_handle); need(";");
+        Step release;
+        release.kind = Step::Kind::Close; // type-directed unref; never owning close
+        plan.steps.push_back(std::move(release));
+
+        need("return"); need(result_name); need(";"); need("}");
+        if (token().text != "<eof>")
+            reject("multiple functions or trailing local-pointer source", token().offset);
+        plan.result = std::make_unique<Expr>();
+        plan.result->kind = Expr::Kind::Variable;
+        plan.result->name = result_name;
+        plan.result->known = plan.local_initial;
+        return plan;
+    }
+
     std::vector<Token> tokens_;
     std::size_t at_ = 0;
     std::string owner_;

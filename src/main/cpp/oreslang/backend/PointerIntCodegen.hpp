@@ -40,6 +40,13 @@ inline std::string emit_verified_ir(const Plan& plan) {
     auto* entry = llvm::BasicBlock::Create(context, "entry", main_fn);
     builder.SetInsertPoint(entry);
     auto* allocation = builder.CreateAlloca(array, nullptr, "pointer.int.region");
+    if (plan.form == Plan::Form::BorrowedLocal) {
+        // A scoped local-place read loan is real LLVM stack memory, with
+        // authenticated authority erased only after typed ownership proof.
+        builder.CreateStore(builder.getInt64(plan.local_initial),
+            builder.CreateInBoundsGEP(array, allocation,
+                {builder.getInt64(0), builder.getInt64(0)}, "pointer.local.initial"));
+    }
     std::unordered_map<std::string, llvm::Value*> scalar_values;
     auto slot = [&](std::size_t index) -> llvm::Value* {
         return builder.CreateInBoundsGEP(array, allocation,
@@ -74,6 +81,10 @@ inline std::string emit_verified_ir(const Plan& plan) {
             scalar_values.emplace(step.name, lower(*step.value));
             break;
         case Step::Kind::Close:
+            if (plan.form == Plan::Form::BorrowedLocal) {
+                // Non-owning unref revokes the handle, not the original local.
+                break;
+            }
             // Stack-promotion drop: overwrite every slot using volatile stores
             // before return. The stack frame is then reclaimed by the ABI.
             // No pointer or address can escape this function.
