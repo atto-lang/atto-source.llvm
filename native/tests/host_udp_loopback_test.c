@@ -4,10 +4,19 @@
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
+#include <pthread.h>
+#include <sched.h>
+#include <stdatomic.h>
 static int granted = 1;
 static unsigned denied_port = 0;
 static unsigned denied_source_port = 0;
+static atomic_int hold_send_authorize = 0;
+static atomic_int send_entered = 0;
 static int authorize(void *context, unsigned port, int operation) {
+    if (operation == ATTO_UDP_SEND && atomic_load(&hold_send_authorize)) {
+        atomic_store(&send_entered, 1);
+        while (atomic_load(&hold_send_authorize)) sched_yield();
+    }
     (void)context;
     if (!granted || (operation == ATTO_UDP_SEND && port == denied_port) ||
         (operation == ATTO_UDP_PEER && port == denied_source_port))
@@ -22,6 +31,15 @@ static int read_next(atto_udp_loopback *s, uint8_t *buf, size_t cap, size_t *n, 
         nanosleep(&tiny,NULL);
     }
     return -ETIMEDOUT;
+}
+struct blocked_send { atto_udp_loopback *socket; unsigned port; };
+static void *blocked_sender(void *context) {
+    struct blocked_send *task=(struct blocked_send *)context;
+    const uint8_t bytes[]={8};
+    size_t n=0;
+    int rc=atto_udp_loopback_send(task->socket,task->port,bytes,sizeof bytes,&n);
+    assert(rc==0 && n==sizeof bytes);
+    return NULL;
 }
 int main(void) {
     atto_udp_loopback *a=NULL,*b=NULL;
@@ -68,8 +86,28 @@ int main(void) {
     assert(atto_udp_loopback_close(a)==0);
     assert(atto_udp_loopback_send(a,(unsigned)bp,pkt,4,&sent)==-EBADF);
     assert(atto_udp_loopback_receive(a,out,sizeof(out),&n,&source)==-EBADF);
-    atto_udp_loopback_destroy(a);
-    atto_udp_loopback_destroy(b);
+    assert(atto_udp_loopback_destroy(a)==0);
+    assert(atto_udp_loopback_destroy(b)==0);
+
+    /* Concurrency gate: destruction must NOT free a socket whose operation
+     * remains inside a trusted host permission callback. Retry only after
+     * that physical operation exits and host ingress is fenced. */
+    atto_udp_loopback *busy=NULL;
+    assert(atto_udp_loopback_open(&busy,0,authorize,NULL)==0);
+    const int busy_port = atto_udp_loopback_port(busy);
+    assert(busy_port>0);
+    struct blocked_send task={busy,(unsigned)busy_port};
+    atomic_store(&send_entered,0);
+    atomic_store(&hold_send_authorize,1);
+    pthread_t worker;
+    assert(pthread_create(&worker,NULL,blocked_sender,&task)==0);
+    for(int i=0;i<1000000 && !atomic_load(&send_entered);++i) sched_yield();
+    assert(atomic_load(&send_entered));
+    assert(atto_udp_loopback_destroy(busy)==-EAGAIN);
+    atomic_store(&hold_send_authorize,0);
+    assert(pthread_join(worker,NULL)==0);
+    assert(atto_udp_loopback_destroy(busy)==0);
+
     puts("Native LLVM UDP loopback host ABI: passed (not guest import or actor lifecycle)");
     return 0;
 }
