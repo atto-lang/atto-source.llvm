@@ -205,7 +205,7 @@ def main():
         aligned_source = root / "aligned.atto"
         aligned_source.write_text(
             'import module aligned from "atto.alloc/aligned"; '
-            'pub fnc main():int{return aligned.align_up(13,8)+26;}\\n',
+            'pub fnc main():int{return aligned.align_up(13,8)+26;}\n',
             encoding="utf-8",
         )
         aligned = run([args.compiler, str(aligned_source)])
@@ -228,7 +228,7 @@ def main():
         bad_aligned = root / "bad_aligned.atto"
         bad_aligned.write_text(
             'import module aligned from "atto.alloc/../aligned"; '
-            'pub fnc main():int{return 42;}\\n',
+            'pub fnc main():int{return 42;}\n',
             encoding="utf-8",
         )
         reject(run([args.compiler, str(bad_aligned)]),
