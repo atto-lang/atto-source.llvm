@@ -370,8 +370,32 @@ private:
             const auto id = state_->next_waiter_id;
             token = Subscription(state_, kind, index, id);
             std::function<void()> wrapped(
-                [consumer = std::move(consumer), token]() mutable {
-                    consumer(token);
+                [consumer = std::move(consumer), token,
+                 state = state_]() mutable {
+                    try {
+                        consumer(token);
+
+                        // Channel close is a terminal readiness edge. A
+                        // callback may commit and consume its registration,
+                        // lose a select and be revoked, or merely observe the
+                        // close. In the observation case no later edge is
+                        // guaranteed, so retire the exact waiter after the
+                        // terminal notification just as Future completion
+                        // does.
+                        bool terminal = false;
+                        {
+                            std::lock_guard<std::mutex> guard(state->mutex);
+                            terminal = state->closed;
+                        }
+                        if (terminal) (void)token.close();
+                    } catch (...) {
+                        // A readiness notification is advisory, but a callback
+                        // failure must not strand an inert waiter forever.
+                        // Retire this exact generation-checked subscription
+                        // before surfacing the diagnostic to the batch.
+                        (void)token.close();
+                        throw;
+                    }
                 });
 
             const bool ready = kind == WaitKind::Read

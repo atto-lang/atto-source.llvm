@@ -91,3 +91,27 @@ Immediate `stop()` may cancel startup or abandon queued DATA: execution receipts
 must account for every accepted message and verify the processed FIFO prefix,
 rather than assuming graceful draining. Exclusive incarnation ownership and
 physical reclamation fences remain required before reusing an actor ID.
+
+## Scoped collection owners
+
+Host lowering admits `val Array<T>` and `let mut Array<T>` construction after
+statements and inside conditional/index/for-of bodies. Supported elements are
+`int`, `String` and the existing immutable record subset. `const` and `let`
+without `mut` preserve read-only referent capabilities. Constructor element types
+must match exactly; scope names cannot escape or shadow a live owner.
+
+Each static declaration reserves one zeroed cleanup shadow in the invocation's
+bounded array region. The array is created only on a reached path and dropped
+at the lexical exit or before a structured return. Entry-block handle slots
+remain addressable through shared cleanup, so an early return before a later
+declaration does not inspect uninitialized storage. Loop back-edges reuse those
+slots, release each iteration's resources and clear their failure shadows.
+Owning aggregate returns transfer the token and disarm the source before
+cleanup. No tracing collector or runtime compilation is involved.
+
+The shared-source gate covers skipped declarations, 2,000 repeated allocations,
+nested returns, sibling scopes with different element types, immutable record
+iteration and owning aggregate return. ASan instruments the generated guest IR.
+Unsupported scoped Wasm owners still reject before emitting IR. Mutable class
+owners and general actor/HTTP suspension frames remain separate lowering work;
+this support alone does not compile the complete Spin source server.

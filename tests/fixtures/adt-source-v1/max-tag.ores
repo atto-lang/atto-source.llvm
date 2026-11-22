@@ -1,0 +1,12 @@
+define enum Terminal as
+    Last = 2147483647;
+end
+fnc classify(Terminal x): int {
+    match x over
+        on Terminal.Last -> { return 7; }
+    end
+}
+pub fnc main(): void {
+    stdio.println(classify(Terminal.Last()));
+    return;
+}

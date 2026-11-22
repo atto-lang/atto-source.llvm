@@ -1,0 +1,32 @@
+use namespace core;
+
+// NATS candidate matching over already validated dot-token vectors.
+// This is an INTERNAL pure comparison primitive, not a subscription
+// admission or deliverable authorization decision. The caller must have
+// validated each subject once at bounded ingress, and must not mutate
+// either token vector until this synchronous comparison completes.
+// No actor state, session authority, or routing mailbox lives here.
+define class NatsSubjectTokens as
+  val Array<String> parts_value;
+
+  pub matches_prevalidated(borrow NatsSubjectTokens published): bool {
+    if self.parts_value.size == 0 || published.parts_value.size == 0 then
+      return false;
+    fi
+    for (let int i = 0; i < self.parts_value.size; i = i + 1) {
+      val String token = self.parts_value.get(i);
+      if token == ">" then
+        // NATS terminal > means one or more remaining tokens.
+        return i == self.parts_value.size - 1 &&
+               published.parts_value.size > i;
+      fi
+      if i >= published.parts_value.size then
+        return false;
+      fi
+      if token != "*" && token != published.parts_value.get(i) then
+        return false;
+      fi
+    }
+    return self.parts_value.size == published.parts_value.size;
+  }
+end
