@@ -45,5 +45,9 @@ pub fnc main(): int {
   if sync.mutex_release_receipt_admissible(true, 8, 8, 3, 3, true) then return 38; fi
   if !sync.rw_upgrade_admissible(1, false, 0, true) then return 39; fi
   if sync.rw_upgrade_admissible(2, false, 0, true) then return 40; fi
+  if !path.is_safe_scalar(233, false) then return 41; fi
+  if path.is_safe_scalar(233, true) then return 42; fi
+  if path.is_safe_scalar(55296, false) then return 43; fi
+  if path.is_safe_scalar(1114112, false) then return 44; fi
   return 0;
 }
