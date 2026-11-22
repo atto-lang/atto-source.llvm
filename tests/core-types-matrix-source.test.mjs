@@ -13,7 +13,7 @@ const limits=new Map([
 ]);
 function evalSourceArg(value){
   value=value.trim();
-  const m=/^(types\.int_(min|max)_value\(\))(?:\s*([+-])\s*(\d+))?$/.exec(value);
+  const m=/^(int_(min|max)_value\(\))(?:\s*([+-])\s*(\d+))?$/.exec(value);
   if(m){
     const base=m[2]==='min'?MIN:MAX;
     return base+(m[3]==='-'?-1n:1n)*BigInt(m[4]??0);
@@ -22,15 +22,15 @@ function evalSourceArg(value){
   return BigInt(value);
 }
 function verify(body){
-  const selected=body.match(/^import fnc ([a-z_0-9, ]+) from "\\.\\.\\/\\.\\.\\/\\.\\.\\/core\\/types\\.atto";$/m);
+  const selected=body.match(/^import fnc ([a-z_0-9, ]+) from "\.\.\/\.\.\/\.\.\/core\/atto";$/m);
   assert.ok(selected,"native matrix fixture needs explicit function imports");
   assert.ok(selected[1].split(",").length>=8,"all predicate functions must be statically imported");
   assert.match(body,/pub fnc main\(\) -> int \{/);
-  const expressions=[...body.matchAll(/^\s*if (!?)types\.(fits_[iu](?:8|16|32|64))\(([^;\n]+)\); do return (\d+); fi$/gm)];
+  const expressions=[...body.matchAll(/^\s*if (!?)(fits_[iu](?:8|16|32|64))\(([^;\n]+)\); do return (\d+); fi$/gm)];
   assert.ok(expressions.length>=60,'guest must cover at least sixty cases');
   const source=body.replace(/\/\/[^\r\n]*/g,'');
-  const withoutAssertions=source.replace(/^\s*if (!?)types\.(fits_[iu](?:8|16|32|64))\(([^;\n]+)\); do return (\d+); fi$/gm,'')
-    .replace(/^import fnc ([a-z_0-9, ]+) from "\\.\\.\\/\\.\\.\\/\\.\\.\\/core\\/types\\.atto";$/m,'')
+  const withoutAssertions=source.replace(/^\s*if (!?)(fits_[iu](?:8|16|32|64))\(([^;\n]+)\); do return (\d+); fi$/gm,'')
+    .replace(/^import fnc ([a-z_0-9, ]+) from "\.\.\/\.\.\/\.\.\/core\/atto";$/m,'')
     .replace(/pub fnc main\(\) -> int \{/,'').replace(/return 0;/,'').replace(/\}/g,'').trim();
   assert.equal(withoutAssertions,'','unreviewed statement in guest matrix');
   const cases=new Map([...limits.keys()].map(key=>[key,{accepted:0,rejected:0}]));

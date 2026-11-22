@@ -91,7 +91,7 @@ test('mutated boundaries, spoofed exports and hosted imports are rejected',()=>{
   for(const changed of variants){assert.notEqual(changed,source);assert.throws(()=>check(changed));}
 });
 test('positive linked fixture and all eight compiler-negative fixtures are present',()=>{
-  const importMatch=positive.match(/^import fnc ([a-z_0-9, ]+) from "\\.\\.\\/\\.\\.\\/\\.\\.\\/core\\/types\\.atto";$/m);
+  const importMatch=positive.match(/^import fnc ([a-z_0-9, ]+) from "\.\.\/\.\.\/\.\.\/core\/types\.atto";$/m);
   assert.ok(importMatch,"native LLVM must explicitly select the linked public functions");
   assert.deepEqual(importMatch[1].split(",").map(x=>x.trim()).sort(),[...names].sort());
   assert.match(positive,/pub fnc main\(\) -> int/);
@@ -101,8 +101,8 @@ test('positive linked fixture and all eight compiler-negative fixtures are prese
     ['void-return-negative.atto',/fnc bad\(\) -> void\s*\{\s*return 7;/],
     ['bool-truthiness-negative.atto',/if 1; do/],
     ['i64-literal-overflow-negative.atto',/9223372036854775808/],
-    ['wrong-arg-negative.atto',/types\.fits_u8\(true\)/],
-    ['u64-outside-int-negative.atto',/types\.fits_u64\(18446744073709551615\)/],
+    ['wrong-arg-negative.atto',/fits_u8\(true\)/],
+    ['u64-outside-int-negative.atto',/fits_u64\(18446744073709551615\)/],
     ['namespace-duplicate-negative.atto',/use namespace wrong;/],
     ['namespace-late-negative.atto',/use namespace late;/]
   ];
