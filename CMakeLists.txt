@@ -599,6 +599,18 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 
+if(BUILD_TESTING)
+    add_executable(atto-core-four-registry-host-test
+        tests/core_four_registry_host_test.cpp)
+    target_include_directories(atto-core-four-registry-host-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(atto-core-four-registry-host-test PRIVATE cxx_std_17)
+    add_test(NAME atto_core_four_closed_registry_host_only
+        COMMAND atto-core-four-registry-host-test)
+    set_tests_properties(atto_core_four_closed_registry_host_only
+        PROPERTIES TIMEOUT 15)
+endif()
+
 option(ORE_REQUIRE_NATIVE_MACRO_GUEST_AOT
     "Fail configure unless production LLVM macro CTests and Clang guests are available" OFF)
 if(ORE_REQUIRE_NATIVE_MACRO_GUEST_AOT AND NOT BUILD_TESTING)
