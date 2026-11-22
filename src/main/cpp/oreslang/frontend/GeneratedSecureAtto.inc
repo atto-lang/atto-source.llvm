@@ -1,5 +1,5 @@
 // Generated from stdlib/alloc/secure.atto; do not edit manually.
-// source Git blob SHA-1: fbb2fd0e297272aa6c3d71e47e65216f4d876e84
+// source Git blob SHA-1: c4d033163892d72f06ac84692a6142864ad9f15e
 R"ATTO_SECURE(// Atto-owned memory scrub POLICY.
 // Logical clearing of Array<int> values is NOT cryptographic zeroization:
 // compilers/GC/JITs may copy, relocate or eliminate the backing writes.
@@ -75,6 +75,11 @@ define module secure as
     // unavailable until compiler/runtime enforce a volatile/opaque wipe,
     // destroy all aliases and own deallocation on every exit path.
     pub secure_clear(mut self)(): void {
+      // Do the best-effort logical scrub and revoke access before reporting
+      // that secret-safe erasure is unavailable. This never returns success.
+      if !self.closed; do
+        self.logical_clear();
+      fi
       rt fail("alloc/secure: guaranteed zeroization requires backend support");
     }
   end
