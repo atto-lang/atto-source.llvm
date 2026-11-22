@@ -60,6 +60,20 @@ pub fn compile(source: &str) -> Result<Vec<u8>, Diagnostic> {
             _ => {}
         }
     }
+    // A protected actor attachment must never become an ordinary field
+    // during the scalar/actor guest compiler's fallback parsing.
+    let attached_actor_state = toks.windows(5).any(|w|
+        matches!((&w[0].tok,&w[1].tok,&w[2].tok,&w[3].tok,&w[4].tok),
+            (lexer::Tok::Ident(a),lexer::Tok::Ident(b),
+             lexer::Tok::Ident(c),lexer::Tok::Ident(d),lexer::Tok::Ident(_))
+                if a=="define"&&b=="state"&&c=="on"&&d=="actor"));
+    if attached_actor_state {
+        let headers = target_syntax::parse_target_declarations(&toks)?;
+        if !headers.actor_state_attachments.is_empty() {
+            return Err(Diagnostic::new(toks[0].pos, "E_UNSUPPORTED",
+                "attached actor state is parsed but its guarded native/guest runtime is unavailable"));
+        }
+    }
     if target {
         let headers = target_syntax::parse_target_declarations(&toks)?;
         // Type the declared method signatures without handing unlinked actor

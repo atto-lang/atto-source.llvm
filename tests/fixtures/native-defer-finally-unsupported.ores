@@ -1,0 +1,5 @@
+pub fnc main(): int {
+  try { return 3; }
+  catch (err) { return 2; }
+  finally { return 4; }
+}

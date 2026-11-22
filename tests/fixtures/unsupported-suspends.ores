@@ -1,0 +1,1 @@
+suspends fnc read_blocking(): int { return 1; }

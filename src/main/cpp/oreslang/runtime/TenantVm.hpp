@@ -53,7 +53,8 @@ enum class Status {
     HostClosed,
     SignalHandlerLost, // another component replaced our fault handler, so a guest fault would be fatal
     ActorRestarted,    // this turn failed. The actor restarted from its stored state and goes on
-    ActorTerminated    // the actor spent its restart budget and has ended; the rest of the VM goes on
+    ActorTerminated,   // the actor spent its restart budget and has ended; the rest of the VM goes on
+    ConfidentialComputeUnavailable // no verified hardware-TEE attestation provider; never downgrade
 };
 const char* to_string(Status status) noexcept;
 
@@ -95,6 +96,10 @@ struct VmSpec {
     const OresVmGuestModule* module = nullptr; // must outlive the VM; no writable globals
     std::shared_ptr<const void> module_owner;  // released after the VM retires
     VmLimits limits;
+    // Host-requested confidentiality, not a guest capability or TEE claim.
+    // Until a verified TEE/attestation/key-release provider is integrated,
+    // TenantVmHost::open must deny this before allocating or publishing a VM.
+    bool require_confidential_compute = false;
 };
 
 struct HostLimits {

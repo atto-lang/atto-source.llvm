@@ -1,0 +1,9 @@
+// Native LLVM AOT telemetry candidate: fixed checked-in routine and site IDs.
+// Compilation in this branch requires explicit checked descriptor admission.
+pub fnc main(): int {
+    using telemetry.span("hammer") as span {
+        log.info("hammer.started");
+        log.info("hammer.finished");
+    }
+    return 42;
+}

@@ -1,0 +1,74 @@
+name: LLVM actor pipeline host routing proof
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/ActorPipeContract.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeActorPipeTransport.hpp'
+      - 'src/main/cpp/oreslang/runtime/BoundedActorPort.hpp'
+      - 'src/main/cpp/oreslang/runtime/ActorGroupLifecycle.hpp'
+      - 'src/main/cpp/oreslang/runtime/ActorMailboxCompletion.hpp'
+      - 'tests/native_actor_pipe_contract_test.cpp'
+      - 'tests/native_actor_emit_pipe_contract_v3_test.cpp'
+      - 'src/main/cpp/oreslang/runtime/ActorEmitPipeContractV3.hpp'
+      - 'tests/native_actor_pipe_graph_contract_test.cpp'
+      - 'tests/native_actor_pipeline_routing_test.cpp'
+      - 'tests/native_actor_pipe_transport_test.cpp'
+      - 'tests/native_actor_control_data_lane_test.cpp'
+      - 'tests/bounded_actor_port_test.cpp'
+      - 'scripts/test-actor-pipeline-routing.sh'
+      - 'scripts/test-actor-pipeline-exact-head.sh'
+      - '.github/workflows/actor-pipeline-routing.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/main/cpp/oreslang/runtime/ActorPipeContract.hpp'
+      - 'src/main/cpp/oreslang/runtime/NativeActorPipeTransport.hpp'
+      - 'src/main/cpp/oreslang/runtime/BoundedActorPort.hpp'
+      - 'src/main/cpp/oreslang/runtime/ActorGroupLifecycle.hpp'
+      - 'src/main/cpp/oreslang/runtime/ActorMailboxCompletion.hpp'
+      - 'tests/native_actor_pipe_contract_test.cpp'
+      - 'tests/native_actor_emit_pipe_contract_v3_test.cpp'
+      - 'src/main/cpp/oreslang/runtime/ActorEmitPipeContractV3.hpp'
+      - 'tests/native_actor_pipe_graph_contract_test.cpp'
+      - 'tests/native_actor_pipeline_routing_test.cpp'
+      - 'tests/native_actor_pipe_transport_test.cpp'
+      - 'tests/native_actor_control_data_lane_test.cpp'
+      - 'tests/bounded_actor_port_test.cpp'
+      - 'scripts/test-actor-pipeline-routing.sh'
+      - 'scripts/test-actor-pipeline-exact-head.sh'
+      - '.github/workflows/actor-pipeline-routing.yml'
+permissions:
+  contents: read
+jobs:
+  exact-source-native-host-routing:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout exact reviewed source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify immutable exact PR-head source
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          echo "ACTOR_PIPELINE_SOURCE_HEAD=$EXPECTED_HEAD"
+          echo "ACTOR_PIPELINE_SOURCE_TREE=$(git rev-parse HEAD^{tree})"
+          git hash-object src/main/cpp/oreslang/runtime/ActorPipeContract.hpp \
+            src/main/cpp/oreslang/runtime/NativeActorPipeTransport.hpp \
+            src/main/cpp/oreslang/runtime/BoundedActorPort.hpp \
+            src/main/cpp/oreslang/runtime/ActorGroupLifecycle.hpp
+      - name: Run exact-head native actor pipeline and CONTROL GCC/Clang matrix
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          bash scripts/test-actor-pipeline-exact-head.sh | tee "$RUNNER_TEMP/actor-pipeline-evidence.log"
+          grep -Fx 'LLVM_ACTOR_PIPELINE_EXACT_HEAD_HOST_EXECUTED_PASS' "$RUNNER_TEMP/actor-pipeline-evidence.log"

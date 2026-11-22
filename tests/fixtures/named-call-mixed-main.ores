@@ -1,0 +1,2 @@
+pub fnc main(): int { return combine(4, a: 3); }
+fnc combine(int bar, int a): int { return bar * 10 + a; }

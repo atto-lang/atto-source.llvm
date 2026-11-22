@@ -1,0 +1,9 @@
+// Native scalar loop CFG, negated condition becomes true at i=4.
+pub fnc main(): int {
+  let int i = 0;
+  loop {
+    i = i + 1;
+    do unless i < 4 then break; fi
+  }
+  return i;
+}
