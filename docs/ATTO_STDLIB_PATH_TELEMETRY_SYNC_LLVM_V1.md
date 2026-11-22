@@ -18,7 +18,7 @@ scheduler wakeups or actual semaphore/barrier scheduling. The necessary trusted
 compiler/runtime backends must be implemented and tested independently.
 No blocking APIs were added. No host language code was placed in these `.atto` files.
 
-`tests/fixtures/stdlib_path_telemetry_sync_v1.atto` is a 23-branch
+`tests/fixtures/stdlib_path_telemetry_sync_v1.atto` is a 24-branch
 proposed guest behavior oracle. It is not a PASS until an exact-source
 LLVM compiler imports all three modules and runs the guest. Unsupported
 imports should fail explicitly rather than fall through to host behavior.
