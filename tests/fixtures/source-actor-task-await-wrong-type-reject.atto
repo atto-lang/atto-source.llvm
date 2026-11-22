@@ -1,0 +1,9 @@
+// Even if the task is syntactically capture-free, Task<int> must produce int.
+define actor Worker as {
+  let total: int = 0;
+  pub suspends fnc on_message(int n): int {
+    let Task<int> child = task { return true; };
+    return await child;
+  }
+}
+pub fnc main(): int { return 0; }

@@ -123,5 +123,68 @@ int main() {
         assert(bytes[0] == static_cast<std::uint8_t>(i) && bytes[1] == 2);
     }
 
+
+    // Half-close parity with the Wasm/.NET host envelope: accepted records
+    // always precede EOF; zero-byte DATA is a real queued record.
+    using HalfIo = NativeActorIoEnvelope<3, 8, 16, 2, 8, 16>;
+    HalfIo half(ActorIoAuthority{77, 1, 441});
+    const auto half_auth = half.authority();
+    const std::uint8_t first[] = {11, 22};
+    const std::uint8_t second[] = {33};
+    std::uint8_t half_read[8] = {};
+    std::size_t half_length = 77;
+    assert(!half.input_at_eof(half_auth));
+    assert(!half.output_at_eof(half_auth));
+    assert(half.try_feed_input(half_auth, first, sizeof(first)));
+    assert(half.try_feed_input(half_auth, nullptr, 0));
+    assert(half.close_input(half_auth));
+    assert(!half.close_input(half_auth));
+    assert(!half.input_at_eof(half_auth));
+    assert(!half.try_feed_input(half_auth, second, sizeof(second)));
+    assert(!half.try_feed_input(half_auth, nullptr, 0));
+    assert(half.try_read_input(half_auth, half_read, sizeof(half_read), half_length));
+    assert(half_length == 2 && half_read[0] == 11 && half_read[1] == 22);
+    assert(!half.input_at_eof(half_auth));
+    assert(half.try_read_input(half_auth, nullptr, 0, half_length));
+    assert(half_length == 0);
+    assert(half.input_at_eof(half_auth));
+    assert(!half.try_read_input(half_auth, half_read, sizeof(half_read), half_length));
+
+    assert(half.try_write_output(half_auth, second, sizeof(second)));
+    assert(half.try_write_output(half_auth, first, sizeof(first)));
+    assert(half.close_output(half_auth));
+    assert(!half.close_output(half_auth));
+    assert(!half.output_at_eof(half_auth));
+    assert(!half.try_write_output(half_auth, first, sizeof(first)));
+    assert(half.try_emit_error(half_auth, "E", "independent"));
+    assert(half.try_emit_event(half_auth, "end", "output"));
+    assert(half.try_read_output(half_auth, half_read, sizeof(half_read), half_length));
+    assert(half_length == 1 && half_read[0] == 33);
+    assert(!half.output_at_eof(half_auth));
+    assert(half.try_read_output(half_auth, half_read, sizeof(half_read), half_length));
+    assert(half_length == 2 && half_read[0] == 11);
+    assert(half.output_at_eof(half_auth));
+    ActorIoTextPair<16> half_diagnostic;
+    ActorIoTextPair<16> half_event;
+    assert(half.try_read_error(half_auth, half_diagnostic));
+    assert(half_diagnostic.first_view() == "E");
+    assert(half.try_read_event(half_auth, half_event));
+    assert(half_event.first_view() == "end");
+
+    auto invalid_half = half_auth;
+    ++invalid_half.nonce;
+    expect_stale([&] { (void)half.close_input(invalid_half); });
+    expect_stale([&] { (void)half.output_at_eof(invalid_half); });
+    const auto half_fresh = half.restart(2, 442);
+    expect_stale([&] { (void)half.close_output(half_auth); });
+    expect_stale([&] { (void)half.input_at_eof(half_auth); });
+    assert(!half.input_at_eof(half_fresh) && !half.output_at_eof(half_fresh));
+    assert(half.try_feed_input(half_fresh, second, sizeof(second)));
+    assert(half.try_write_output(half_fresh, second, sizeof(second)));
+    assert(half.try_read_input(half_fresh, half_read, sizeof(half_read), half_length));
+    assert(half_length == 1 && half_read[0] == 33);
+    assert(half.try_read_output(half_fresh, half_read, sizeof(half_read), half_length));
+    assert(half_length == 1 && half_read[0] == 33);
+
     return 0;
 }

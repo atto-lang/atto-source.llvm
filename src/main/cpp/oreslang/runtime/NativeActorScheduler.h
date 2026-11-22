@@ -304,6 +304,20 @@ int ores_native_actor_scheduler_publish_control(
 int ores_native_actor_scheduler_publish_failure(
     OresNativeActorScheduler* scheduler, OresNativeActorRef parent,
     OresNativeActorTerminalFailure failure);
+/* Carrier affinity window (CONTINUATION_LOCALITY_V1 rule 5): a carrier prefers
+ * a WAKE/TASK/DATA turn whose actor it ran last, within the first `window`
+ * entries of the queue. 0 disables it; the maximum is 64. Call before carriers
+ * start taking turns. Returns 0 for an invalid window. */
+int ores_native_actor_scheduler_set_affinity_window(
+        OresNativeActorScheduler* s, uint32_t window);
+/* Turns taken ahead of their queue head because of carrier affinity. */
+uint64_t ores_native_actor_scheduler_affine_picks(OresNativeActorScheduler* s);
+/* Number of turns changing physical carriers since their actor's previous
+ * turn; WAKE/TASK-only count isolates resumed continuation migrations.
+ * These are cache-locality PROXIES, not hardware L1/L2 miss measurements.
+ * Counter reads are lock-protected; NULL returns zero. */
+uint64_t ores_native_actor_scheduler_carrier_migrations(OresNativeActorScheduler* s);
+uint64_t ores_native_actor_scheduler_continuation_migrations(OresNativeActorScheduler* s);
 uint64_t ores_native_actor_scheduler_control_completed(
     OresNativeActorScheduler* scheduler);
 OresNativeActorScheduler* ores_native_actor_scheduler_open(

@@ -1,0 +1,59 @@
+{
+  "schema": "atto.llvm.native-actor-capacity-hardening.v1",
+  "status": "PASS_32_ACTOR_CAP_AND_NATIVE_GUEST_REGRESSION",
+  "base_actor_receipt": "contracts/native-llvm-actor-aot-v1.json",
+  "base_actor_receipt_blob": "b6511bfb60d2a837db08b555aa6acacc1034bac6",
+  "code_source": {
+    "repo": "atto-lang/atto-source.llvm",
+    "commit": "80962a969395db34c332730a56907f4c951e231b",
+    "full_tree": "099b089383525f0da89dd734fc7d86e659450f2c",
+    "files": 46,
+    "llvm_emitter_blob": "fb5d05772f0b47d49876897dbbf02d825111460b",
+    "runtime_c_blob": "95780f61ed1deba59a2375710a25eee6e9e5b86a",
+    "mailbox_stress_c_blob": "92cf80f244cbaa0811e6a154aaed38a1d1fd481f",
+    "actor_test_script_blob": "1aeff548f616423d68ffdd96509dfd51750c1b2c"
+  },
+  "runner": {
+    "repo": "athlet-o/athleto-e2e",
+    "run": "https://github.com/athlet-o/athleto-e2e/actions/runs/43657779372",
+    "mirror_snapshot": "dc8b8594e40c18922ef593b77d3f2b07174280a9",
+    "workflow_commit": "486eb920e7cd23846f0e2c7779a20f8986a0e360",
+    "result": "success",
+    "exact_git_tree": true,
+    "no_cross_org_checkout_secret": true
+  },
+  "verified": {
+    "actor_native_guest_fixtures": 4,
+    "actor_guest_repetitions": 20,
+    "actor_native_guest_executions": 80,
+    "unsupported_or_unsafe_actor_programs_rejected": 3,
+    "abi_producers": 4,
+    "abi_receiving_actors": 8,
+    "abi_accepted_messages_per_run": 1600,
+    "abi_stress_repetitions": 5,
+    "abi_accepted_messages_total": 8000,
+    "maximum_actor_instances": 32,
+    "maximum_actor_instances_actually_tested": true,
+    "thirty_third_spawn_rejected": true,
+    "actor_generation_rejected_after_global_shutdown": true,
+    "private_arena_and_dedicated_stack": true,
+    "per_actor_fifo_and_drain": true,
+    "actor_and_abi_asan_ubsan": true,
+    "scalar_protocol_cases_preserved": 1255,
+    "historical_scalar_receipts_passed": true,
+    "historical_actor_receipt_static_tests_passed": true,
+    "static_evidence_unit_tests_passed": 8
+  },
+  "unsupported": {
+    "supervision_panic_control": false,
+    "critical_read_write_sealed_state": false,
+    "namespace_declare_actor_mtd_runtime": false,
+    "cooperative_work_stealing": false,
+    "guest_dynamic_object_heap": false,
+    "typed_send_result": false,
+    "per_actor_close_cancel": false,
+    "native_full_language_aot": false,
+    "quic_tls_http3_network": false,
+    "independent_other_backends": false
+  }
+}

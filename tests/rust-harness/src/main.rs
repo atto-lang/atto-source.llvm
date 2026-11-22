@@ -1,5 +1,7 @@
 mod checked_i64;
 mod native_cast_parity;
+#[cfg(test)]
+mod actor_io_half_close;
 
 use std::{
     env,

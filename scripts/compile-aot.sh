@@ -98,6 +98,12 @@ fi
 if grep -Eq 'declare .*@oreslang_int_array_' "$work/program.ll"; then
   runtime_sources+=("$root/src/main/cpp/oreslang/runtime/NativeIntArrayRegion.c")
 fi
+if grep -Eq 'declare .*@ores_string_split_literal' "$work/program.ll"; then
+  # Compiler-generated String.split_literal owns a checked Array<String>.
+  # Keep the cross-region helper separate from the basic String runtime
+  # so existing String-only and Array-only link targets remain independent.
+  runtime_sources+=("$root/src/main/cpp/oreslang/runtime/NativeStringSplit.c")
+fi
 if grep -Eq 'declare .*@(oreslang_source_actor_|ores_actor_)' "$work/program.ll"; then
   # Source actors: the native scheduler, VM and actor-owned i64 heap. Same
   # set tests/source_actor_e2e.py links, minus its test-only receipt define.
@@ -149,6 +155,14 @@ if (( ${#runtime_sources[@]} )); then
     -I "$root/src/main/cpp" "${runtime_sources[@]}" -pthread -o "$work/program"
 else
   "$clang" "-O${opt_level}" -x ir "$work/program.ll" -o "$work/program"
+fi
+# This is a Linux ELF *known collector/linkage* screen, not a proof of
+# process-wide zero GC. It must run before publishing the executable so
+# failed admission cannot replace a previously working artifact.
+if [[ "$(uname -s)" == Linux ]]; then
+  bash "$root/scripts/audit-aot-linked-image.sh" "$work/program"
+else
+  echo 'LINKED_AOT_GC_SCREEN_NOT_RUN: non-Linux target; only the IR gate ran' >&2
 fi
 # Fail closed before publishing. A successful subprocess exit is not proof that
 # the output is a native executable: a broken wrapper can emit IR, a shell script,

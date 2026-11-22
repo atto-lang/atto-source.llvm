@@ -168,6 +168,24 @@ def main() -> int:
         )
         require_nesting_rejected(compiler, additive_over)
 
+        # |> stages have their own 128-edge budget (java parity) on top of the
+        # unchanged 64-level nesting budget: the deepest admitted AST combines
+        # both, so recursive passes must survive 64 + 128 levels.
+        stages = " |> increment" * 128
+        combined_ok = base / "nesting-64-plus-pipeline-128.ores"
+        combined_ok.write_text(
+            "fnc increment(int value): int { return value + 1; }\n"
+            "pub fnc main(): int { return " + "1+" * 62 + "(0" + stages + "); }\n"
+        )
+        require_compiles(compiler, combined_ok)
+
+        combined_over = base / "nesting-65-plus-pipeline-128.ores"
+        combined_over.write_text(
+            "fnc increment(int value): int { return value + 1; }\n"
+            "pub fnc main(): int { return " + "1+" * 64 + "(0" + stages + "); }\n"
+        )
+        require_nesting_rejected(compiler, combined_over)
+
     print("native source input budget: byte/encoding/Cortex-M and expression-depth boundaries passed")
     return 0
 

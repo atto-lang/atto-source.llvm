@@ -1,0 +1,9 @@
+// expect-reject: E_DUPLICATE
+use namespace workers;
+declare actor Foo1;
+define actor Foo1 as
+ receive(ActorMail<int> mail): void { return; }
+end
+mtd (Foo1 self) process_value(int value): int { return value + 1; }
+mtd (Foo1 self) process_value(int value): int { return value + 2; }
+pub fnc main(): int { return 42; }

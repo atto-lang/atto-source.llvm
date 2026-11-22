@@ -1,0 +1,34 @@
+// Native LLVM actor bootstrap: two actor types and independent private state.
+// expect-exit: 0
+// stdout-order: unordered across actors
+// expect-stdout: 1
+// expect-stdout: 3
+// expect-stdout: 102
+// expect-stdout: 105
+define actor Foo1 as
+    let int base = 0;
+    receive(ActorMail<int> mail): void {
+        self.base = self.base + mail.value;
+        stdio.println(self.base);
+        return;
+    }
+end
+
+define actor Foo2 as
+    let int base = 100;
+    receive(ActorMail<int> mail): void {
+        self.base = self.base + mail.value;
+        stdio.println(self.base);
+        return;
+    }
+end
+
+pub fnc main(): int {
+    val first = spawn Foo1();
+    val second = spawn Foo2();
+    first.send(1);
+    second.send(2);
+    first.send(2);
+    second.send(3);
+    return 0;
+}
