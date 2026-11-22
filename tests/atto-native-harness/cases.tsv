@@ -37,3 +37,5 @@ std-scalar-range-lower|positive/std-scalar-range-lower.atto|0
 std-scalar-range-upper|positive/std-scalar-range-upper.atto|0
 std-scalar-range-inverted|positive/std-scalar-range-inverted.atto|1
 std-scalar-range-outside|positive/std-scalar-range-outside.atto|1
+std-scalar-greater-equal|positive/std-scalar-greater-equal.atto|1
+std-scalar-less-equal|positive/std-scalar-less-equal.atto|1
