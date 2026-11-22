@@ -444,6 +444,150 @@ fn admit_freestanding_tokens(
     Ok(())
 }
 
+/// Resolve the *compiler-owned* HTTP scalar library as a separate parsed
+/// source unit before type checking. The bootstrap frontend has no general
+/// module AST, so this initial native import slice admits only qualified,
+/// public free-function calls. Unsupported module imports fail closed; this
+/// is not a general filesystem/package importer or a network capability.
+fn link_registered_http_import(
+    tokens: Vec<atto_compiler::lexer::Token>,
+    profile: LibraryProfile,
+) -> Result<(Vec<atto_compiler::lexer::Token>, Option<atto_compiler::ast::Program>), String> {
+    use atto_compiler::lexer::{Tok, Token};
+    use std::collections::BTreeSet;
+
+    let word = |index: usize, expected: &str| {
+        matches!(tokens.get(index).map(|t| &t.tok),
+            Some(Tok::Ident(name)) if name == expected)
+    };
+    if !tokens.iter().any(|token| matches!(&token.tok,
+        Tok::Ident(name) if name == "import")) {
+        return Ok((tokens, None));
+    }
+    if profile == LibraryProfile::FreestandingCore {
+        return Err("E_FREESTANDING_FORBIDDEN_IMPORT: std.http is hosted-only".into());
+    }
+    // Exactly one, source-leading wildcard alias of the registered identity.
+    // The lexer eliminates comments/strings as keyword candidates, and the
+    // parser never sees a partial or unvalidated import declaration.
+    if !word(0, "import")
+        || !matches!(tokens.get(1).map(|t| &t.tok), Some(Tok::Star))
+        || !word(2, "as")
+        || !word(4, "from")
+        || !matches!(tokens.get(6).map(|t| &t.tok), Some(Tok::Semi))
+    {
+        return Err("E_NATIVE_IMPORT_UNSUPPORTED: expected source-leading import * as alias from \"std.http\";".into());
+    }
+    let alias = match tokens.get(3).map(|t| &t.tok) {
+        Some(Tok::Ident(alias)) if !alias.is_empty()
+            && !matches!(alias.as_str(), "import" | "from" | "pub"
+                | "define" | "fnc" | "module" | "as") => alias.clone(),
+        _ => return Err("E_NATIVE_IMPORT_ALIAS: expected non-keyword namespace alias".into()),
+    };
+    match tokens.get(5).map(|t| &t.tok) {
+        Some(Tok::Str(path)) if path == "std.http" => {}
+        Some(Tok::Str(_)) => {
+            return Err("E_NATIVE_IMPORT_UNREGISTERED: only registered std.http is admitted".into());
+        }
+        _ => return Err("E_NATIVE_IMPORT_UNSUPPORTED: import path must be a quoted identity".into()),
+    }
+
+    // Compile-time inclusion is NOT the same as concatenating source bytes:
+    // the library is independently lexed and parsed into an AST. Its bytes
+    // come only from this backend repository's immutable build input, never
+    // from working-directory shadow files, env search paths or symlinks.
+    const HTTP_SOURCE: &str = include_str!("../stdlib/http/message_policy.atto");
+    if HTTP_SOURCE.len() > atto_compiler::SOURCE_CAP {
+        return Err("E_NATIVE_IMPORT_LIMIT: packaged library exceeds source cap".into());
+    }
+    let library_tokens = atto_compiler::lexer::lex(HTTP_SOURCE)
+        .map_err(|e| format!("E_NATIVE_IMPORT_LIBRARY_LEX: {e}"))?;
+    let library = atto_compiler::parser::Parser::new(library_tokens.clone())
+        .parse_program()
+        .map_err(|e| format!("E_NATIVE_IMPORT_LIBRARY_PARSE: {e}"))?;
+    if library.funcs.is_empty() || !library.classes.is_empty()
+        || !library.actors.is_empty() || !library.enums.is_empty()
+        || library.actor_interface.is_some() || !library.type_names.is_empty()
+    {
+        return Err("E_NATIVE_IMPORT_LIBRARY_SHAPE: std.http must contain only scalar functions".into());
+    }
+    let library_names: BTreeSet<String> = library.funcs.iter()
+        .map(|func| func.name.clone()).collect();
+    if library_names.len() != library.funcs.len() || library_names.contains("main") {
+        return Err("E_NATIVE_IMPORT_LIBRARY_SHAPE: duplicate or reserved function".into());
+    }
+    // The current frontend's Func AST does not retain the public modifier.
+    // Extract the public surface from the same independently lexed source,
+    // at file scope only. A private helper may be linked for internal library
+    // calls but never exported to an import alias.
+    let mut public_functions = BTreeSet::new();
+    let mut depth = 0usize;
+    for (i, token) in library_tokens.iter().enumerate() {
+        if depth == 0
+            && matches!(&token.tok, Tok::Ident(value) if value == "pub")
+            && matches!(library_tokens.get(i + 1).map(|t| &t.tok),
+                Some(Tok::Ident(value)) if value == "fnc")
+        {
+            if let Some(Tok::Ident(name)) = library_tokens.get(i + 2).map(|t| &t.tok) {
+                if !name.starts_with("http_") || !library_names.contains(name)
+                    || !public_functions.insert(name.clone())
+                {
+                    return Err("E_NATIVE_IMPORT_LIBRARY_EXPORT: invalid public HTTP function".into());
+                }
+            } else {
+                return Err("E_NATIVE_IMPORT_LIBRARY_EXPORT: missing function name".into());
+            }
+        }
+        match token.tok {
+            Tok::LBrace => depth += 1,
+            Tok::RBrace => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    if public_functions.is_empty() {
+        return Err("E_NATIVE_IMPORT_LIBRARY_EXPORT: no public HTTP functions".into());
+    }
+
+    let mut application_tokens = Vec::with_capacity(tokens.len());
+    let mut i = 7;
+    while i < tokens.len() {
+        if let Tok::Ident(name) = &tokens[i].tok {
+            if name == "import" {
+                return Err("E_NATIVE_IMPORT_UNSUPPORTED: multiple or nested imports".into());
+            }
+            // User-authored direct references to the compiler's internal
+            // function names cannot bypass the qualified namespace export.
+            if library_names.contains(name) {
+                return Err(format!("E_NATIVE_IMPORT_PRIVATE: unqualified built-in symbol {name}"));
+            }
+            if *name == alias {
+                if matches!(tokens.get(i + 1).map(|t| &t.tok), Some(Tok::Dot)) {
+                    let member = match tokens.get(i + 2).map(|t| &t.tok) {
+                        Some(Tok::Ident(member)) => member,
+                        _ => return Err("E_NATIVE_IMPORT_MEMBER: expected a public function name".into()),
+                    };
+                    let qualified = format!("http_{member}");
+                    if !public_functions.contains(&qualified) {
+                        return Err(format!("E_NATIVE_IMPORT_PRIVATE: no public std.http function {member}"));
+                    }
+                    if !matches!(tokens.get(i + 3).map(|t| &t.tok), Some(Tok::LParen)) {
+                        return Err("E_NATIVE_IMPORT_MEMBER: only qualified calls are supported".into());
+                    }
+                    application_tokens.push(Token {
+                        tok: Tok::Ident(qualified), pos: tokens[i].pos,
+                    });
+                    i += 3;
+                    continue;
+                }
+                return Err("E_NATIVE_IMPORT_ALIAS: namespace alias cannot be shadowed or used as a value".into());
+            }
+        }
+        application_tokens.push(tokens[i].clone());
+        i += 1;
+    }
+    Ok((application_tokens, Some(library)))
+}
+
 pub fn compile_ir(source: &str) -> Result<String, String> {
     compile_ir_with_profile(source, LibraryProfile::Hosted)
 }
@@ -477,12 +621,19 @@ fn compile_ir_with_profile(source: &str, profile: LibraryProfile) -> Result<Stri
     if profile == LibraryProfile::FreestandingCore {
         admit_freestanding_tokens(&toks)?;
     }
-    let program = if target_native::requires_target_link(&toks) {
+    let (toks, linked_http) = link_registered_http_import(toks, profile)?;
+    let mut program = if target_native::requires_target_link(&toks) {
         target_native::lower(&toks)?
     } else {
         atto_compiler::parser::Parser::new(toks).parse_program()
             .map_err(|e|e.to_string())?
     };
+    if let Some(library) = linked_http {
+        // Merge independently checked source units at the AST boundary, not
+        // by text concatenation. The normal typed checker enforces all call
+        // signatures and duplicate declaration rules on the linked program.
+        program.funcs.extend(library.funcs);
+    }
     let typed = check::check(&program).map_err(|e|e.to_string())?;
     if profile == LibraryProfile::FreestandingCore {
         if !typed.imports.is_empty() {
