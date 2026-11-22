@@ -10,6 +10,16 @@ cc_bin="${CC:-cc}"
     "$root/src/main/cpp/oreslang/runtime/NativeThreadV1.c" \
     "$root/tests/native_thread_v1_test.c" \
     -o "$tmp/native-thread-v1"
+
+# Scope quota test reuses the exact same native C runtime and test-only
+# exhaustion hook; no guest compiler or external source copy is involved.
+"$cc_bin" -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+    -DORES_NATIVE_THREAD_TEST_ID_EXHAUSTION -pthread \
+    -I"$root/src/main/cpp" \
+    "$root/src/main/cpp/oreslang/runtime/NativeThreadV1.c" \
+    "$root/tests/native_thread_scope_v1_test.c" \
+    -o "$tmp/native-thread-scope-v1"
+"$tmp/native-thread-scope-v1"
 "$tmp/native-thread-v1"
 
 # A header-only compiler-admission model test. Does not invoke guest frontend.
@@ -36,3 +46,25 @@ esac
     "$tmp/NativeThreadV1.o" \
     -o "$tmp/native-thread-join-reaper"
 "$tmp/native-thread-join-reaper"
+
+# Host-only scheduler notification bridge: cancellation, exactly-once enqueue,
+# generation tags, and race with physical thread completion.
+"$cxx_bin" -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -UNDEBUG -pthread \
+  -I"$root/src/main/cpp" "$root/tests/native_join_task_wait_v1_test.cpp" \
+  "$tmp/NativeThreadV1.o" -o "$tmp/native-join-task-wait"
+"$tmp/native-join-task-wait"
+
+
+# End-to-end host-only join completion -> Task READY -> exact scheduler claim.
+# Keep all C stores compiled as C, and never run guest frames from the reaper.
+for unit in NativeExecutionContextStore NativeContinuationStore NativeAwaitTraceBridge; do
+  "$cc_bin" -std=c11 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror -pthread \
+    -I"$root/src/main/cpp" -c "$root/src/main/cpp/oreslang/runtime/$unit.c" \
+    -o "$tmp/$unit.o"
+done
+"$cxx_bin" -std=c++17 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror -pthread \
+  -I"$root/src/main/cpp" "$root/tests/native_join_task_continuation_bridge_v1_test.cpp" \
+  "$tmp/NativeThreadV1.o" "$tmp/NativeExecutionContextStore.o" \
+  "$tmp/NativeContinuationStore.o" "$tmp/NativeAwaitTraceBridge.o" \
+  -o "$tmp/native-join-task-continuation-bridge"
+"$tmp/native-join-task-continuation-bridge"

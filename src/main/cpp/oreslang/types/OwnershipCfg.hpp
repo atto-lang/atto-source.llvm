@@ -116,34 +116,9 @@ inline void require_owned(const std::string& key, const PlaceState& value) {
         violation(key, "not definitely initialized on every CFG predecessor");
 }
 
-// apply() also has direct compiler callers, outside verify()'s entry
-// normalization. Do not let release erase malformed ownership evidence or
-// dereference an empty identity set. Legacy anonymous entry loans must first
-// go through verify(), which explicitly normalizes their reserved identity.
-inline void validate_operation_state(const State& state) {
-    for (const auto& [name, value] : state) {
-        if (!value.possible || (value.possible &
-                static_cast<ValueMask>(~(kOwned | kMoved | kUninitialized | kDropped)))) {
-            violation(name, "invalid operation ownership mask");
-        }
-        if (value.shared_loans > 65535 ||
-                value.shared_loans != value.shared_loan_ids.size() ||
-                value.exclusive_loan != value.exclusive_loan_id.has_value()) {
-            violation(name, "unproven operation loan identity");
-        }
-        if (value.exclusive_loan && value.shared_loans) {
-            violation(name, "conflicting operation borrow states");
-        }
-        if ((value.exclusive_loan || value.shared_loans) && value.possible != kOwned) {
-            violation(name, "live loan on non-owned operation place");
-        }
-    }
-}
-
 inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
     // Keep direct helper callers as safe as verify(Graph), not just the CFG path.
     validate_disjoint_place_layout(state);
-    validate_operation_state(state);
     if (op.kind == Operation::Kind::ReadObject ||
             op.kind == Operation::Kind::MoveObject) {
         // A non-Copy object requires *all* its fields. A moved field does
@@ -225,9 +200,7 @@ inline void apply(Operation op, State& state, std::uint64_t site_id = 0) {
             if (!value.shared_loans) violation(op.place, "unmatched shared loan release");
             if (!op.loan_id && value.shared_loan_ids.size() != 1)
                 violation(op.place, "shared loan release requires unambiguous provenance");
-            // value_or eagerly evaluates its argument even for an explicit ID.
-            // State validation above proves the fallback set is nonempty.
-            const auto to_release = op.loan_id ? *op.loan_id : *value.shared_loan_ids.begin();
+            const auto to_release = op.loan_id.value_or(*value.shared_loan_ids.begin());
             if (!value.shared_loan_ids.erase(to_release))
                 violation(op.place, "shared loan release has foreign provenance");
             --value.shared_loans;

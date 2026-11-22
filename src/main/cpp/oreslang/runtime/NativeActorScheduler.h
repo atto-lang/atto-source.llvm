@@ -228,9 +228,18 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_typed_control(
 OresNativeActorScheduler* ores_native_actor_scheduler_open_control(
     size_t actor_count, size_t per_actor_capacity, size_t workers,
     OresNativeActorTaskFn on_message, OresNativeActorTaskFn on_control, void* ctx);
-/* A failed/retired child publishes a typed control envelope (encoded in
- * payload) to the parent. Returns 0 if the reserved slot is full or if the
- * target is stale/stopped; caller must retry or explicitly escalate.
+/* Trusted host-only immutable child-parent reservation: before the first
+ * child DATA message, bind one live incarnation to its supervisor. The
+ * scheduler preallocates one terminal receipt per actor at creation.
+ */
+int ores_native_actor_scheduler_bind_supervisor(
+    OresNativeActorScheduler* scheduler,
+    OresNativeActorRef parent, OresNativeActorRef child);
+/* A distinct bound child publishes one typed terminal failure into its
+ * preallocated receipt; parent CONTROL owns the eventual single-flight
+ * delivery/ack even under a saturated USER mailbox. No manual retry is
+ * required for an already-admitted terminal receipt. Duplicates, stale,
+ * foreign, unbound and wrong-parent refs are rejected. Trusted host ABI.
  */
 /* Reserve the exact future delivery credit BEFORE registering a bounded
  * pending mailbox producer. All worker pthreads are made serviceable during
@@ -295,6 +304,14 @@ int ores_native_actor_scheduler_publish_control(
 int ores_native_actor_scheduler_publish_failure(
     OresNativeActorScheduler* scheduler, OresNativeActorRef parent,
     OresNativeActorTerminalFailure failure);
+/* Carrier affinity window (CONTINUATION_LOCALITY_V1 rule 5): a carrier prefers
+ * a WAKE/TASK/DATA turn whose actor it ran last, within the first `window`
+ * entries of the queue. 0 disables it; the maximum is 64. Call before carriers
+ * start taking turns. Returns 0 for an invalid window. */
+int ores_native_actor_scheduler_set_affinity_window(
+        OresNativeActorScheduler* s, uint32_t window);
+/* Turns taken ahead of their queue head because of carrier affinity. */
+uint64_t ores_native_actor_scheduler_affine_picks(OresNativeActorScheduler* s);
 uint64_t ores_native_actor_scheduler_control_completed(
     OresNativeActorScheduler* scheduler);
 OresNativeActorScheduler* ores_native_actor_scheduler_open(

@@ -235,11 +235,29 @@ fn main() {
     let exact = include_str!("fixtures/native-class-string/main.ores");
     let foo = include_str!("fixtures/native-class-string/main-1.ores");
     let positives = [
+        ("atto-nats-split-literal-empty-tokens",
+         r#"pub fnc main():int{
+            val String subject="orders..created.";
+            val parts=subject.split_literal(".");
+            val String empty="";
+            val empties=empty.split_literal(".");
+            val String nul="a\u0000b";
+            val binary=nul.split_literal("\u0000");
+            val String longsep="a::b::::";
+            val multi=longsep.split_literal("::");
+            return parts.size==4&&parts.get(0)=="orders"&&
+                parts.get(1)==""&&parts.get(2)=="created"&&
+                parts.get(3)==""&&empties.size==1&&empties.get(0)==""&&
+                binary.size==2&&binary.get(0)=="a"&&binary.get(1)=="b"&&
+                multi.size==4&&multi.get(0)=="a"&&multi.get(1)=="b"&&
+                multi.get(2)==""&&multi.get(3)==""?0:1;
+         }"#, ""),
         ("ordered-array-moves-through-owning-return", "define class Box as pub val Array<int> values;end fnc touch():void{return;}fnc build():Box{touch();val Array<int> values=new Array<int>();values.add(42);return new Box(values);}pub fnc main():int{val Box box=build();return box.values.get(0)==42?0:1;}", ""),
         ("ordered-array-sibling-scopes", "fnc touch():void{return;}pub fnc main():int{touch();if true;then val Array<int> values=new Array<int>();values.add(1);fi if true;then val Array<String> values=new Array<String>();values.add(\"ok\");if values.get(0)!=\"ok\";then return 1;fi fi return 0;}", ""),
         ("ordered-record-array-loop", "define class EntryValue as pub val int value;end fnc touch():void{return;}pub fnc main():int{touch();let int total=0;for(let int i=0;i<100;i=i+1){val Array<EntryValue> values=new Array<EntryValue>();values.add(new EntryValue(i));val EntryValue entry=values.get(0);total=total+entry.value;}return total==4950?0:1;}", ""),
 
         ("ordered-array-scopes-loop-and-early-return", include_str!("fixtures/native-class-string/ordered-array-locals.ores"), ""),
+        ("checked-copy-option-guest", include_str!("fixtures/native-class-string/copy-option-v1.atto"), "7:42:true:true:true:true:9"),
         ("ordered-val-keeps-exclusive-referent-capability", "fnc touch():void{return;}fnc observe(borrow mut int value):int{return 42;}pub fnc main():int{touch();val int value=42;return observe(rt mut borrow value)==42?0:1;}", ""),
         ("ordered-initial-and-later-mutable-slots", "fnc touch():void{return;}pub fnc main():int{let int initial=1;touch();let int later=2;initial=initial+later;return initial==3?0:1;}", ""),
         ("ordered-routing-counters-and-skipped-initializers", include_str!("fixtures/native-class-string/ordered-routing-locals.ores"), "enter;enter;initialize;finish;done;"),
@@ -254,6 +272,10 @@ fn main() {
         ("ordered-local-scopes-do-not-leak", r#"fnc touch():void{return;}pub fnc main():int{touch();let int total=0;for(let int index=0;index<2;index=index+1){let int local=index;local=local+1;total=total+local;}if total==3;then let int local=39;total=total+local;fi return total==42?0:1;}"#, ""),
         ("contextual-pattern-function-and-parameter", "fnc pattern(int pattern):int{return pattern;}pub fnc main():int{return pattern(42)==42?0:1;}", ""),
         ("sum-mixed-guard-source-order", "fnc choose(bool first):Option<int>{if first;then return Some(1);fi if(true){return Some(2);}fi return None;}pub fnc main():int{return choose(true).unwrap()==1&&choose(false).unwrap()==2?0:1;}", ""),
+        ("adt-conditional-option-tagged-arms",
+            include_str!("fixtures/adt-conditional-v1/option-positive.atto"), ""),
+        ("adt-conditional-result-tagged-arms",
+            include_str!("fixtures/adt-conditional-v1/result-positive.atto"), ""),
         ("sum-result-schema-matrix", r#"pub routine main():int{val Result<int,int> ii=Ok(0);val Result<int,bool> ib=Err(false);val Result<bool,int> bi=Ok(false);val Result<String,bool> sb=Ok("");val Result<String,String> ss=Err("");return ii.is_ok()&&ii.unwrap()==0&&ib.is_err()&&bi.is_ok()&&!bi.unwrap()&&sb.is_ok()&&sb.unwrap()==""&&ss.is_err()?0:1;}"#, ""),
         ("imported-canonical-sum-identity", r#"import module sums from './sums.ores';pub routine main():int{val Option<String> item=sums.choose(true);val Result<bool,String> result=sums.checked(false);return item.unwrap()=="module"&&result.is_err()?0:1;}"#, ""),
         ("actual-routing-option-capture", include_str!("fixtures/native-class-string/routing-option-capture.ores"), ""),
@@ -496,6 +518,34 @@ fn main() {
             "",
         ),
         (
+            "nats-string-contains-literal-binary",
+            r#"fnc valid_subject_token(String token):bool {
+                  if token == "" then return false; fi
+                  if token.contains_literal(" ") || token.contains_literal("\t") ||
+                     token.contains_literal("\r") || token.contains_literal("\n") ||
+                     token.contains_literal("\u0000") then return false; fi
+                  return true;
+                }
+                pub routine main():int {
+                  val String subject="orders.created.eu";
+                  val String nul="a\u0000b";
+                  val String utf="é\u0000stop";
+                  return valid_subject_token("orders") &&
+                    !valid_subject_token("") &&
+                    !valid_subject_token("bad subject") &&
+                    !valid_subject_token(nul) &&
+                    subject.contains_literal("created") &&
+                    subject.contains_literal(".") &&
+                    subject.contains_literal("") &&
+                    !subject.contains_literal("payments") &&
+                    !subject.contains_literal("orders.created.eu.extra") &&
+                    nul.contains_literal("\u0000") &&
+                    utf.contains_literal("\u0000") &&
+                    !subject.contains_literal("\u0000") ? 0 : 1;
+                }"#,
+            "",
+        ),
+        (
             "string-content-equality",
             r#"fnc same(string a,string b):bool{return a == b;}
               pub routine main():int {
@@ -621,7 +671,11 @@ fn main() {
     ];
     for (case_index, (name, source, expected)) in positives.iter().chain(native_only.iter()).chain(panics.iter()).enumerate() {
         let expects_panic = case_index >= positives.len() + native_only.len();
-        fs::write(scratch.0.join("main.ores"), source).unwrap();
+        // Canonical ADT regressions execute as actual .atto guest files.
+        let guest_name = if name.starts_with("adt-conditional-") {
+            "main.atto"
+        } else { "main.ores" };
+        fs::write(scratch.0.join(guest_name), source).unwrap();
         fs::write(scratch.0.join("main-1.ores"), foo).unwrap();
         fs::write(scratch.0.join("sums.ores"), "define module sums as pub fnc choose(bool yes):Option<string>{return yes?Some(\"module\"):None;}pub fnc checked(bool yes):Result<bool,string>{return yes?Ok(false):Err(\"missing\");}end").unwrap();
         fs::write(scratch.0.join("owned-box.ores"), "define pub class OwnedBox as pub val Array<int> values;pub copy():OwnedBox{val Array<int> copied=new Array<int>();copied.add(self.values.get(0));return new OwnedBox(copied);}end").unwrap();
@@ -631,7 +685,7 @@ fn main() {
         let module_fixture = include_str!("fixtures/native-class-string/routing-path-validation.ores")
             .replace("pub routine main(): int", "pub fnc verify_paths(): int");
         fs::write(scratch.0.join("paths.ores"), format!("define module paths as\n{module_fixture}\nend\n")).unwrap();
-        let path = scratch.0.join("main.ores");
+        let path = scratch.0.join(guest_name);
         let generated = run(Command::new(&compiler).arg(&path));
         assert!(
             generated.status.success() && !generated.stdout.is_empty(),
@@ -694,6 +748,7 @@ fn main() {
             .arg(PathBuf::from(&runtime).parent().unwrap().parent().unwrap().parent().unwrap())
             .arg(&runtime)
             .arg(PathBuf::from(&runtime).parent().unwrap().join("NativeIntArrayRegion.c"))
+            .arg(PathBuf::from(&runtime).parent().unwrap().join("NativeStringSplit.c"))
             .arg(PathBuf::from(&runtime).parent().unwrap().join("NativeRecordRegion.c"))
             .arg("-pthread")
             .arg("-o")
@@ -833,6 +888,9 @@ fn main() {
         ("ordered-array-readonly-cannot-mutate", "fnc touch():void{return;}pub fnc main():int{touch();const Array<int> values=new Array<int>();values.add(1);return 0;}".to_owned(), foo.to_owned()),
         ("ordered-array-constructor-type-mismatch", "fnc touch():void{return;}pub fnc main():int{touch();val Array<int> values=new Array<String>();return 0;}".to_owned(), foo.to_owned()),
         ("ordered-array-element-type-mismatch", "fnc touch():void{return;}pub fnc main():int{touch();val Array<String> values=new Array<String>();values.add(1);return 0;}".to_owned(), foo.to_owned()),
+        ("checked-copy-option-reject-string", "pub routine main():int{val Array<String> values=new Array<String>();values.add(\"x\");val Option<int> forged=values.get_copy(0);return 0;}".to_owned(), foo.to_owned()),
+        ("checked-copy-option-reject-bool-index", "pub routine main():int{val Array<int> values=new Array<int>();values.add(42);val Option<int> forged=values.get_copy(true);return 0;}".to_owned(), foo.to_owned()),
+        ("checked-copy-option-reject-arity", "pub routine main():int{val Array<int> values=new Array<int>();val Option<int> forged=values.get_copy();return 0;}".to_owned(), foo.to_owned()),
         ("ordered-array-loop-cannot-retain-borrow", "fnc touch():void{return;}pub fnc main():int{touch();for(let int i=0;i<2;i=i+1){val Array<int> values=new Array<int>();values.add(i);}return values.get(0);}".to_owned(), foo.to_owned()),
 
         ("legacy-mut-borrow-spelling-stays-rejected", "pub fnc main():int{val int owner=1;return rt borrow mut owner;}".to_owned(), foo.to_owned()),
@@ -857,6 +915,15 @@ fn main() {
         ("sum-contract-not-int-result", "pub define contract Api as fnc inspect(int value)=>int;end define module Server conforms Api as pub fnc inspect(int value):Option<int>{return Some(value);}pub fnc main():int{return 0;}end".to_owned(), foo.to_owned()),
         ("sum-cannot-reorder-legacy-return-guards", "fnc bad():Option<int>{if(true){return Some(1);}fi if true;then return Some(2);fi return None;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("sum-cannot-forge-from-int", "pub fnc main():int{val Option<int> item=1;return 0;}".to_owned(), foo.to_owned()),
+        ("adt-conditional-option-scalar-false",
+            include_str!("fixtures/adt-conditional-v1/option-scalar-false.atto").to_owned(),
+            foo.to_owned()),
+        ("adt-conditional-option-scalar-true",
+            include_str!("fixtures/adt-conditional-v1/option-scalar-true.atto").to_owned(),
+            foo.to_owned()),
+        ("adt-conditional-result-scalar-false",
+            include_str!("fixtures/adt-conditional-v1/result-scalar-false.atto").to_owned(),
+            foo.to_owned()),
         ("sum-cannot-return-as-int", "pub fnc main():int{val Option<int> item=Some(1);return item;}".to_owned(), foo.to_owned()),
         ("sum-cannot-use-as-bool", "pub fnc main():int{val Option<bool> item=Some(true);return item?0:1;}".to_owned(), foo.to_owned()),
         ("sum-cannot-cross-payload-types", "fnc read(Option<int> item):int{return item.unwrap();}pub fnc main():int{val Option<bool> item=Some(true);return read(item);}".to_owned(), foo.to_owned()),
@@ -962,6 +1029,17 @@ fn main() {
         ("string-record-private-field", "define class Segment as val String value; end pub fnc main():int{val Segment s=new Segment(\"secret\");return s.value==\"secret\"?0:1;}".to_owned(), foo.to_owned()),
         ("string-record-final-field-write", "define class Segment as pub val String value; end pub fnc main():int{let mut Segment s=new Segment(\"first\");s.value=\"other\";return 0;}".to_owned(), foo.to_owned()),
         ("string-record-untyped-handle-return", "define class Segment as pub val String value; end pub fnc main():int{val Segment s=new Segment(\"first\");return s.value;}".to_owned(), foo.to_owned()),
+        ("atto-nats-split-int-receiver", "pub fnc main():int{val int subject=42;val parts=subject.split_literal(\".\");return 0;}".to_owned(), foo.to_owned()),
+        ("atto-nats-split-int-delimiter", "pub fnc main():int{val String subject=\"a.b\";val parts=subject.split_literal(42);return 0;}".to_owned(), foo.to_owned()),
+        ("atto-nats-split-wrong-arity", "pub fnc main():int{val String subject=\"a.b\";val parts=subject.split_literal(\".\",\"-\");return 0;}".to_owned(), foo.to_owned()),
+        ("atto-nats-split-named-delimiter", "pub fnc main():int{val String subject=\"a.b\";val parts=subject.split_literal(delimiter:\".\");return 0;}".to_owned(), foo.to_owned()),
+        ("atto-nats-split-owner-as-int", "pub fnc main():int{val String subject=\"a.b\";val parts=subject.split_literal(\".\");val int token=parts;return token;}".to_owned(), foo.to_owned()),
+        ("nats-native-string-abi-spoof", "pub fnc ores_string_split_literal():int{return 42;}pub fnc main():int{return ores_string_split_literal();}".to_owned(), foo.to_owned()),
+        ("nats-native-string-containment-abi-spoof", "pub fnc ores_string_contains_literal():int{return 42;}pub fnc main():int{return ores_string_contains_literal();}".to_owned(), foo.to_owned()),
+        ("nats-string-contains-int-receiver", "pub routine main():int{val n: int = 42;return n.contains_literal(\"4\")?0:1;}".to_owned(), foo.to_owned()),
+        ("nats-string-contains-int-needle", "pub routine main():int{val String s=\"abc\";return s.contains_literal(42)?0:1;}".to_owned(), foo.to_owned()),
+        ("nats-string-contains-wrong-arity", "pub routine main():int{val String s=\"abc\";return s.contains_literal(\"a\",\"b\")?0:1;}".to_owned(), foo.to_owned()),
+        ("nats-string-contains-named-needle-rejected", "pub routine main():int{val String s=\"abc\";return s.contains_literal(needle:\"a\")?0:1;}".to_owned(), foo.to_owned()),
         ("string-array-integer-add", "pub fnc main():int{val Array<String> a=new Array<String>();a.add(42);return 0;}".to_owned(), foo.to_owned()),
         ("integer-array-string-add", "pub fnc main():int{val Array<int> a=new Array<int>();a.add(\"bad\");return 0;}".to_owned(), foo.to_owned()),
         ("string-array-string-index", "pub fnc main():int{val Array<String> a=new Array<String>();return a.get(\"bad\")==\"x\"?0:1;}".to_owned(), foo.to_owned()),
@@ -1076,9 +1154,12 @@ fn main() {
         ),
     ];
     for (name, source, dependency) in &negatives {
-        fs::write(scratch.0.join("main.ores"), source).unwrap();
+        let guest_name = if name.starts_with("adt-conditional-") {
+            "main.atto"
+        } else { "main.ores" };
+        fs::write(scratch.0.join(guest_name), source).unwrap();
         fs::write(scratch.0.join("main-1.ores"), dependency).unwrap();
-        let rejected = run(Command::new(&compiler).arg(scratch.0.join("main.ores")));
+        let rejected = run(Command::new(&compiler).arg(scratch.0.join(guest_name)));
         assert_eq!(
             rejected.status.code(),
             Some(1),
@@ -1087,9 +1168,16 @@ fn main() {
         assert!(rejected.stdout.is_empty(), "{name}: emitted partial IR");
         let expected_boundary = match *name {
             "legacy-mut-borrow-spelling-stays-rejected" => Some("legacy 'rt borrow mut value' is not accepted"),
+            "checked-copy-option-reject-string" |
+            "checked-copy-option-reject-bool-index" |
+            "checked-copy-option-reject-arity" => Some("native Array.get_copy requires Array<int> and a checked int index"),
             "ordered-owning-array-not-hoisted" => Some("ordered owning local requires scoped region/drop lowering"),
             "ordered-async-frame-not-on-stack" => Some("continuation-aware statement lowering"),
             "sum-contract-not-int-parameter" => Some("contract ownership mode mismatch"),
+            "adt-conditional-option-scalar-false" |
+            "adt-conditional-option-scalar-true" |
+            "adt-conditional-result-scalar-false" => Some(
+                "native conditional sum branches must resolve to the same declared sum type"),
             "sum-contract-not-int-result" => Some("contract requires int return"),
             "owning-return-duplicate-array" => Some("live unique array"),
             "owning-return-borrowed-field" => Some("named lexical array"),

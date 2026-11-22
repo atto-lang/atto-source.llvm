@@ -65,7 +65,16 @@ fn run(dir: &Path, program: &str, args: &[&str], timeout: Duration) -> Result<St
     String::from_utf8(out).map_err(|e| format!("{shown}: non-UTF-8 output: {e}"))
 }
 
-fn execute(producer: &str, clang: &str, harness: &str) -> Result<String, String> {
+/// `emit_target` selects the producer's DataLayout (native64, i686, armv7,
+/// wasm32); `clang_args` (e.g. `-m32`) apply to both clang steps so the IR,
+/// the harness and the executable share one target.
+fn execute(
+    producer: &str,
+    clang: &str,
+    harness: &str,
+    emit_target: &str,
+    clang_args: &[String],
+) -> Result<String, String> {
     let suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|e| e.to_string())?
@@ -75,7 +84,12 @@ fn execute(producer: &str, clang: &str, harness: &str) -> Result<String, String>
     let scratch = Scratch(dir);
     let temp = scratch.0.as_path();
 
-    let generated = run(temp, producer, &["--emit"], STEP_TIMEOUT)?;
+    let emit = if emit_target == "native64" {
+        "--emit".to_owned()
+    } else {
+        format!("--emit={emit_target}")
+    };
+    let generated = run(temp, producer, &[emit.as_str()], STEP_TIMEOUT)?;
     if !generated.contains("ref32.authenticated") {
         return Err("verified LLVM IR omitted original-generation proof validation".into());
     }
@@ -86,16 +100,16 @@ fn execute(producer: &str, clang: &str, harness: &str) -> Result<String, String>
         temp.join("compact.o").to_string_lossy().into_owned(),
         temp.join("actor-ref32-e2e").to_string_lossy().into_owned(),
     );
-    run(temp, clang, &["-x", "ir", "-c", &ir, "-o", &object], STEP_TIMEOUT)?;
-    run(
-        temp,
-        clang,
-        &[
-            "-std=c++17", "-O1", "-g", "-Wall", "-Wextra", "-Wpedantic", "-Werror", harness,
-            &object, "-o", &executable,
-        ],
-        STEP_TIMEOUT,
-    )?;
+    let extra: Vec<&str> = clang_args.iter().map(String::as_str).collect();
+    let mut compile_ir = extra.clone();
+    compile_ir.extend(["-x", "ir", "-c", &ir, "-o", &object]);
+    run(temp, clang, &compile_ir, STEP_TIMEOUT)?;
+    let mut link = extra;
+    link.extend([
+        "-std=c++17", "-O1", "-g", "-Wall", "-Wextra", "-Wpedantic", "-Werror", harness,
+        &object, "-o", &executable,
+    ]);
+    run(temp, clang, &link, STEP_TIMEOUT)?;
     let executed = run(temp, &executable, &[], RUN_TIMEOUT)?;
     if !executed.contains("PASS LLVM compact i32 physical load/store") {
         return Err("compiled reference contract returned no success marker".into());
@@ -105,20 +119,29 @@ fn execute(producer: &str, clang: &str, harness: &str) -> Result<String, String>
 
 fn main() {
     let (mut producer, mut clang, mut harness) = (None, None, None);
+    let mut emit_target = Some("native64".to_owned());
+    let mut clang_args = Vec::new();
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
+        let value = args.next().unwrap_or_else(|| panic!("{arg} requires a value"));
         let slot = match arg.as_str() {
             "--ir-producer" => &mut producer,
             "--clang" => &mut clang,
             "--harness" => &mut harness,
+            "--emit-target" => &mut emit_target,
+            "--clang-arg" => {
+                clang_args.push(value);
+                continue;
+            }
             _ => panic!("unknown argument: {arg}"),
         };
-        *slot = Some(args.next().unwrap_or_else(|| panic!("{arg} requires a value")));
+        *slot = Some(value);
     }
     let producer = producer.expect("--ir-producer PATH required");
     let clang = clang.expect("--clang PATH required");
     let harness = harness.expect("--harness PATH required");
-    match execute(&producer, &clang, &harness) {
+    let emit_target = emit_target.expect("--emit-target NAME");
+    match execute(&producer, &clang, &harness, &emit_target, &clang_args) {
         Ok(marker) => println!("{marker}"),
         Err(failure) => {
             eprintln!("FAIL compiled actor-ref32 LLVM execution: {failure}");

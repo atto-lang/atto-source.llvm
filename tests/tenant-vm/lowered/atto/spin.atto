@@ -1,0 +1,14 @@
+// Tenant code that never returns. Nothing in it cooperates with being stopped. AttoLang has no
+// general loop on this target yet, and the optimizer turns this tail call into one.
+fnc forever(int n): int {
+  return forever(n + 1);
+}
+define actor Spinner as {
+  let turns: int = 0;
+  pub fnc on_message(int n): int {
+    return forever(n);
+  }
+}
+pub fnc main(): int {
+  return 0;
+}

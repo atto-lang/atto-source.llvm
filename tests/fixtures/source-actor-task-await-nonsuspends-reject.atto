@@ -1,0 +1,9 @@
+// await requires an explicitly marked suspending function or method.
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    let Task<int> child = task { return 41; };
+    return await child;
+  }
+}
+pub fnc main(): int { return 0; }

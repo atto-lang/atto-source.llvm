@@ -50,10 +50,21 @@ public:
         while (result.valid_bytes < size) {
             const std::uint64_t remaining = size - result.valid_bytes;
             if (remaining < 26) {
+                // A truncated tail must still match all known header bytes.
+                read_exact(fd, bytes.data(),
+                        static_cast<std::size_t>(remaining),
+                        result.valid_bytes);
+                validate_header_prefix(bytes.data(),
+                        static_cast<std::size_t>(remaining), tenant,
+                        generation, result.last_sequence,
+                        result.last_operation);
                 result.incomplete_tail = true;
                 break;
             }
             read_exact(fd, bytes.data(), 26, result.valid_bytes);
+            validate_header_prefix(bytes.data(), 26, tenant,
+                    generation, result.last_sequence,
+                    result.last_operation);
             if (bytes[0] != 79 || bytes[1] != 68 || bytes[2] != 66
                     || bytes[3] != 49 || bytes[4] != 1
                     || (bytes[5] != 1 && bytes[5] != 2))
@@ -95,6 +106,50 @@ public:
         return result;
     }
 private:
+    static void require_field_prefix(const std::uint8_t* bytes,
+            std::size_t length, std::size_t offset,
+            std::uint32_t expected) {
+        for (std::size_t i = 0; i < 4 && offset + i < length; ++i) {
+            if (bytes[offset + i] !=
+                    static_cast<std::uint8_t>(expected >> (8U * i)))
+                throw std::invalid_argument(
+                    "WAL truncated identity/sequence prefix mismatch");
+        }
+    }
+
+    // Reject malformed short or full headers BEFORE marking a torn tail.
+    static void validate_header_prefix(const std::uint8_t* bytes,
+            std::size_t length, std::uint32_t tenant,
+            std::uint32_t generation, std::uint32_t previous_sequence,
+            std::uint32_t previous_operation) {
+        const std::uint8_t magic[] = {79, 68, 66, 49, 1};
+        for (std::size_t i = 0; i < length && i < 5; ++i)
+            if (bytes[i] != magic[i])
+                throw std::invalid_argument("WAL truncated magic/version");
+        if (length > 5 && bytes[5] != 1 && bytes[5] != 2)
+            throw std::invalid_argument("WAL truncated kind invalid");
+        if (previous_sequence == 0x7fffffffU)
+            throw std::invalid_argument("WAL sequence exhausted");
+        require_field_prefix(bytes, length, 6, tenant);
+        require_field_prefix(bytes, length, 10, generation);
+        require_field_prefix(bytes, length, 14, previous_sequence + 1U);
+        if (length >= 22 &&
+                ((bytes[21] & 128U) != 0U ||
+                    u32(bytes, 18) <= previous_operation))
+            throw std::invalid_argument("WAL operation not increasing");
+        if (length >= 24) {
+            const auto key_length = u16(bytes, 22);
+            if (key_length == 0 || key_length > 64)
+                throw std::invalid_argument("WAL truncated key size");
+        }
+        if (length >= 26) {
+            const auto value_length = u16(bytes, 24);
+            if (value_length > 1024 ||
+                    (bytes[5] == 2 && value_length != 0))
+                throw std::invalid_argument("WAL truncated value size");
+        }
+    }
+
     static std::uint32_t u16(const std::uint8_t* p, std::size_t at) noexcept {
         return std::uint32_t(p[at]) | (std::uint32_t(p[at + 1]) << 8);
     }
