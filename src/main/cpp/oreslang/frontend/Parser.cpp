@@ -1497,6 +1497,15 @@ private:
                 Lexer look = lexer_;
                 const Token name = look.next();
                 const Token after = look.next();
+                // Reject stacked introducers at the declaration boundary
+                // rather than letting "mtd method foo()" fall into native
+                // field parsing with an unrelated generic diagnostic.
+                if ((name.text == "mtd" || name.text == "method" || name.text == "fnc") &&
+                    after.kind == Kind::Identifier) {
+                    const Token following = look.next();
+                    if (following.text == "(" || following.text == "<")
+                        fail("native duplicate instance method introducer");
+                }
                 if (name.kind == Kind::Identifier &&
                     (!reserved(name.text) || name.text == "pattern") &&
                     (after.text == "(" || after.text == "<")) {
