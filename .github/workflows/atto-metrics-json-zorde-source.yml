@@ -1,0 +1,35 @@
+name: Atto LLVM std metrics/json/zorde source-contract ONLY
+on:
+  pull_request:
+    paths:
+      - 'stdlib/metrics.atto'
+      - 'stdlib/json.atto'
+      - 'stdlib/zorde.atto'
+      - 'tests/std-metrics-json-zorde-source-contract.test.mjs'
+      - '.github/workflows/atto-metrics-json-zorde-source.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout immutable triggering SHA
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact SHA and run native-source invariants
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet --exit-code
+          git diff --cached --quiet --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          echo "ATTO_LLVM_STDLIB_TREE=$(git rev-parse 'HEAD^{tree}')"
+          node --test tests/std-metrics-json-zorde-source-contract.test.mjs
+          echo 'ATTO_LLVM_STDLIB_SOURCE_CONTRACT=PASS'
+          echo 'ATTO_LLVM_STDLIB_GUEST_EXECUTION=NOT_EXECUTED'
