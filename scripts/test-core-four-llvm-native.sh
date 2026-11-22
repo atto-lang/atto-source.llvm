@@ -55,12 +55,14 @@ for name in borrow-use-after-take borrow-escape borrow-conflicting-loans; do
   }
   case "$name" in
     borrow-use-after-take)
-      grep -Eiq 'moved|move|taken|take' "$negative_log" || {
-        echo "core ownership move diagnostic missing: $name" >&2; cat "$negative_log" >&2; exit 1;
+      # A generic error mentioning borrow-use-after-take.atto is NOT proof.
+      grep -Fqi 'use of explicitly moved int' "$negative_log" || {
+        echo "core ownership use-after-move diagnostic missing: $name" >&2; cat "$negative_log" >&2; exit 1;
       } ;;
     borrow-escape)
-      grep -Eiq 'borrow|loan|escape' "$negative_log" || {
-        echo "core ownership loan diagnostic missing: $name" >&2; cat "$negative_log" >&2; exit 1;
+      # Require the checker-specific return/loan rule, not the fixture name.
+      grep -Fqi 'borrowed reference may only be passed to a borrowed parameter' "$negative_log" || {
+        echo "core ownership borrow-escape diagnostic missing: $name" >&2; cat "$negative_log" >&2; exit 1;
       } ;;
     borrow-conflicting-loans)
       grep -Fqi 'conflicting active native borrow' "$negative_log" || {
