@@ -73,6 +73,14 @@ pub fnc main(): int { return 42; }
 ATTO
 reject unknown_builtin E_NATIVE_IMPORT_UNREGISTERED
 
+# Unproved generic Copy bounds in core collections must not become
+# a native import just because the source file exists in the repository.
+cat >"$work/unproven_core_collections.atto" <<'ATTO'
+import * as collections from "ores.core.collections";
+pub fnc main(): int { return 42; }
+ATTO
+reject unproven_core_collections E_NATIVE_IMPORT_UNREGISTERED
+
 cat >"$work/private_member.atto" <<'ATTO'
 import * as http from "std.http";
 pub fnc main(): int { return http.private_helper(200); }
@@ -115,4 +123,4 @@ pub fnc main(): int { if http_status_valid(200) then return 42; fi return 1; }
 ATTO
 reject no_import E_UNBOUND
 
-echo 'ATTO_LLVM_HTTP_NAMESPACE_NEGATIVES_ALL_PASS checks=8'
+echo 'ATTO_LLVM_HTTP_NAMESPACE_NEGATIVES_ALL_PASS checks=9'
