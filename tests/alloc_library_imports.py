@@ -200,6 +200,40 @@ def main():
                 "freestanding alloc/* requires an explicit allocator provider",
             )
 
+        # Exercise REAL compiler IR plus native guest execution of the
+        # Atto-written alignment arithmetic, not just a registry string lookup.
+        aligned_source = root / "aligned.atto"
+        aligned_source.write_text(
+            'import module aligned from "atto.alloc/aligned"; '
+            'pub fnc main():int{return aligned.align_up(13,8)+26;}\n',
+            encoding="utf-8",
+        )
+        aligned = run([args.compiler, str(aligned_source)])
+        require(aligned.returncode == 0, aligned.stderr)
+        require("__ores_module_1.align_up" in aligned.stdout,
+                "Atto alloc/aligned was not compiled into real LLVM IR")
+        if args.clang:
+            aligned_ir = root / "aligned.ll"
+            aligned_exe = root / "aligned_guest"
+            aligned_ir.write_text(aligned.stdout, encoding="utf-8")
+            compiled_aligned = run([
+                args.clang, "-O2", "-Wno-override-module",
+                str(aligned_ir), "-o", str(aligned_exe)
+            ])
+            require(compiled_aligned.returncode == 0, compiled_aligned.stderr)
+            executed_aligned = run([str(aligned_exe)])
+            require(executed_aligned.returncode == 42,
+                    f"aligned .atto guest returned {executed_aligned.returncode}")
+
+        bad_aligned = root / "bad_aligned.atto"
+        bad_aligned.write_text(
+            'import module aligned from "atto.alloc/../aligned"; '
+            'pub fnc main():int{return 42;}\n',
+            encoding="utf-8",
+        )
+        reject(run([args.compiler, str(bad_aligned)]),
+               "unknown compiler-owned alloc module")
+
     print(
         "compiler-owned alloc tier, allocator ABI, alias identity, "
         "transitive closure, and freestanding provider gates PASS"

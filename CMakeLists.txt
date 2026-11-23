@@ -5,6 +5,11 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Compiler-owned core/alloc/std library table (stdlib/LIBRARIES.txt).
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/AttoLibraryEmbed.cmake")
+atto_generate_library_table("${CMAKE_CURRENT_BINARY_DIR}/generated")
+include_directories(BEFORE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+
 # Standalone native IR ABI test: hand-authored source-free LLVM IR links with
 # the real C telemetry runtime and returns 42. This is NOT Atto compiler IR.
 # Limit the fixture to its pinned x86_64 Linux triple and a local Clang driver.
@@ -545,6 +550,82 @@ if(ATTO_ACTOR_LOGICAL_FRAMES_HOST_ONLY)
     add_test(NAME actor_logical_frames_v1_native_host
         COMMAND atto-native-actor-logical-frames-host-test)
     set_tests_properties(actor_logical_frames_v1_native_host PROPERTIES TIMEOUT 20)
+    # Actual native frame allocator: Actor A fails its quota, B still returns
+    # 42, and A restart cannot reuse prior actor-incarnation handles.
+    add_executable(atto-native-actor-a-b-quota-host-test
+        tests/native_actor_a_b_quota_isolation_test.c
+        src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c)
+    target_include_directories(atto-native-actor-a-b-quota-host-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(atto-native-actor-a-b-quota-host-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(atto-native-actor-a-b-quota-host-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(atto-native-actor-a-b-quota-host-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_a_b_frame_quota_isolation
+        COMMAND atto-native-actor-a-b-quota-host-test)
+    set_tests_properties(native_actor_a_b_frame_quota_isolation PROPERTIES TIMEOUT 20)
+
+    # Uses the real typed supervisor CONTROL scheduler and actor-owned frames.
+    # This is native host evidence, not a compiled .atto failure path.
+    add_executable(atto-native-actor-frame-control-host-test
+        tests/native_actor_frame_quota_supervisor_test.c
+        src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(atto-native-actor-frame-control-host-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(atto-native-actor-frame-control-host-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(atto-native-actor-frame-control-host-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(atto-native-actor-frame-control-host-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_frame_quota_typed_supervisor_control
+        COMMAND atto-native-actor-frame-control-host-test)
+    set_tests_properties(native_actor_frame_quota_typed_supervisor_control PROPERTIES TIMEOUT 30)
+    # Stronger host path: registered NativeOresVM child + owner finalization
+    # receipt must precede priority CONTROL, with rejected forgery/replay.
+    add_executable(atto-native-vm-supervised-quota-host-test
+        tests/native_actor_frame_quota_vm_supervised_test.c
+        src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c)
+    target_include_directories(atto-native-vm-supervised-quota-host-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(atto-native-vm-supervised-quota-host-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(atto-native-vm-supervised-quota-host-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(atto-native-vm-supervised-quota-host-test PRIVATE Threads::Threads)
+    add_test(NAME native_vm_registered_actor_frame_quota_supervisor
+        COMMAND atto-native-vm-supervised-quota-host-test)
+    set_tests_properties(native_vm_registered_actor_frame_quota_supervisor PROPERTIES TIMEOUT 30)
+
+    # Compiled native callback test at the actual source-actor bootstrap ABI.
+    # This is source-runtime proof, not LLVM-produced .atto guest proof.
+    add_executable(atto-native-source-actor-failure-host-test
+        tests/source_actor_failure_supervisor_test.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+        src/main/cpp/oreslang/runtime/NativeLogicalTrace.c)
+    target_include_directories(atto-native-source-actor-failure-host-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(atto-native-source-actor-failure-host-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_definitions(atto-native-source-actor-failure-host-test PRIVATE ORESLANG_SOURCE_ACTOR_TESTING)
+    target_compile_options(atto-native-source-actor-failure-host-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(atto-native-source-actor-failure-host-test PRIVATE Threads::Threads)
+    add_test(NAME native_source_actor_failure_supervisor_host
+        COMMAND atto-native-source-actor-failure-host-test)
+    set_tests_properties(native_source_actor_failure_supervisor_host PROPERTIES TIMEOUT 30)
     return()
 endif()
 
@@ -574,6 +655,20 @@ llvm_map_components_to_libnames(ORE_LLVM_LIBS core support)
 target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
+
+# core/range and core/cell are embedded from stdlib/LIBRARIES.txt
+# (cmake/AttoLibraryEmbed.cmake); no separate snapshot check is needed.
+if(BUILD_TESTING)
+    add_executable(atto-core-four-registry-host-test
+        tests/core_four_registry_host_test.cpp)
+    target_include_directories(atto-core-four-registry-host-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(atto-core-four-registry-host-test PRIVATE cxx_std_17)
+    add_test(NAME atto_core_four_closed_registry_host_only
+        COMMAND atto-core-four-registry-host-test)
+    set_tests_properties(atto_core_four_closed_registry_host_only
+        PROPERTIES TIMEOUT 15)
+endif()
 
 option(ORE_REQUIRE_NATIVE_MACRO_GUEST_AOT
     "Fail configure unless production LLVM macro CTests and Clang guests are available" OFF)
@@ -616,6 +711,19 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_logical_frames_v1
         COMMAND oreslang-native-actor-logical-frames-v1-test)
     set_tests_properties(native_actor_logical_frames_v1 PROPERTIES TIMEOUT 20)
+    add_executable(oreslang-native-actor-a-b-quota-test
+        tests/native_actor_a_b_quota_isolation_test.c
+        src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c)
+    target_include_directories(oreslang-native-actor-a-b-quota-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-native-actor-a-b-quota-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(oreslang-native-actor-a-b-quota-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-native-actor-a-b-quota-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_a_b_quota_sibling_42
+        COMMAND oreslang-native-actor-a-b-quota-test)
+    set_tests_properties(native_actor_a_b_quota_sibling_42 PROPERTIES TIMEOUT 20)
 
     # This runs the actual native Atto scalar parser + LLVM function IR
     # emitter. It proves checked routine metadata only, NOT an inserted
@@ -689,6 +797,63 @@ if(BUILD_TESTING)
         endif()
     endif()
 
+    add_executable(oreslang-native-actor-frame-control-test
+        tests/native_actor_frame_quota_supervisor_test.c
+        src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-actor-frame-control-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-native-actor-frame-control-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(oreslang-native-actor-frame-control-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-native-actor-frame-control-test PRIVATE Threads::Threads)
+    add_test(NAME native_actor_frame_quota_typed_supervisor_e2e
+        COMMAND oreslang-native-actor-frame-control-test)
+    set_tests_properties(native_actor_frame_quota_typed_supervisor_e2e PROPERTIES TIMEOUT 30)
+    add_executable(oreslang-native-vm-supervised-quota-test
+        tests/native_actor_frame_quota_vm_supervised_test.c
+        src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c)
+    target_include_directories(oreslang-native-vm-supervised-quota-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-native-vm-supervised-quota-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(oreslang-native-vm-supervised-quota-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-native-vm-supervised-quota-test PRIVATE Threads::Threads)
+    add_test(NAME native_vm_registered_actor_quota_failure_control
+        COMMAND oreslang-native-vm-supervised-quota-test)
+    set_tests_properties(native_vm_registered_actor_quota_failure_control PROPERTIES TIMEOUT 30)
+
+
+    # Compiled native callback test at the actual source-actor bootstrap ABI.
+    # This is source-runtime proof, not LLVM-produced .atto guest proof.
+    add_executable(oreslang-native-source-actor-failure-test
+        tests/source_actor_failure_supervisor_test.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+        src/main/cpp/oreslang/runtime/NativeLogicalTrace.c)
+    target_include_directories(oreslang-native-source-actor-failure-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-native-source-actor-failure-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_definitions(oreslang-native-source-actor-failure-test PRIVATE ORESLANG_SOURCE_ACTOR_TESTING)
+    target_compile_options(oreslang-native-source-actor-failure-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-native-source-actor-failure-test PRIVATE Threads::Threads)
+    add_test(NAME native_source_actor_failure_supervisor_bridge
+        COMMAND oreslang-native-source-actor-failure-test)
+    set_tests_properties(native_source_actor_failure_supervisor_bridge PROPERTIES TIMEOUT 30)
     # Static byte/bit/packet match plan host proof, NOT compiled .atto guest AOT.
     add_executable(oreslang-atto-byte-bit-pattern-plan-test
         tests/atto_byte_bit_pattern_plan_test.cpp)
@@ -2077,6 +2242,9 @@ if(BUILD_TESTING)
     set_tests_properties(native_realtime_profile_cli PROPERTIES TIMEOUT 60)
     # Exact native LLVM source -> IR -> Clang -> guest scalar subset checks.
     # No source-to-effect-IR parity is claimed by this observable output test.
+    # Resolve the Clang driver here as well: the canonical find_program below
+    # runs later, so a fresh configure would otherwise pass an empty --clang.
+    find_program(ORE_SOURCE_I64_CLANG NAMES clang-18 clang-19 clang clang-17 clang-16 clang-15 clang-14)
     add_test(NAME native_rust_scalar_guest_parity
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_rust_scalar_guest_parity.py"
@@ -4225,6 +4393,13 @@ if(BUILD_TESTING)
         --ir "ret i64")
     oreslang_contract_test(native_actor_bare_method source-actor-bare-method.ores
         --ir "oreslang_source_actor_spawn")
+    # Real compiled .atto source actor handler now calls the actor-owned frame
+    # bridge (not just a host-only model). Full Clang execution lives in the
+    # existing source_actor_compiled_native_lifecycle CTest.
+    oreslang_contract_test(native_actor_aot_frame_call
+        actor-logical-frame-aot-two-actors.atto --ir "call i32 @oreslang_source_actor_frame_push")
+    oreslang_contract_test(reject_source_actor_frame_abi_symbol_forgery
+        actor-frame-abi-forgery-reject.atto --diagnostic "reserved native runtime ABI symbol 'oreslang_source_actor_frame_push'")
     oreslang_contract_test(native_actor_suspending_method_gate source-actor-suspend-method-reject.ores
         --diagnostic "native suspends actor method requires continuation lowering")
     # Compiler-staged actor Task/await AST. Every staged positive *must* be
@@ -4388,6 +4563,7 @@ if(BUILD_TESTING)
         src/main/cpp/oreslang/runtime/NativeOresVM.c
         src/main/cpp/oreslang/runtime/NativeActorFuture.c
         src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c
         src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
         src/main/cpp/oreslang/runtime/NativeContinuationStore.c
         src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
@@ -4952,6 +5128,20 @@ if(BUILD_TESTING)
     add_test(NAME native_dop_precompiled_kernel_region_host_only
         COMMAND oreslang-dop-precompiled-kernel-region-test)
     set_tests_properties(native_dop_precompiled_kernel_region_host_only
+        PROPERTIES TIMEOUT 20)
+
+    # Zero-heap, bounded observations for precompiled AOT AoS/SoA advice.
+    # Host-only: does not generate guest probes, JIT, relayout or certify GC.
+    add_executable(oreslang-dop-aot-layout-trace-test
+        tests/dop_aot_layout_trace_test.cpp)
+    target_include_directories(oreslang-dop-aot-layout-trace-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-dop-aot-layout-trace-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-dop-aot-layout-trace-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_dop_aot_layout_trace_host_only
+        COMMAND oreslang-dop-aot-layout-trace-test)
+    set_tests_properties(native_dop_aot_layout_trace_host_only
         PROPERTIES TIMEOUT 20)
 
     # Host-only physical AoS/SoA/AoSoA storage and checked opaque row identity.
@@ -5982,38 +6172,6 @@ if(BUILD_TESTING)
                  COMMAND oreslang-pinned-actor-heap-suspend-test)
         set_tests_properties(native_pinned_actor_heap_suspend_cancel_quiescence PROPERTIES TIMEOUT 30)
     endif()
-    # Java/Graal currently owns tuple and nominal Entry value lowering.
-    # The native scalar frontend must reject these forms before emitting any IR,
-    # while preserving an ordinary user function whose source name is "tuple".
-    oreslang_contract_test(native_tuple_explicit_literal_failclosed
-        native-tuple-explicit-reject.ores
-        --diagnostic "native tuple literal unsupported")
-    oreslang_contract_test(native_tuple_compact_literal_failclosed
-        native-tuple-compact-reject.ores
-        --diagnostic "native tuple literal unsupported")
-    oreslang_contract_test(native_entry_value_failclosed
-        native-entry-reject.ores
-        --diagnostic "native Entry<K,V> unsupported")
-    oreslang_contract_test(native_entry_generic_product_failclosed
-        native-entry-generic-reject.ores
-        --diagnostic "native Entry<K,V> unsupported")
-    oreslang_contract_test(native_user_tuple_call_is_ordinary
-        native-user-tuple-call.ores
-        --ir "call i64 @tuple")
-    oreslang_contract_test(native_local_entry_identifier_is_ordinary
-        native-local-entry-name.ores
-        --ir "define i64 @main")
-    if(ORE_CLANG)
-        oreslang_contract_test(native_user_tuple_call_executes
-            native-user-tuple-call.ores
-            --run 42 --clang "${ORE_CLANG}")
-        set_tests_properties(native_user_tuple_call_executes PROPERTIES TIMEOUT 60)
-        oreslang_contract_test(native_local_entry_identifier_executes
-            native-local-entry-name.ores
-            --run 42 --clang "${ORE_CLANG}")
-        set_tests_properties(native_local_entry_identifier_executes PROPERTIES TIMEOUT 60)
-    endif()
-
     # Tuple / Entry are nominal aggregate values in Java/Graal. Until the
     # LLVM frontend provides a checked native product ABI, fail closed before
     # emitting IR for *all* arities, including () and (x,).
@@ -7757,6 +7915,16 @@ if(BUILD_TESTING)
             --clang "${ORE_RT_AOT_CLANG}")
     set_tests_properties(native_alloc_library_import_resolution
         PROPERTIES TIMEOUT 120)
+    # core/alloc/std library units (stdlib/LIBRARIES.txt): real native
+    # compile + link + run of every tests/atto_libraries guest.
+    if(ORE_RT_AOT_CLANG)
+        add_test(NAME native_atto_libraries_v1
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_libraries_v1.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_RT_AOT_CLANG}")
+        set_tests_properties(native_atto_libraries_v1 PROPERTIES TIMEOUT 300)
+    endif()
     add_executable(oreslang-allocator-provider-v1-test
         tests/allocator_provider_v1_test.c
         src/main/cpp/oreslang/runtime/AllocatorProviderV1.c)
@@ -8650,6 +8818,7 @@ if(BUILD_TESTING)
         src/main/cpp/oreslang/runtime/NativeOresVM.c
         src/main/cpp/oreslang/runtime/NativeActorFuture.c
         src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c
         src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
         src/main/cpp/oreslang/runtime/NativeContinuationStore.c
         src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
@@ -8672,6 +8841,7 @@ if(BUILD_TESTING)
         src/main/cpp/oreslang/runtime/NativeOresVM.c
         src/main/cpp/oreslang/runtime/NativeActorFuture.c
         src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c
         src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
         src/main/cpp/oreslang/runtime/NativeContinuationStore.c
         src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
@@ -8776,6 +8946,7 @@ if(BUILD_TESTING)
         src/main/cpp/oreslang/runtime/NativeOresVM.c
         src/main/cpp/oreslang/runtime/NativeActorFuture.c
         src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c
         src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
         src/main/cpp/oreslang/runtime/NativeContinuationStore.c
         src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
@@ -8801,6 +8972,7 @@ if(BUILD_TESTING)
             src/main/cpp/oreslang/runtime/NativeOresVM.c
             src/main/cpp/oreslang/runtime/NativeActorFuture.c
             src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+            src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c
             src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
             src/main/cpp/oreslang/runtime/NativeContinuationStore.c
             src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
@@ -8836,6 +9008,7 @@ if(BUILD_TESTING)
             src/main/cpp/oreslang/runtime/NativeOresVM.c
             src/main/cpp/oreslang/runtime/NativeActorFuture.c
             src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+            src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c
             src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
             src/main/cpp/oreslang/runtime/NativeContinuationStore.c
             src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
@@ -9368,69 +9541,6 @@ if(BUILD_TESTING)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_thread_source_admission_m0.cmake")
     set_tests_properties(native_thread_source_admission_m0
         PROPERTIES TIMEOUT 60)
-endif()
-
-# LLVM threading parity host substrate (compiler guest lowering remains gated).
-# Separate tests preserve the current parent CMake source and .atto admission.
-if(BUILD_TESTING AND UNIX)
-    find_package(Threads REQUIRED)
-    add_executable(oreslang-native-thread-scope-v1-test
-        tests/native_thread_scope_v1_test.c
-        src/main/cpp/oreslang/runtime/NativeThreadV1.c)
-    set_target_properties(oreslang-native-thread-scope-v1-test PROPERTIES
-        C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS OFF)
-    target_include_directories(oreslang-native-thread-scope-v1-test PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
-    target_compile_definitions(oreslang-native-thread-scope-v1-test PRIVATE
-        ORES_NATIVE_THREAD_TEST_ID_EXHAUSTION=1)
-    target_compile_options(oreslang-native-thread-scope-v1-test PRIVATE
-        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
-    target_link_libraries(oreslang-native-thread-scope-v1-test PRIVATE Threads::Threads)
-    add_test(NAME native_thread_scope_quota_join_host_only
-        COMMAND oreslang-native-thread-scope-v1-test)
-    set_tests_properties(native_thread_scope_quota_join_host_only PROPERTIES TIMEOUT 20)
-endif()
-
-# Host-only Task join notification adapter: cancellation/completion arbitration.
-# This does not compile .atto programs or exercise real guest suspension.
-if(BUILD_TESTING AND UNIX)
-    find_package(Threads REQUIRED)
-    add_executable(oreslang-native-join-task-wait-test
-        tests/native_join_task_wait_v1_test.cpp
-        src/main/cpp/oreslang/runtime/NativeThreadV1.c)
-    target_include_directories(oreslang-native-join-task-wait-test PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
-    target_compile_features(oreslang-native-join-task-wait-test PRIVATE cxx_std_17)
-    target_compile_options(oreslang-native-join-task-wait-test PRIVATE
-        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
-    target_link_libraries(oreslang-native-join-task-wait-test PRIVATE Threads::Threads)
-    add_test(NAME native_join_task_wait_notification_host_only
-        COMMAND oreslang-native-join-task-wait-test)
-    set_tests_properties(native_join_task_wait_notification_host_only
-        PROPERTIES TIMEOUT 30)
-endif()
-
-# Host-only pthread join -> Task cancellation/READY admission -> carrier claim.
-# This uses actual native continuation stores, not source .atto lowering.
-if(BUILD_TESTING AND UNIX)
-    find_package(Threads REQUIRED)
-    add_executable(oreslang-native-join-task-continuation-bridge-test
-        tests/native_join_task_continuation_bridge_v1_test.cpp
-        src/main/cpp/oreslang/runtime/NativeThreadV1.c
-        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
-        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
-        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c)
-    target_include_directories(oreslang-native-join-task-continuation-bridge-test PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
-    target_compile_features(oreslang-native-join-task-continuation-bridge-test PRIVATE cxx_std_17)
-    target_compile_options(oreslang-native-join-task-continuation-bridge-test PRIVATE
-        "$<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>"
-        "$<$<COMPILE_LANG_AND_ID:C,GNU,Clang,AppleClang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>")
-    target_link_libraries(oreslang-native-join-task-continuation-bridge-test PRIVATE Threads::Threads)
-    add_test(NAME native_join_task_continuation_bridge_host_only
-        COMMAND oreslang-native-join-task-continuation-bridge-test)
-    set_tests_properties(native_join_task_continuation_bridge_host_only
-        PROPERTIES TIMEOUT 45)
 endif()
 
 # Opt-in shared polling/execution host substrate. Not source-actor qualification.

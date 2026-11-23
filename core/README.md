@@ -2,7 +2,7 @@
 
 The compiler-owned import registry maps `atto.core/{slice,iter,cmp}` to
 the immutable embedded source in `core/{slice,iter,cmp}.atto`.
-Aliases `ores.core/*` and explicit `*.atto` resolve to the same
+The `core/*` shorthand and an explicit `.atto` suffix resolve to the same (never `ores.*`)
 unit identity. Included `Generated*Atto.inc` raw-string snapshots have
 Git-blob SHA-1 comments verified byte-for-byte by
 `tests/check_atto_core_modules.py`.

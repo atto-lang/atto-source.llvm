@@ -1,0 +1,136 @@
+// LLVM-owned AttoLang alloc/bitset source candidate.
+// Uses checked signed arithmetic rather than backend-specific shifts.
+// Zero fill and ownership are managed by this .atto class, never host maps.
+define module bitset as
+  pub define class BitSet as
+    let mut Array<int> chunks = new Array<int>();
+    let int bit_length;
+
+    pub constructor(int length) {
+      if length < 0 || length > 1048576; do
+        rt fail("bitset: size must be between 0 and 1048576");
+      fi
+      self.bit_length = length;
+      let int count = (length + 62) / 63;
+      for (let int i = 0; i < count; i = i + 1) {
+        self.chunks.add(0);
+      }
+    }
+
+    bit_mask(int offset): int {
+      let mut int mask = 1;
+      for (let int i = 0; i < offset; i = i + 1) {
+        mask = mask * 2;
+      }
+      return mask;
+    }
+
+    count_word(int word): int {
+      let mut int remaining = word;
+      let mut int total = 0;
+      for (let int i = 0; i < 63; i = i + 1) {
+        if remaining % 2 != 0; do
+          total = total + 1;
+        fi
+        remaining = remaining / 2;
+      }
+      return total;
+    }
+
+    merge_word(int first, int second, bool intersection): int {
+      let mut int mask = 1;
+      let mut int merged = 0;
+      for (let int i = 0; i < 63; i = i + 1) {
+        let bool a = ((first / mask) % 2) != 0;
+        let bool b = ((second / mask) % 2) != 0;
+        if intersection; do
+          if a && b; do merged = merged + mask; fi
+        else
+          if a || b; do merged = merged + mask; fi
+        fi
+        if i < 62; do mask = mask * 2; fi
+      }
+      return merged;
+    }
+
+    pub len(): int { return self.bit_length; }
+    pub is_empty(): bool { return self.bit_length == 0; }
+
+    pub get(int index): Option<bool> {
+      if index < 0 || index >= self.bit_length; do
+        return None;
+      fi
+      let int mask = self.bit_mask(index % 63);
+      let int word = self.chunks.get(index / 63);
+      return Some(((word / mask) % 2) != 0);
+    }
+
+    pub try_set(mut self)(int index, bool value): Result<bool, String> {
+      if index < 0 || index >= self.bit_length; do
+        return Err("IndexOutOfBounds");
+      fi
+      let int slot = index / 63;
+      let int mask = self.bit_mask(index % 63);
+      let int previous = self.chunks.get(slot);
+      let bool was_set = ((previous / mask) % 2) != 0;
+      if value && !was_set; do
+        self.chunks.set(slot, previous + mask);
+      fi
+      if !value && was_set; do
+        self.chunks.set(slot, previous - mask);
+      fi
+      return Ok(was_set);
+    }
+
+    pub clear_all(mut self)(): void {
+      for (let int i = 0; i < self.chunks.size; i = i + 1) {
+        self.chunks.set(i, 0);
+      }
+      return;
+    }
+
+    pub count_ones(): int {
+      let mut int count = 0;
+      for (let int i = 0; i < self.chunks.size; i = i + 1) {
+        count = count + self.count_word(self.chunks.get(i));
+      }
+      return count;
+    }
+
+    pub first_set(): Option<int> {
+      for (let int i = 0; i < self.bit_length; i = i + 1) {
+        let int mask = self.bit_mask(i % 63);
+        if ((self.chunks.get(i / 63) / mask) % 2) != 0; do
+          return Some(i);
+        fi
+      }
+      return None;
+    }
+
+    pub try_union_with(mut self)(BitSet other): Result<int, String> {
+      if self.bit_length != other.bit_length; do
+        return Err("LengthMismatch");
+      fi
+      for (let int i = 0; i < self.chunks.size; i = i + 1) {
+        self.chunks.set(i, self.merge_word(
+            self.chunks.get(i), other.chunks.get(i), false));
+      }
+      return Ok(self.count_ones());
+    }
+
+    pub try_intersect_with(mut self)(BitSet other): Result<int, String> {
+      if self.bit_length != other.bit_length; do
+        return Err("LengthMismatch");
+      fi
+      for (let int i = 0; i < self.chunks.size; i = i + 1) {
+        self.chunks.set(i, self.merge_word(
+            self.chunks.get(i), other.chunks.get(i), true));
+      }
+      return Ok(self.count_ones());
+    }
+  end
+
+  pub fnc new_bitset(int length): BitSet {
+    return new BitSet(length);
+  }
+end
