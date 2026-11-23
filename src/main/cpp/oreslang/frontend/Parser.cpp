@@ -1116,6 +1116,15 @@ public:
                 pointer_int_aot::Parser(std::move(tokens)).parse());
             return program;
         }
+        // A namespace is a file-header declaration, not an import or module
+        // wrapper. Parse it before any import/export; never let the imported
+        // dependency graph silently turn a late header into a valid header.
+        if (token_.text == "use" && peek_next().text == "namespace")
+            advance();
+        if (accept("namespace")) {
+            program.namespace_name = identifier();
+            require(";");
+        }
         while (token_.text == "import" || token_.text == "export") {
             if (token_.text == "export") { export_declaration(program); continue; }
             advance();
@@ -1263,13 +1272,11 @@ public:
             require(";");
             program.imports.push_back(std::move(imported));
         }
-        // Match Java: a contextual "use" in the source header selects the
-        // SAME flat namespace; it does not authorize cross-package binding.
-        if (token_.text == "use" && peek_next().text == "namespace")
-            advance();
-        if (accept("namespace")) {
-            program.namespace_name = identifier();
-            require(";");
+        if (token_.text == "namespace" ||
+            (token_.text == "use" && peek_next().text == "namespace")) {
+            if (!program.namespace_name.empty())
+                fail("NAMESPACE_DUPLICATE: only one file-level namespace header is permitted");
+            fail("NAMESPACE_HEADER_ORDER: namespace header must precede imports and declarations");
         }
         bool wrapped_module = false;
         if (token_.text == "import")
@@ -7086,6 +7093,8 @@ private:
         std::string name = identifier();
         if (native_ownership_intrinsic_name(name))
             fail("NATIVE_OWNERSHIP_INTRINSIC_RESERVED: compiler-owned nominal cannot be redefined");
+        if (name == "Option" || name == "Result")
+            fail("native sum type names are compiler-owned");
         if (types::protected_core_identity(name))
             fail("E_PRELUDE_SPOOF: nominal declaration cannot replace compiler-owned core identity");
         if (name == "pattern") fail("contextual pattern keyword cannot declare a native nominal type");
@@ -8651,7 +8660,7 @@ private:
             // binding must retain the nominal type and ownership contract.
             std::function<void(const Expression&, std::size_t)> check_inferred_scalar_shape;
             check_inferred_scalar_shape = [&](const Expression& expr, std::size_t depth) {
-                require_expression_depth(depth, expr.offset);
+                require_expression_depth(depth, expr);
                 using K = Expression::Kind;
                 if (expr.kind == K::SumConstruct || expr.kind == K::SumAccess ||
                         expr.kind == K::RecordConstruct || expr.kind == K::ArrayCall ||
@@ -8713,7 +8722,7 @@ private:
 
             std::function<void(const Expression&, std::size_t)> check_scalar_cast_sources;
             check_scalar_cast_sources = [&](const Expression& expr, std::size_t depth) {
-                require_expression_depth(depth, expr.offset);
+                require_expression_depth(depth, expr);
                 if (expr.kind == Expression::Kind::Cast)
                     check_inferred_scalar_shape(*expr.left, depth + 1);
                 auto child = [&](const std::unique_ptr<Expression>& value) {
@@ -8811,9 +8820,9 @@ private:
                     return;
                 }
                 if (stmt.kind == Statement::Kind::Loop) {
-                    TypeMap body = env;
+                    TypeMap body = env; AssignableMap body_assignable = assignable;
                     for (const auto& action : stmt.then_statements)
-                        check_statement_types(action, body);
+                        check_statement_types(action, body, body_assignable);
                     return;
                 }
                 if (stmt.kind == Statement::Kind::Break ||

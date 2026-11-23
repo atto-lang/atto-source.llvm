@@ -43,6 +43,16 @@ int main(void) {
     assert(ores_allocator_provider_v1_high_water(&provider) ==
         ores_allocator_provider_v1_used(&provider));
 
+    // Existing native provider physically aligns granted addresses, bounded
+    // to 64 bytes; Atto's padding calculator is NOT equivalent to this proof.
+    void* aligned64 = ores_allocator_provider_v1_alloc(&provider, 31, 64);
+    assert(aligned64 != 0 && (((uintptr_t)aligned64) & 63u) == 0);
+    assert(ores_allocator_provider_v1_alloc(&provider, 1, 128) == 0);
+    for (size_t i = 0; i < 7; ++i) ((uint8_t*)first)[i] = 0xA5;
+    for (size_t i = 0; i < 17; ++i) ((uint8_t*)second)[i] = 0x5A;
+    for (size_t i = 0; i < 31; ++i) ((uint8_t*)aligned64)[i] = 0xBC;
+
+
     assert(ores_allocator_provider_v1_init(
         &other, other_storage.bytes, sizeof(other_storage.bytes)) ==
         ORES_ALLOCATOR_PROVIDER_V1_OK);
@@ -67,6 +77,13 @@ int main(void) {
         ORES_ALLOCATOR_PROVIDER_V1_OK);
     assert(ores_allocator_provider_v1_used(&provider) == 0);
     assert(ores_allocator_provider_v1_high_water(&provider) == high);
+    // The provider reset scrubs issued bytes through volatile stores.
+    // Test only accessible backing bytes; this does not prove every CPU
+    // cache, register, copy or JIT/managed-memory alias was erased.
+    for (size_t i = 0; i < 7; ++i) assert(((uint8_t*)first)[i] == 0);
+    for (size_t i = 0; i < 17; ++i) assert(((uint8_t*)second)[i] == 0);
+    for (size_t i = 0; i < 31; ++i) assert(((uint8_t*)aligned64)[i] == 0);
+
     assert(ores_allocator_provider_v1_init(
         &provider, storage.bytes, sizeof(storage.bytes)) ==
         ORES_ALLOCATOR_PROVIDER_V1_INVALID);

@@ -98,12 +98,18 @@ inline bool core_sum_carrier(std::string_view name, std::size_t arity) noexcept 
         && (name == "Option" || name == "Result");
 }
 
+// Prelude names are auto-imported, not reserved words. Only the ADT
+// constructors and the core carrier/collection/loan identities are protected;
+// other catalogued names (Box, Error, Pair, Iterator, ...) may be declared by
+// user code and shadow the prelude, as in Rust.
 inline bool protected_core_identity(std::string_view name) noexcept {
     const auto* entry = core_type_info(name);
-    return (entry && (entry->kind == CoreTypeKind::Constructor
-        || entry->scope != CoreTypeScope::Explicit))
-        || name == "FixedList" || name == "Vector"
-        || name == "ReadLoan" || name == "WriteLoan";
+    if (entry && entry->kind == CoreTypeKind::Constructor) return true;
+    if (entry && entry->canonical.rfind("core/primitive/", 0) == 0) return true;
+    return name == "Option" || name == "Result" || name == "Array" ||
+        name == "FixedArray" || name == "List" || name == "FixedList" ||
+        name == "Vector" || name == "Slice" || name == "Tuple" ||
+        name == "Map" || name == "Set" || name == "ReadLoan" || name == "WriteLoan";
 }
 
 } // namespace oreslang::types

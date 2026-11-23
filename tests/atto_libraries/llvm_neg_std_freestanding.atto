@@ -1,0 +1,4 @@
+// flags: --target=wasm32-unknown-unknown --library-profile=core
+// expect-error: std/* requires a hosted target
+import module io from "std/io";
+pub fnc main(): int { return 0; }
