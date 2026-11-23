@@ -19,3 +19,5 @@ core   range        core/range.atto                  any
 core   math         stdlib/core/math.atto            any
 core   hash         stdlib/core/hash.atto            any
 core   cell         stdlib/core/cell.atto            any
+core   slice        core/slice.atto                  any
+core   iter         core/iter.atto                   any

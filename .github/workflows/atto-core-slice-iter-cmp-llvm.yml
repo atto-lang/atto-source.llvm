@@ -1,0 +1,57 @@
+name: LLVM Atto core slice/iter/cmp exact guest
+on:
+  pull_request:
+    paths:
+      - 'core/slice.atto'
+      - 'core/iter.atto'
+      - 'core/cmp.atto'
+      - 'src/main/cpp/oreslang/frontend/CoreLibrarySources.hpp'
+      - 'src/main/cpp/oreslang/frontend/Generated*Atto.inc'
+      - 'tests/check_atto_core_modules.py'
+      - 'tests/core_library_sources_test.cpp'
+      - 'tests/native_module_imports.py'
+      - '.github/workflows/atto-core-slice-iter-cmp-llvm.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compiler-guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact Git HEAD and immutable compiler-owned snapshot
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet
+          git diff --cached --quiet
+          test -z "$(git ls-files --others --exclude-standard)"
+          python3 -I tests/check_atto_core_modules.py
+      - name: Install toolchain and build actual native compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang llvm-dev python3
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --parallel 2 --target oreslang-llvmc oreslang-native-project-root-import-test
+      - name: Execute real imported .atto guests (including slice, iter, cmp)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build -R '^(native_source_module_graph_execution|native_project_root_import_security)$' --output-on-failure --timeout 180
+          echo "ATTO_CORE_SIC_LLVM_GUEST_EXECUTED=TRUE"
+      - name: Recheck exact source HEAD
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"

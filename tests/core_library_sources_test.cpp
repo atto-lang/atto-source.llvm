@@ -96,6 +96,38 @@ int main() {
     assert(numeric->source.find("define module numeric as") != std::string_view::npos);
     assert(numeric->source.find("clamp_int") != std::string_view::npos);
 
+    const auto* slice = find_core_library_source("atto.core/slice");
+    assert(slice != nullptr);
+    assert(slice == find_core_library_source("atto.core/slice.atto"));
+    assert(find_core_library_source("ores.core/slice") == nullptr);
+    assert(slice->module_name == "slice");
+    assert(slice->canonical_import == "atto.core/slice");
+    assert(slice->unit_id == "@atto.core/slice.atto");
+    assert(slice->admitted_provider_bits == 0u);
+    assert(slice->source.find("define module slice as") != std::string_view::npos);
+    assert(find_core_library_source("atto.core/slice.ores") == nullptr);
+
+    const auto* iter = find_core_library_source("atto.core/iter");
+    assert(iter != nullptr);
+    assert(iter == find_core_library_source("atto.core/iter.atto"));
+    assert(find_core_library_source("ores.core/iter") == nullptr);
+    assert(iter->module_name == "iter");
+    assert(iter->canonical_import == "atto.core/iter");
+    assert(iter->unit_id == "@atto.core/iter.atto");
+    assert(iter->admitted_provider_bits == 0u);
+    assert(iter->source.find("define module iter as") != std::string_view::npos);
+    assert(find_core_library_source("atto.core/iter.ores") == nullptr);
+
+    const auto* cmp = find_core_library_source("atto.core/cmp");
+    assert(cmp != nullptr);
+    assert(cmp == find_core_library_source("atto.core/cmp.atto"));
+    assert(find_core_library_source("ores.core/cmp") == nullptr);
+    assert(cmp->module_name == "cmp");
+    assert(cmp->canonical_import == "atto.core/cmp");
+    assert(cmp->unit_id == "@atto.core/cmp.atto");
+    assert(cmp->admitted_provider_bits == 0u);
+    assert(cmp->source.find("define module cmp as") != std::string_view::npos);
+    assert(find_core_library_source("atto.core/cmp.ores") == nullptr);
     // The three new helpers are compiler-owned and cannot resolve from disk.
     for (std::string_view path : {"atto.core/math", "atto.core/hash", "atto.core/cell"}) {
         const auto* owned = find_core_library_source(path);
