@@ -10,14 +10,17 @@ int main() {
         std::cerr << "core-four registry: " << what << '\n';
         return 1;
     };
-    for (const auto name : {"range", "cell", "contracts", "num"}) {
+    // range/cell come from this PR; num is the v1 unit. contracts needs native
+    // `rt fail`, so it stays a source candidate (stdlib/policy/core).
+    for (const auto name : {"range", "cell", "num"}) {
         const std::string base(name);
         const auto* a = find_core_library_source("core/" + base);
         const auto* b = find_core_library_source("atto.core/" + base);
-        const auto* c = find_core_library_source("ores.core/" + base);
         const auto* d = find_core_library_source("core/" + base + ".atto");
-        if (!a || !b || !c || !d) return fail("registered module absent");
-        if (a != b || a != c || a != d) return fail("aliases produced separate identities");
+        if (!a || !b || !d) return fail("registered module absent");
+        if (a != b || a != d) return fail("aliases produced separate identities");
+        if (find_core_library_source("ores.core/" + base))
+            return fail("ores.* must not select an AttoLang library unit");
         if (a->tier != CompilerLibraryTier::Core || a->module_name != name ||
             a->admitted_provider_bits != 0u || a->source.empty())
             return fail("core module metadata/provider contract changed");
@@ -37,6 +40,8 @@ int main() {
     for (const auto candidate : {"std/num", "atto.std/num", "alloc/num"}) {
         if (find_core_library_source(candidate)) return fail("hosted/alloc namespace admitted as core");
     }
-    std::cout << "CORE_FOUR_LLVM_REGISTRY_HOST_ONLY_PASS aliases=4 modules=4 shadowed=NO\n";
+    if (find_core_library_source("core/contracts"))
+        return fail("contracts must stay unregistered until rt fail lowers natively");
+    std::cout << "CORE_FOUR_LLVM_REGISTRY_HOST_ONLY_PASS aliases=3 modules=3 shadowed=NO\n";
     return 0;
 }

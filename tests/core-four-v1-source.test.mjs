@@ -8,9 +8,9 @@ const read=path=>readFileSync(new URL(path,import.meta.url),'utf8');
 const MIN=-(1n<<63n), MAX=(1n<<63n)-1n;
 const MASK=(1n<<64n)-1n, wrap=n=>BigInt.asIntN(64,n);
 const range=read('../core/range.atto');
-const cell=read('../core/cell.atto');
-const num=read('../core/num.atto');
-const contracts=read('../core/contracts.atto');
+const cell=read('../stdlib/core/cell.atto');
+const num=read('../stdlib/policy/core/num.atto');
+const contracts=read('../stdlib/policy/core/contracts.atto');
 const manifest=JSON.parse(read('../contracts/core-four-v1.json'));
 function add(a,b) {
   if(b>0n && a>MAX-b) return MIN+(a-(MAX-b)-1n);
@@ -75,8 +75,8 @@ test('contract failure and range endpoint guards have required source shape',()=
   assert.match(contracts,/rt fail\(message\)/);
   assert.match(range,/current > 9223372036854775807 - step/);
   assert.match(range,/current < -9223372036854775808 \+ step/);
-  assert.match(range,/start <= value && value < end/);
-  assert.match(range,/start <= value && value <= end/);
+  assert.match(range,/start <= value && value < limit/);
+  assert.match(range,/start <= value && value <= limit/);
   assert.match(num,/pub fnc checked_add/);
   assert.match(num,/pub fnc checked_div/);
   assert.match(num,/pub fnc wrapping_mul/);
@@ -118,24 +118,14 @@ test('guest runner fails closed without configured real compiler',()=>{
   assert.ok(report.failed>0);
 });
 
-test('LLVM canonical imports are closed, aliases preserve one identity, source embeds are exact',()=>{
-  const registry=read('../src/main/cpp/oreslang/frontend/CoreLibrarySources.hpp');
-  const loader=read('../src/main/cpp/oreslang/frontend/ModuleLoader.cpp');
-  const cmake=read('../CMakeLists.txt');
-  for(const [name,cap] of [['range','Range'],['cell','Cell'],['contracts','Contracts'],['num','Num']]) {
-    for(const prefix of ['core/','atto.core/','ores.core/'])
-      assert.ok(registry.includes('"'+prefix+name+'"'),prefix+name);
-    const original=read('../core/'+name+'.atto');
-    const literal=read('../src/main/cpp/oreslang/frontend/GeneratedCore'+cap+'Atto.inc');
-    assert.equal(literal, 'R"ATCHANGE_CORE4('+original+')ATCHANGE_CORE4"\\n'
-      .replaceAll('ATCHANGE_CORE4','ATTO_CORE4'));
-  }
-  assert.ok(registry.includes('is_reserved_core_import'));
-  assert.ok(loader.includes('unknown compiler-owned core module'));
-  assert.ok(cmake.includes('core-four .atto source/embed mismatch'));
+test('range/cell are registered library units; num/contracts stay source candidates',()=>{
+  const libraries=read('../stdlib/LIBRARIES.txt');
+  assert.match(libraries,/^core\s+range\s+core\/range\.atto\s+any$/m);
+  assert.match(libraries,/^core\s+cell\s+stdlib\/core\/cell\.atto\s+any$/m);
+  assert.doesNotMatch(libraries,/contracts/);
+  assert.doesNotMatch(libraries,/ores\./);
   for(const fixture of ['smoke.atto','contract-failure.atto']) {
     const src=read('../tests/fixtures/core-four-v1/'+fixture);
-    assert.match(src,/"core\/contracts"/);
     assert.doesNotMatch(src,/"std\/core\//);
   }
 });

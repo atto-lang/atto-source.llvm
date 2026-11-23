@@ -1,0 +1,115 @@
+// AttoLang LLVM alloc/deque: bounded, double-ended integer ring buffer.
+// No sentinel values: all signed int payloads are valid, including zero.
+// reserve() is explicit; push operations never allocate or suspend.
+define module deque as
+  pub define class Deque as
+    let mut Array<int> data = new Array<int>();
+    let mut int head = 0;
+    let mut int count = 0;
+    let mut int limit;
+
+    pub constructor(int capacity) {
+      if capacity < 1 || capacity > 1048576; do
+        rt fail("deque: capacity outside 1..1048576");
+      fi
+      self.limit = capacity;
+      for (let int i = 0; i < capacity; i = i + 1) {
+        self.data.add(0);
+      }
+    }
+
+    pub size(): int { return self.count; }
+    pub capacity(): int { return self.limit; }
+    pub is_empty(): bool { return self.count == 0; }
+    pub is_full(): bool { return self.count == self.limit; }
+
+    pub push_back(mut self)(int value): bool {
+      if self.count == self.limit; do return false; fi
+      let int index = (self.head + self.count) % self.limit;
+      self.data.set(index, value);
+      self.count = self.count + 1;
+      return true;
+    }
+
+    pub push_front(mut self)(int value): bool {
+      if self.count == self.limit; do return false; fi
+      if self.head == 0; do
+        self.head = self.limit - 1;
+      else
+        self.head = self.head - 1;
+      fi
+      self.data.set(self.head, value);
+      self.count = self.count + 1;
+      return true;
+    }
+
+    pub pop_front(mut self)(): Option<int> {
+      if self.count == 0; do return None; fi
+      let int result = self.data.get(self.head);
+      self.data.set(self.head, 0);
+      self.head = (self.head + 1) % self.limit;
+      self.count = self.count - 1;
+      if self.count == 0; do self.head = 0; fi
+      return Some(result);
+    }
+
+    pub pop_back(mut self)(): Option<int> {
+      if self.count == 0; do return None; fi
+      let int index = (self.head + self.count - 1) % self.limit;
+      let int result = self.data.get(index);
+      self.data.set(index, 0);
+      self.count = self.count - 1;
+      if self.count == 0; do self.head = 0; fi
+      return Some(result);
+    }
+
+    pub front(): Option<int> {
+      if self.count == 0; do return None; fi
+      return Some(self.data.get(self.head));
+    }
+
+    pub back(): Option<int> {
+      if self.count == 0; do return None; fi
+      return Some(self.data.get((self.head + self.count - 1) % self.limit));
+    }
+
+    pub at(int index): Option<int> {
+      if index < 0 || index >= self.count; do return None; fi
+      return Some(self.data.get((self.head + index) % self.limit));
+    }
+
+    // Transactional: failure preserves all existing elements and indices.
+    // No unchecked capacity doubling or integer overflow.
+    pub reserve(mut self)(int new_capacity): bool {
+      if new_capacity < self.count || new_capacity < self.limit ||
+         new_capacity > 1048576; do
+        return false;
+      fi
+      if new_capacity == self.limit; do return true; fi
+      let mut Array<int> next = new Array<int>();
+      for (let int i = 0; i < new_capacity; i = i + 1) {
+        if i < self.count; do
+          next.add(self.data.get((self.head + i) % self.limit));
+        else
+          next.add(0);
+        fi
+      }
+      self.data = next;
+      self.head = 0;
+      self.limit = new_capacity;
+      return true;
+    }
+
+    pub clear(mut self)(): void {
+      for (let int i = 0; i < self.count; i = i + 1) {
+        self.data.set((self.head + i) % self.limit, 0);
+      }
+      self.count = 0;
+      self.head = 0;
+    }
+  end
+
+  pub fnc new_deque(int capacity): Deque {
+    return new Deque(capacity);
+  }
+end
