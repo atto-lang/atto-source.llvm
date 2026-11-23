@@ -2,6 +2,7 @@
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/types/FunctorTypeRules.hpp"
+#include "oreslang/types/CoreTypeRegistry.hpp"
 #include <functional>
 #include <stdexcept>
 #include <unordered_map>
@@ -22,6 +23,12 @@ inline std::string native_sum_name(NativeSumType::Kind kind, ScalarType value, S
     // Invalid enum discriminants must never collapse to valid Result<int,int>
     // names, and unchecked ScalarType values must never turn into "int".
     const std::string component = native_sum_scalar_name(value);
+    const std::string_view source_name =
+        kind == NativeSumType::Kind::Option ? "Option" : "Result";
+    const std::size_t generic_arity =
+        kind == NativeSumType::Kind::Option ? 1u : 2u;
+    if (!types::core_sum_carrier(source_name, generic_arity))
+        throw std::runtime_error("native sum kind/arity is not admitted by CoreTypeRegistry");
     switch (kind) {
         case NativeSumType::Kind::Option:
             if (trap_error)
@@ -52,6 +59,15 @@ inline void validate_native_sum_registry(const Program& program) {
                 !is_scalar(sum.value_type) || !is_scalar(sum.error_type) ||
                 (sum.kind == NativeSumType::Kind::Option && sum.error_type != ScalarType::I64))
             throw std::runtime_error("invalid native sum scalar ABI descriptor");
+        const std::string_view identity =
+            sum.kind == NativeSumType::Kind::Option ? "Option" : "Result";
+        const auto* metadata = types::core_type_info(identity);
+        const std::size_t expected_arity =
+            sum.kind == NativeSumType::Kind::Option ? 1u : 2u;
+        if (!metadata || !metadata->accepts_arity(expected_arity) ||
+                metadata->drop != types::CoreDropPolicy::ActivePayloadOnce ||
+                metadata->ownership != types::CoreOwnership::PayloadDependent)
+            throw std::runtime_error("native sum safety metadata disagrees with CoreTypeRegistry");
         if (!admitted_sum_names.insert(sum.name).second)
             throw std::runtime_error("duplicate native sum type descriptor");
         const auto expected = native_sum_name(sum.kind, sum.value_type, sum.error_type, sum.trap_error);
@@ -199,7 +215,12 @@ inline void resolve_native_sums(Program& program) {
                 throw std::runtime_error("native Result<_, Error> values are minted only by trap; Ok/Err cannot construct them");
             if ((option && e.name != "Some" && e.name != "None") || (!option && e.name != "Ok" && e.name != "Err"))
                 throw std::runtime_error("native sum constructor variant does not match declared sum type");
-            if (e.arguments.size() != (e.name == "None" ? 0u : 1u)) throw std::runtime_error("native sum constructor payload arity mismatch");
+            const auto* constructor = types::core_type_info(e.name);
+            if (!constructor || constructor->kind != types::CoreTypeKind::Constructor ||
+                    !constructor->accepts_arity(e.arguments.size()))
+                throw std::runtime_error("native sum constructor arity/identity mismatch with CoreTypeRegistry");
+            if (e.arguments.size() != (e.name == "None" ? 0u : 1u))
+                throw std::runtime_error("native sum constructor payload arity mismatch");
             // A scalar Result/Option must never carry an untyped or differently
             // typed payload. In particular, Err(7) is not Err<String>, and a
             // nominal/nested sum cannot be laundered into an i64 slot. The

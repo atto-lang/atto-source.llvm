@@ -3,6 +3,7 @@
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/ChannelGuestGate.hpp"
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/types/CoreTypeRegistry.hpp"
 #include "oreslang/frontend/PointerIntSyntax.hpp"
 #include "oreslang/frontend/NativeTelemetryLiteralV1.hpp"
 #include "oreslang/types/NativeClassLayout.hpp"
@@ -1244,6 +1245,8 @@ public:
             if (!imported.selected_class) require("module");
             imported.selected_module = identifier();
             imported.local_name = accept("as") ? identifier() : imported.selected_module;
+            if (types::protected_core_identity(imported.local_name))
+                fail("E_PRELUDE_SPOOF: module import alias cannot replace compiler-owned core identity");
             if (!module_names_.insert(imported.local_name).second)
                 fail("duplicate imported module binding '" + imported.local_name + "'");
             require("from");
@@ -2032,6 +2035,8 @@ private:
                   "define model is a runtime type and value");
 
         decl.name = identifier();
+        if (types::protected_core_identity(decl.name))
+            fail("E_PRELUDE_SPOOF: type/trait declaration cannot replace compiler-owned core identity");
         if (native_ownership_intrinsic_name(decl.name))
             fail("NATIVE_OWNERSHIP_INTRINSIC_RESERVED: compiler-owned type cannot be redefined");
         if (decl.name == "String" || decl.name == "string" || callable_nominal_name(decl.name) || entry_builtin_name(decl.name))
@@ -2193,7 +2198,8 @@ private:
         const std::string name = identifier();
         if (token_.text == "<")
             fail("native generic type alias requires a verified monomorphization ABI");
-        if (name == "int" || name == "bool" || name == "string" ||
+        if (types::protected_core_identity(name) ||
+                name == "int" || name == "bool" || name == "string" ||
                 name == "String" || reserved(name) ||
                 callable_nominal_name(name) || entry_builtin_name(name) ||
                 native_ownership_intrinsic_name(name))
@@ -3104,6 +3110,8 @@ private:
             fail("expected gen* generator declaration");
         }
         generator.name = identifier();
+        if (types::protected_core_identity(generator.name))
+            fail("E_PRELUDE_SPOOF: generator cannot replace compiler-owned core identity");
         require("(");
         if (!accept(")"))
             fail("native sync generator v1 is zero-argument");
@@ -3410,6 +3418,8 @@ private:
             fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
         }
         value.name = owner.empty() ? identifier() : owner + "." + identifier();
+        if (types::protected_core_identity(value.name))
+            fail("E_PRELUDE_SPOOF: callable cannot replace compiler-owned core identity");
         if (native_reserved_io_callable_name(value.name))
             fail("native I/O callable name is compiler-owned until typed registry, "
                  "nonblocking transport and continuation lowering are available");
@@ -7083,6 +7093,10 @@ private:
         std::string name = identifier();
         if (native_ownership_intrinsic_name(name))
             fail("NATIVE_OWNERSHIP_INTRINSIC_RESERVED: compiler-owned nominal cannot be redefined");
+        if (name == "Option" || name == "Result")
+            fail("native sum type names are compiler-owned");
+        if (types::protected_core_identity(name))
+            fail("E_PRELUDE_SPOOF: nominal declaration cannot replace compiler-owned core identity");
         if (name == "pattern") fail("contextual pattern keyword cannot declare a native nominal type");
         if (name == "_") fail("wildcard '_' cannot be declared as a nominal type name");
         return name;
