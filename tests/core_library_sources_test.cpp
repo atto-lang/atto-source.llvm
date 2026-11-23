@@ -104,12 +104,9 @@ int main() {
         assert(owned->admitted_provider_bits == 0u);
         assert(!owned->source.empty());
     }
-    assert(find_core_library_source("atto.core/math") ==
-           find_core_library_source("ores.core/math"));
-    assert(find_core_library_source("atto.core/hash") ==
-           find_core_library_source("ores.core/hash"));
-    assert(find_core_library_source("atto.core/cell") ==
-           find_core_library_source("ores.core/cell"));
+    assert(find_core_library_source("ores.core/math") == nullptr);
+    assert(find_core_library_source("ores.core/hash") == nullptr);
+    assert(find_core_library_source("ores.core/cell") == nullptr);
     assert(find_core_library_source("atto.core/hash.ores") == nullptr);
     assert(find_core_library_source("atto.core/../hash") == nullptr);
     assert(find_core_library_source("ores.core/cell/../math") == nullptr);

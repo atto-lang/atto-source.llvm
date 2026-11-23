@@ -15,3 +15,7 @@ std    path    stdlib/std/path_windows.atto   windows
 alloc  aligned stdlib/alloc/aligned.atto       any  none
 alloc  stats   stdlib/alloc/stats.atto         any
 alloc  secure  stdlib/alloc/secure.atto        any
+core   range        core/range.atto                  any
+core   math         stdlib/core/math.atto            any
+core   hash         stdlib/core/hash.atto            any
+core   cell         stdlib/core/cell.atto            any

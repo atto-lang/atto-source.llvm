@@ -11,19 +11,10 @@ struct Source {
     delimiter: &'static str,
     blob: &'static str,
 }
-const SOURCES: [Source; 6] = [
+const SOURCES: [Source; 3] = [
     Source { file: "stdlib/numeric.atto",
         output: "src/main/cpp/oreslang/frontend/GeneratedNumericAtto.inc",
         delimiter: "ATTO_NUMERIC", blob: "5ced991f1d49b3c2a60fdd72b9003c0a4d18cd72" },
-    Source { file: "stdlib/math.atto",
-        output: "src/main/cpp/oreslang/frontend/GeneratedMathAtto.inc",
-        delimiter: "ATTO_MATH", blob: "3c1ca889b795e294aba6349c538e782461335e90" },
-    Source { file: "stdlib/hash.atto",
-        output: "src/main/cpp/oreslang/frontend/GeneratedHashAtto.inc",
-        delimiter: "ATTO_HASH", blob: "28d702730cc83c4327d70797c10f39d61e4ce31c" },
-    Source { file: "stdlib/cell.atto",
-        output: "src/main/cpp/oreslang/frontend/GeneratedCellAtto.inc",
-        delimiter: "ATTO_CELL", blob: "f6984338fd6453876eb3754f93f7ca7996c87bc9" },
     Source { file: "stdlib/alloc/int_buffer.atto",
         output: "src/main/cpp/oreslang/frontend/GeneratedIntBufferAtto.inc",
         delimiter: "ATTO_INT_BUFFER", blob: "25b3d4bc06a0c859aacadaf0795414027a076bdc" },
