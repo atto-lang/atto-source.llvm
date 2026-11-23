@@ -235,6 +235,16 @@ inline const CoreLibrarySource* find_core_library_source(
     return source && source->tier == CompilerLibraryTier::Core ? source : nullptr;
 }
 
+inline const CoreLibrarySource* find_std_library_source(
+        std::string_view raw) noexcept {
+    const auto* source = find_compiler_library_source(raw);
+    return source && source->tier == CompilerLibraryTier::Std ? source : nullptr;
+}
+
+inline bool is_registered_std_import(std::string_view raw) noexcept {
+    return find_std_library_source(raw) != nullptr;
+}
+
 inline const CoreLibrarySource* find_alloc_library_source(
         std::string_view raw) noexcept {
     const auto* source = find_compiler_library_source(raw);

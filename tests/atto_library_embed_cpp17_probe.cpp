@@ -1,5 +1,6 @@
 #include "oreslang/frontend/CoreLibrarySources.hpp"
 #include <cassert>
+#include <string>
 #include <string_view>
 #include <string>
 using namespace oreslang::frontend;
@@ -12,26 +13,37 @@ int main() {
         buffer->source.find("new Array<int>()") != std::string_view::npos);
     assert(bundle != nullptr &&
         bundle->source.find("atto.alloc/int_buffer") != std::string_view::npos);
+    // The newly embedded alloc sources are compiler-controlled and share
+    // immutable identity across canonical and legacy import spellings.
+    for (const auto name : {"heap", "region"}) {
+        const std::string canonical = std::string("atto.alloc/") + name;
+        const std::string legacy = std::string("alloc/") + name;
+        const std::string extension = canonical + ".atto";
+        const auto* source = find_compiler_library_source(canonical);
+        if (!source || source->tier != CompilerLibraryTier::Alloc ||
+            source->source.find("define module ") == std::string_view::npos ||
+            source->admitted_provider_bits != 0u ||
+            find_compiler_library_source(legacy) != source ||
+            find_compiler_library_source(extension) != source)
+            return 1;
+    }
+    if (find_compiler_library_source("atto.alloc/missing") != nullptr ||
+        find_compiler_library_source("alloc/../heap") != nullptr)
+        return 2;
     // Newly embedded alloc modules are exactly the same units under the
     // canonical and historical import spellings, not duplicated runtime code.
+    // bitset/linked_list/map are unregistered source candidates
+    // (stdlib/policy/alloc) until classes lower natively.
     for (const auto* path : {"bitset", "linked_list", "map"}) {
         const std::string name(path);
-        const auto* canonical = find_alloc_library_source("atto.alloc/" + name);
-        const auto* old_alias = find_alloc_library_source("alloc/" + name);
-        const auto* explicit_ext = find_alloc_library_source("atto.alloc/" + name + ".atto");
-        assert(canonical != nullptr);
-        assert(canonical == old_alias && canonical == explicit_ext);
-        assert(canonical->tier == CompilerLibraryTier::Alloc);
-        assert(canonical->admitted_provider_bits ==
-            core_provider_bit(CoreProviderRequirement::Allocator));
-        assert(canonical->source.find("define module " + name + " as") != std::string_view::npos);
-        assert(find_core_library_source("atto.alloc/" + name) == nullptr);
-        assert(!core_closure_admitted(
-            {core_provider_bit(CoreProviderRequirement::Allocator), false}, 0));
-        assert(core_closure_admitted(
-            {core_provider_bit(CoreProviderRequirement::Allocator), false},
-            core_provider_bit(CoreProviderRequirement::Allocator)));
+        assert(find_alloc_library_source("atto.alloc/" + name) == nullptr);
+        assert(find_alloc_library_source("alloc/" + name) == nullptr);
     }
+    assert(!core_closure_admitted(
+        {core_provider_bit(CoreProviderRequirement::Allocator), false}, 0));
+    assert(core_closure_admitted(
+        {core_provider_bit(CoreProviderRequirement::Allocator), false},
+        core_provider_bit(CoreProviderRequirement::Allocator)));
     assert(find_alloc_library_source("atto.alloc/unknown") == nullptr);
     assert(find_alloc_library_source("atto.alloc/../map") == nullptr);
     // Exact closed registry: all canonical spellings share one source object,

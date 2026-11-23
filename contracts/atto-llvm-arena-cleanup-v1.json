@@ -1,0 +1,481 @@
+{
+  "schema": "atto.llvm.local-arena-deterministic-cleanup.v1",
+  "status": "TARGET_SOURCE_ONLY_NOT_GUEST_EXECUTED",
+  "source_paths": [
+    {
+      "path": "stdlib/policy/alloc/arena_lifecycle.atto",
+      "sha256": "3d155f4d0959ab01504b12d37cba1e10eae445fe11136635bd91013001482bae",
+      "bytes": 1255
+    },
+    {
+      "path": "stdlib/policy/alloc/scoped_arena.atto",
+      "sha256": "945f57ac39249ce3442ca40804099c7381c490c0c69aab9878d48a1f8bdcd356",
+      "bytes": 2101
+    },
+    {
+      "path": "stdlib/policy/core/arena_limits.atto",
+      "sha256": "b89f8f678607934b106975cd7fde5bc6067bf9086818ebd125e57e5ebbb84b44",
+      "bytes": 1228
+    },
+    {
+      "path": "stdlib/policy/std/arena_advice.atto",
+      "sha256": "c38e132f5e84cdb7f5a6e5c196f64247ea8bc753924e9a935a25e244caffe345",
+      "bytes": 623
+    }
+  ],
+  "scope": {
+    "backend": "llvm",
+    "backend_local": true,
+    "byte_identical_across_compilers_required": false,
+    "dependencies": [
+      "explicit sealed allocator provider",
+      "static affine ownership and region-bound lifetime proof",
+      "AOT drop glue",
+      "actor shutdown quiescence"
+    ],
+    "runtime_types": [
+      "OwnedArena",
+      "ArenaSlice"
+    ],
+    "public_profiles": [
+      "core",
+      "std"
+    ],
+    "alloc_role": "internal explicit allocation provider, not an ambient third public runtime profile"
+  },
+  "reclamation": {
+    "collector": "none (no tracing or background collector)",
+    "scope_exit": "compiler inserts exactly-once nonthrowing, nonsuspending drop of fully initialized owned values",
+    "panic_exception_cancel": "all admitted unwind/cancellation paths run drop glue; panic skips guest actor callbacks",
+    "actor_stop": "seal allocations and mailbox admission, wait for turns/loans/pins/continuations/I/O/producer admissions to quiesce",
+    "destructors": "drop nontrivial owners exactly once in reverse initialization order before physical free",
+    "bulk_free": "triggered by last synchronous owning/loan release or actor retirement; no collector thread",
+    "generation": "monotone checked, never wrap/reuse stale identity",
+    "quotas": "preflight overflow, alignment, physical reserved bytes plus metadata and tenant/actor caps before publication",
+    "slice": "region-bound non-owning capability, compile reject escape/transfer/unpinned suspension",
+    "zeroing": "zero before exposure and before cross-tenant reuse; confidentiality hooks are explicit",
+    "failed_reservation": "fail atomic; no leaked quota or partially published handle",
+    "ffi": "no forged host pointer, raw offset, or untracked external callback"
+  },
+  "cases": [
+    {
+      "fn": "arena_end_offset",
+      "args": [
+        0,
+        8,
+        8,
+        16
+      ],
+      "expected": 8
+    },
+    {
+      "fn": "arena_end_offset",
+      "args": [
+        3,
+        4,
+        8,
+        16
+      ],
+      "expected": 12
+    },
+    {
+      "fn": "arena_end_offset",
+      "args": [
+        3,
+        9,
+        8,
+        16
+      ],
+      "expected": -1
+    },
+    {
+      "fn": "arena_end_offset",
+      "args": [
+        0,
+        0,
+        8,
+        0
+      ],
+      "expected": 0
+    },
+    {
+      "fn": "arena_end_offset",
+      "args": [
+        7,
+        0,
+        8,
+        7
+      ],
+      "expected": 7
+    },
+    {
+      "fn": "arena_end_offset",
+      "args": [
+        7,
+        1,
+        8,
+        7
+      ],
+      "expected": -1
+    },
+    {
+      "fn": "arena_end_offset",
+      "args": [
+        8,
+        1,
+        3,
+        20
+      ],
+      "expected": -1
+    },
+    {
+      "fn": "arena_end_offset",
+      "args": [
+        -1,
+        1,
+        8,
+        16
+      ],
+      "expected": -1
+    },
+    {
+      "fn": "arena_end_offset",
+      "args": [
+        2147483646,
+        2,
+        8,
+        2147483647
+      ],
+      "expected": -1
+    },
+    {
+      "fn": "arena_end_offset",
+      "args": [
+        2147483646,
+        0,
+        8,
+        2147483647
+      ],
+      "expected": 2147483646
+    },
+    {
+      "fn": "arena_end_offset",
+      "args": [
+        1,
+        1,
+        1,
+        2
+      ],
+      "expected": 2
+    },
+    {
+      "fn": "arena_quiescent",
+      "args": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "expected": true
+    },
+    {
+      "fn": "arena_quiescent",
+      "args": [
+        1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "expected": false
+    },
+    {
+      "fn": "arena_quiescent",
+      "args": [
+        0,
+        1,
+        0,
+        0,
+        0
+      ],
+      "expected": false
+    },
+    {
+      "fn": "arena_quiescent",
+      "args": [
+        0,
+        0,
+        1,
+        0,
+        0
+      ],
+      "expected": false
+    },
+    {
+      "fn": "arena_quiescent",
+      "args": [
+        0,
+        0,
+        0,
+        1,
+        0
+      ],
+      "expected": false
+    },
+    {
+      "fn": "arena_quiescent",
+      "args": [
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "expected": false
+    },
+    {
+      "fn": "arena_quiescent",
+      "args": [
+        -1,
+        0,
+        0,
+        0,
+        0
+      ],
+      "expected": false
+    },
+    {
+      "fn": "arena_can_free",
+      "args": [
+        true,
+        true,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "expected": true
+    },
+    {
+      "fn": "arena_can_free",
+      "args": [
+        false,
+        true,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "expected": false
+    },
+    {
+      "fn": "arena_can_free",
+      "args": [
+        true,
+        false,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "expected": false
+    },
+    {
+      "fn": "arena_can_free",
+      "args": [
+        true,
+        true,
+        0,
+        1,
+        0,
+        0,
+        0
+      ],
+      "expected": false
+    },
+    {
+      "fn": "arena_can_free",
+      "args": [
+        true,
+        true,
+        0,
+        0,
+        0,
+        1,
+        0
+      ],
+      "expected": false
+    },
+    {
+      "fn": "arena_next_generation",
+      "args": [
+        1,
+        4095
+      ],
+      "expected": 2
+    },
+    {
+      "fn": "arena_next_generation",
+      "args": [
+        4094,
+        4095
+      ],
+      "expected": 4095
+    },
+    {
+      "fn": "arena_next_generation",
+      "args": [
+        4095,
+        4095
+      ],
+      "expected": -1
+    },
+    {
+      "fn": "arena_next_generation",
+      "args": [
+        0,
+        4095
+      ],
+      "expected": -1
+    },
+    {
+      "fn": "arena_next_generation",
+      "args": [
+        1,
+        1
+      ],
+      "expected": -1
+    },
+    {
+      "fn": "arena_next_generation",
+      "args": [
+        2147483647,
+        2147483647
+      ],
+      "expected": -1
+    },
+    {
+      "fn": "arena_near_quota",
+      "args": [
+        90,
+        100,
+        10
+      ],
+      "expected": true
+    },
+    {
+      "fn": "arena_near_quota",
+      "args": [
+        89,
+        100,
+        10
+      ],
+      "expected": false
+    },
+    {
+      "fn": "arena_near_quota",
+      "args": [
+        100,
+        100,
+        0
+      ],
+      "expected": true
+    },
+    {
+      "fn": "arena_near_quota",
+      "args": [
+        101,
+        100,
+        10
+      ],
+      "expected": true
+    },
+    {
+      "fn": "arena_near_quota",
+      "args": [
+        -1,
+        100,
+        10
+      ],
+      "expected": true
+    },
+    {
+      "fn": "arena_can_fit_request",
+      "args": [
+        8,
+        2,
+        10
+      ],
+      "expected": true
+    },
+    {
+      "fn": "arena_can_fit_request",
+      "args": [
+        8,
+        3,
+        10
+      ],
+      "expected": false
+    },
+    {
+      "fn": "arena_can_fit_request",
+      "args": [
+        11,
+        0,
+        10
+      ],
+      "expected": false
+    },
+    {
+      "fn": "arena_can_fit_request",
+      "args": [
+        0,
+        0,
+        0
+      ],
+      "expected": true
+    }
+  ],
+  "negative_gates": [
+    "region-borrow-escapes",
+    "slice-after-owner-drop",
+    "cross-owner-slice-replay",
+    "double-drop",
+    "generation-wrap",
+    "quota-overflow",
+    "unaligned-allocation",
+    "drop-on-unwind",
+    "constructor-partial-init",
+    "suspend-unpinned-loan",
+    "actor-stop-inflight-continuation",
+    "ffi-loan-after-stop",
+    "native-asan-ubsan",
+    "native-artifact-no-tracing-gc",
+    "guest-aot-execution"
+  ],
+  "evidence": {
+    "policy_vectors": "SOURCE_ONLY_ORACLE",
+    "guest_compiled": false,
+    "guest_executed": false,
+    "native_runtime_integrated": false,
+    "no_gc_certified": false,
+    "parity_certified": false,
+    "backend_results": {
+      "atto": "NOT_EXECUTED",
+      "cranelift": "NOT_EXECUTED",
+      "forge": "NOT_EXECUTED",
+      "hdl": "NOT_EXECUTED",
+      "java": "NOT_EXECUTED",
+      "js": "NOT_EXECUTED",
+      "llvm": "NOT_EXECUTED",
+      "net": "NOT_EXECUTED",
+      "realtime": "NOT_EXECUTED",
+      "rs": "NOT_EXECUTED",
+      "wasm": "NOT_EXECUTED"
+    }
+  }
+}

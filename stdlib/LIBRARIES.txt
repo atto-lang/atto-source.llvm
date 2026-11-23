@@ -23,3 +23,5 @@ core   slice        core/slice.atto                  any
 core   iter         core/iter.atto                   any
 std    sync         stdlib/std/sync.atto             any
 std    telemetry    stdlib/std/telemetry.atto        any
+alloc  heap         stdlib/alloc/heap.atto           any  none
+alloc  region       stdlib/alloc/region.atto         any  none
