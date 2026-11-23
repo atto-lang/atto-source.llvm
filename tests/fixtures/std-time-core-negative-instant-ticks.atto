@@ -1,0 +1,8 @@
+// NEGATIVE core ownership: externally visible Instant fields are fixed.
+// Rewriting ticks_ns could forge deadline ordering or cross clock provenance.
+import module time from "std/time";
+pub routine main(): void {
+  val now = time.instant(9, 1);
+  now.ticks_ns = -1;
+  return;
+}

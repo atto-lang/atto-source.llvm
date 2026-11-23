@@ -1,0 +1,9 @@
+// core ownership: the transferred owner retains exclusive access.
+define class Box as
+  pub let int value = 42;
+end
+pub fnc main(): int {
+  let Box original = new Box();
+  let Box transferred = original;
+  return transferred.value;
+}

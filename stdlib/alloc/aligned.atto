@@ -17,7 +17,7 @@ define module aligned as
        !valid_alignment(alignment); do
       return -1;
     fi
-    val int residue = address % alignment;
+    val int residue = Integer.rem(address, alignment);
     if residue == 0; do
       return 0;
     fi
@@ -60,6 +60,8 @@ define module aligned as
   }
 
   pub fnc pages_for(int bytes, int page_bytes): int {
+    let int shift = 0;
+    let int p = 1;
     if bytes < 0 || bytes > 2147483647 ||
        !valid_alignment(page_bytes); do
       return -1;
@@ -67,6 +69,12 @@ define module aligned as
     if bytes == 0; do
       return 0;
     fi
-    return ((bytes - 1) / page_bytes) + 1;
+    // page_bytes is a validated power of two: divide by shifting.
+    loop {
+      do if p >= page_bytes then break; fi
+      p = p <<< 1;
+      shift = shift + 1;
+    }
+    return ((bytes - 1) >>> shift) + 1;
   }
 end

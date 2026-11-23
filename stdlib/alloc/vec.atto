@@ -1,0 +1,36 @@
+// alloc/vec: allocator-backed growable int buffers (Array<int>).
+// Every buffer is owned by the calling frame and released deterministically
+// when it goes out of scope.
+define module vec as
+
+  // Sum of start, start+1, ..., start+count-1 (count <= 8) stored in an
+  // owned buffer first. Native loops cannot yet touch owners, so the buffer
+  // is filled with straight-line code and bounded by `count`.
+  pub fnc sum_range(int start, int count): int {
+    let mut Array<int> values = new Array<int>();
+    values.add(start);
+    values.add(start + 1);
+    values.add(start + 2);
+    values.add(start + 3);
+    values.add(start + 4);
+    values.add(start + 5);
+    values.add(start + 6);
+    values.add(start + 7);
+    val int c = count < 0 ? 0 : (count > 8 ? 8 : count);
+    return (c > 0 ? values.get(0) : 0) + (c > 1 ? values.get(1) : 0) +
+      (c > 2 ? values.get(2) : 0) + (c > 3 ? values.get(3) : 0) +
+      (c > 4 ? values.get(4) : 0) + (c > 5 ? values.get(5) : 0) +
+      (c > 6 ? values.get(6) : 0) + (c > 7 ? values.get(7) : 0);
+  }
+
+  // Store three values, overwrite the middle one, return the new middle.
+  pub fnc replace_middle(int a, int b, int c, int replacement): int {
+    let mut Array<int> values = new Array<int>();
+    values.add(a);
+    values.add(b);
+    values.add(c);
+    values.set(1, replacement);
+    return values.get(1);
+  }
+
+end
