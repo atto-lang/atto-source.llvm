@@ -1,0 +1,4 @@
+# atto-common-source alloc ownership v1: two physically compiled native guest cases
+# Every fixture must exist in exact source Git HEAD; runtime checks are in atto_box_main_v1.sh
+lexical.normal_return_once	guest	PASS	tests/atto-box-main-v1/return-get.atto
+lexical.early_return_once	guest	PASS	tests/atto-box-main-v1/return-early.atto
