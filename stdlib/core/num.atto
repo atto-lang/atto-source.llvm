@@ -1,0 +1,124 @@
+// core/num: freestanding checked, saturating and bounded i64 arithmetic.
+// Layer: core (no heap, OS, actor scheduler or host runtime).
+// Plain `+`/`-`/`*` on int are checked and trap on overflow; these helpers
+// report overflow as a value instead.
+define module num as
+
+  pub fnc max_value(): int {
+    return 9223372036854775807;
+  }
+
+  pub fnc min_value(): int {
+    return 0 - 9223372036854775807 - 1;
+  }
+
+  pub fnc abs(int x): int {
+    if x < 0; do
+      return 0 - x;
+    fi
+    return x;
+  }
+
+  pub fnc signum(int x): int {
+    if x < 0; do
+      return 0 - 1;
+    fi
+    if x > 0; do
+      return 1;
+    fi
+    return 0;
+  }
+
+  pub fnc min(int a, int b): int {
+    if a < b; do
+      return a;
+    fi
+    return b;
+  }
+
+  pub fnc max(int a, int b): int {
+    if a > b; do
+      return a;
+    fi
+    return b;
+  }
+
+  pub fnc clamp(int value, int lower, int upper): int {
+    if value < lower; do
+      return lower;
+    fi
+    if value > upper; do
+      return upper;
+    fi
+    return value;
+  }
+
+  pub fnc checked_add(int a, int b): Option<int> {
+    if b > 0; do
+      if a > 9223372036854775807 - b; do
+        return None;
+      fi
+    fi
+    if b < 0; do
+      if a < (0 - 9223372036854775807 - 1) - b; do
+        return None;
+      fi
+    fi
+    return Some(a + b);
+  }
+
+  pub fnc checked_sub(int a, int b): Option<int> {
+    if b < 0; do
+      if a > 9223372036854775807 + b; do
+        return None;
+      fi
+    fi
+    if b > 0; do
+      if a < (0 - 9223372036854775807 - 1) + b; do
+        return None;
+      fi
+    fi
+    return Some(a - b);
+  }
+
+  pub fnc saturating_add(int a, int b): int {
+    if b > 0; do
+      if a > 9223372036854775807 - b; do
+        return 9223372036854775807;
+      fi
+    fi
+    if b < 0; do
+      if a < (0 - 9223372036854775807 - 1) - b; do
+        return 0 - 9223372036854775807 - 1;
+      fi
+    fi
+    return a + b;
+  }
+
+  pub fnc saturating_sub(int a, int b): int {
+    if b < 0; do
+      if a > 9223372036854775807 + b; do
+        return 9223372036854775807;
+      fi
+    fi
+    if b > 0; do
+      if a < (0 - 9223372036854775807 - 1) + b; do
+        return 0 - 9223372036854775807 - 1;
+      fi
+    fi
+    return a - b;
+  }
+
+  // Integer power by repeated multiplication; traps on overflow like `*`.
+  pub fnc pow(int base, int exponent): int {
+    let int result = 1;
+    let int i = 0;
+    loop {
+      do if i >= exponent then break; fi
+      result = result * base;
+      i = i + 1;
+    }
+    return result;
+  }
+
+end
