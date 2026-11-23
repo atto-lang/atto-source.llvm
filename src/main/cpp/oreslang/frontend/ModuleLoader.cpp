@@ -228,22 +228,19 @@ private:
                 if (!library) {
                     if (frontend::is_reserved_core_import(raw))
                         fail(current,
-                            (raw.rfind("atto.core", 0) == 0
-                                ? "unknown compiler-owned atto.core module '" :
-                             raw.rfind("ores.core", 0) == 0
+                            (raw.rfind("ores.core", 0) == 0
                                 ? "unknown compiler-owned ores.core module '" :
-                                  "unknown compiler-owned core module '") + raw + "'");
+                                  "unknown compiler-owned atto.core module '") + raw + "'");
                     if (frontend::is_reserved_std_import(raw))
                         fail(current,
-                            "unknown compiler-owned std module '" + raw + "' (" +
+                            "unknown compiler-owned atto.std module '" + raw + "' (" +
                             (raw.rfind("atto.std", 0) == 0
                                 ? "native atto.std package resolution remains unsupported"
                                 : "native ores.std package resolution remains unsupported") +
                             " outside the registry)");
                     fail(current,
-                        (raw.rfind("atto.alloc", 0) == 0
-                            ? "unknown compiler-owned atto.alloc module '" :
-                              "unknown compiler-owned alloc module '") + raw + "'");
+                        "unknown compiler-owned atto.alloc module '" + raw +
+                        "' (unknown compiler-owned alloc module)");
                 }
                 if (library->tier == frontend::CompilerLibraryTier::Std && !host)
                     fail(current,

@@ -58,7 +58,9 @@ int main() {
         const auto* num = find_compiler_library_source("core/num");
         assert(num != nullptr && num->tier == CompilerLibraryTier::Core);
         assert(num == find_compiler_library_source("atto.core/num.atto"));
-        assert(num == find_compiler_library_source("ores.core/num"));
+        assert(num->canonical_import == "atto.core/num");
+        assert(find_compiler_library_source("ores.core/num") == nullptr);
+        assert(find_compiler_library_source("ores.std/io") == nullptr);
         assert(find_compiler_library_source("core/../num") == nullptr);
         assert(find_compiler_library_source("core/Num") == nullptr);
         assert(find_compiler_library_source("core/x/num") == nullptr);

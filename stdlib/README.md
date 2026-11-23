@@ -6,9 +6,9 @@ imported with the canonical selectors from
 [atto-spec core-alloc-std-libraries-v1](https://github.com/atto-lang/atto-spec/blob/main/language/core-alloc-std-libraries-v1.md):
 
 ```atto
-import module num from "core/num";
-import module arena from "alloc/arena";
-import module path from "std/path";
+import module num from "atto.core/num";
+import module arena from "atto.alloc/arena";
+import module path from "atto.std/path";
 ```
 
 | Layer   | Units                                   | Requires |
@@ -17,8 +17,7 @@ import module path from "std/path";
 | `alloc` | `arena`, `vec` (+ legacy `int_buffer`, `int_buffer_bundle`) | allocator provider |
 | `std`   | `io`, `path` (POSIX and Windows variants) | hosted target |
 
-* `core/`, `alloc/` and `std/` never fall through to files or packages; unknown
-  units are compile errors. `atto.<layer>/` and `.atto` suffixes are aliases;
+* X  units are compile errors. `atto.<layer>/` and `.atto` suffixes are aliases;
   `ores.core/` and `ores.std/` are legacy aliases.
 * Layering is enforced: core units may import only core; alloc units core and
   alloc. `std/*` is rejected on freestanding targets.
