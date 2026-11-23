@@ -918,6 +918,19 @@ int main(int argc, char** argv) {
             if (arg == "--release") build_profile = BuildProfile::Release;
             else if (arg == "--strict-aot") build_profile = BuildProfile::StrictAot;
             else build_profile = BuildProfile::HardRt;
+        } else if (arg.rfind("--target-os=", 0) == 0) {
+            // Selects platform-variant library units such as std/path.
+            const std::string os = arg.substr(std::string_view("--target-os=").size());
+            if (os == "windows") {
+                oreslang::frontend::selected_library_target_os() =
+                    oreslang::frontend::LibraryTargetOs::Windows;
+            } else if (os == "linux" || os == "macos" || os == "posix" || os == "freebsd") {
+                oreslang::frontend::selected_library_target_os() =
+                    oreslang::frontend::LibraryTargetOs::Posix;
+            } else {
+                std::cerr << "unknown --target-os (expected linux|macos|freebsd|posix|windows)\n";
+                return 2;
+            }
         } else if (arg == "--freestanding") {
             if (freestanding) { std::cerr << "duplicate --freestanding\n"; return 2; }
             freestanding = true;

@@ -1,0 +1,20 @@
+// Native AOT smoke: two actor incarnations own separate i64 heaps and
+// separately preallocated logical-frame stores. A's payload is 1; B's is 42.
+// The existing stop policy may abandon queued messages; the source AOT gate
+// checks each processed prefix rather than inventing mailbox delivery.
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+pub fnc main(): int {
+  const a: ActorRef<Worker> = spawn Worker();
+  const b: ActorRef<Worker> = spawn Worker();
+  a.send(1);
+  b.send(42);
+  stop a;
+  stop b;
+  return 42;
+}
