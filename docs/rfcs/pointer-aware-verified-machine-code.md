@@ -8,18 +8,21 @@ Bridge relational parametricity, ownership-derived separation logic, dependent/r
 ## Atto pointer syntax (normative design constraint)
 Atto uses the `Pointer` class and `Pointer<T>` for pointer-typed values. Do not introduce C/Rust pointer or reference sigils (`&`, `*`) into Atto syntax. Ownership operations use `take!`, `borrow!`, `share!` and their established variants. Pointer access must use the existing/approved `Pointer<T>` methods; examples below are illustrative API proposals, not implemented interfaces.
 
+### Mutable-value swap (proposed syntax, semantics pending)
+
 ```atto
-fnc exchange<T>(left: Pointer<T>, right: Pointer<T>)
-    where disjoint(left, right)
+fnc swap<T>(a: mut T, b: mut T)
+    where disjoint(a, b)
 {
-    let first = take!(left.read());
-    let second = take!(right.read());
-    left.write(take!(second));
-    right.write(take!(first));
+    let temp = take! a;
+    a = take! b;
+    b = take! temp;
 }
 ```
 
-The example is *not* yet well-typed by specification: moving from a pointed-to location requires initialization tracking, exclusive access, a safe replacement operation, and a defined `Pointer<T>` access API. A later revision must either use a validated swap primitive or specify the full protocol before acceptance.
+This is the preferred **surface syntax** over any C/Rust-style reference or dereference operators. However, it does not by itself establish a caller-visible swap: if parameters are passed by value, only local bindings change. The specification must explicitly define parameter passing, reassignment after a move, evaluation order, and whether `disjoint(a, b)` is meaningful for independent value bindings. For plain values with independent storage, a disjointness precondition may be redundant; for aliased mutable storage it must be proven from ownership/region information. Do not silently treat `mut T` as an implicit pointer or mutable reference.
+
+For explicitly pointer-based operations, use `Pointer<T>` and its *approved* access API, not `&` or `*`. This RFC deliberately does not invent `Pointer<T>` read/write/move method signatures. An implementation must specify initialization and exclusive-access rules before a pointer swap can be accepted.
 
 ## Semantics and obligations
 1. Track allocation identity, provenance, bounds, alignment, initialization, lifetimes, permissions, and region ownership for each `Pointer<T>`.
