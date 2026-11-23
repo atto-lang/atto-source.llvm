@@ -1,0 +1,46 @@
+// alloc/arena: deterministic bump-arena placement over an explicit
+// (used, capacity) cursor. No hidden global heap and no GC: the owner keeps
+// the cursor, places allocations with `place`, and frees everything at once
+// with `reset`. Depends only on core/mem.
+import module mem from "atto.core/mem";
+
+define module arena as
+
+  // Start offset of an allocation of `size` bytes at `align`, or None if the
+  // request is invalid or does not fit in the remaining capacity.
+  pub fnc place(int used, int capacity, int size, int align): Option<int> {
+    if used < 0 || capacity < used || size < 0; do
+      return None;
+    fi
+    val Option<int> start = mem.align_up(used, align);
+    if start.is_none(); do
+      return None;
+    fi
+    val int at = start.unwrap_or(0);
+    if at > capacity || size > capacity - at; do
+      return None;
+    fi
+    return Some(at);
+  }
+
+  // Cursor after placing `size` bytes at `align`; unchanged when it does not fit.
+  pub fnc advance(int used, int capacity, int size, int align): int {
+    val Option<int> at = place(used, capacity, size, align);
+    if at.is_none(); do
+      return used;
+    fi
+    return at.unwrap_or(0) + size;
+  }
+
+  pub fnc remaining(int used, int capacity): int {
+    if used >= capacity; do
+      return 0;
+    fi
+    return capacity - used;
+  }
+
+  pub fnc reset(): int {
+    return 0;
+  }
+
+end

@@ -1115,6 +1115,15 @@ public:
                 pointer_int_aot::Parser(std::move(tokens)).parse());
             return program;
         }
+        // A namespace is a file-header declaration, not an import or module
+        // wrapper. Parse it before any import/export; never let the imported
+        // dependency graph silently turn a late header into a valid header.
+        if (token_.text == "use" && peek_next().text == "namespace")
+            advance();
+        if (accept("namespace")) {
+            program.namespace_name = identifier();
+            require(";");
+        }
         while (token_.text == "import" || token_.text == "export") {
             if (token_.text == "export") { export_declaration(program); continue; }
             advance();
@@ -1260,13 +1269,11 @@ public:
             require(";");
             program.imports.push_back(std::move(imported));
         }
-        // Match Java: a contextual "use" in the source header selects the
-        // SAME flat namespace; it does not authorize cross-package binding.
-        if (token_.text == "use" && peek_next().text == "namespace")
-            advance();
-        if (accept("namespace")) {
-            program.namespace_name = identifier();
-            require(";");
+        if (token_.text == "namespace" ||
+            (token_.text == "use" && peek_next().text == "namespace")) {
+            if (!program.namespace_name.empty())
+                fail("NAMESPACE_DUPLICATE: only one file-level namespace header is permitted");
+            fail("NAMESPACE_HEADER_ORDER: namespace header must precede imports and declarations");
         }
         bool wrapped_module = false;
         if (token_.text == "import")
@@ -3909,7 +3916,7 @@ private:
         while (token_.text == "const" || token_.text == "val" || token_.text == "let" ||
                 token_.text == "int" || token_.text == "bool" ||
                 token_.text == "string" || token_.text == "String" ||
-                token_.text == "stdio" || array_effect_ahead()) {
+                token_.text == "mut" || token_.text == "stdio" || array_effect_ahead()) {
             if (native_box_local()) continue;
             // Typed Future<void> is admitted ONLY as a linear lexical alias
             // for one already-spawned ActorRef.get_ready() lifecycle promise.
@@ -3918,6 +3925,8 @@ private:
             if (source_task_local()) continue;
             if (source_future_pipeline_local()) continue;
             if (ready_future_local()) continue;
+            if (token_.text == "mut")
+                fail("E_MUT_QUALIFIER: bare mut requires an explicit const, val or let binding");
             LocalBinding binding;
             // A non-mut let Class is still not a const declaration.
             // This independent lexical proof prevents mutable/rebindable
@@ -3929,6 +3938,13 @@ private:
             if (token_.text == "const" && peek_next().text == "mut")
                 fail("E_CONST_MUT_UNSUPPORTED: scoped owned mutable value lowering is not yet implemented");
             Lexer sum_look = lexer_; auto sum_first = sum_look.next();
+            // The type-right spelling is an explicit constant, not a runtime
+            // val fallback: const name: int = e == const int name = e.
+            // Independent lookahead: sum_look stays at the first token for
+            // the let-mut and scalar-alias checks below.
+            const bool type_right_const = token_.text == "const" &&
+                    sum_first.kind == Kind::Identifier &&
+                    [&] { Lexer right = sum_look; return right.next().text == ":"; }();
             if (token_.text == "let" && sum_first.text == "mut") sum_first = sum_look.next();
             // Java: `val Count c = 42;` with `type Count = int;` is the same
             // scalar local as `val c: Count = 42;`. Only a declared scalar alias
@@ -3938,13 +3954,16 @@ private:
                     sum_first.kind == Kind::Identifier &&
                     scalar_alias_targets_.count(std::string(sum_first.text)) &&
                     sum_look.next().kind == Kind::Identifier;
-            if (alias_prefixed ||
-                    type_first_const ||
+            if (alias_prefixed || type_first_const || type_right_const ||
                     ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
                     (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "String" || sum_first.text == "string"))) {
                 const std::string mode = type_first_const ? "const" : std::string(token_.text);
                 if (!type_first_const) { advance(); if (mode == "let") accept("mut"); }
                 binding.owner_mutable = mode != "const"; binding.assignable = mode == "let";
+                if (type_right_const) {
+                    binding.name = identifier();
+                    require(":");
+                }
                 if (alias_prefixed) {
                     binding.pending_type_alias = std::string(token_.text);
                     advance();
@@ -3953,7 +3972,7 @@ private:
                     binding.scalar_type = accept("bool") ? ScalarType::Bool : (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
                     if (binding.scalar_type == ScalarType::I64) require("int");
                 }
-                binding.name = identifier();
+                if (!type_right_const) binding.name = identifier();
                 require("=");
                 // Lower a terminal unary `pending |> std.await` through
                 // the *same* checked Future/Task await slot and ownership
@@ -8627,7 +8646,7 @@ private:
             // binding must retain the nominal type and ownership contract.
             std::function<void(const Expression&, std::size_t)> check_inferred_scalar_shape;
             check_inferred_scalar_shape = [&](const Expression& expr, std::size_t depth) {
-                require_expression_depth(depth, expr.offset);
+                require_expression_depth(depth, expr);
                 using K = Expression::Kind;
                 if (expr.kind == K::SumConstruct || expr.kind == K::SumAccess ||
                         expr.kind == K::RecordConstruct || expr.kind == K::ArrayCall ||
@@ -8689,7 +8708,7 @@ private:
 
             std::function<void(const Expression&, std::size_t)> check_scalar_cast_sources;
             check_scalar_cast_sources = [&](const Expression& expr, std::size_t depth) {
-                require_expression_depth(depth, expr.offset);
+                require_expression_depth(depth, expr);
                 if (expr.kind == Expression::Kind::Cast)
                     check_inferred_scalar_shape(*expr.left, depth + 1);
                 auto child = [&](const std::unique_ptr<Expression>& value) {
@@ -8787,9 +8806,9 @@ private:
                     return;
                 }
                 if (stmt.kind == Statement::Kind::Loop) {
-                    TypeMap body = env;
+                    TypeMap body = env; AssignableMap body_assignable = assignable;
                     for (const auto& action : stmt.then_statements)
-                        check_statement_types(action, body);
+                        check_statement_types(action, body, body_assignable);
                     return;
                 }
                 if (stmt.kind == Statement::Kind::Break ||
