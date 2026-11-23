@@ -1,5 +1,6 @@
 # Compiler-owned AttoLang library units embedded into oreslang-llvmc.
-# Columns: layer unit source-file os(any|posix|windows)
+# Columns: layer unit source-file os(any|posix|windows) [providers(none|allocator)]
+# providers defaults to allocator for alloc units and none otherwise.
 # Import as: import module <unit> from "<layer>/<unit>";
 core   num     stdlib/core/num.atto           any
 core   cmp     stdlib/core/cmp.atto           any
@@ -11,3 +12,6 @@ alloc  vec     stdlib/alloc/vec.atto          any
 std    io      stdlib/std/io.atto             any
 std    path    stdlib/std/path_posix.atto     posix
 std    path    stdlib/std/path_windows.atto   windows
+alloc  aligned stdlib/alloc/aligned.atto       any  none
+alloc  stats   stdlib/alloc/stats.atto         any
+alloc  secure  stdlib/alloc/secure.atto        any
