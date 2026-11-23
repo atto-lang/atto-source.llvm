@@ -2,11 +2,11 @@
 // A lookalike project file named std/path.atto may never replace these bytes.
 import module path as P from "std/path";
 import module path as Q from "atto.std/path.atto";
-import module path as R from "ores.std/path";
+import module path as R from "atto.std/path";
 import module telemetry as T from "std/telemetry";
 import module telemetry as U from "atto.std/telemetry.atto";
 import module sync as S from "std/sync";
-import module sync as V from "ores.std/sync.atto";
+import module sync as V from "atto.std/sync";
 
 pub fnc main(): int {
   if !P.is_separator(47, false) then return 1; fi

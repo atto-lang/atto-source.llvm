@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+# Exact-current-source stage-0 native AOT compiler admission for std/time.
+# SUCCESS of this script is NOT a guest parity PASS unless the machine-readable
+# result says VERIFIED_GUEST_EXECUTED. Unsupported compiler syntax must be
+# rejected without publishing an artifact. No host model/queue can replace it.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+export CARGO_NET_OFFLINE=true
+expected_head="$(git rev-parse HEAD)"
+expected_tree="$(git rev-parse 'HEAD^{tree}')"
+test -z "$(git status --porcelain)"
+echo "ATTO_TIME_SOURCE_HEAD=$expected_head"
+echo "ATTO_TIME_SOURCE_TREE=$expected_tree"
+source=examples/atto-time-contract.atto
+test -f "$source"
+grep -Fxq 'import module time from "std/time";' "$source"
+test "$(grep -c 'check(' "$source")" -eq 53
+test "$(grep -c 'TIME-CONTRACT-DONE' "$source")" -eq 1
+echo "ATTO_TIME_GUEST_SOURCE_BLOB=$(git hash-object "$source")"
+cargo build --offline --release --bin atto-llvm
+compiler=target/release/atto-llvm
+test -x "$compiler"
+echo "ATTO_TIME_COMPILER_SHA256=$(sha256sum "$compiler" | cut -d' ' -f1)"
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+candidate="$work/time_guest"
+if ! "$compiler" "$source" -o "$candidate" >"$work/compile-stdout" 2>"$work/compile-stderr"; then
+  # A strict native scalar-only compiler may truthfully reject this guest.
+  # The error must be typed and no executable must have been published.
+  test ! -e "$candidate" || {
+    echo "FAIL std/time unsupported compiler published guest artifact" >&2
+    exit 1
+  }
+  if ! grep -Eq 'E_[A-Z][A-Z0-9_]*' "$work/compile-stderr" "$work/compile-stdout"; then
+    echo "FAIL std/time admission lacked a typed compiler diagnostic" >&2
+    sed -n '1,35p' "$work/compile-stderr" >&2
+    exit 1
+  fi
+  echo "STD_TIME_GUEST_UNSUPPORTED_NOT_PARITY"
+  # Exit nonzero so a source job can NEVER be mistaken for positive parity.
+  exit 78
+fi
+# Unexpected acceptance must prove genuine ELF executable and exact guest
+# stdout. A compiler returning zero without output is ALWAYS a failure.
+test -s "$candidate"
+if command -v readelf >/dev/null; then
+  readelf -h "$candidate" | grep -Eq 'Class:[[:space:]]*ELF64'
+fi
+echo "ATTO_TIME_GUEST_ARTIFACT_SHA256=$(sha256sum "$candidate" | cut -d' ' -f1)"
+if ! timeout 20s "$candidate" >"$work/guest-stdout" 2>"$work/guest-stderr"; then
+  echo "FAIL std/time guest execution" >&2
+  sed -n '1,35p' "$work/guest-stderr" >&2
+  exit 1
+fi
+python3 - "$work/guest-stdout" <<'PY'
+import pathlib,sys
+rows=pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+assert len(rows)==53,(len(rows),rows[:3],rows[-3:])
+assert rows[-1]=="TIME-CONTRACT-DONE",rows[-1]
+labels=[x.removeprefix("TIME-PASS|") for x in rows[:-1]]
+assert all(x.startswith("TIME-PASS|") for x in rows[:-1])
+assert len(set(labels))==52,labels
+for required in ("ceil-sub-ms","hours-overflow","manual-overflow-atomic",
+                 "clock-mismatch","timer-no-repeat","interval-coalesce",
+                 "deadline-overflow"):
+    assert required in labels,required
+print("STD_TIME_GUEST_VERIFIED_52_CASES")
+PY
+# A fixed val binding has a mutable referent (const mut): real native guest
+# execution must accept all three mut-self operations without an alias escape.
+positive=tests/fixtures/std-time-borrow-positive-val.atto
+test -f "$positive"
+test "$(grep -c 'val .* = time\.' "$positive")" -ge 3
+positive_guest="$work/time_val_guest"
+"$compiler" "$positive" -o "$positive_guest"
+test -s "$positive_guest"
+if command -v readelf >/dev/null; then
+  readelf -h "$positive_guest" | grep -Eq 'Class:[[:space:]]*ELF64'
+fi
+echo "ATTO_TIME_VAL_GUEST_ARTIFACT_SHA256=$(sha256sum "$positive_guest" | cut -d' ' -f1)"
+timeout 20s "$positive_guest" >"$work/time-val-out" 2>"$work/time-val-err" || {
+  echo "FAIL positive val const-mut native guest" >&2
+  sed -n '1,35p' "$work/time-val-err" >&2
+  exit 1
+}
+printf '1\ntrue\ntrue\n' >"$work/expected-val-out"
+cmp "$work/time-val-out" "$work/expected-val-out" || {
+  echo "FAIL val did not preserve writable referent semantics" >&2
+  exit 1
+}
+echo "STD_TIME_VAL_MUTABLE_REFERENT_GUEST_EXECUTED"
+
+# Conversely, const is read-only. Each negative must be rejected for
+# borrow/mutable-receiver reasons, never for unrelated syntax/import errors.
+for kind in clock timer interval; do
+  negative="tests/fixtures/std-time-borrow-negative-$kind.atto"
+  test -f "$negative"
+  reject_artifact="$work/time-immutable-$kind"
+  if "$compiler" "$negative" -o "$reject_artifact" \
+     >"$work/neg-$kind.stdout" 2>"$work/neg-$kind.stderr"; then
+    echo "FAIL immutable const $kind receiver compiled" >&2
+    exit 1
+  fi
+  test ! -e "$reject_artifact" || {
+    echo "FAIL immutable const $kind rejection left executable artifact" >&2
+    exit 1
+  }
+  if ! grep -Eiq 'borrow|mutab|read-only|immutable|ownership|const[ -]receiver' \
+     "$work/neg-$kind.stdout" "$work/neg-$kind.stderr"; then
+    echo "FAIL immutable const $kind rejected without ownership diagnostic" >&2
+    sed -n '1,35p' "$work/neg-$kind.stderr" >&2
+    exit 1
+  fi
+  echo "STD_TIME_CONST_MUT_SELF_COMPILE_REJECTED=$kind"
+done
+# Core ownership invariant: externally readable Duration/Instant fixed slots
+# remain immutable after construction, even from a writable val receiver.
+for kind in duration-nanos instant-ticks; do
+  negative="tests/fixtures/std-time-core-negative-$kind.atto"
+  test -f "$negative"
+  rejected="$work/core-fixed-$kind"
+  if "$compiler" "$negative" -o "$rejected" \
+    >"$work/core-$kind.stdout" 2>"$work/core-$kind.stderr"; then
+    echo "FAIL core time fixed-field mutation compiled: $kind" >&2
+    exit 1
+  fi
+  test ! -e "$rejected" || {
+    echo "FAIL core time field rejection left an artifact: $kind" >&2
+    exit 1
+  }
+  if ! grep -Eiq 'immutab|final|fixed|ownership|read-only' \
+     "$work/core-$kind.stdout" "$work/core-$kind.stderr"; then
+    echo "FAIL core time field rejected for unrelated compiler reason: $kind" >&2
+    sed -n '1,35p' "$work/core-$kind.stderr" >&2
+    exit 1
+  fi
+  echo "STD_TIME_CORE_FIXED_FIELD_REJECTED=$kind"
+done
+echo "STD_TIME_VERIFIED_GUEST_EXECUTED"

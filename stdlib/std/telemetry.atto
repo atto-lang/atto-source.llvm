@@ -10,7 +10,7 @@ define module telemetry as
   }
 
   pub fnc sampled_flag(int flags): bool {
-    return flags >= 0 && flags <= 255 && flags % 2 == 1;
+    return flags >= 0 && flags <= 255 && Integer.rem(flags, 2) == 1;
   }
 
   // 0 DROP, 1 RECORD_ONLY, 2 RECORD_AND_SAMPLE; 3 selects parent policy.

@@ -2,7 +2,7 @@ name: Atto core borrow range parity v1 (source-only; no borrow proof)
 on:
   pull_request:
     paths:
-      - 'stdlib/core/borrow_ranges.atto'
+      - 'stdlib/policy/core/borrow_ranges.atto'
       - 'contracts/atto-core-borrow-ranges-v1.json'
       - 'tests/core-borrow-ranges-source.test.mjs'
       - '.github/workflows/atto-core-borrow-ranges-source.yml'
@@ -30,7 +30,7 @@ jobs:
           test -z "$(git status --porcelain --untracked-files=all)"
           echo "ATTO_CORE_BORROW_HEAD=$EXPECTED_HEAD"
           echo "ATTO_CORE_BORROW_TREE=$(git rev-parse 'HEAD^{tree}')"
-          for file in stdlib/core/borrow_ranges.atto \
+          for file in stdlib/policy/core/borrow_ranges.atto \
             contracts/atto-core-borrow-ranges-v1.json \
             tests/core-borrow-ranges-source.test.mjs; do
             test -f "$file"

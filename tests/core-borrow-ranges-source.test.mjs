@@ -21,7 +21,7 @@ function file(path) {
   return {value,bytes};
 }
 const contractFile=file("contracts/atto-core-borrow-ranges-v1.json");
-const sourceFile=file("stdlib/core/borrow_ranges.atto");
+const sourceFile=file("stdlib/policy/core/borrow_ranges.atto");
 const gitBlob=bytes=>createHash("sha1").update(
   Buffer.from("blob "+bytes.length+"\0")).update(bytes).digest("hex");
 const EXPECTED_CONTRACT_BLOB="a6e35b7605c758559c9bdc094aacde152be7f2c0";

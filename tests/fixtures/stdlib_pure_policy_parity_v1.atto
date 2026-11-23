@@ -5,7 +5,9 @@ import module path from "std/path";
 import module sync from "std/sync";
 import module telemetry from "std/telemetry";
 
-pub fnc main(): int {
+// Split in two: the native LLVM frontend caps structured return branches
+// at 128 per function. Each part returns the failing case number or 0.
+fnc checks_a(): int {
   if !path.is_separator(47, false) then return 1; fi
   if path.is_separator(92, false) then return 2; fi
   if !path.is_separator(92, true) then return 3; fi
@@ -73,6 +75,10 @@ pub fnc main(): int {
   if !sync.sem_return_admissible(3, 2, 5, false) then return 65; fi
   if !sync.sem_return_admissible(3, 2, 5, true) then return 66; fi
   if sync.sem_return_admissible(4, 2, 5, false) then return 67; fi
+  return 0;
+}
+
+fnc checks_b(): int {
   if sync.sem_return_admissible(0, 0, 5, false) then return 68; fi
   if sync.sem_return_admissible(3, 2, 0, true) then return 69; fi
   if !sync.barrier_last_arrival(3, 4, false) then return 70; fi
@@ -141,4 +147,10 @@ pub fnc main(): int {
   if telemetry.drop_increment(2147483647) != 2147483647 then return 133; fi
   if telemetry.drop_increment(-1) != -1 then return 134; fi
   return 0;
+}
+
+pub fnc main(): int {
+  val int a = checks_a();
+  if a != 0 then return a; fi
+  return checks_b();
 }

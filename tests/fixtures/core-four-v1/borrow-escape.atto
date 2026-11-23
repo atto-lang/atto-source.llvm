@@ -1,0 +1,5 @@
+// LLVM compile-negative: borrowed scalar cannot escape through return.
+import module cell from "core/cell";
+pub fnc main(int value): int {
+  return borrow!value;
+}

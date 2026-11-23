@@ -87,11 +87,26 @@ public:
             // while imported source units are combined.
             if (!unit.program.inverted_structs.empty() || unit.program.inverted_main)
                 fail(unit, "DOP_INVERTED_CROSS_UNIT_UNSUPPORTED: linked inverted owner needs checked schema/owner identity");
+            // A file-scoped `use namespace foo;` header is source metadata,
+            // NOT `import namespace`, package federation, or a module wrapper.
+            // Admit it only for already-supported explicit file function imports.
+            // Nominal classes, actor state and type/package ownership still need
+            // verified namespace v2 linkage and must fail closed here.
+            if (!unit.program.namespace_name.empty() &&
+                    (!unit.program.module.empty() ||
+                     !unit.program.classes.empty() ||
+                     !unit.program.actors.empty() ||
+                     !unit.program.sum_types.empty() ||
+                     !unit.program.contracts.empty() ||
+                     !unit.program.conforms.empty() ||
+                     !unit.program.type_only_declarations.empty() ||
+                     !unit.program.type_constraint_descriptors.empty())) {
+                fail(unit, "NAMESPACE_FUNCTION_ONLY: linked source namespace supports only plain top-level fnc declarations");
+            }
             if (!unit.program.type_only_declarations.empty() ||
-                    !unit.program.type_constraint_descriptors.empty() ||
-                    !unit.program.namespace_name.empty()) {
+                    !unit.program.type_constraint_descriptors.empty()) {
                 fail(unit,
-                    "native linked type-only declarations/namespaces require checked cross-unit type identity lowering");
+                    "native linked type-only declarations require checked cross-unit type identity lowering");
             }
             if (!unit.program.contracts.empty() || !unit.program.conforms.empty())
                 fail(unit, "native linked contract conformance requires checked cross-unit contract identity lowering");
@@ -176,7 +191,10 @@ private:
         if (unit->compiler_owned_library) {
             unit->core_closure =
                 frontend::infer_core_closure_requirements(unit->program);
-            if (!frontend::core_closure_admitted(
+            // Hosted std units may perform host I/O; only core/alloc units
+            // must prove a freestanding provider closure.
+            if (unit->compiler_library_tier != frontend::CompilerLibraryTier::Std &&
+                    !frontend::core_closure_admitted(
                     unit->core_closure, unit->admitted_core_provider_bits))
                 fail(*unit,
                     "compiler-owned library inferred undeclared provider or hosted effect");
@@ -206,29 +224,36 @@ private:
 
             if (frontend::is_reserved_compiler_library_import(raw)) {
                 const auto* library =
-                    frontend::find_compiler_library_source(raw);
+                    frontend::find_compiler_library_source(raw, frontend::selected_library_target_os());
                 if (!library) {
                     if (frontend::is_reserved_core_import(raw))
                         fail(current,
-                            (raw.rfind("atto.core", 0) == 0
-                                ? "unknown compiler-owned atto.core module '" :
-                                  "unknown compiler-owned ores.core module '") + raw + "'");
+                            (raw.rfind("ores.core", 0) == 0
+                                ? "unknown compiler-owned ores.core module '" :
+                                  "unknown compiler-owned atto.core module '") + raw + "'");
+                    if (frontend::is_reserved_std_import(raw))
+                        fail(current,
+                            "unknown compiler-owned atto.std module '" + raw + "' (" +
+                            (raw.rfind("atto.std", 0) == 0
+                                ? "native atto.std package resolution remains unsupported"
+                                : "native ores.std package resolution remains unsupported") +
+                            " outside the registry)");
                     fail(current,
-                        (raw.rfind("atto.alloc", 0) == 0
-                            ? "unknown compiler-owned atto.alloc module '" :
-                              "unknown compiler-owned alloc module '") + raw + "'");
+                        "unknown compiler-owned atto.alloc module '" + raw +
+                        "' (unknown compiler-owned alloc module)");
                 }
-                // std/ is a hosted capability boundary. A freestanding
-                // core profile may never obtain std via an alias or transitive
-                // compiler-owned import, regardless of the module's contents.
                 if (library->tier == frontend::CompilerLibraryTier::Std && !host)
                     fail(current,
-                        "hosted compiler-owned std/* requires --target=host");
+                        "std/* requires a hosted target; freestanding targets admit only core/* and alloc/*");
                 if (current.compiler_owned_library &&
                         !frontend::compiler_library_dependency_allowed(
                             current.compiler_library_tier, library->tier))
                     fail(current,
-                        "compiler-owned core/alloc dependency tier violation");
+                        current.compiler_library_tier == frontend::CompilerLibraryTier::Core
+                            ? (library->tier == frontend::CompilerLibraryTier::Std
+                                ? "compiler-owned core modules may not depend on std/*"
+                                : "compiler-owned ores.core modules may not depend on alloc/*")
+                            : "compiler-owned alloc modules may not depend on std/*");
                 const std::string unit_id(library->unit_id);
                 const auto known = paths.find(unit_id);
                 selected = known == paths.end() ? units.size() : known->second;
@@ -269,7 +294,8 @@ private:
                     current.core_closure =
                         frontend::merge_core_closure_requirements(
                             current.core_closure, target.core_closure);
-                    if (!frontend::core_closure_admitted(
+                    if (current.compiler_library_tier != frontend::CompilerLibraryTier::Std &&
+                            !frontend::core_closure_admitted(
                             current.core_closure,
                             current.admitted_core_provider_bits))
                         fail(current,
@@ -278,11 +304,7 @@ private:
             } else {
                 if (current.compiler_owned_library)
                     fail(current,
-                        "compiler-owned library modules may import only ores.core/* or alloc/*");
-                if (frontend::is_reserved_std_import(raw))
-                    fail(current, raw.rfind("atto.std", 0) == 0
-                        ? "native atto.std package resolution remains unsupported"
-                        : "native ores.std package resolution remains unsupported");
+                        "compiler-owned library modules may import only core/*, alloc/* or std/* (ores.core/* or alloc/*)");
                 if (!host)
                     fail(current,
                         "freestanding native imports require compiler-owned ores.core/* modules");

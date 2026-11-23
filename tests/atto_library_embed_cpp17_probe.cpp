@@ -12,6 +12,28 @@ int main() {
         buffer->source.find("new Array<int>()") != std::string_view::npos);
     assert(bundle != nullptr &&
         bundle->source.find("atto.alloc/int_buffer") != std::string_view::npos);
+    // Newly embedded alloc modules are exactly the same units under the
+    // canonical and historical import spellings, not duplicated runtime code.
+    for (const auto* path : {"bitset", "linked_list", "map"}) {
+        const std::string name(path);
+        const auto* canonical = find_alloc_library_source("atto.alloc/" + name);
+        const auto* old_alias = find_alloc_library_source("alloc/" + name);
+        const auto* explicit_ext = find_alloc_library_source("atto.alloc/" + name + ".atto");
+        assert(canonical != nullptr);
+        assert(canonical == old_alias && canonical == explicit_ext);
+        assert(canonical->tier == CompilerLibraryTier::Alloc);
+        assert(canonical->admitted_provider_bits ==
+            core_provider_bit(CoreProviderRequirement::Allocator));
+        assert(canonical->source.find("define module " + name + " as") != std::string_view::npos);
+        assert(find_core_library_source("atto.alloc/" + name) == nullptr);
+        assert(!core_closure_admitted(
+            {core_provider_bit(CoreProviderRequirement::Allocator), false}, 0));
+        assert(core_closure_admitted(
+            {core_provider_bit(CoreProviderRequirement::Allocator), false},
+            core_provider_bit(CoreProviderRequirement::Allocator)));
+    }
+    assert(find_alloc_library_source("atto.alloc/unknown") == nullptr);
+    assert(find_alloc_library_source("atto.alloc/../map") == nullptr);
     // Exact closed registry: all canonical spellings share one source object,
     // while unknown, legacy .ores, traversal and URI imports never resolve.
     for (const auto* name : {"path", "sync", "telemetry"}) {
@@ -19,11 +41,11 @@ int main() {
         const auto legacy = std::string("std/") + name;
         const auto ores = std::string("ores.std/") + name;
         const auto full = canonical + ".atto";
-        const auto* expected = find_std_library_source(canonical);
+        const auto* expected = find_compiler_library_source(canonical);
         assert(expected != nullptr);
         assert(expected->tier == CompilerLibraryTier::Std);
         assert(find_compiler_library_source(legacy) == expected);
-        assert(find_compiler_library_source(ores) == expected);
+        assert(find_compiler_library_source(ores) == nullptr);
         assert(find_compiler_library_source(full) == expected);
         assert(find_compiler_library_source(legacy + ".atto") == expected);
         assert(find_compiler_library_source(legacy + ".ores") == nullptr);

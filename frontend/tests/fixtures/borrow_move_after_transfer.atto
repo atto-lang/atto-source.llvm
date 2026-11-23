@@ -1,0 +1,9 @@
+// core ownership: a non-Copy class owner cannot be used after transfer.
+define class Box as
+  pub let int value = 42;
+end
+pub fnc main(): int {
+  let Box original = new Box();
+  let Box transferred = original;
+  return original.value;
+}

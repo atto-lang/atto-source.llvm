@@ -14,11 +14,39 @@ enum class CoreProviderRequirement : std::uint32_t {
     MonotonicClock = 1u << 4
 };
 
+// Public library layers, mirroring Rust's core/alloc/std split:
+//   core  - freestanding, no heap/OS/scheduler (bare metal safe)
+//   alloc - core plus an explicit allocator provider (arenas, buffers)
+//   std   - hosted: requires an operating system / host runtime
 enum class CompilerLibraryTier : std::uint8_t {
     Core,
     Alloc,
     Std
 };
+
+// Operating-system family used to select platform-variant library units
+// (e.g. std/path). Import spelling never changes; only the selected source.
+enum class LibraryTargetOs : std::uint8_t {
+    Posix,
+    Windows
+};
+
+constexpr LibraryTargetOs host_library_target_os() noexcept {
+#if defined(_WIN32)
+    return LibraryTargetOs::Windows;
+#else
+    return LibraryTargetOs::Posix;
+#endif
+}
+
+// Process-wide selection, set once by the driver from --target-os=.
+inline LibraryTargetOs& selected_library_target_os() noexcept {
+    static LibraryTargetOs selected = host_library_target_os();
+    return selected;
+}
+
+// 0 = any OS, 1 = POSIX only, 2 = Windows only.
+enum class LibraryOsFilter : std::uint8_t { Any, Posix, Windows };
 
 constexpr std::uint32_t core_provider_bit(CoreProviderRequirement requirement) noexcept {
     return static_cast<std::uint32_t>(requirement);
@@ -52,10 +80,12 @@ struct CoreLibrarySource {
     std::string_view unit_id;
     std::string_view source;
     std::uint32_t admitted_provider_bits = 0;
+    LibraryOsFilter os = LibraryOsFilter::Any;
 };
 
 inline bool is_reserved_core_import(std::string_view raw) noexcept {
-    return raw == "atto.core" || raw.rfind("atto.core/", 0) == 0 ||
+    return raw == "core" || raw.rfind("core/", 0) == 0 ||
+        raw == "atto.core" || raw.rfind("atto.core/", 0) == 0 ||
         raw == "ores.core" || raw.rfind("ores.core/", 0) == 0;
 }
 
@@ -70,37 +100,63 @@ inline bool is_reserved_alloc_import(std::string_view raw) noexcept {
         raw == "alloc" || raw.rfind("alloc/", 0) == 0;
 }
 
-// Only these three reviewed, compiler-owned std modules are admitted. This
-// closed registry MUST NOT admit a filesystem path or arbitrary std/* unit.
-inline bool is_registered_std_import(std::string_view raw) noexcept {
-    constexpr std::string_view prefixes[] = {"std/", "atto.std/", "ores.std/"};
-    for (const auto prefix : prefixes) {
-        if (raw.rfind(prefix, 0) != 0) continue;
-        const auto stem = raw.substr(prefix.size());
-        return stem == "path" || stem == "path.atto" ||
-               stem == "sync" || stem == "sync.atto" ||
-               stem == "telemetry" || stem == "telemetry.atto";
-    }
-    return false;
-}
-
 inline bool is_reserved_compiler_library_import(std::string_view raw) noexcept {
     return is_reserved_core_import(raw) || is_reserved_alloc_import(raw) ||
-           is_registered_std_import(raw);
+        is_reserved_std_import(raw);
+}
+
+inline std::string_view compiler_library_tier_name(CompilerLibraryTier tier) noexcept {
+    switch (tier) {
+        case CompilerLibraryTier::Core: return "core";
+        case CompilerLibraryTier::Alloc: return "alloc";
+        case CompilerLibraryTier::Std: return "std";
+    }
+    return "core";
+}
+
+// Canonical selector is "atto.<layer>/<unit>"; "<layer>/<unit>" is the
+// equivalent shorthand and an optional ".atto" suffix is accepted. ores.*
+// spellings never select a v1 unit (Oreslang -> AttoLang rename). Units are single flat identifiers:
+// no traversal, nesting, dots or uppercase. Returns false for anything else.
+inline bool normalize_compiler_library_import(
+        std::string_view raw, CompilerLibraryTier& tier, std::string_view& unit) noexcept {
+    struct Prefix { std::string_view text; CompilerLibraryTier tier; };
+    static constexpr Prefix prefixes[] = {
+        // AttoLang names only: ores.* never selects a v1 unit.
+        {"core/", CompilerLibraryTier::Core}, {"atto.core/", CompilerLibraryTier::Core},
+        {"alloc/", CompilerLibraryTier::Alloc}, {"atto.alloc/", CompilerLibraryTier::Alloc},
+        {"std/", CompilerLibraryTier::Std}, {"atto.std/", CompilerLibraryTier::Std},
+    };
+    for (const auto& prefix : prefixes) {
+        if (raw.rfind(prefix.text, 0) != 0) continue;
+        std::string_view rest = raw.substr(prefix.text.size());
+        constexpr std::string_view suffix = ".atto";
+        if (rest.size() > suffix.size() &&
+                rest.substr(rest.size() - suffix.size()) == suffix)
+            rest = rest.substr(0, rest.size() - suffix.size());
+        if (rest.empty() || rest.size() > 64) return false;
+        for (const char ch : rest) {
+            if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_'))
+                return false;
+        }
+        if (rest[0] >= '0' && rest[0] <= '9') return false;
+        tier = prefix.tier;
+        unit = rest;
+        return true;
+    }
+    return false;
 }
 
 inline bool compiler_library_dependency_allowed(
         CompilerLibraryTier importer,
         CompilerLibraryTier dependency) noexcept {
-    // Core may depend on Core only. Alloc may depend on Core or Alloc.
-    // A hosted Std module may depend on any compiler-owned tier.
-    return dependency == CompilerLibraryTier::Core ||
-        (importer == CompilerLibraryTier::Alloc &&
-         dependency == CompilerLibraryTier::Alloc) ||
-        importer == CompilerLibraryTier::Std;
+    // core -> core; alloc -> core|alloc; std -> core|alloc|std.
+    return static_cast<std::uint8_t>(dependency) <= static_cast<std::uint8_t>(importer);
 }
 
-inline const CoreLibrarySource* find_compiler_library_source(std::string_view raw) noexcept {
+inline const CoreLibrarySource* find_compiler_library_source(
+        std::string_view raw,
+        LibraryTargetOs target_os = host_library_target_os()) noexcept {
     // Canonical Atto imports and legacy Ores imports must share one immutable
     // compiler-owned unit identity; no spelling may duplicate modules.
     static constexpr std::string_view kNumericSource =
@@ -139,28 +195,28 @@ inline const CoreLibrarySource* find_compiler_library_source(std::string_view ra
         core_provider_bit(CoreProviderRequirement::Allocator)
     };
 
-    static constexpr std::string_view kStdPathSource =
-#include "oreslang/frontend/GeneratedStdPathAtto.inc"
-    ;
-    static constexpr CoreLibrarySource kStdPath{
-        CompilerLibraryTier::Std, "atto.std/path", "path",
-        "@atto.std/path.atto", kStdPathSource, 0u
-    };
-    static constexpr std::string_view kStdTelemetrySource =
-#include "oreslang/frontend/GeneratedStdTelemetryAtto.inc"
-    ;
-    static constexpr CoreLibrarySource kStdTelemetry{
-        CompilerLibraryTier::Std, "atto.std/telemetry", "telemetry",
-        "@atto.std/telemetry.atto", kStdTelemetrySource, 0u
-    };
-    static constexpr std::string_view kStdSyncSource =
-#include "oreslang/frontend/GeneratedStdSyncAtto.inc"
-    ;
-    static constexpr CoreLibrarySource kStdSync{
-        CompilerLibraryTier::Std, "atto.std/sync", "sync",
-        "@atto.std/sync.atto", kStdSyncSource, 0u
+    // Table generated at configure time from stdlib/LIBRARIES.txt
+    // (cmake/AttoLibraryEmbed.cmake); one entry per layer/unit/OS variant.
+    static constexpr CoreLibrarySource kTable[] = {
+#include "oreslang/frontend/GeneratedAttoLibraryTable.inc"
     };
 
+    if (raw == "core/numeric" || raw == "core/numeric.atto")
+        return &kNumeric;
+    if (raw == "alloc/int_buffer.atto") return &kIntBuffer;
+    if (raw == "alloc/int_buffer_bundle.atto") return &kIntBufferBundle;
+    {
+        CompilerLibraryTier tier{};
+        std::string_view unit;
+        if (normalize_compiler_library_import(raw, tier, unit)) {
+            for (const auto& entry : kTable) {
+                if (entry.tier != tier || entry.module_name != unit) continue;
+                if (entry.os == LibraryOsFilter::Posix && target_os != LibraryTargetOs::Posix) continue;
+                if (entry.os == LibraryOsFilter::Windows && target_os != LibraryTargetOs::Windows) continue;
+                return &entry;
+            }
+        }
+    }
     if (raw == "atto.core/numeric" || raw == "atto.core/numeric.atto" ||
             raw == "ores.core/numeric" || raw == "ores.core/numeric.ores")
         return &kNumeric;
@@ -170,14 +226,6 @@ inline const CoreLibrarySource* find_compiler_library_source(std::string_view ra
     if (raw == "atto.alloc/int_buffer_bundle" || raw == "atto.alloc/int_buffer_bundle.atto" ||
             raw == "alloc/int_buffer_bundle" || raw == "alloc/int_buffer_bundle.ores")
         return &kIntBufferBundle;
-    if (is_registered_std_import(raw)) {
-        const std::size_t slash = raw.find('/');
-        if (slash == std::string_view::npos) return nullptr;
-        const auto stem = raw.substr(slash + 1);
-        if (stem == "path" || stem == "path.atto") return &kStdPath;
-        if (stem == "telemetry" || stem == "telemetry.atto") return &kStdTelemetry;
-        if (stem == "sync" || stem == "sync.atto") return &kStdSync;
-    }
     return nullptr;
 }
 
@@ -191,12 +239,6 @@ inline const CoreLibrarySource* find_alloc_library_source(
         std::string_view raw) noexcept {
     const auto* source = find_compiler_library_source(raw);
     return source && source->tier == CompilerLibraryTier::Alloc ? source : nullptr;
-}
-
-inline const CoreLibrarySource* find_std_library_source(
-        std::string_view raw) noexcept {
-    const auto* source = find_compiler_library_source(raw);
-    return source && source->tier == CompilerLibraryTier::Std ? source : nullptr;
 }
 
 inline CoreClosureRequirements infer_core_closure_requirements(
