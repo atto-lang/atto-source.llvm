@@ -1,0 +1,1 @@
+pub fnc main(): int { int shorthand = 10; const right: int = 20; const int left = 12; return shorthand + right + left; }

@@ -53,7 +53,7 @@ def main() -> None:
             d = base / module
             d.mkdir()
             (d / (module + ".atto")).write_text(
-                source_file(ROOT / "stdlib" / "alloc" / (module + ".atto")),
+                source_file(ROOT / "stdlib" / "policy" / "alloc" / (module + ".atto")),
                 encoding="utf-8")
             fixture = source_file(ROOT / "tests" / "fixtures" / "alloc" /
                                   (module + "_smoke.atto"))
@@ -155,7 +155,7 @@ pub fnc main(): int {
             d = base / ("negative-" + module)
             d.mkdir()
             (d / (module + ".atto")).write_text(
-                source_file(ROOT / "stdlib" / "alloc" / (module + ".atto")),
+                source_file(ROOT / "stdlib" / "policy" / "alloc" / (module + ".atto")),
                 encoding="utf-8")
             entry = d / "main.atto"
             entry.write_text(source, encoding="utf-8")

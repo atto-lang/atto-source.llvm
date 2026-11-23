@@ -1,0 +1,3 @@
+// negative: compiler-owned import traversal must reject before output
+import module hidden from "atto.alloc/../map";
+pub fnc main(): int { return 0; }
