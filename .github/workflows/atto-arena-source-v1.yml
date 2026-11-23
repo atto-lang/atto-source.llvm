@@ -2,19 +2,19 @@ name: LLVM-local Atto arena policy (source only)
 on:
   pull_request:
     paths:
-      - 'stdlib/core/arena_limits.atto'
-      - 'stdlib/alloc/arena_lifecycle.atto'
-      - 'stdlib/alloc/scoped_arena.atto'
-      - 'stdlib/std/arena_advice.atto'
+      - 'stdlib/policy/core/arena_limits.atto'
+      - 'stdlib/policy/alloc/arena_lifecycle.atto'
+      - 'stdlib/policy/alloc/scoped_arena.atto'
+      - 'stdlib/policy/std/arena_advice.atto'
       - 'contracts/atto-llvm-arena-cleanup-v1.json'
       - 'tests/test_atto_arena_source_v1.py'
       - '.github/workflows/atto-arena-source-v1.yml'
   push:
     paths:
-      - 'stdlib/core/arena_limits.atto'
-      - 'stdlib/alloc/arena_lifecycle.atto'
-      - 'stdlib/alloc/scoped_arena.atto'
-      - 'stdlib/std/arena_advice.atto'
+      - 'stdlib/policy/core/arena_limits.atto'
+      - 'stdlib/policy/alloc/arena_lifecycle.atto'
+      - 'stdlib/policy/alloc/scoped_arena.atto'
+      - 'stdlib/policy/std/arena_advice.atto'
       - 'contracts/atto-llvm-arena-cleanup-v1.json'
       - 'tests/test_atto_arena_source_v1.py'
       - '.github/workflows/atto-arena-source-v1.yml'

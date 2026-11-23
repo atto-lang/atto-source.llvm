@@ -2,7 +2,7 @@ name: Atto backend-local arena policy source-only gate
 on:
   pull_request:
     paths:
-      - 'stdlib/alloc/arena_plan.atto'
+      - 'stdlib/policy/alloc/arena_plan.atto'
       - 'contracts/atto-arena-policy-v1.json'
       - 'tests/atto-arena-policy-source.test.mjs'
       - 'docs/ATTO_BACKEND_LOCAL_LIBRARIES.md'

@@ -4,7 +4,7 @@ Three public `.atto` source candidates live at:
 
 - `stdlib/alloc/heap.atto`: checked heap reservation, release-policy
   arithmetic and terminal reclamation eligibility;
-- `stdlib/alloc/arena.atto`: aligned bump-offset, checkpoint and epoch
+- `stdlib/policy/alloc/arena.atto`: aligned bump-offset, checkpoint and epoch
   reset planning;
 - `stdlib/alloc/region.atto`: owner/incarnation equality, quiescence,
   drop-completion, and non-wrapping region epochs.

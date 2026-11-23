@@ -3,9 +3,9 @@
   "status": "proposed-cases-only; NOT_EXECUTED by native Atto compiler",
   "notice": "No shared-source or identical-capacity-floor requirement across backend implementations",
   "source_paths": [
-    "stdlib/core/byte_budget.atto",
-    "stdlib/alloc/capacity_plan.atto",
-    "stdlib/std/stream_watermarks.atto"
+    "stdlib/policy/core/byte_budget.atto",
+    "stdlib/policy/alloc/capacity_plan.atto",
+    "stdlib/policy/std/stream_watermarks.atto"
   ],
   "capacity_floor": 4,
   "cases": [

@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 
-const source = readFileSync(new URL("../stdlib/alloc/arena_plan.atto", import.meta.url), "utf8");
+const source = readFileSync(new URL("../stdlib/policy/alloc/arena_plan.atto", import.meta.url), "utf8");
 const manifest = JSON.parse(readFileSync(new URL("../contracts/atto-arena-policy-v1.json", import.meta.url), "utf8"));
 const gitBlob = createHash("sha1")
   .update(`blob ${Buffer.byteLength(source, "utf8")}\0`)

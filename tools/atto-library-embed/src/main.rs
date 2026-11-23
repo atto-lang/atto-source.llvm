@@ -11,7 +11,7 @@ struct Source {
     delimiter: &'static str,
     blob: &'static str,
 }
-const SOURCES: [Source; 9] = [
+const SOURCES: [Source; 3] = [
     Source { file: "stdlib/numeric.atto",
         output: "src/main/cpp/oreslang/frontend/GeneratedNumericAtto.inc",
         delimiter: "ATTO_NUMERIC", blob: "5ced991f1d49b3c2a60fdd72b9003c0a4d18cd72" },
@@ -21,24 +21,6 @@ const SOURCES: [Source; 9] = [
     Source { file: "stdlib/alloc/int_buffer_bundle.atto",
         output: "src/main/cpp/oreslang/frontend/GeneratedIntBufferBundleAtto.inc",
         delimiter: "ATTO_INT_BUNDLE", blob: "07c7083e099a18f1db7097f9639efc677070eb95" },
-    Source { file: "stdlib/alloc/heap.atto",
-        output: "src/main/cpp/oreslang/frontend/GeneratedHeapAtto.inc",
-        delimiter: "ATTO_HEAP", blob: "115e09bcf2a51ddfe927b81381544e7ebec68d95" },
-    Source { file: "stdlib/alloc/arena.atto",
-        output: "src/main/cpp/oreslang/frontend/GeneratedArenaAtto.inc",
-        delimiter: "ATTO_ARENA", blob: "ae18bb071331f7d8e4919b5ebc47d0402212721f" },
-    Source { file: "stdlib/alloc/region.atto",
-        output: "src/main/cpp/oreslang/frontend/GeneratedRegionAtto.inc",
-        delimiter: "ATTO_REGION", blob: "bd47dfe3ee758e4b52b297944870c11406928b25" },
-    Source { file: "stdlib/alloc/pool.atto",
-        output: "src/main/cpp/oreslang/frontend/GeneratedPoolAtto.inc",
-        delimiter: "ATTO_POOL", blob: "199a1d7e63cc54f3a4afa8c8ab5a06664a03e7a8" },
-    Source { file: "stdlib/alloc/arc.atto",
-        output: "src/main/cpp/oreslang/frontend/GeneratedArcAtto.inc",
-        delimiter: "ATTO_ARC", blob: "945854a650ff81d9c84807c976e8cca196083d04" },
-    Source { file: "stdlib/alloc/weak.atto",
-        output: "src/main/cpp/oreslang/frontend/GeneratedWeakAtto.inc",
-        delimiter: "ATTO_WEAK", blob: "7a135e7012a49be5bf5c740b1800133b238dded4" },
 ];
 const MAX_BYTES: usize = 1024 * 1024;
 

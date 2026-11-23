@@ -6,14 +6,14 @@ and no byte-for-byte source identity with other compilers is mandated.
 
 ## Layer boundaries
 
-- `stdlib/core/byte_budget.atto` is freestanding, pure and allocation-free.
-- `stdlib/alloc/capacity_plan.atto` is a pure policy helper for an explicit
+- `stdlib/policy/core/byte_budget.atto` is freestanding, pure and allocation-free.
+- `stdlib/policy/alloc/capacity_plan.atto` is a pure policy helper for an explicit
   allocator. Actual allocation and ownership are NOT implemented by this file.
-- `stdlib/alloc/arena_plan.atto` adds overflow-safe reservation and conservative
+- `stdlib/policy/alloc/arena_plan.atto` adds overflow-safe reservation and conservative
   rewind/tail-release/close/generation policy. A trusted runtime must enforce
   true ownership, live-loan state, alignment, destructor completion, scrubbing
   and actor incarnation. No heap or arena allocator is exposed by this file.
-- `stdlib/std/stream_watermarks.atto` provides stream backpressure decisions.
+- `stdlib/policy/std/stream_watermarks.atto` provides stream backpressure decisions.
   Channel admission, actor scheduling, permission checks and I/O are still
   enforced by the runtime.
 
@@ -23,7 +23,7 @@ and `next_capacity` returns -1. Max budgets are inclusive. Growth uses a
 backend-local initial capacity floor of 4 items; this value may vary
 across compilers without changing safe ownership or streaming contracts.
 
-The LLVM-local `stdlib/alloc/arena_lifecycle.atto` separately checks sealed
+The LLVM-local `stdlib/policy/alloc/arena_lifecycle.atto` separately checks sealed
 admission, completed drops, active turns, continuations, I/O and producer
 leases before physical reclamation. `arena_can_close` in `arena_plan.atto`
 is **not** an alias for that stronger `arena_can_free` gate. Existing

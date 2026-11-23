@@ -3,7 +3,7 @@ on:
   pull_request:
     paths:
       - 'stdlib/alloc/heap.atto'
-      - 'stdlib/alloc/arena.atto'
+      - 'stdlib/policy/alloc/arena.atto'
       - 'stdlib/alloc/region.atto'
       - 'src/main/cpp/oreslang/frontend/Generated*Atto.inc'
       - 'src/main/cpp/oreslang/frontend/CoreLibrarySources.hpp'

@@ -1,6 +1,49 @@
-// Compiler-owned Atto alloc tier: source implements policy, not physical authority.
-// Real native allocation still requires a provider and compiler-verified lifetimes.
+// alloc/arena: deterministic bump-arena placement over an explicit
+// (used, capacity) cursor. No hidden global heap and no GC: the owner keeps
+// the cursor, places allocations with `place`, and frees everything at once
+// with `reset`. Depends only on core/mem.
+import module mem from "atto.core/mem";
+
 define module arena as
+
+  // Start offset of an allocation of `size` bytes at `align`, or None if the
+  // request is invalid or does not fit in the remaining capacity.
+  pub fnc place(int used, int capacity, int size, int align): Option<int> {
+    if used < 0 || capacity < used || size < 0; do
+      return None;
+    fi
+    val Option<int> start = mem.align_up(used, align);
+    if start.is_none(); do
+      return None;
+    fi
+    val int at = start.unwrap_or(0);
+    if at > capacity || size > capacity - at; do
+      return None;
+    fi
+    return Some(at);
+  }
+
+  // Cursor after placing `size` bytes at `align`; unchanged when it does not fit.
+  pub fnc advance(int used, int capacity, int size, int align): int {
+    val Option<int> at = place(used, capacity, size, align);
+    if at.is_none(); do
+      return used;
+    fi
+    return at.unwrap_or(0) + size;
+  }
+
+  pub fnc remaining(int used, int capacity): int {
+    if used >= capacity; do
+      return 0;
+    fi
+    return capacity - used;
+  }
+
+  pub fnc reset(): int {
+    return 0;
+  }
+
+  // --- Quota/epoch arena policy (from atto-source.llvm#855) ---
 // LLVM-backend-owned alloc/arena source: bounded bump-allocation decisions.
 // Offsets are policy values, NOT dereferenceable pointers or owner tickets.
 // Runtime must physically allocate, zero and drop in the actor's own domain.
@@ -8,9 +51,9 @@ define module arena as
   pub fnc arena_aligned_start(int cursor, int bytes, int alignment, int quota) -> int {
     if cursor < 0 || bytes < 0 || alignment <= 0 || quota < 0 then return -1; fi
     if cursor > quota then return -1; fi
-    if (alignment & (alignment - 1)) != 0 then return -1; fi
+    if !mem.is_power_of_two(alignment) then return -1; fi
     if bytes == 0 then return cursor; fi
-    val int remainder = cursor - (cursor / alignment) * alignment;
+    val int remainder = Integer.rem(cursor, alignment);
     if remainder == 0 then
       if bytes > quota - cursor then return -1; fi
       return cursor;
@@ -43,5 +86,4 @@ define module arena as
     if loans != 0 || live_values != 0 then return false; fi
     return generation >= 1 && generation < generation_maximum;
   }
-
 end

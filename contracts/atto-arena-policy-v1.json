@@ -1,7 +1,7 @@
 {
   "schema": "atto.backend-local.arena-policy.v1",
   "backend": "atto-source.llvm",
-  "source": "stdlib/alloc/arena_plan.atto",
+  "source": "stdlib/policy/alloc/arena_plan.atto",
   "source_git_blob_sha": "e42af976b5ec0846c86e0ed8dfee3d9d6e34056d",
   "status": "SOURCE_ONLY_NOT_EXECUTED_BY_NATIVE_ATTO_COMPILER",
   "i64_arguments": "Decimal strings represent exact signed 64-bit integers; JSON numbers restricted to safe integer range.",

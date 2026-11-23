@@ -68,8 +68,8 @@ def validate(payload, root=ROOT):
     assert len(payload['evidence']['backend_results']) == 11
     assert set(payload['evidence']['backend_results'].values()) == {'NOT_EXECUTED'}
     names = [x['path'] for x in payload['source_paths']]
-    assert names == ['stdlib/alloc/arena_lifecycle.atto','stdlib/alloc/scoped_arena.atto',
-                     'stdlib/core/arena_limits.atto','stdlib/std/arena_advice.atto']
+    assert names == ['stdlib/policy/alloc/arena_lifecycle.atto','stdlib/policy/alloc/scoped_arena.atto',
+                     'stdlib/policy/core/arena_limits.atto','stdlib/policy/std/arena_advice.atto']
     for x in payload['source_paths']:
         assert set(x) == {'path','sha256','bytes'}
         assert not Path(x['path']).is_absolute() and '..' not in Path(x['path']).parts
@@ -80,10 +80,10 @@ def validate(payload, root=ROOT):
         assert len(b) == x['bytes'] and hashlib.sha256(b).hexdigest() == x['sha256']
         txt = b.decode('utf8')
         assert not re.search(r'\b(?:syscall|malloc|free|thread|spawn|await|ffi|gc_collect)\s*\(',txt)
-    core = (root / 'stdlib/core/arena_limits.atto').read_text()
-    alloc = (root / 'stdlib/alloc/arena_lifecycle.atto').read_text()
-    scoped = (root / 'stdlib/alloc/scoped_arena.atto').read_text()
-    std = (root / 'stdlib/std/arena_advice.atto').read_text()
+    core = (root / 'stdlib/policy/core/arena_limits.atto').read_text()
+    alloc = (root / 'stdlib/policy/alloc/arena_lifecycle.atto').read_text()
+    scoped = (root / 'stdlib/policy/alloc/scoped_arena.atto').read_text()
+    std = (root / 'stdlib/policy/std/arena_advice.atto').read_text()
     for name in ('arena_alignment_valid','arena_padding','arena_end_offset'):
         assert re.search(r'pub fnc '+name+r'\(', core)
     for name in ('arena_quiescent','arena_can_free','arena_next_generation'):

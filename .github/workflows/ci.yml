@@ -42,6 +42,24 @@ jobs:
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
       - name: Compile
         run: cmake --build build --parallel 2
+      - name: Execute core-four ownership compiler guests O0/O2 and zero-IR negatives
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          ORESLANG_LLVMC: build/oreslang-llvmc
+          ORES_NO_GC_IR_AUDIT: build/oreslang-no-gc-ir-audit
+        run: |
+          set -euo pipefail
+          test -x "$ORESLANG_LLVMC"
+          test -x "$ORES_NO_GC_IR_AUDIT"
+          bash scripts/test-core-four-llvm-native.sh \
+            | tee "$RUNNER_TEMP/core-four-llvm-native-receipt.txt"
+          grep -F 'CORE_FOUR_LLVM_LOCAL_GUEST_PASS' "$RUNNER_TEMP/core-four-llvm-native-receipt.txt" | grep -F 'O0|'
+          grep -F 'CORE_FOUR_LLVM_LOCAL_GUEST_PASS' "$RUNNER_TEMP/core-four-llvm-native-receipt.txt" | grep -F 'O2|'
+          grep -F 'CORE_FOUR_LLVM_LOCAL_MATRIX_PASS' "$RUNNER_TEMP/core-four-llvm-native-receipt.txt"
+          for fixture in borrow-use-after-take borrow-escape borrow-conflicting-loans; do
+            grep -F 'CORE_FOUR_LLVM_BORROW_COMPILER_NEGATIVE' "$RUNNER_TEMP/core-four-llvm-native-receipt.txt" \
+              | grep -F "$fixture" | grep -F 'IR=NONE'
+          done
       - name: Self-test fail-closed Option-pattern evidence harness (synthetic only)
         run: python3 -m unittest discover -s scripts -p test_option_pattern_contract.py -v
       - name: Reject unsupported Option pattern syntax using real LLVM compiler

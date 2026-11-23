@@ -1,0 +1,8 @@
+// NEGATIVE core ownership: caller cannot rewrite Duration's checked fixed
+// nanos field to bypass its constructor's nonnegative invariant.
+import module time from "std/time";
+pub routine main(): void {
+  val duration = time.nanoseconds(1).expect("one");
+  duration.nanos = -1;
+  return;
+}

@@ -3,22 +3,22 @@
   "status": "TARGET_SOURCE_ONLY_NOT_GUEST_EXECUTED",
   "source_paths": [
     {
-      "path": "stdlib/alloc/arena_lifecycle.atto",
+      "path": "stdlib/policy/alloc/arena_lifecycle.atto",
       "sha256": "3d155f4d0959ab01504b12d37cba1e10eae445fe11136635bd91013001482bae",
       "bytes": 1255
     },
     {
-      "path": "stdlib/alloc/scoped_arena.atto",
+      "path": "stdlib/policy/alloc/scoped_arena.atto",
       "sha256": "945f57ac39249ce3442ca40804099c7381c490c0c69aab9878d48a1f8bdcd356",
       "bytes": 2101
     },
     {
-      "path": "stdlib/core/arena_limits.atto",
+      "path": "stdlib/policy/core/arena_limits.atto",
       "sha256": "b89f8f678607934b106975cd7fde5bc6067bf9086818ebd125e57e5ebbb84b44",
       "bytes": 1228
     },
     {
-      "path": "stdlib/std/arena_advice.atto",
+      "path": "stdlib/policy/std/arena_advice.atto",
       "sha256": "c38e132f5e84cdb7f5a6e5c196f64247ea8bc753924e9a935a25e244caffe345",
       "bytes": 623
     }

@@ -1,0 +1,50 @@
+name: Atto alloc native LLVM compiled guest exact-head
+on:
+  pull_request:
+    paths:
+      - 'stdlib/alloc/**'
+      - 'tests/fixtures/alloc/**'
+      - 'tests/atto_alloc_guest.py'
+      - '.github/workflows/atto-alloc-guest.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  llvm-atto-alloc-guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout exact head with no persisted credentials
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify source tree
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          git diff --quiet && git diff --cached --quiet
+          echo "ATTO_ALLOC_LLVM_HEAD=$EXPECTED_SHA TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Install compiler and native toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang llvm-dev python3
+          python3 -I tests/check_alloc_embeds.py
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --parallel 2 --target oreslang-llvmc
+      - name: Compile and run real .atto alloc guests and privacy negatives
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          python3 -I tests/atto_alloc_guest.py \
+            --compiler "$(pwd)/build/oreslang-llvmc" --clang "$(command -v clang)"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          echo "ATTO_ALLOC_LLVM_NATIVE_GUEST_RECEIPT=$EXPECTED_SHA"

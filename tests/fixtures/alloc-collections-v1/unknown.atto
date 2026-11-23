@@ -1,0 +1,3 @@
+// negative: unknown compiler-owned alloc module cannot use project fallback
+import module hidden from "atto.alloc/not_a_library";
+pub fnc main(): int { return 0; }
