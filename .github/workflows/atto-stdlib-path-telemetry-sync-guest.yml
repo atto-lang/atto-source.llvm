@@ -1,0 +1,227 @@
+name: LLVM native Atto std path/telemetry/sync executable guest gate
+on:
+  pull_request:
+    paths:
+      - 'stdlib/std/path.atto'
+      - 'stdlib/std/telemetry.atto'
+      - 'stdlib/std/sync.atto'
+      - 'tests/fixtures/stdlib_path_telemetry_sync_v1.atto'
+      - 'tests/fixtures/stdlib_alias_identity_v1.atto'
+      - 'tests/fixtures/stdlib_pure_policy_parity_v1.atto'
+      - 'tests/native_borrow_alias_matrix.rs'
+      - 'tests/native_task_borrow_rejection.rs'
+      - '.github/workflows/atto-stdlib-path-telemetry-sync-guest.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-import-guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout source repo exact head, never cross-org
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify source SHA, entire root tree and component blobs
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          echo "LLVM_ATTO_STD_HEAD=$EXPECTED_SHA"
+          echo "LLVM_ATTO_STD_TREE=$(git rev-parse 'HEAD^{tree}')"
+          for path in \
+            stdlib/std/path.atto stdlib/std/telemetry.atto stdlib/std/sync.atto \
+            tests/fixtures/stdlib_path_telemetry_sync_v1.atto \
+            tests/fixtures/stdlib_alias_identity_v1.atto \
+            tests/fixtures/stdlib_pure_policy_parity_v1.atto \
+            tests/native_borrow_alias_matrix.rs \
+            tests/native_task_borrow_rejection.rs; do
+            sha="$(git hash-object --no-filters -- "$path")"
+            test "$sha" = "$(git rev-parse "HEAD:$path")"
+            echo "LLVM_ATTO_STD_SOURCE_BLOB=$path:$sha"
+          done
+      - name: Provision native toolchain
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang llvm-dev cmake ninja-build
+      - name: Compile exact-head LLVM native Atto compiler
+        run: |
+          set -euo pipefail
+          cmake -G Ninja -S . -B "$RUNNER_TEMP/std-backend" \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
+            -DLLVM_DIR="$(llvm-config --cmakedir)"
+          cmake --build "$RUNNER_TEMP/std-backend" --target oreslang-llvmc --parallel 2
+          test -x "$RUNNER_TEMP/std-backend/oreslang-llvmc"
+          sha256sum "$RUNNER_TEMP/std-backend/oreslang-llvmc"
+      - name: Compile original Atto std imports and run guest at O0 and O2
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/std-backend/oreslang-llvmc" --target=host \
+            tests/fixtures/stdlib_path_telemetry_sync_v1.atto \
+            > "$RUNNER_TEMP/std-guest.ll"
+          test -s "$RUNNER_TEMP/std-guest.ll"
+          grep -Eq '^define i64 @__oreslang_guest_main\(' "$RUNNER_TEMP/std-guest.ll"
+          grep -Eq '^define i32 @main\(' "$RUNNER_TEMP/std-guest.ll"
+          for opt in 0 2; do
+            clang "-O$opt" -x ir "$RUNNER_TEMP/std-guest.ll" \
+              -o "$RUNNER_TEMP/std-guest-O$opt"
+            "$RUNNER_TEMP/std-guest-O$opt"
+            echo "LLVM_ATTO_STD_REAL_GUEST=EXECUTED opt=$opt"
+          done
+      - name: Compile and run all 134 shared Atto std policy vectors at O0 and O2
+        shell: bash
+        run: |
+          set -euo pipefail
+          compiler="$RUNNER_TEMP/std-backend/oreslang-llvmc"
+          fixture=tests/fixtures/stdlib_pure_policy_parity_v1.atto
+          "$compiler" --target=host "$fixture" > "$RUNNER_TEMP/std-parity-134.ll"
+          test -s "$RUNNER_TEMP/std-parity-134.ll"
+          grep -Eq '^define i64 @__oreslang_guest_main\(' "$RUNNER_TEMP/std-parity-134.ll"
+          grep -Eq '^define i32 @main\(' "$RUNNER_TEMP/std-parity-134.ll"
+          for opt in 0 2; do
+            clang "-O$opt" -x ir "$RUNNER_TEMP/std-parity-134.ll" \
+              -o "$RUNNER_TEMP/std-parity-134-O$opt"
+            "$RUNNER_TEMP/std-parity-134-O$opt"
+            echo "LLVM_STD_POLICY_134_NATIVE_GUEST=EXECUTED opt=$opt"
+          done
+
+      - name: Prove aliases share one compiler-owned unit in an executed Atto native guest
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/std-backend/oreslang-llvmc" --target=host \
+            tests/fixtures/stdlib_alias_identity_v1.atto \
+            > "$RUNNER_TEMP/std-alias-guest.ll"
+          test -s "$RUNNER_TEMP/std-alias-guest.ll"
+          # Seven qualified bindings but only three compiler-owned units:
+          # each public function is defined once, regardless of alias count.
+          for function in 'is_separator' 'sampled_flag' 'mutex_take_admissible'; do
+            count="$(grep -Ec "^define i64 @__ores_module_[0-9]+\\.${function}\\(" \
+              "$RUNNER_TEMP/std-alias-guest.ll" || true)"
+            test "$count" -eq 1
+          done
+          clang -O2 -x ir "$RUNNER_TEMP/std-alias-guest.ll" \
+            -o "$RUNNER_TEMP/std-alias-guest.bin"
+          "$RUNNER_TEMP/std-alias-guest.bin"
+          echo "LLVM_ATTO_STD_ALIAS_GUEST=EXECUTED"
+
+      - name: Reject unsupported std import spellings, traversal, shadowing and freestanding admission
+        shell: bash
+        run: |
+          set -euo pipefail
+          compiler="$RUNNER_TEMP/std-backend/oreslang-llvmc"
+          mkdir -p "$RUNNER_TEMP/std-negative/std"
+          # An application-owned lookalike must not replace the compiler-owned module.
+          cat > "$RUNNER_TEMP/std-negative/std/path.atto" <<'ATTO'
+          define module path as
+            pub fnc is_separator(int scalar, bool windows): bool { return false; }
+          end
+          ATTO
+          cat > "$RUNNER_TEMP/std-negative/shadow.atto" <<'ATTO'
+          import module path from "std/path";
+          pub fnc main(): int {
+            if path.is_separator(47, false) then return 0; fi
+            return 37;
+          }
+          ATTO
+          "$compiler" --target=host "$RUNNER_TEMP/std-negative/shadow.atto" > "$RUNNER_TEMP/std-shadow.ll"
+          test -s "$RUNNER_TEMP/std-shadow.ll"
+          clang -O2 -x ir "$RUNNER_TEMP/std-shadow.ll" -o "$RUNNER_TEMP/std-shadow.bin"
+          "$RUNNER_TEMP/std-shadow.bin"
+          echo "LLVM_STD_SHADOW_PROTECTION=EXECUTED"
+
+          reject_import() {
+            local name="$1" spelling="$2" diagnostic="$3"
+            printf 'import module path from "%s"; pub fnc main():int{return 0;}\n' "$spelling" \
+              > "$RUNNER_TEMP/std-negative/$name.atto"
+            if "$compiler" --target=host "$RUNNER_TEMP/std-negative/$name.atto" \
+              > "$RUNNER_TEMP/std-negative/$name.ll" 2> "$RUNNER_TEMP/std-negative/$name.err"; then
+              echo "::error::Forbidden std source import succeeded: $name" >&2
+              exit 1
+            fi
+            test ! -s "$RUNNER_TEMP/std-negative/$name.ll"
+            grep -Fq "$diagnostic" "$RUNNER_TEMP/std-negative/$name.err"
+            echo "LLVM_STD_FAIL_CLOSED=$name"
+          }
+          reject_import legacy "std/path.ores" "native ores.std package resolution remains unsupported"
+          reject_import unknown "std/does_not_exist" "native ores.std package resolution remains unsupported"
+          reject_import traversal "std/../path" "native ores.std package resolution remains unsupported"
+          reject_import extension "std/path.atto.bak" "native ores.std package resolution remains unsupported"
+          reject_import other "atto.std/otp" "native atto.std package resolution remains unsupported"
+
+          cat > "$RUNNER_TEMP/std-negative/freestanding.atto" <<'ATTO'
+          import module path from "std/path";
+          pub fnc main():int{return path.component_kind(1,97,0);}
+          ATTO
+          if "$compiler" --library-profile=core --target=wasm32-unknown-unknown \
+            "$RUNNER_TEMP/std-negative/freestanding.atto" \
+            > "$RUNNER_TEMP/std-negative/freestanding.ll" \
+            2> "$RUNNER_TEMP/std-negative/freestanding.err"; then
+            echo "::error::Freestanding std import succeeded unexpectedly" >&2
+            exit 1
+          fi
+          test ! -s "$RUNNER_TEMP/std-negative/freestanding.ll"
+          grep -Fq 'hosted compiler-owned std/* requires --target=host' \
+            "$RUNNER_TEMP/std-negative/freestanding.err"
+          echo "LLVM_STD_FREESTANDING_IMPORT_DENIED=EXECUTED"
+      - name: Compile sanitized native guest and run actual instrumentation
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euo pipefail
+          clang -O1 -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -x ir "$RUNNER_TEMP/std-guest.ll" \
+            -o "$RUNNER_TEMP/std-guest-sanitized"
+          "$RUNNER_TEMP/std-guest-sanitized"
+          clang -O1 -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -x ir "$RUNNER_TEMP/std-parity-134.ll" \
+            -o "$RUNNER_TEMP/std-parity-134-sanitized"
+          "$RUNNER_TEMP/std-parity-134-sanitized"
+          echo "LLVM_STD_POLICY_134_ASAN_UBSAN=EXECUTED"
+          echo "LLVM_ATTO_STD_ASAN_UBSAN_GUEST=EXECUTED"
+      - name: Compile actual LLVM borrow checker and execute 144 canonical Atto alias cases
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc --version
+          rustc -O --edition=2021 tests/native_borrow_alias_matrix.rs \
+            -o "$RUNNER_TEMP/std-borrow-alias-matrix"
+          "$RUNNER_TEMP/std-borrow-alias-matrix" \
+            --compiler "$RUNNER_TEMP/std-backend/oreslang-llvmc" \
+            --clang "$(command -v clang)" \
+            --source-ext=atto \
+            | tee "$RUNNER_TEMP/std-borrow-alias-matrix.log"
+          grep -Fq \
+            'PASS borrow contract: accepted=60, rejected=84, Java=0, sanitized=false' \
+            "$RUNNER_TEMP/std-borrow-alias-matrix.log"
+          echo "ATTO_LLVM_CORE_BORROW_ALIAS_144=EXECUTED"
+      - name: Fail closed for eight borrowed Task/suspension forms
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc -O --edition=2021 tests/native_task_borrow_rejection.rs \
+            -o "$RUNNER_TEMP/std-native-task-borrow"
+          "$RUNNER_TEMP/std-native-task-borrow" \
+            "$RUNNER_TEMP/std-backend/oreslang-llvmc" \
+            --source-ext=atto \
+            | tee "$RUNNER_TEMP/std-native-task-borrow.log"
+          grep -Fq \
+            'PASS: 8 borrowed Task forms rejected before LLVM IR emission' \
+            "$RUNNER_TEMP/std-native-task-borrow.log"
+          echo "ATTO_LLVM_CORE_TASK_BORROW_NEGATIVE=EXECUTED"
+
+      - name: Preserve the evidence boundary
+        if: always()
+        run: |
+          echo 'No private source was exported to any other organization.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'A compiler rejection, missing library import or 0-step queue is NOT a native guest pass.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Passing this workflow does not prove thread/actor locking, OTLP or native FS provider support.' >> "$GITHUB_STEP_SUMMARY"

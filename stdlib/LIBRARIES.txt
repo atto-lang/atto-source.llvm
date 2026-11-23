@@ -21,3 +21,5 @@ core   hash         stdlib/core/hash.atto            any
 core   cell         stdlib/core/cell.atto            any
 core   slice        core/slice.atto                  any
 core   iter         core/iter.atto                   any
+std    sync         stdlib/std/sync.atto             any
+std    telemetry    stdlib/std/telemetry.atto        any
