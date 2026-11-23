@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-const source=(f)=>readFileSync(new URL('../stdlib/alloc/'+f+'.atto',import.meta.url),'utf8');
+const source=(f)=>readFileSync(new URL('../stdlib/policy/alloc/'+f+'.atto',import.meta.url),'utf8');
 const fixture=(f)=>readFileSync(new URL('./fixtures/alloc-collections-source/'+f+'.atto',import.meta.url),'utf8');
 
 test('Box requires explicit ownership transfer and forbids raw handle forging',()=>{

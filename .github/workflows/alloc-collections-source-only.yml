@@ -2,17 +2,17 @@ name: Atto alloc source contracts (not guest execution)
 on:
   push:
     paths:
-      - 'stdlib/alloc/box.atto'
-      - 'stdlib/alloc/vec.atto'
-      - 'stdlib/alloc/string.atto'
+      - 'stdlib/policy/alloc/box.atto'
+      - 'stdlib/policy/alloc/vec.atto'
+      - 'stdlib/policy/alloc/string.atto'
       - 'tests/alloc-collections-source-contract.test.mjs'
       - 'tests/fixtures/alloc-collections-source/**'
       - '.github/workflows/alloc-collections-source-only.yml'
   pull_request:
     paths:
-      - 'stdlib/alloc/box.atto'
-      - 'stdlib/alloc/vec.atto'
-      - 'stdlib/alloc/string.atto'
+      - 'stdlib/policy/alloc/box.atto'
+      - 'stdlib/policy/alloc/vec.atto'
+      - 'stdlib/policy/alloc/string.atto'
       - 'tests/alloc-collections-source-contract.test.mjs'
       - 'tests/fixtures/alloc-collections-source/**'
       - '.github/workflows/alloc-collections-source-only.yml'

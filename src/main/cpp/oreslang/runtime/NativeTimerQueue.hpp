@@ -71,6 +71,31 @@ public:
         return NativeTimerHandle{domain_, id};
     }
 
+    /**
+     * Adapter for Atto std/time's current signed-i64 nanosecond values.
+     * Enforce the guest's range BEFORE native unsigned arithmetic; never
+     * turn negative timestamps/durations into enormous future deadlines.
+     * The owner must obtain now_ns from its trusted monotonic clock, not
+     * from an untrusted source-constructible Instant or ManualClock.
+     *
+     * This is a native runtime adapter, not source compiler lowering.
+     */
+    NativeTimerHandle arm_after_atto(std::int64_t now_ns, std::int64_t delay_ns) {
+        if (now_ns < 0 || delay_ns < 0)
+            throw std::invalid_argument("negative Atto timer timestamp or duration");
+        if (now_ns > std::numeric_limits<std::int64_t>::max() - delay_ns)
+            throw std::overflow_error("Atto signed timer deadline overflow");
+        return arm_after(static_cast<std::uint64_t>(now_ns),
+                         static_cast<std::uint64_t>(delay_ns));
+    }
+
+    /** Poll against a validated signed-i64 Atto clock reading. */
+    std::vector<Expired> poll_atto(std::int64_t now_ns, std::size_t max_items) {
+        if (now_ns < 0)
+            throw std::invalid_argument("negative Atto monotonic clock reading");
+        return poll(static_cast<std::uint64_t>(now_ns), max_items);
+    }
+
     bool cancel(NativeTimerHandle handle) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (handle.domain != domain_ || closed_) return false;

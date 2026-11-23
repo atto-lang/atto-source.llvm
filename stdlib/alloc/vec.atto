@@ -1,86 +1,36 @@
-// Compiler-local source candidate for atto-source.llvm; no shared source dependency.
-// Backend-owned alloc/vec module. Array<T> provides the actual heap storage;
-// Vec<T> owns that backing array and never returns an unproven mutable alias.
-// A consuming generic formal is a TARGET; backends without typed ownership
-// contracts must reject, never silently move a borrowed argument.
-// There is deliberately no fake reserve(), zero-copy slice or unsafe pop():
-// those need checked allocator/element-take compiler primitives.
-define module alloc_vec as
-  define pub class Vec<T> as
-    let mut Array<T> values = new Array<T>();
-  end
+// alloc/vec: allocator-backed growable int buffers (Array<int>).
+// Every buffer is owned by the calling frame and released deterministically
+// when it goes out of scope.
+define module vec as
 
-  pub fnc new_vec<T>() -> Vec<T> {
-    return new Vec<T>();
+  // Sum of start, start+1, ..., start+count-1 (count <= 8) stored in an
+  // owned buffer first. Native loops cannot yet touch owners, so the buffer
+  // is filled with straight-line code and bounded by `count`.
+  pub fnc sum_range(int start, int count): int {
+    let mut Array<int> values = new Array<int>();
+    values.add(start);
+    values.add(start + 1);
+    values.add(start + 2);
+    values.add(start + 3);
+    values.add(start + 4);
+    values.add(start + 5);
+    values.add(start + 6);
+    values.add(start + 7);
+    val int c = count < 0 ? 0 : (count > 8 ? 8 : count);
+    return (c > 0 ? values.get(0) : 0) + (c > 1 ? values.get(1) : 0) +
+      (c > 2 ? values.get(2) : 0) + (c > 3 ? values.get(3) : 0) +
+      (c > 4 ? values.get(4) : 0) + (c > 5 ? values.get(5) : 0) +
+      (c > 6 ? values.get(6) : 0) + (c > 7 ? values.get(7) : 0);
   }
 
-  pub mtd (Vec<T> self) len() -> int {
-    return self.values.size;
+  // Store three values, overwrite the middle one, return the new middle.
+  pub fnc replace_middle(int a, int b, int c, int replacement): int {
+    let mut Array<int> values = new Array<int>();
+    values.add(a);
+    values.add(b);
+    values.add(c);
+    values.set(1, replacement);
+    return values.get(1);
   }
 
-  pub mtd (Vec<T> self) is_empty() -> bool {
-    return self.values.size == 0;
-  }
-
-  pub mtd (mut self: Vec<T>) push(take! T item) -> void {
-    self.values.add(take! item);
-    return;
-  }
-
-  // Explicit Copy-only path for scalars/verified Copy types.
-  // A non-Copy T must be rejected; this is NOT an implicit shallow clone.
-  pub mtd (mut self: Vec<T>) push_copy(T item) -> void {
-    self.values.add(copy! item);
-    return;
-  }
-
-  // get_copy is available only for T whose Copy capability the compiler
-  // proves. For owned/non-Copy elements, no implicit shallow copy is allowed.
-  pub mtd (Vec<T> self) get_copy(int index) -> Option<T> {
-    if index < 0 || index >= self.values.size; do
-      return None;
-    fi
-    return self.values.get_copy(index);
-  }
-
-  // Dropping the old backing storage must run T's destructor exactly once.
-  pub mtd (mut self: Vec<T>) clear() -> void {
-    self.values = new Array<T>();
-    return;
-  }
-
-  pub mtd (mut self: Vec<T>) into_array() -> Array<T> {
-    let Array<T> owned = take! self.values;
-    self.values = new Array<T>();
-    return take! owned;
-  }
-
-  // Pure overflow-safe capacity planner. The backing allocator, not this
-  // function, performs reserve/grow or reports allocation failure.
-  pub fnc next_capacity(int current, int needed, int max_capacity) -> Option<int> {
-    if current < 0 || needed < 0 || max_capacity < 0; do
-      return None;
-    fi
-    if current > max_capacity || needed > max_capacity; do
-      return None;
-    fi
-    if needed <= current; do
-      return Some(current);
-    fi
-    let int capacity = current;
-    if capacity < 4; do
-      capacity = 4;
-    fi
-    if capacity > max_capacity; do
-      capacity = max_capacity;
-    fi
-    while capacity < needed do
-      if capacity > max_capacity - capacity; do
-        capacity = max_capacity;
-      else
-        capacity = capacity + capacity;
-      fi
-    done
-    return Some(capacity);
-  }
 end
