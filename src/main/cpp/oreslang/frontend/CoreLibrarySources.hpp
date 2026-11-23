@@ -114,19 +114,18 @@ inline std::string_view compiler_library_tier_name(CompilerLibraryTier tier) noe
     return "core";
 }
 
-// Canonical selector is "<layer>/<unit>". "atto.<layer>/<unit>" is an
-// equivalent long form; "ores.<layer>/" is a legacy migration alias. An
-// optional ".atto" suffix is accepted. Units are single flat identifiers:
+// Canonical selector is "atto.<layer>/<unit>"; "<layer>/<unit>" is the
+// equivalent shorthand and an optional ".atto" suffix is accepted. ores.*
+// spellings never select a v1 unit (Oreslang -> AttoLang rename). Units are single flat identifiers:
 // no traversal, nesting, dots or uppercase. Returns false for anything else.
 inline bool normalize_compiler_library_import(
         std::string_view raw, CompilerLibraryTier& tier, std::string_view& unit) noexcept {
     struct Prefix { std::string_view text; CompilerLibraryTier tier; };
     static constexpr Prefix prefixes[] = {
+        // AttoLang names only: ores.* never selects a v1 unit.
         {"core/", CompilerLibraryTier::Core}, {"atto.core/", CompilerLibraryTier::Core},
-        {"ores.core/", CompilerLibraryTier::Core},
         {"alloc/", CompilerLibraryTier::Alloc}, {"atto.alloc/", CompilerLibraryTier::Alloc},
         {"std/", CompilerLibraryTier::Std}, {"atto.std/", CompilerLibraryTier::Std},
-        {"ores.std/", CompilerLibraryTier::Std},
     };
     for (const auto& prefix : prefixes) {
         if (raw.rfind(prefix.text, 0) != 0) continue;

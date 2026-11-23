@@ -2,7 +2,7 @@
 // (used, capacity) cursor. No hidden global heap and no GC: the owner keeps
 // the cursor, places allocations with `place`, and frees everything at once
 // with `reset`. Depends only on core/mem.
-import module mem from "core/mem";
+import module mem from "atto.core/mem";
 
 define module arena as
 
