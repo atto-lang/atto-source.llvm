@@ -77,6 +77,9 @@ public:
             for (const auto& fn : unit->program.functions)
                 if (fn.foreign_import)
                     throw std::runtime_error("foreign FFI imports require one standalone source unit");
+        for (const auto& unit : units)
+            if (!unit->program.models.empty())
+                fail(*unit, "MODEL_SOURCE_PROFILE_UNSUPPORTED: native models require a standalone source unit");
         Program linked;
         linked.module = units.front()->program.module;
         linked.namespace_name = units.front()->program.namespace_name;

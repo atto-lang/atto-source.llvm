@@ -649,9 +649,13 @@ if(LLVM_VERSION_MAJOR LESS 14)
 endif()
 message(STATUS "Building Oreslang LLVM against LLVM ${LLVM_PACKAGE_VERSION}")
 
+set(ORE_NATIVE_PARSER_SOURCES
+    src/main/cpp/oreslang/frontend/Parser.cpp
+    src/main/cpp/oreslang/frontend/ModelGraph.cpp)
+
 add_executable(oreslang-llvmc
     src/main/cpp/oreslang/main.cpp
-    src/main/cpp/oreslang/frontend/Parser.cpp
+    ${ORE_NATIVE_PARSER_SOURCES}
     src/main/cpp/oreslang/frontend/ModuleLoader.cpp
     src/main/cpp/oreslang/frontend/MethodResolver.cpp
     src/main/cpp/oreslang/types/NativeScalarTypes.cpp
@@ -669,6 +673,59 @@ llvm_map_components_to_libnames(ORE_LLVM_LIBS core support)
 target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
+
+if(BUILD_TESTING)
+    # General-purpose define model frontend/lowering contract.
+    add_executable(oreslang-native-model-graph-test
+        tests/native_model_graph_test.cpp
+        ${ORE_NATIVE_PARSER_SOURCES}
+        src/main/cpp/oreslang/frontend/MethodResolver.cpp
+        src/main/cpp/oreslang/types/NativeScalarTypes.cpp
+        src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+    target_include_directories(oreslang-native-model-graph-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_include_directories(oreslang-native-model-graph-test SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+    target_link_libraries(oreslang-native-model-graph-test PRIVATE ${ORE_LLVM_LIBS})
+    target_compile_definitions(oreslang-native-model-graph-test PRIVATE
+        ORES_MODEL_CORPUS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/tests/model-executable-v1-conformance.cases")
+    target_compile_options(oreslang-native-model-graph-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -UNDEBUG>)
+    add_test(NAME native_general_modelgraph_contract
+        COMMAND oreslang-native-model-graph-test)
+    set_tests_properties(native_general_modelgraph_contract PROPERTIES TIMEOUT 30)
+
+    # Model source-to-native proof must use Rust, never Python. Compile the
+    # standalone harness at build time, fail closed when rustc is unavailable.
+    find_program(ORE_MODEL_RUSTC NAMES rustc REQUIRED)
+    find_program(ORE_MODEL_CLANG NAMES clang REQUIRED)
+    set(ORE_MODEL_RUST_RUNNER "${CMAKE_CURRENT_BINARY_DIR}/native_model_source_execution_rs${CMAKE_EXECUTABLE_SUFFIX}")
+    set(ORE_MODEL_RUST_SELFTEST "${CMAKE_CURRENT_BINARY_DIR}/native_model_harness_selftest_rs${CMAKE_EXECUTABLE_SUFFIX}")
+    add_custom_command(
+        OUTPUT "${ORE_MODEL_RUST_RUNNER}"
+        COMMAND "${ORE_MODEL_RUSTC}" --edition=2021 -C opt-level=1
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_model_source_execution.rs"
+            -o "${ORE_MODEL_RUST_RUNNER}"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_model_source_execution.rs"
+        VERBATIM)
+    add_custom_command(
+        OUTPUT "${ORE_MODEL_RUST_SELFTEST}"
+        COMMAND "${ORE_MODEL_RUSTC}" --edition=2021 --test
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_model_source_execution.rs"
+            -o "${ORE_MODEL_RUST_SELFTEST}"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_model_source_execution.rs"
+        VERBATIM)
+    add_custom_target(oreslang-native-model-rust-gates ALL
+        DEPENDS "${ORE_MODEL_RUST_RUNNER}" "${ORE_MODEL_RUST_SELFTEST}")
+    add_test(NAME native_model_harness_selftest
+        COMMAND "${ORE_MODEL_RUST_SELFTEST}")
+    set_tests_properties(native_model_harness_selftest PROPERTIES TIMEOUT 15)
+    add_test(NAME native_model_source_execution
+        COMMAND "${ORE_MODEL_RUST_RUNNER}"
+            --compiler "$<TARGET_FILE:oreslang-llvmc>"
+            --clang "${ORE_MODEL_CLANG}"
+            --corpus "${CMAKE_CURRENT_SOURCE_DIR}/tests/model-executable-v1-conformance.cases")
+    set_tests_properties(native_model_source_execution PROPERTIES TIMEOUT 120)
+endif()
 
 # core/range and core/cell are embedded from stdlib/LIBRARIES.txt
 # (cmake/AttoLibraryEmbed.cmake); no separate snapshot check is needed.
@@ -1364,7 +1421,7 @@ if(BUILD_TESTING)
     # synthetic Program fixtures. No native namespace guest/IR is enabled.
     add_executable(oreslang-native-verified-namespace-parser-v2-test
         tests/native_verified_namespace_parser_v2_test.cpp
-        src/main/cpp/oreslang/frontend/Parser.cpp
+        ${ORE_NATIVE_PARSER_SOURCES}
         src/main/cpp/oreslang/frontend/MethodResolver.cpp
         src/main/cpp/oreslang/types/NativeScalarTypes.cpp
         src/main/cpp/oreslang/types/OwnershipChecker.cpp)
@@ -2825,7 +2882,7 @@ if(BUILD_TESTING)
         # graph, without authorizing native guest namespace execution.
         add_executable(oreslang-native-verified-namespace-real-parser-v2-test
             tests/native_verified_namespace_real_parser_v2_test.cpp
-            src/main/cpp/oreslang/frontend/Parser.cpp
+            ${ORE_NATIVE_PARSER_SOURCES}
             src/main/cpp/oreslang/frontend/MethodResolver.cpp
             src/main/cpp/oreslang/types/NativeScalarTypes.cpp
             src/main/cpp/oreslang/types/OwnershipChecker.cpp)
@@ -2845,7 +2902,7 @@ if(BUILD_TESTING)
         # ownership validator; the source spelling fixture is not AOT proof.
         add_executable(oreslang-native-ownership-bang-aliases-test
             tests/native_ownership_bang_aliases_test.cpp
-            src/main/cpp/oreslang/frontend/Parser.cpp
+            ${ORE_NATIVE_PARSER_SOURCES}
             src/main/cpp/oreslang/frontend/MethodResolver.cpp
             src/main/cpp/oreslang/types/NativeScalarTypes.cpp
             src/main/cpp/oreslang/types/OwnershipChecker.cpp)
@@ -8388,7 +8445,7 @@ endif()
 if(BUILD_TESTING)
     add_executable(oreslang-native-actor-max-threads-admission-test
         tests/actor_max_threads_source_admission_test.cpp
-        src/main/cpp/oreslang/frontend/Parser.cpp
+        ${ORE_NATIVE_PARSER_SOURCES}
         src/main/cpp/oreslang/frontend/MethodResolver.cpp
         src/main/cpp/oreslang/types/NativeScalarTypes.cpp
         src/main/cpp/oreslang/types/OwnershipChecker.cpp)
@@ -8413,7 +8470,7 @@ endif()
 if(BUILD_TESTING)
     add_executable(oreslang-native-gpu-actor-admission-test
         tests/gpu_actor_source_admission_test.cpp
-        src/main/cpp/oreslang/frontend/Parser.cpp
+        ${ORE_NATIVE_PARSER_SOURCES}
         src/main/cpp/oreslang/frontend/MethodResolver.cpp
         src/main/cpp/oreslang/types/NativeScalarTypes.cpp
         src/main/cpp/oreslang/types/OwnershipChecker.cpp)
@@ -8436,7 +8493,7 @@ endif()
 if(BUILD_TESTING)
     add_executable(oreslang-native-macro-aot-admission-test
         tests/native_macro_aot_admission_test.cpp
-        src/main/cpp/oreslang/frontend/Parser.cpp
+        ${ORE_NATIVE_PARSER_SOURCES}
         src/main/cpp/oreslang/frontend/MethodResolver.cpp
         src/main/cpp/oreslang/types/NativeScalarTypes.cpp
         src/main/cpp/oreslang/types/OwnershipChecker.cpp)
@@ -8615,7 +8672,7 @@ endif()
 if(BUILD_TESTING)
     add_executable(oreslang-native-singleton-admission-test
         tests/native_singleton_admission_test.cpp
-        src/main/cpp/oreslang/frontend/Parser.cpp
+        ${ORE_NATIVE_PARSER_SOURCES}
         src/main/cpp/oreslang/frontend/MethodResolver.cpp
         src/main/cpp/oreslang/types/NativeScalarTypes.cpp
         src/main/cpp/oreslang/types/OwnershipChecker.cpp)
@@ -10105,7 +10162,7 @@ endif()
 # This is not a separately authored language frontend.
 add_executable(atto-checked-actor-ir
   ci/m5/export_checked_actor_ir.cpp
-  src/main/cpp/oreslang/frontend/Parser.cpp
+  ${ORE_NATIVE_PARSER_SOURCES}
   src/main/cpp/oreslang/frontend/MethodResolver.cpp
   src/main/cpp/oreslang/types/NativeScalarTypes.cpp
   src/main/cpp/oreslang/types/OwnershipChecker.cpp

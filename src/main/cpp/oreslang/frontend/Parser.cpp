@@ -2,6 +2,7 @@
 #include "llvm/Support/SHA256.h"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/ChannelGuestGate.hpp"
+#include "oreslang/frontend/ModelGraph.hpp"
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/types/CoreTypeRegistry.hpp"
 #include "oreslang/frontend/PointerIntSyntax.hpp"
@@ -1361,8 +1362,10 @@ public:
                 fail("VIRTUAL_ACTOR_BACKEND_UNSUPPORTED: logical key and activation fencing required");
             if (token_.text == "supervisor")
                 fail("NATIVE_SUPERVISOR_UNSUPPORTED: source supervisor requires immutable typed Failure and compiler-owned CONTROL lowering");
-            if (token_.text == "model")
-                fail("MODEL_BACKEND_UNSUPPORTED: native model graph requires verified operation provenance, configuration and codegen parity");
+            if (accept("model")) {
+                parse_model_declaration(program, exported);
+                continue;
+            }
             if (accept("enum")) {
                 if (token_.text != "MaxActorThreads")
                     fail("native user-defined tagged enum requires ADT layout and constructor lowering; expected 'MaxActorThreads'");
@@ -1559,8 +1562,10 @@ public:
                     fail("VIRTUAL_ACTOR_BACKEND_UNSUPPORTED: logical key and activation fencing required");
                 if (token_.text == "supervisor")
                     fail("NATIVE_SUPERVISOR_UNSUPPORTED: source supervisor requires immutable typed Failure and compiler-owned CONTROL lowering");
-                if (token_.text == "model")
-                    fail("MODEL_BACKEND_UNSUPPORTED: native model graph requires verified operation provenance, configuration and codegen parity");
+                if (accept("model")) {
+                    parse_model_declaration(program, public_class);
+                    continue;
+                }
                 if (accept("abstract"))
                     fail("NATIVE_PRIVATE_ABSTRACT_UNSUPPORTED: native abstract declarations require inherited virtual-slot and override proof; no IR emitted");
                 // Keep the same fail-closed HTTP actor gate inside modules,
@@ -1604,6 +1609,8 @@ public:
         if (!verified_namespace_metadata_only_ && !program.namespace_imports.empty())
             fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: native namespace imports require verified v2 package manifests and cross-unit lowering");
         validate_type_only_declarations(program);
+        if (!program.models.empty() && !program.namespace_name.empty())
+            fail("MODEL_SOURCE_PROFILE_UNSUPPORTED: native models require a standalone source unit");
         if (!verified_namespace_metadata_only_ && !program.namespace_name.empty() &&
                 (!program.functions.empty() || !program.classes.empty() ||
                  !program.actors.empty() || !program.inverted_structs.empty() || !program.contracts.empty() ||
@@ -1628,7 +1635,8 @@ public:
                 "completion fences are not executable; no implicit CPU fallback");
         if (program.functions.empty() && program.actors.empty() && program.classes.empty() &&
                 program.cooperative_loops.empty() && program.generators.empty() &&
-                program.type_only_declarations.empty() && program.inverted_structs.empty())
+                program.type_only_declarations.empty() && program.inverted_structs.empty() &&
+                program.models.empty())
             fail("expected at least one function, generator, actor, type-only or inverted struct declaration");
         // P0 C host exposure is deliberately *version-only*. Without this
         // whole-source check a second unannotated guest function would retain
@@ -1641,13 +1649,13 @@ public:
                 !program.generators.empty() || !program.cooperative_loops.empty() ||
                 !program.type_only_declarations.empty() ||
                 !program.contracts.empty() || !program.imports.empty() ||
-                !sum_types_.empty())
+                !program.models.empty() || !sum_types_.empty())
                 fail("C_EXPORT_U32_REJECT: version-only host source may contain only one guest function and no other declarations");
         }
         if (!program.cooperative_loops.empty() &&
                 (program.cooperative_loops.size() != 1 || !program.functions.empty() ||
                  !program.generators.empty() || !program.actors.empty() ||
-                 !program.classes.empty() || !program.module.empty())) {
+                 !program.classes.empty() || !program.models.empty() || !program.module.empty())) {
             fail("first AOT continuation slice requires exactly one standalone suspend function");
         }
         program.sum_types = std::move(sum_types_);
@@ -1657,6 +1665,102 @@ public:
     static void validate_complete(const Program& program) { validate(program); }
 
 private:
+    void parse_model_declaration(Program& program, bool exported) {
+        if (program.models.size() == 1024)
+            fail("MODEL_BUDGET: native model count exceeds 1024");
+        program.models.push_back(model_declaration(exported));
+    }
+
+    ModelStaticArg model_static_argument() {
+        ModelStaticArg argument;
+        if (accept("-")) {
+            if (token_.kind != Kind::Integer)
+                fail("MODEL_NONCONSTANT_CONFIG: expected integer literal after '-'");
+            argument.kind = ModelStaticArg::Kind::Integer;
+            argument.integer = negative_integer_literal();
+            return argument;
+        }
+        if (token_.kind == Kind::Integer) {
+            argument.kind = ModelStaticArg::Kind::Integer;
+            argument.integer = model_integer_literal();
+            return argument;
+        }
+        if (token_.kind == Kind::Identifier && !reserved(token_.text)) {
+            argument.kind = ModelStaticArg::Kind::Parameter;
+            argument.parameter = identifier();
+            return argument;
+        }
+        fail("MODEL_NONCONSTANT_CONFIG: model operation arguments must be integer literals or model parameters");
+    }
+
+    ModelDecl model_declaration(bool exported) {
+        ModelDecl model;
+        model.offset = token_.offset;
+        model.name = identifier();
+        model.exported = exported;
+        if (callable_nominal_name(model.name))
+            fail("MODEL_TYPE_NAME_COLLISION: callable signatures cannot be model types");
+
+        if (accept("(")) {
+            bool seen_default = false;
+            std::unordered_set<std::string> names;
+            if (!accept(")")) {
+                do {
+                    if (model.parameters.size() == 64)
+                        fail("MODEL_CONFIG_BUDGET: native model parameter limit exceeded (64)");
+                    ModelParameter parameter;
+                    parameter.name = identifier();
+                    if (!names.insert(parameter.name).second)
+                        fail("MODEL_DUPLICATE_PARAMETER: duplicate model parameter '" + parameter.name + "'");
+                    require(":");
+                    require("int");
+                    if (accept("=")) {
+                        const bool negative = accept("-");
+                        parameter.has_default = true;
+                        parameter.default_value =
+                            negative ? negative_integer_literal() : model_integer_literal();
+                        seen_default = true;
+                    } else if (seen_default) {
+                        fail("MODEL_CONFIG_DEFAULT_ORDER: required model parameters cannot follow defaults");
+                    }
+                    model.parameters.push_back(std::move(parameter));
+                } while (accept(","));
+                require(")");
+            }
+        }
+
+        require("as");
+        std::size_t total_static_arguments = 0;
+        while (token_.text != "end") {
+            if (token_.kind == Kind::End)
+                fail("expected 'end' after model declaration");
+            if (model.operations.size() == 4096)
+                fail("MODEL_NODE_BUDGET: native model node limit exceeded (4096)");
+            if (token_.kind != Kind::Identifier || reserved(token_.text))
+                fail("MODEL_EFFECTFUL_BODY: model body admits only statically named operation calls");
+            ModelOperation operation;
+            operation.offset = token_.offset;
+            operation.name = identifier();
+            require("(");
+            if (!accept(")")) {
+                do {
+                    if (operation.static_arguments.size() == 32)
+                        fail("MODEL_STATIC_ARG_BUDGET: native model op limit exceeded (32)");
+                    operation.static_arguments.push_back(model_static_argument());
+                    if (++total_static_arguments > 16384)
+                        fail("MODEL_STATIC_ARG_BUDGET: native model total static argument limit exceeded");
+                } while (accept(","));
+                require(")");
+            }
+            accept(";");
+            model.operations.push_back(std::move(operation));
+        }
+        require("end");
+        if (model.operations.empty())
+            fail("MODEL_EMPTY_BODY: native model requires at least one operation");
+        return model;
+    }
+
     std::unordered_set<std::string> inverted_struct_names_;
 
     // Structural lexer lookahead is only a dispatch hint, never authorization:
@@ -3058,12 +3162,43 @@ private:
             fail("class field requires ';' or a line break");
     }
 
-    std::int64_t integer_literal() {
+    std::string checked_integer_digits() const {
         if (token_.kind != Kind::Integer) fail("expected integer literal");
         std::string digits(token_.text);
         if (digits.front() == '_' || digits.back() == '_' ||
                 digits.find("__") != std::string::npos) fail("malformed integer separator");
         digits.erase(std::remove(digits.begin(), digits.end(), '_'), digits.end());
+        return digits;
+    }
+
+    std::int64_t negative_integer_literal() {
+        std::string digits = checked_integer_digits();
+        const auto significant = digits.find_first_not_of('0');
+        if (significant != std::string::npos) digits.erase(0, significant);
+        if (digits == "9223372036854775808") {
+            advance();
+            return std::numeric_limits<std::int64_t>::min();
+        }
+        std::int64_t value = 0;
+        const auto parsed = std::from_chars(digits.data(), digits.data() + digits.size(), value);
+        if (parsed.ec != std::errc{} || parsed.ptr != digits.data() + digits.size())
+            fail("MODEL_CONST_OVERFLOW: model constant exceeds signed i64");
+        advance();
+        return -value;
+    }
+
+    std::int64_t model_integer_literal() {
+        std::string digits = checked_integer_digits();
+        std::int64_t value = 0;
+        const auto parsed = std::from_chars(digits.data(), digits.data() + digits.size(), value);
+        if (parsed.ec != std::errc{} || parsed.ptr != digits.data() + digits.size())
+            fail("MODEL_CONST_OVERFLOW: model constant exceeds signed i64");
+        advance();
+        return value;
+    }
+
+    std::int64_t integer_literal() {
+        std::string digits = checked_integer_digits();
         std::int64_t value = 0;
         const auto parsed = std::from_chars(digits.data(), digits.data() + digits.size(), value);
         if (parsed.ec != std::errc{} || parsed.ptr != digits.data() + digits.size())
@@ -9590,12 +9725,18 @@ Program parse_unresolved_program(std::string_view source, bool experimental_owne
     if (experimental_rt_scalar_loop &&
             (program.functions.size() != 1 || !program.functions.front().scalar_while ||
              !program.classes.empty() || !program.actors.empty() ||
-             !program.module.empty()))
+             !program.models.empty() || !program.module.empty()))
         throw std::runtime_error("experimental scalar loop requires exactly one standalone function");
     return program;
 }
 
 void resolve_and_validate_program(Program& program) {
+    if (!program.models.empty() &&
+            (!program.namespace_name.empty() || !program.namespace_imports.empty() ||
+             !program.imports.empty() || !program.inverted_structs.empty() ||
+             program.inverted_main || program.pointer_int_plan))
+        throw std::runtime_error(
+            "MODEL_SOURCE_PROFILE_UNSUPPORTED: native models require a standalone source unit");
     if (program.pointer_int_plan) {
         if (!program.functions.empty() || !program.actors.empty() ||
                 !program.classes.empty() || !program.imports.empty() ||
@@ -9662,6 +9803,7 @@ void resolve_and_validate_program(Program& program) {
             "NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: verified namespace AST requires typed cross-unit lowering");
     if (!program.imports.empty())
         throw std::runtime_error("native imports require filesystem module resolution");
+    admit_and_lower_models(program);
     resolve_native_methods(program);
     resolve_native_sums(program);
     resolve_future_pipeline_contracts(program);
