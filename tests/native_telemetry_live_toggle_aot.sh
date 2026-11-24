@@ -14,18 +14,8 @@ trap 'rm -rf "$OUT"' EXIT
 # invoked repeatedly by the C host and cannot access the privileged enable
 # API. The same native process, function address and binary are used for
 # each runtime transition. No JIT, code rewrite or recompilation occurs.
-cat > "$OUT/toggle.atto" <<'ATTO'
-define macro operation(Syntax<Expr> value) -> Syntax<Expr> { return value; }
-
-pub fnc trace_once(): int {
-  using telemetry.span(operation!(syntax expr "host-toggle")) as scope {
-    return 51;
-  }
-  return 0;
-}
-ATTO
-
-if ! "$COMPILER" "$OUT/toggle.atto" > "$OUT/toggle.ll" 2> "$OUT/compiler.err"; then
+if ! "$COMPILER" "$ROOT/tests/fixtures/telemetry-hybrid.atto" \
+    > "$OUT/toggle.ll" 2> "$OUT/compiler.err"; then
   cat "$OUT/compiler.err" >&2
   echo "Atto source->LLVM compilation failed" >&2
   exit 1
@@ -34,7 +24,7 @@ grep -Eq 'define (dso_local )?i64 @trace_once\(' "$OUT/toggle.ll" ||
   { echo "no reusable exported Atto trace_once symbol" >&2; exit 1; }
 grep -q 'ores_native_telemetry_span_begin' "$OUT/toggle.ll"
 grep -q 'ores_native_telemetry_span_end' "$OUT/toggle.ll"
-grep -q 'c"host-toggle' "$OUT/toggle.ll"
+grep -q 'c"lexical-checkout' "$OUT/toggle.ll"
 if grep -Eq '@operation\(' "$OUT/toggle.ll"; then
   echo "compile-time span name macro leaked into guest code" >&2
   exit 1
@@ -46,7 +36,7 @@ cat > "$OUT/host-toggle.c" <<'C'
 #include <stdint.h>
 #include <stdio.h>
 
-extern int64_t trace_once(void);
+extern int64_t trace_once(int64_t);
 
 static void check(uint64_t started, uint64_t ended) {
     OresNativeTelemetrySnapshot s = ores_native_telemetry_snapshot();
@@ -58,19 +48,19 @@ static void check(uint64_t started, uint64_t ended) {
 int main(void) {
     ores_native_telemetry_set_enabled(0);
     check(0, 0);
-    assert(trace_once() == 51);
+    assert(trace_once(42) == 51);
     check(0, 0);
 
     ores_native_telemetry_set_enabled(1);
-    assert(trace_once() == 51);
+    assert(trace_once(42) == 51);
     check(1, 1);
 
     ores_native_telemetry_set_enabled(0);
-    assert(trace_once() == 51);
+    assert(trace_once(42) == 51);
     check(1, 1);
 
     ores_native_telemetry_set_enabled(1);
-    assert(trace_once() == 51);
+    assert(trace_once(42) == 51);
     check(2, 2);
 
     puts("ATTO_AOT_SAME_PROCESS_DORMANT_PROBE_TOGGLE_PASS:4:2");
