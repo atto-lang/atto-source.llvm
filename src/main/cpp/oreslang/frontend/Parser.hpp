@@ -390,6 +390,9 @@ struct Function {
     // compiled as scheduler work; sync unary stages execute on that carrier.
     std::vector<SourceFuturePipelineI64Binding> future_pipelines;
     bool async_source_i64 = false;
+    bool source_routine = false;
+    // Model admission needs the source spelling after alias resolution.
+    bool source_signature_has_scalar_alias = false;
     /* Restricted lifecycle-await slice: exactly one actor lifecycle suspension. */
     std::string ready_await_actor;
     std::size_t ready_await_offset = 0;
@@ -586,6 +589,42 @@ struct InvertedSourceMain {
     std::vector<InvertedSourceOperation> operations;
 };
 
+struct ModelParameter {
+    std::string name;
+    bool has_default = false;
+    std::int64_t default_value = 0;
+};
+
+struct ModelStaticArg {
+    enum class Kind { Integer, Parameter };
+    Kind kind = Kind::Integer;
+    std::int64_t integer = 0;
+    std::string parameter;
+};
+
+struct ModelOperation {
+    std::string name;
+    std::vector<ModelStaticArg> static_arguments;
+    std::size_t offset = 0;
+};
+
+struct ModelDecl {
+    std::string name;
+    std::vector<ModelParameter> parameters;
+    std::vector<ModelOperation> operations;
+    std::string graph_digest;
+    std::string portable_profile;
+    bool exported = false;
+    std::size_t offset = 0;
+};
+
+struct ModelRunReceipt {
+    std::string model_name;
+    std::string blueprint_graph_digest;
+    std::string configured_graph_digest;
+    std::vector<std::int64_t> configuration;
+};
+
 struct Program {
     // Host compilation authority, injected by the trusted CLI/loader only.
     // Source code cannot forge this bit; parsed programs default denied.
@@ -604,6 +643,8 @@ struct Program {
     std::vector<ClassDecl> classes;
     std::vector<ActorDecl> actors;
     std::vector<Function> functions;
+    std::vector<ModelDecl> models;
+    std::vector<ModelRunReceipt> model_runs;
     std::vector<ModuleContract> contracts;
     std::vector<TypeOnlyDecl> type_only_declarations;
     std::vector<TypeConstraintDescriptor> type_constraint_descriptors;
