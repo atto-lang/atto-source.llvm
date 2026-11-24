@@ -362,6 +362,7 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
         case Expression::Kind::Add:
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
+        case Expression::Kind::DivideQuantity:
         case Expression::Kind::Remainder:
         case Expression::Kind::ShiftLeft:
         case Expression::Kind::ShiftRight:
@@ -464,6 +465,7 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
         case Expression::Kind::Add:
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
+        case Expression::Kind::DivideQuantity:
         case Expression::Kind::Remainder:
         case Expression::Kind::ShiftLeft:
         case Expression::Kind::ShiftRight:

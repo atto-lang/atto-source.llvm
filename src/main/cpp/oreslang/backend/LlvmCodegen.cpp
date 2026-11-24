@@ -544,6 +544,30 @@ llvm::Value* lower(const Expression& expr,
             return checked_signed_arithmetic(builder, llvm::Intrinsic::smul_with_overflow,
                 left, right, "mul");
         }
+        case Expression::Kind::DivideQuantity: {
+            auto* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            auto* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            auto* module = builder.GetInsertBlock()->getModule();
+            auto* parent = builder.GetInsertBlock()->getParent();
+            auto* zero = llvm::BasicBlock::Create(builder.getContext(), "quantity.div.zero", parent);
+            auto* range = llvm::BasicBlock::Create(builder.getContext(), "quantity.div.range", parent);
+            auto* overflow = llvm::BasicBlock::Create(builder.getContext(), "quantity.div.overflow", parent);
+            auto* valid = llvm::BasicBlock::Create(builder.getContext(), "quantity.div.valid", parent);
+            builder.CreateCondBr(builder.CreateICmpEQ(right, llvm::ConstantInt::get(i64, 0)), zero, range);
+            builder.SetInsertPoint(zero);
+            builder.CreateCall(native_trap(*module));
+            builder.CreateUnreachable();
+            builder.SetInsertPoint(range);
+            auto* minimum = llvm::ConstantInt::get(i64, UINT64_C(1) << 63);
+            auto* minus_one = llvm::ConstantInt::getSigned(i64, -1);
+            auto* outside = builder.CreateAnd(builder.CreateICmpEQ(left, minimum), builder.CreateICmpEQ(right, minus_one));
+            builder.CreateCondBr(outside, overflow, valid);
+            builder.SetInsertPoint(overflow);
+            builder.CreateCall(native_trap(*module));
+            builder.CreateUnreachable();
+            builder.SetInsertPoint(valid);
+            return builder.CreateSDiv(left, right, "quantity.div");
+        }
         case Expression::Kind::ShiftLeft:
         case Expression::Kind::ShiftRight:
         case Expression::Kind::ShiftUnsignedRight: {

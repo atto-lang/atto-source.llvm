@@ -179,6 +179,9 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
             break;
         case Expression::Kind::BitXor:
             break;
+        case Expression::Kind::DivideQuantity:
+            add_effect(facts, FunctionEffect::Panic);
+            break;
         case Expression::Kind::Modulo:
         case Expression::Kind::Remainder: {
             // Qualify only a proven literal divisor. Keep the analyzer's

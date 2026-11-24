@@ -3,6 +3,7 @@
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/ChannelGuestGate.hpp"
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/QuantityUnit.hpp"
 #include "oreslang/types/CoreTypeRegistry.hpp"
 #include "oreslang/frontend/PointerIntSyntax.hpp"
 #include "oreslang/frontend/NativeTelemetryLiteralV1.hpp"
@@ -1290,6 +1291,9 @@ public:
             fail("DECLARED_ACTOR_CODEGEN_UNSUPPORTED: external runtime-only "
                  "actor entrypoint needs manifest-verified receiver, state "
                  "loan and mailbox MIR");
+        while (token_.text == "define" &&
+                (peek_next().text == "dimension" || peek_next().text == "unit"))
+            quantity_declaration();
         while (token_.text == "export" || token_.text == "define" || token_.text == "declare" ||
                at_bare_type_alias() ||
                 (token_.text == "pub" &&
@@ -4694,7 +4698,7 @@ private:
                 if (accept_return_marker()) {
                     if (!value.return_class.empty()) fail("structured class return requires ownership-aware exit lowering");
                     statement.kind = Statement::Kind::Return;
-                    if (!value.returns_void) statement.expression = expression();
+                    if (!value.returns_void) statement.expression = return_expression();
                     if (!accept(";") && token_.text != "}"
                             && (!then_scope || (token_.text != "fi" && token_.text != "else" && token_.text != "elif")))
                         fail("native return requires ';' or a closing block delimiter");
@@ -5423,7 +5427,7 @@ private:
         }
         require_return_marker();
         if (!value.returns_void) {
-            value.result = expression();
+            value.result = return_expression();
             if (value.scalar_while &&
                     (value.result->kind != Expression::Kind::Variable ||
                      value.result->name != value.scalar_while->counter))
@@ -5479,6 +5483,181 @@ private:
     // Eager scalar |> and reverse <| lower to the SAME checked call AST.
     // Reverse stages are right-associative: f <| g <| x means f(g(x)).
     // Continuous actor pipe/rpipe remain distinct, fail-closed operations.
+    QuantityUnit read_quantity_unit() {
+        const std::string name = identifier();
+        auto found = quantity_units_.find(name);
+        if (found == quantity_units_.end()) fail("E_UNIT_NAME: unknown unit '" + name + "'");
+        return found->second;
+    }
+
+    std::int64_t read_quantity_factor() {
+        if (token_.kind != Kind::Integer)
+            fail("E_UNIT_SCALE: expected a positive signed i64 factor");
+        std::int64_t factor;
+        try {
+            factor = integer_literal();
+        } catch (const std::runtime_error&) {
+            fail("E_UNIT_SCALE: expected a positive signed i64 factor");
+        }
+        if (factor <= 0) fail("E_UNIT_SCALE: expected a positive signed i64 factor");
+        return factor;
+    }
+
+    void quantity_declaration() {
+        require("define");
+        const bool dimension = accept("dimension");
+        if (!dimension) require("unit");
+        const auto name = identifier();
+        if (quantity_dimensions_.size() + quantity_units_.size() >= 128)
+            fail("E_UNIT_LIMIT: more than 128 quantity declarations");
+        if (quantity_dimensions_.count(name) || quantity_units_.count(name))
+            fail("E_UNIT_DUPLICATE: quantity name '" + name + "' is already declared");
+        if (dimension) {
+            require(";");
+            quantity_dimensions_.emplace(name, QuantityUnit::base(name));
+            return;
+        }
+        require(":");
+        const auto dimension_name = identifier();
+        const auto base = quantity_dimensions_.find(dimension_name);
+        if (base == quantity_dimensions_.end()) fail("E_UNIT_NAME: unknown dimension '" + dimension_name + "'");
+        auto unit = base->second;
+        if (accept("=")) {
+            if (token_.kind == Kind::Integer) {
+                const auto factor = read_quantity_factor();
+                require("*");
+                unit = read_quantity_unit().scale(factor, false);
+            } else {
+                unit = read_quantity_unit();
+                if (accept("/")) unit = unit.scale(read_quantity_factor(), true);
+                else if (accept("*")) unit = unit.scale(read_quantity_factor(), false);
+            }
+            if (!unit.same_dimension(base->second)) fail("E_UNIT_DIMENSION: derived unit has the wrong dimension");
+        } else if (!quantity_canonical_units_.insert(dimension_name).second) {
+            fail("E_UNIT_DUPLICATE: dimension already has a canonical unit");
+        }
+        require(";");
+        quantity_units_.emplace(name, std::move(unit));
+    }
+
+    bool has_quantity_return() const {
+        if (quantity_dimensions_.empty()) return false;
+        Lexer cursor = lexer_;
+        for (Token token = token_; token.kind != Kind::End; token = cursor.next()) {
+            if (token.text == ";" || token.text == "{" || token.text == "}" ||
+                    token.text == "end" || token.text == "return") break;
+            if (token.kind != Kind::Integer) continue;
+            Lexer suffix = cursor;
+            const auto open = suffix.next();
+            if (open.text == "<" && open.offset == token.offset + token.text.size() &&
+                    suffix.next().kind == Kind::Identifier && suffix.next().text == ">") return true;
+        }
+        return false;
+    }
+
+    struct QuantityTerm {
+        std::unique_ptr<Expression> expression;
+        QuantityUnit unit;
+        std::size_t depth = 0;
+    };
+
+    QuantityTerm quantity_binary(Expression::Kind kind, std::size_t offset, QuantityTerm left,
+                                 QuantityTerm right, QuantityUnit unit) {
+        const auto depth = 1 + std::max(left.depth, right.depth);
+        if (depth >= kMaxNativeExpressionDepth) fail("E_UNIT_LIMIT: quantity expression is too deep");
+        auto expression = make_expression(kind, offset);
+        expression->left = std::move(left.expression);
+        expression->right = std::move(right.expression);
+        return {std::move(expression), std::move(unit), depth};
+    }
+
+    QuantityTerm quantity_sum(std::size_t depth) {
+        auto left = quantity_product(depth);
+        while (token_.text == "+" || token_.text == "-") {
+            const auto op = token_;
+            advance();
+            auto right = quantity_product(depth);
+            left.unit.require_compatible(right.unit);
+            auto unit = left.unit;
+            left = quantity_binary(op.text == "+" ? Expression::Kind::Add : Expression::Kind::Subtract,
+                op.offset, std::move(left), std::move(right), std::move(unit));
+        }
+        return left;
+    }
+
+    QuantityTerm quantity_product(std::size_t depth) {
+        auto left = quantity_atom(depth);
+        while (token_.text == "*" || token_.text == "/") {
+            const auto op = token_;
+            advance();
+            auto right = quantity_atom(depth);
+            const bool divide = op.text == "/";
+            if (divide && left.unit.scalar() && right.unit.scalar())
+                fail("E_UNIT_SCALAR_DIVISION: two plain int operands use ordinary division");
+            auto unit = left.unit.combine(right.unit, divide);
+            left = quantity_binary(divide ? Expression::Kind::DivideQuantity : Expression::Kind::Multiply,
+                op.offset, std::move(left), std::move(right), std::move(unit));
+        }
+        return left;
+    }
+
+    QuantityTerm quantity_literal(Token number, std::int64_t value) {
+        QuantityUnit unit;
+        if (token_.text == "<" && token_.offset == number.offset + number.text.size()) {
+            advance();
+            unit = read_quantity_unit();
+            require(">");
+            if (accept(".")) {
+                require("to_unit");
+                require("<");
+                auto target = read_quantity_unit();
+                require(">");
+                require("(");
+                require(")");
+                value = unit.convert_exact(value, target);
+                unit = std::move(target);
+            }
+        }
+        auto expression = make_expression(Expression::Kind::Integer, number.offset);
+        expression->integer = value;
+        return {std::move(expression), std::move(unit)};
+    }
+
+    QuantityTerm quantity_atom(std::size_t depth) {
+        if (depth >= kMaxNativeExpressionDepth) fail("E_UNIT_LIMIT: quantity expression is too deep");
+        if (accept("(")) {
+            auto term = quantity_sum(depth + 1);
+            require(")");
+            return term;
+        }
+        if (accept("+")) return quantity_atom(depth + 1);
+        const auto start = token_;
+        if (start.text == "-") {
+            const auto number = peek_next();
+            if (number.kind == Kind::Integer) {
+                std::string digits(number.text);
+                digits.erase(std::remove(digits.begin(), digits.end(), '_'), digits.end());
+                const auto first = digits.find_first_not_of('0');
+                if (first != std::string::npos && digits.compare(first, std::string::npos, "9223372036854775808") == 0)
+                    return quantity_literal(number, signed_integer_literal());
+            }
+            advance();
+            auto term = quantity_atom(depth + 1);
+            auto negated = make_expression(Expression::Kind::Negate, start.offset);
+            negated->left = std::move(term.expression);
+            return {std::move(negated), std::move(term.unit), term.depth + 1};
+        }
+        if (start.kind != Kind::Integer) fail("E_UNIT_EXPRESSION: expected a closed integer quantity expression");
+        return quantity_literal(start, integer_literal());
+    }
+
+    std::unique_ptr<Expression> return_expression() {
+        if (!has_quantity_return()) return expression();
+        auto term = quantity_sum(0);
+        if (!term.unit.scalar()) fail("E_UNIT_ERASURE: an unannotated int requires dimensionless scale one");
+        return std::move(term.expression);
+    }
+
     std::unique_ptr<Expression> expression() {
         auto value = conditional();
         std::size_t stages = 0;
@@ -7423,6 +7602,7 @@ private:
             case Expression::Kind::Add:
             case Expression::Kind::Subtract:
             case Expression::Kind::Multiply:
+            case Expression::Kind::DivideQuantity:
             case Expression::Kind::Remainder:
             case Expression::Kind::ShiftLeft:
             case Expression::Kind::ShiftRight:
@@ -7695,6 +7875,7 @@ private:
             }
             case Expression::Kind::Subtract:
             case Expression::Kind::Multiply:
+            case Expression::Kind::DivideQuantity:
             case Expression::Kind::Remainder:
             case Expression::Kind::ShiftLeft:
             case Expression::Kind::ShiftRight:
@@ -9337,6 +9518,9 @@ private:
     std::unordered_map<std::string, ForwardType> forwards_;
     std::unordered_map<std::string, std::string> actor_forwards_;
     std::unordered_map<std::string, ScalarAlias> defined_type_aliases_;
+    std::unordered_map<std::string, QuantityUnit> quantity_dimensions_;
+    std::unordered_map<std::string, QuantityUnit> quantity_units_;
+    std::unordered_set<std::string> quantity_canonical_units_;
     std::string_view source_;
     Lexer lexer_;
     Token token_;
