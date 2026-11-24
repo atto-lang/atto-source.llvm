@@ -474,6 +474,37 @@ llvm::Value* lower(const Expression& expr,
             }
             return storage.at(expr.left->name);
         }
+        case Expression::Kind::CheckedI32: {
+            auto* value = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            auto* narrowed = builder.CreateTrunc(value, builder.getInt32Ty(), "i32.narrowed");
+            auto* extended = builder.CreateSExt(narrowed, i64, "i32.extended");
+            auto* module = builder.GetInsertBlock()->getModule();
+            auto* parent = builder.GetInsertBlock()->getParent();
+            auto* invalid = llvm::BasicBlock::Create(builder.getContext(), "i32.range.invalid", parent);
+            auto* valid = llvm::BasicBlock::Create(builder.getContext(), "i32.range.valid", parent);
+            builder.CreateCondBr(builder.CreateICmpEQ(value, extended), valid, invalid);
+            builder.SetInsertPoint(invalid);
+            builder.CreateCall(native_trap(*module));
+            builder.CreateUnreachable();
+            builder.SetInsertPoint(valid);
+            return extended;
+        }
+        case Expression::Kind::CheckRefinement: {
+            auto* value = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            auto* minimum = llvm::ConstantInt::getSigned(i64, expr.arguments[0]->integer);
+            auto* maximum = llvm::ConstantInt::getSigned(i64, expr.arguments[1]->integer);
+            auto* below = builder.CreateICmpSLT(value, minimum, "refinement.below");
+            auto* above = builder.CreateICmpSGT(value, maximum, "refinement.above");
+            auto* parent = builder.GetInsertBlock()->getParent();
+            auto* invalid = llvm::BasicBlock::Create(builder.getContext(), "refinement.bounds.invalid", parent);
+            auto* valid = llvm::BasicBlock::Create(builder.getContext(), "refinement.bounds.valid", parent);
+            builder.CreateCondBr(builder.CreateOr(below, above), invalid, valid);
+            builder.SetInsertPoint(invalid);
+            builder.CreateCall(native_trap(*parent->getParent()));
+            builder.CreateUnreachable();
+            builder.SetInsertPoint(valid);
+            return value;
+        }
         case Expression::Kind::Negate: {
             auto* value = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             return checked_signed_arithmetic(builder, llvm::Intrinsic::ssub_with_overflow,
@@ -543,6 +574,30 @@ llvm::Value* lower(const Expression& expr,
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
             return checked_signed_arithmetic(builder, llvm::Intrinsic::smul_with_overflow,
                 left, right, "mul");
+        }
+        case Expression::Kind::DivideQuantity: {
+            auto* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            auto* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            auto* module = builder.GetInsertBlock()->getModule();
+            auto* parent = builder.GetInsertBlock()->getParent();
+            auto* zero = llvm::BasicBlock::Create(builder.getContext(), "quantity.div.zero", parent);
+            auto* range = llvm::BasicBlock::Create(builder.getContext(), "quantity.div.range", parent);
+            auto* overflow = llvm::BasicBlock::Create(builder.getContext(), "quantity.div.overflow", parent);
+            auto* valid = llvm::BasicBlock::Create(builder.getContext(), "quantity.div.valid", parent);
+            builder.CreateCondBr(builder.CreateICmpEQ(right, llvm::ConstantInt::get(i64, 0)), zero, range);
+            builder.SetInsertPoint(zero);
+            builder.CreateCall(native_trap(*module));
+            builder.CreateUnreachable();
+            builder.SetInsertPoint(range);
+            auto* minimum = llvm::ConstantInt::get(i64, UINT64_C(1) << 63);
+            auto* minus_one = llvm::ConstantInt::getSigned(i64, -1);
+            auto* outside = builder.CreateAnd(builder.CreateICmpEQ(left, minimum), builder.CreateICmpEQ(right, minus_one));
+            builder.CreateCondBr(outside, overflow, valid);
+            builder.SetInsertPoint(overflow);
+            builder.CreateCall(native_trap(*module));
+            builder.CreateUnreachable();
+            builder.SetInsertPoint(valid);
+            return builder.CreateSDiv(left, right, "quantity.div");
         }
         case Expression::Kind::ShiftLeft:
         case Expression::Kind::ShiftRight:

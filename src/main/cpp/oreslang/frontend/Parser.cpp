@@ -3,6 +3,9 @@
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/ChannelGuestGate.hpp"
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/QuantityUnit.hpp"
+#include "oreslang/frontend/VerifiedI64Range.hpp"
+#include "oreslang/frontend/VerifiedProtocol.hpp"
 #include "oreslang/types/CoreTypeRegistry.hpp"
 #include "oreslang/frontend/PointerIntSyntax.hpp"
 #include "oreslang/frontend/NativeTelemetryLiteralV1.hpp"
@@ -1090,7 +1093,7 @@ public:
         if (!experimental_pointer_int_aot_) reject_unlowered_with_update();
     }
 
-    Program parse() {
+    Program parse(bool protocol_actor_library = false) {
         Program program;
         if (experimental_pointer_int_aot_) {
             // One canonical native scanner for both ordinary scalar programs
@@ -1290,6 +1293,18 @@ public:
             fail("DECLARED_ACTOR_CODEGEN_UNSUPPORTED: external runtime-only "
                  "actor entrypoint needs manifest-verified receiver, state "
                  "loan and mailbox MIR");
+        while (token_.text == "define" &&
+                (peek_next().text == "dimension" || peek_next().text == "unit"))
+            quantity_declaration();
+        if (at_refined_quantity_alias() || at_protocol_declaration()) {
+            if (!program.namespace_name.empty() || !program.imports.empty()
+                    || !program.namespace_imports.empty() || !program.exports.empty())
+                fail("E_REFINEMENT_SCOPE: Verified Core requires a standalone source file");
+            parse_verified_functions(program, protocol_actor_library);
+            return program;
+        }
+        if (protocol_actor_library)
+            fail("E_PROTOCOL_ACTOR: host protocol artifact requires a verified protocol actor");
         while (token_.text == "export" || token_.text == "define" || token_.text == "declare" ||
                at_bare_type_alias() ||
                 (token_.text == "pub" &&
@@ -4694,7 +4709,7 @@ private:
                 if (accept_return_marker()) {
                     if (!value.return_class.empty()) fail("structured class return requires ownership-aware exit lowering");
                     statement.kind = Statement::Kind::Return;
-                    if (!value.returns_void) statement.expression = expression();
+                    if (!value.returns_void) statement.expression = return_expression();
                     if (!accept(";") && token_.text != "}"
                             && (!then_scope || (token_.text != "fi" && token_.text != "else" && token_.text != "elif")))
                         fail("native return requires ';' or a closing block delimiter");
@@ -5423,7 +5438,7 @@ private:
         }
         require_return_marker();
         if (!value.returns_void) {
-            value.result = expression();
+            value.result = return_expression();
             if (value.scalar_while &&
                     (value.result->kind != Expression::Kind::Variable ||
                      value.result->name != value.scalar_while->counter))
@@ -5479,6 +5494,773 @@ private:
     // Eager scalar |> and reverse <| lower to the SAME checked call AST.
     // Reverse stages are right-associative: f <| g <| x means f(g(x)).
     // Continuous actor pipe/rpipe remain distinct, fail-closed operations.
+    QuantityUnit read_quantity_unit() {
+        const std::string name = identifier();
+        auto found = quantity_units_.find(name);
+        if (found == quantity_units_.end()) fail("E_UNIT_NAME: unknown unit '" + name + "'");
+        return found->second;
+    }
+
+    std::int64_t read_quantity_factor() {
+        if (token_.kind != Kind::Integer)
+            fail("E_UNIT_SCALE: expected a positive signed i64 factor");
+        std::int64_t factor;
+        try {
+            factor = integer_literal();
+        } catch (const std::runtime_error&) {
+            fail("E_UNIT_SCALE: expected a positive signed i64 factor");
+        }
+        if (factor <= 0) fail("E_UNIT_SCALE: expected a positive signed i64 factor");
+        return factor;
+    }
+
+    void quantity_declaration() {
+        require("define");
+        const bool dimension = accept("dimension");
+        if (!dimension) require("unit");
+        const auto name = identifier();
+        if (quantity_dimensions_.size() + quantity_units_.size() >= 128)
+            fail("E_UNIT_LIMIT: more than 128 quantity declarations");
+        if (quantity_dimensions_.count(name) || quantity_units_.count(name))
+            fail("E_UNIT_DUPLICATE: quantity name '" + name + "' is already declared");
+        if (dimension) {
+            require(";");
+            quantity_dimensions_.emplace(name, QuantityUnit::base(name));
+            return;
+        }
+        require(":");
+        const auto dimension_name = identifier();
+        const auto base = quantity_dimensions_.find(dimension_name);
+        if (base == quantity_dimensions_.end()) fail("E_UNIT_NAME: unknown dimension '" + dimension_name + "'");
+        auto unit = base->second;
+        if (accept("=")) {
+            if (token_.kind == Kind::Integer) {
+                const auto factor = read_quantity_factor();
+                require("*");
+                unit = read_quantity_unit().scale(factor, false);
+            } else {
+                unit = read_quantity_unit();
+                if (accept("/")) unit = unit.scale(read_quantity_factor(), true);
+                else if (accept("*")) unit = unit.scale(read_quantity_factor(), false);
+            }
+            if (!unit.same_dimension(base->second)) fail("E_UNIT_DIMENSION: derived unit has the wrong dimension");
+        } else if (!quantity_canonical_units_.insert(dimension_name).second) {
+            fail("E_UNIT_DUPLICATE: dimension already has a canonical unit");
+        }
+        require(";");
+        quantity_units_.emplace(name, std::move(unit));
+    }
+
+    bool has_quantity_return() const {
+        if (quantity_dimensions_.empty()) return false;
+        Lexer cursor = lexer_;
+        for (Token token = token_; token.kind != Kind::End; token = cursor.next()) {
+            if (token.text == ";" || token.text == "{" || token.text == "}" ||
+                    token.text == "end" || token.text == "return") break;
+            if (token.kind != Kind::Integer) continue;
+            Lexer suffix = cursor;
+            const auto open = suffix.next();
+            if (open.text == "<" && open.offset == token.offset + token.text.size() &&
+                    suffix.next().kind == Kind::Identifier && suffix.next().text == ">") return true;
+        }
+        return false;
+    }
+
+    struct RefinedQuantity {
+        QuantityUnit unit;
+        VerifiedI64Range range;
+        bool i32 = false;
+
+        void require(const RefinedQuantity& actual, const char* category, const std::string& operation) const {
+            if (unit.scalar() && !actual.unit.scalar())
+                throw std::runtime_error("E_UNIT_ERASURE: " + operation + " requires dimensionless scale one");
+            unit.require_compatible(actual.unit);
+            if (!range.includes(actual.range))
+                throw std::runtime_error(std::string(category) + ": cannot prove " + operation);
+        }
+    };
+
+    struct VerifiedFunction {
+        std::string lowered_name;
+        std::vector<RefinedQuantity> parameters;
+        RefinedQuantity result;
+        std::vector<std::size_t> upper_parameters;
+    };
+
+    struct QuantityTerm {
+        std::unique_ptr<Expression> expression;
+        QuantityUnit unit;
+        std::size_t depth = 0;
+        VerifiedI64Range range;
+        std::unordered_set<std::string> upper_bounds;
+        bool i32 = false;
+
+        RefinedQuantity type() const { return {unit, range, i32}; }
+    };
+
+    bool at_refined_quantity_alias() const {
+        if (token_.text != "type") return false;
+        Lexer next = lexer_;
+        if (next.next().kind != Kind::Identifier || next.next().text != "=") return false;
+        const auto carrier = next.next().text;
+        return (carrier == "int" || carrier == "i32") && next.next().text == "where";
+    }
+
+    std::string read_quantity_comparison() {
+        const auto op = token_.text;
+        if (op != "<" && op != ">" && op != "<=" && op != ">=" && op != "eq")
+            fail("E_REFINEMENT_PREDICATE: expected a signed interval comparison");
+        advance();
+        return std::string(op);
+    }
+
+    RefinedQuantity read_refined_type() {
+        if (accept("int")) return {};
+        if (accept("i32")) return {QuantityUnit(), VerifiedI64Range::signed_i32(), true};
+        const auto name = identifier();
+        auto found = refinement_aliases_.find(name);
+        if (found == refinement_aliases_.end())
+            fail("E_REFINEMENT_NAME: unknown verified scalar type '" + name + "'");
+        return found->second;
+    }
+
+    void parse_refined_quantity_alias() {
+        require("type");
+        const auto name = identifier();
+        require("=");
+        const bool i32 = accept("i32");
+        if (!i32) require("int");
+        require("where");
+        RefinedQuantity type{QuantityUnit(), i32 ? VerifiedI64Range::signed_i32() : VerifiedI64Range(), i32};
+        bool has_unit = false;
+        do {
+            if (accept("units")) {
+                if (has_unit) fail("E_UNIT_DUPLICATE: repeated unit clause");
+                require("in");
+                type.unit = read_quantity_unit();
+                has_unit = true;
+            } else {
+                require("self");
+                const auto op = read_quantity_comparison();
+                type.range = type.range.constrain(op, signed_integer_literal());
+            }
+        } while (accept("and"));
+        require(";");
+        if (refinement_aliases_.size() >= 128) fail("E_REFINEMENT_LIMIT: too many aliases");
+        if (name == "int" || name == "i32" || !refinement_aliases_.emplace(name, std::move(type)).second)
+            fail("E_REFINEMENT_DUPLICATE: duplicate refinement name");
+    }
+
+    RefinedQuantity read_verified_bound(RefinedQuantity type, std::string_view op) {
+        const auto number = token_.text == "-" ? peek_next() : token_;
+        const auto value = signed_integer_literal();
+        QuantityUnit unit;
+        if (token_.text == "<" && token_.offset == number.offset + number.text.size()) {
+            advance();
+            unit = read_quantity_unit();
+            require(">");
+        }
+        type.unit.require_compatible(unit);
+        type.range = type.range.constrain(op, value);
+        return type;
+    }
+
+    bool at_protocol_declaration() const {
+        return token_.text == "define" && peek_next().text == "protocol";
+    }
+
+    void require_protocol(std::string_view text, std::string_view category = "E_PROTOCOL_SYNTAX") {
+        if (!accept(text))
+            fail(std::string(category) + ": expected '" + std::string(text) + "'");
+    }
+
+    std::string protocol_name() {
+        if (token_.kind != Kind::Identifier || (reserved(token_.text) && token_.text != "pattern") ||
+                token_.text == "i32")
+            fail("E_PROTOCOL_SYNTAX: expected a protocol identifier");
+        return identifier();
+    }
+
+    std::vector<ProtocolField> parse_protocol_payload() {
+        std::vector<ProtocolField> payload;
+        if (!accept("(")) return payload;
+        std::unordered_set<std::string> names;
+        if (!accept(")")) {
+            do {
+                if (payload.size() >= 16) fail("E_PROTOCOL_LIMIT: too many payload fields");
+                if (token_.text != "int" && token_.text != "i32" &&
+                        !refinement_aliases_.count(std::string(token_.text)))
+                    fail("E_PROTOCOL_PAYLOAD: unknown scalar payload type");
+                auto type = read_refined_type();
+                auto field = protocol_name();
+                if (!names.insert(field).second) fail("E_PROTOCOL_PAYLOAD: duplicate payload field name");
+                payload.push_back({std::move(field), {
+                    type.i32, type.range.minimum(), type.range.maximum(), std::move(type.unit)
+                }});
+            } while (accept(","));
+            if (!accept(")")) fail("E_PROTOCOL_PAYLOAD: expected ')' after protocol payload");
+        }
+        return payload;
+    }
+
+    std::shared_ptr<const VerifiedProtocol> parse_protocol_declaration(
+            std::unordered_set<std::string>& protocol_names) {
+        require_protocol("define");
+        require_protocol("protocol");
+        auto protocol = std::make_shared<VerifiedProtocol>();
+        if (token_.text == "int" || token_.text == "i32")
+            fail("E_PROTOCOL_DUPLICATE: reserved protocol name");
+        protocol->name = protocol_name();
+        if (protocol_names.size() >= 64) fail("E_PROTOCOL_LIMIT: too many protocols");
+        if (refinement_aliases_.count(protocol->name) || !protocol_names.insert(protocol->name).second)
+            fail("E_PROTOCOL_DUPLICATE: duplicate protocol name");
+        require_protocol("as");
+        std::unordered_set<std::string> states;
+        std::unordered_map<std::string, std::unordered_set<std::string>> outgoing;
+        std::unordered_map<std::string, std::vector<ProtocolScalar>> signatures;
+        while (!accept("end")) {
+            if (token_.kind == Kind::End) fail("E_PROTOCOL_SYNTAX: expected a protocol clause or 'end'");
+            auto first = protocol_name();
+            if (token_.text != "->" && first == "initial") {
+                if (!protocol->initial_state.empty()) fail("E_PROTOCOL_INITIAL: duplicate initial state");
+                protocol->initial_state = protocol_name();
+                states.insert(protocol->initial_state);
+            } else if (token_.text != "->" && first == "terminal") {
+                if (!protocol->terminal_states.insert(protocol_name()).second)
+                    fail("E_PROTOCOL_TERMINAL: duplicate terminal state");
+                if (protocol->terminal_states.size() > 128) fail("E_PROTOCOL_LIMIT: too many terminal states");
+            } else {
+                if (protocol->edges.size() >= 256) fail("E_PROTOCOL_LIMIT: too many protocol edges");
+                require_protocol("->");
+                auto target = protocol_name();
+                require_protocol("on");
+                auto message = protocol_name();
+                states.insert(first);
+                states.insert(target);
+                if (!outgoing[first].insert(message).second)
+                    fail("E_PROTOCOL_DUPLICATE: duplicate source state and message edge");
+                auto payload = parse_protocol_payload();
+                std::vector<ProtocolScalar> signature;
+                for (const auto& field : payload) signature.push_back(field.type);
+                const auto [entry, inserted] = signatures.try_emplace(message, std::move(signature));
+                if (!inserted && entry->second != signature)
+                    fail("E_PROTOCOL_PAYLOAD: inconsistent message payload type");
+                protocol->edges.push_back({std::move(first), std::move(target), std::move(message), std::move(payload)});
+            }
+            if (states.size() > 128) fail("E_PROTOCOL_LIMIT: too many protocol states");
+            require_protocol(";");
+        }
+        if (protocol->initial_state.empty()) fail("E_PROTOCOL_INITIAL: missing initial state");
+        for (const auto& terminal : protocol->terminal_states) {
+            if (!states.count(terminal)) fail("E_PROTOCOL_TERMINAL: unknown terminal state");
+            if (outgoing.count(terminal)) fail("E_PROTOCOL_TERMINAL: terminal state has outgoing edges");
+        }
+        return protocol;
+    }
+
+    bool at_protocol_actor() const {
+        if (token_.text != "define") return false;
+        Lexer next = lexer_;
+        return next.next().text == "actor" && next.next().kind == Kind::Identifier &&
+            next.next().text == "implements";
+    }
+
+    std::shared_ptr<const VerifiedProtocolActor> parse_protocol_actor(
+            const std::vector<std::shared_ptr<const VerifiedProtocol>>& protocols,
+            std::unordered_set<std::string>& actor_names) {
+        require_protocol("define");
+        require_protocol("actor");
+        auto actor = std::make_shared<VerifiedProtocolActor>();
+        actor->name = protocol_name();
+        if (actor_names.size() >= 64) fail("E_PROTOCOL_LIMIT: too many protocol actors");
+        if (refinement_aliases_.count(actor->name) || !actor_names.insert(actor->name).second ||
+                std::any_of(protocols.begin(), protocols.end(), [&](const auto& protocol) {
+                    return protocol->name == actor->name;
+                })) fail("E_PROTOCOL_ACTOR: duplicate actor name");
+        require_protocol("implements");
+        const auto target = protocol_name();
+        const auto protocol = std::find_if(protocols.begin(), protocols.end(),
+            [&](const auto& candidate) { return candidate->name == target; });
+        if (protocol == protocols.end()) fail("E_PROTOCOL_ACTOR: unknown local protocol");
+        actor->protocol = *protocol;
+        require_protocol("as", "E_PROTOCOL_ACTOR");
+        if (token_.text == "state" && peek_next().text == "{") {
+            advance();
+            require_protocol("{", "E_PROTOCOL_STATE");
+            const auto type = read_refined_type();
+            auto field = protocol_name();
+            require_protocol("=", "E_PROTOCOL_STATE");
+            const auto number = token_.text == "-" ? peek_next() : token_;
+            const auto literal = signed_integer_literal();
+            auto initial = quantity_literal(number, literal);
+            type.require(initial.type(), "E_PROTOCOL_INVARIANT", "the initial actor field value");
+            actor->field = ProtocolStateField{{std::move(field), {type.i32,
+                type.range.minimum(), type.range.maximum(), type.unit}}, initial.range.minimum()};
+            require_protocol(";", "E_PROTOCOL_STATE");
+            require_protocol("}", "E_PROTOCOL_STATE");
+        }
+
+        std::unordered_map<std::string, const ProtocolEdge*> messages;
+        std::unordered_set<std::string> state_dependent_destinations;
+        for (const auto& edge : actor->protocol->edges) {
+            const auto [entry, inserted] = messages.emplace(edge.message, &edge);
+            if (!inserted && entry->second->target != edge.target)
+                state_dependent_destinations.insert(edge.message);
+        }
+        std::unordered_set<std::string> seen;
+        while (!accept("end")) {
+            if (token_.kind == Kind::End) fail("E_PROTOCOL_HANDLER: expected a protocol handler or 'end'");
+            auto message = protocol_name();
+            const auto edge = messages.find(message);
+            if (edge == messages.end()) fail("E_PROTOCOL_HANDLER: actor handles an undeclared message");
+            if (!seen.insert(message).second) fail("E_PROTOCOL_HANDLER: duplicate protocol handler");
+            if (token_.text != "(") fail("E_PROTOCOL_HANDLER: expected a parameter list");
+            auto parameters = parse_protocol_payload();
+            const auto& payload = edge->second->payload;
+            if (!std::equal(parameters.begin(), parameters.end(), payload.begin(), payload.end(),
+                    [](const auto& lhs, const auto& rhs) { return lhs.type == rhs.type; }))
+                fail("E_PROTOCOL_PAYLOAD: handler parameter types differ from the message");
+            require_protocol("->", "E_PROTOCOL_HANDLER");
+            require_protocol("void", "E_PROTOCOL_HANDLER");
+            require_protocol("{", "E_PROTOCOL_HANDLER");
+            std::optional<std::uint16_t> increment_parameter;
+            if (actor->field) {
+                const auto& field = actor->field->field;
+                if (std::any_of(parameters.begin(), parameters.end(),
+                        [&](const auto& parameter) { return parameter.name == field.name; }))
+                    fail("E_PROTOCOL_STATE: handler parameter shadows the actor field");
+                if (accept(field.name)) {
+                    require_protocol("=", "E_PROTOCOL_STATE");
+                    require_protocol(field.name, "E_PROTOCOL_STATE");
+                    require_protocol("+", "E_PROTOCOL_STATE");
+                    const auto operand = protocol_name();
+                    const auto parameter = std::find_if(parameters.begin(), parameters.end(),
+                        [&](const auto& candidate) { return candidate.name == operand; });
+                    if (parameter == parameters.end())
+                        fail("E_PROTOCOL_STATE: increment must name a handler parameter");
+                    if (parameter->type.i32 != field.type.i32)
+                        fail("E_PROTOCOL_STATE: increment carrier differs from the actor field");
+                    field.type.unit.require_compatible(parameter->type.unit);
+                    increment_parameter = static_cast<std::uint16_t>(parameter - parameters.begin());
+                    require_protocol(";", "E_PROTOCOL_STATE");
+                }
+            }
+            require_protocol("transition", "E_PROTOCOL_TRANSITION");
+            auto destination = protocol_name();
+            if (state_dependent_destinations.count(message) || edge->second->target != destination)
+                fail("E_PROTOCOL_TRANSITION: handler destination must match every edge for its message");
+            require_protocol(";", "E_PROTOCOL_TRANSITION");
+            require_protocol("}", "E_PROTOCOL_TRANSITION");
+            actor->handlers.push_back({std::move(message), std::move(parameters), std::move(destination),
+                increment_parameter});
+        }
+        if (seen.size() != messages.size()) fail("E_PROTOCOL_HANDLER: missing protocol handler");
+        return actor;
+    }
+
+    void parse_protocol_guest(Program& program) {
+        require_protocol("val", "E_PROTOCOL_GUEST");
+        const auto local = identifier();
+        require_protocol("=", "E_PROTOCOL_GUEST");
+        require_protocol("spawn", "E_PROTOCOL_GUEST");
+        auto guest = std::make_shared<VerifiedProtocolGuest>();
+        guest->actor = protocol_name();
+        const auto actor = std::find_if(program.protocol_actors.begin(), program.protocol_actors.end(),
+            [&](const auto& candidate) { return candidate->name == guest->actor; });
+        if (actor == program.protocol_actors.end()) fail("E_PROTOCOL_GUEST: unknown actor type");
+        require_protocol("(", "E_PROTOCOL_GUEST");
+        require_protocol(")", "E_PROTOCOL_GUEST");
+        require_protocol(";", "E_PROTOCOL_GUEST");
+
+        std::unordered_map<std::string, std::size_t> receipts;
+        while (true) {
+            require_protocol(local, "E_PROTOCOL_GUEST");
+            require_protocol(".", "E_PROTOCOL_GUEST");
+            if (accept("stop")) {
+                require_protocol("(", "E_PROTOCOL_GUEST");
+                require_protocol(")", "E_PROTOCOL_GUEST");
+                require_protocol(";", "E_PROTOCOL_GUEST");
+                break;
+            }
+            if (guest->turns.size() >= 64) fail("E_PROTOCOL_LIMIT: too many guest protocol turns");
+            require_protocol("send", "E_PROTOCOL_GUEST");
+            require_protocol("(", "E_PROTOCOL_GUEST");
+            ProtocolGuestTurn turn;
+            turn.message = protocol_name();
+            const auto& handlers = (*actor)->handlers;
+            const auto handler = std::find_if(handlers.begin(), handlers.end(),
+                [&](const auto& candidate) { return candidate.message == turn.message; });
+            if (handler == handlers.end()) fail("E_PROTOCOL_GUEST: unknown message tag");
+            require_protocol("(", "E_PROTOCOL_GUEST");
+            for (const auto& parameter : handler->parameters) {
+                if (!turn.payload.empty()) require_protocol(",", "E_PROTOCOL_PAYLOAD");
+                const auto number = token_.text == "-" ? peek_next() : token_;
+                const auto literal = signed_integer_literal();
+                const auto actual = quantity_literal(number, literal);
+                const auto& type = parameter.type;
+                RefinedQuantity expected{type.unit, VerifiedI64Range(type.minimum, type.maximum), type.i32};
+                expected.require(actual.type(), "E_PROTOCOL_PAYLOAD", "the typed send argument");
+                turn.payload.push_back(actual.range.minimum());
+            }
+            require_protocol(")", "E_PROTOCOL_PAYLOAD");
+            require_protocol(")", "E_PROTOCOL_GUEST");
+            require_protocol(";", "E_PROTOCOL_GUEST");
+            require_protocol("val", "E_PROTOCOL_GUEST");
+            const auto receipt = identifier();
+            if (receipt == local || !receipts.emplace(receipt, guest->turns.size()).second)
+                fail("E_PROTOCOL_GUEST: duplicate local binding");
+            require_protocol("=", "E_PROTOCOL_GUEST");
+            require_protocol(local, "E_PROTOCOL_GUEST");
+            require_protocol(".", "E_PROTOCOL_GUEST");
+            require_protocol("get_receipt", "E_PROTOCOL_GUEST");
+            require_protocol("(", "E_PROTOCOL_GUEST");
+            require_protocol(")", "E_PROTOCOL_GUEST");
+            require_protocol(";", "E_PROTOCOL_GUEST");
+            guest->turns.push_back(std::move(turn));
+        }
+        require_protocol("return", "E_PROTOCOL_GUEST");
+        const auto selected = receipts.find(identifier());
+        if (selected == receipts.end()) fail("E_PROTOCOL_GUEST: return requires a known receipt status");
+        require_protocol(";", "E_PROTOCOL_GUEST");
+        require_protocol("}", "E_PROTOCOL_GUEST");
+        if (token_.kind != Kind::End) fail("E_PROTOCOL_GUEST: main must be the last declaration");
+        guest->result = selected->second;
+        program.protocol_guest = std::move(guest);
+    }
+
+    void parse_verified_functions(Program& program, bool protocol_actor_library) {
+        while (at_refined_quantity_alias()) parse_refined_quantity_alias();
+        std::unordered_set<std::string> protocol_names;
+        while (at_protocol_declaration()) program.protocols.push_back(parse_protocol_declaration(protocol_names));
+        std::unordered_set<std::string> actor_names;
+        while (at_protocol_actor())
+            program.protocol_actors.push_back(parse_protocol_actor(program.protocols, actor_names));
+        verified_callable_ = true;
+        bool main_seen = false;
+        while (token_.kind != Kind::End) {
+            if (program.functions.size() >= 64) fail("E_REFINEMENT_LIMIT: too many verified functions");
+            if (main_seen) fail("E_REFINEMENT_SCOPE: main must be the final verified function");
+            const bool exported = accept("pub");
+            if (!exported) accept("private");
+            require("fnc");
+            Function function;
+            function.offset = token_.offset;
+            const auto name = identifier();
+            const bool main = name == "main";
+            if (exported != main) fail("E_REFINEMENT_EXPORT: only the scalar main may be public");
+            if (verified_functions_.count(name)) fail("E_REFINEMENT_DUPLICATE: duplicate verified function");
+            function.name = main ? name : "$verified$" + name;
+            function.exported = exported;
+            function.native_internal = !exported;
+            verified_locals_.clear();
+            verified_upper_bounds_.clear();
+            require("(");
+            if (token_.text != ")") {
+                do {
+                    if (function.parameters.size() >= 16) fail("E_REFINEMENT_LIMIT: too many parameters");
+                    auto type = read_refined_type();
+                    Parameter parameter;
+                    parameter.name = identifier();
+                    if (!verified_locals_.emplace(parameter.name, std::move(type)).second)
+                        fail("E_REFINEMENT_DUPLICATE: duplicate parameter");
+                    verified_upper_bounds_.emplace(parameter.name, std::unordered_set<std::string>{parameter.name});
+                    function.parameters.push_back(std::move(parameter));
+                } while (accept(","));
+            }
+            require(")");
+            require("->");
+            const auto declared_result = read_refined_type();
+            auto guaranteed_result = declared_result;
+            if (main && (!function.parameters.empty() || !declared_result.unit.scalar()
+                    || !declared_result.range.includes(VerifiedI64Range())))
+                fail("E_REFINEMENT_EXPORT: main must have signature () -> int");
+            while (accept("requires")) {
+                if (main) fail("E_REFINEMENT_EXPORT: main cannot require caller facts");
+                const auto parameter = identifier();
+                auto actual = verified_locals_.find(parameter);
+                if (actual == verified_locals_.end()) fail("E_REFINEMENT_NAME: requires must name a parameter");
+                actual->second = read_verified_bound(actual->second, read_quantity_comparison());
+            }
+            VerifiedFunction signature;
+            signature.lowered_name = function.name;
+            for (const auto& parameter : function.parameters)
+                signature.parameters.push_back(verified_locals_.at(parameter.name));
+            while (accept("ensures")) {
+                require("result");
+                const auto op = read_quantity_comparison();
+                if (op == "<=" && token_.kind == Kind::Identifier) {
+                    const auto name = identifier();
+                    auto parameter = std::find_if(function.parameters.begin(), function.parameters.end(),
+                        [&](const Parameter& param) { return param.name == name; });
+                    if (parameter == function.parameters.end())
+                        fail("E_REFINEMENT_NAME: ensures must name a parameter");
+                    const auto index = static_cast<std::size_t>(parameter - function.parameters.begin());
+                    guaranteed_result.unit.require_compatible(signature.parameters[index].unit);
+                    signature.upper_parameters.push_back(index);
+                } else {
+                    guaranteed_result = read_verified_bound(std::move(guaranteed_result), op);
+                }
+            }
+            signature.result = guaranteed_result;
+            require("{");
+            if (main && !program.protocol_actors.empty() && token_.text == "val") {
+                auto lookahead = lexer_;
+                if (lookahead.next().kind == Kind::Identifier && lookahead.next().text == "=" &&
+                    lookahead.next().text == "spawn") {
+                    if (protocol_actor_library || !program.functions.empty() ||
+                        guaranteed_result.range.minimum() != declared_result.range.minimum() ||
+                        guaranteed_result.range.maximum() != declared_result.range.maximum() ||
+                        !signature.upper_parameters.empty())
+                        fail("E_PROTOCOL_GUEST: actor main requires a standalone uncontracted entrypoint");
+                    parse_protocol_guest(program);
+                    return;
+                }
+            }
+            while (accept("val")) {
+                if (function.locals.size() >= 128) fail("E_REFINEMENT_LIMIT: too many immutable bindings");
+                LocalBinding local;
+                local.offset = token_.offset;
+                RefinedQuantity type;
+                if (peek_next().text == ":") {
+                    local.name = identifier();
+                    require(":");
+                    type = read_refined_type();
+                } else {
+                    type = read_refined_type();
+                    local.name = identifier();
+                }
+                require("=");
+                auto value = verified_expression(0);
+                type.require(value.type(), "E_REFINEMENT_BINDING", "binding " + local.name);
+                require(";");
+                if (!verified_locals_.emplace(local.name, RefinedQuantity{type.unit, value.range, type.i32}).second)
+                    fail("E_REFINEMENT_DUPLICATE: duplicate verified binding");
+                verified_upper_bounds_.emplace(local.name, std::move(value.upper_bounds));
+                local.initializer = std::move(value.expression);
+                function.locals.push_back(std::move(local));
+            }
+            if (!accept("return"))
+                fail("E_REFINEMENT_BODY: expected an explicit return after immutable bindings");
+            auto result = verified_expression(0);
+            declared_result.require(result.type(), "E_REFINEMENT_RETURN", "return from " + name);
+            guaranteed_result.require(result.type(), "E_REFINEMENT_POSTCONDITION", "ensures of " + name);
+            for (const auto index : signature.upper_parameters) {
+                const auto& parameter = function.parameters[index].name;
+                if (!result.upper_bounds.count(parameter) && !result.range.at_most(signature.parameters[index].range))
+                    fail("E_REFINEMENT_POSTCONDITION: cannot prove result <= " + parameter);
+            }
+            require(";");
+            require("}");
+            function.result = std::move(result.expression);
+            program.functions.push_back(std::move(function));
+            verified_functions_.emplace(name, std::move(signature));
+            main_seen = main;
+        }
+        if (protocol_actor_library) {
+            if (program.protocol_actors.empty())
+                fail("E_PROTOCOL_ACTOR: host protocol artifact requires a verified protocol actor");
+            if (!program.functions.empty() && !main_seen)
+                fail("E_REFINEMENT_EXPORT: verified functions require a public main");
+        } else if (!main_seen) {
+            fail("E_REFINEMENT_EXPORT: verified source requires a public main");
+        }
+    }
+
+    QuantityTerm verified_reference(std::size_t depth) {
+        const auto offset = token_.offset;
+        const auto name = identifier();
+        if (!accept("(")) {
+            auto found = verified_locals_.find(name);
+            if (found == verified_locals_.end()) fail("E_REFINEMENT_NAME: unknown immutable value '" + name + "'");
+            auto value = make_expression(Expression::Kind::Variable, offset);
+            value->name = name;
+            return {std::move(value), found->second.unit, 0, found->second.range,
+                    verified_upper_bounds_.at(name), found->second.i32};
+        }
+        const auto found = verified_functions_.find(name);
+        if (found == verified_functions_.end()) fail("E_REFINEMENT_CALL: expected an earlier verified function");
+        const auto& signature = found->second;
+        auto call = make_expression(Expression::Kind::Call, offset);
+        call->name = signature.lowered_name;
+        std::size_t height = 1;
+        std::unordered_set<std::string> upper_bounds;
+        if (token_.text != ")") {
+            do {
+                const auto index = call->arguments.size();
+                if (index >= signature.parameters.size()) fail("E_REFINEMENT_CALL: incorrect arity");
+                auto arg = verified_expression(depth + 1);
+                signature.parameters[index].require(arg.type(),
+                    "E_REFINEMENT_PRECONDITION", "argument " + std::to_string(index + 1) + " of " + name);
+                call->arguments.push_back(std::move(arg.expression));
+                if (std::find(signature.upper_parameters.begin(), signature.upper_parameters.end(), index)
+                        != signature.upper_parameters.end())
+                    upper_bounds.insert(arg.upper_bounds.begin(), arg.upper_bounds.end());
+                height = std::max(height, arg.depth + 1);
+            } while (accept(","));
+        }
+        require(")");
+        if (call->arguments.size() != signature.parameters.size()) fail("E_REFINEMENT_CALL: incorrect arity");
+        if (height >= kMaxNativeExpressionDepth) fail("E_UNIT_LIMIT: quantity expression is too deep");
+        return {std::move(call), signature.result.unit, height, signature.result.range,
+                std::move(upper_bounds), signature.result.i32};
+    }
+
+    QuantityTerm quantity_binary(Expression::Kind kind, std::size_t offset, QuantityTerm left,
+                                 QuantityTerm right, QuantityUnit unit) {
+        const bool i32 = left.i32 || right.i32;
+        const auto carrier = VerifiedI64Range::signed_i32();
+        if (i32 && (!carrier.includes(left.range) || !carrier.includes(right.range)))
+            fail("E_I32_RANGE: checked i32 arithmetic requires both operands to fit i32");
+        const auto depth = (i32 ? 2 : 1) + std::max(left.depth, right.depth);
+        if (depth >= kMaxNativeExpressionDepth) fail("E_UNIT_LIMIT: quantity expression is too deep");
+        auto expression = make_expression(kind, offset);
+        expression->left = std::move(left.expression);
+        expression->right = std::move(right.expression);
+        VerifiedI64Range result;
+        switch (kind) {
+            case Expression::Kind::Add: result = left.range.add(right.range); break;
+            case Expression::Kind::Subtract: result = left.range.subtract(right.range); break;
+            case Expression::Kind::Multiply: result = left.range.multiply(right.range); break;
+            case Expression::Kind::DivideQuantity: result = left.range.divide(right.range); break;
+            default: throw std::logic_error("unexpected verified arithmetic kind");
+        }
+        const bool bounded_by_left = (kind == Expression::Kind::Add && right.range.nonpositive())
+            || (kind == Expression::Kind::Subtract && right.range.nonnegative())
+            || (kind == Expression::Kind::DivideQuantity && left.range.nonnegative()
+                && right.range.positive() && right.unit.scalar());
+        if (i32) {
+            auto checked = make_expression(Expression::Kind::CheckedI32, offset);
+            checked->left = std::move(expression);
+            expression = std::move(checked);
+            result = result.on_normal_result_within(carrier);
+        }
+        return {std::move(expression), std::move(unit), depth, result,
+                bounded_by_left ? std::move(left.upper_bounds) : std::unordered_set<std::string>{}, i32};
+    }
+
+    QuantityTerm verified_expression(std::size_t depth) {
+        auto term = quantity_sum(depth);
+        while (token_.text == "as") {
+            const auto offset = token_.offset;
+            advance();
+            if (token_.text == "?")
+                fail("E_REFINEMENT_CAST: optional refinement casts are unsupported");
+            auto target = read_refined_type();
+            target.unit.require_compatible(term.unit);
+            if (++term.depth >= kMaxNativeExpressionDepth)
+                fail("E_UNIT_LIMIT: quantity expression is too deep");
+            auto checked = make_expression(Expression::Kind::CheckRefinement, offset);
+            checked->left = std::move(term.expression);
+            for (auto bound : {target.range.minimum(), target.range.maximum()}) {
+                auto limit = make_expression(Expression::Kind::Integer, offset);
+                limit->integer = bound;
+                checked->arguments.push_back(std::move(limit));
+            }
+            term.expression = std::move(checked);
+            term.unit = std::move(target.unit);
+            term.range = term.range.on_normal_result_within(target.range);
+            term.i32 = target.i32;
+        }
+        return term;
+    }
+
+    QuantityTerm quantity_sum(std::size_t depth) {
+        auto left = quantity_product(depth);
+        while (token_.text == "+" || token_.text == "-") {
+            const auto op = token_;
+            advance();
+            auto right = quantity_product(depth);
+            left.unit.require_compatible(right.unit);
+            auto unit = left.unit;
+            left = quantity_binary(op.text == "+" ? Expression::Kind::Add : Expression::Kind::Subtract,
+                op.offset, std::move(left), std::move(right), std::move(unit));
+        }
+        return left;
+    }
+
+    QuantityTerm quantity_product(std::size_t depth) {
+        auto left = quantity_atom(depth);
+        while (token_.text == "*" || token_.text == "/") {
+            const auto op = token_;
+            advance();
+            auto right = quantity_atom(depth);
+            const bool divide = op.text == "/";
+            if (divide && !left.i32 && !right.i32 && left.unit.scalar() && right.unit.scalar())
+                fail("E_UNIT_SCALAR_DIVISION: two plain int operands use ordinary division");
+            auto unit = left.unit.combine(right.unit, divide);
+            left = quantity_binary(divide ? Expression::Kind::DivideQuantity : Expression::Kind::Multiply,
+                op.offset, std::move(left), std::move(right), std::move(unit));
+        }
+        return left;
+    }
+
+    QuantityTerm quantity_literal(Token number, std::int64_t value) {
+        QuantityUnit unit;
+        if (token_.text == "<" && token_.offset == number.offset + number.text.size()) {
+            advance();
+            unit = read_quantity_unit();
+            require(">");
+            if (accept(".")) {
+                require("to_unit");
+                require("<");
+                auto target = read_quantity_unit();
+                require(">");
+                require("(");
+                require(")");
+                value = unit.convert_exact(value, target);
+                unit = std::move(target);
+            }
+        }
+        auto expression = make_expression(Expression::Kind::Integer, number.offset);
+        expression->integer = value;
+        return {std::move(expression), std::move(unit), 0, VerifiedI64Range(value, value), {}};
+    }
+
+    QuantityTerm quantity_atom(std::size_t depth) {
+        if (depth >= kMaxNativeExpressionDepth) fail("E_UNIT_LIMIT: quantity expression is too deep");
+        if (accept("(")) {
+            auto term = verified_callable_ ? verified_expression(depth + 1) : quantity_sum(depth + 1);
+            require(")");
+            return term;
+        }
+        if (accept("+")) return quantity_atom(depth + 1);
+        const auto start = token_;
+        if (start.text == "-") {
+            const auto number = peek_next();
+            if (number.kind == Kind::Integer) {
+                std::string digits(number.text);
+                digits.erase(std::remove(digits.begin(), digits.end(), '_'), digits.end());
+                const auto first = digits.find_first_not_of('0');
+                if (first != std::string::npos && digits.compare(first, std::string::npos, "9223372036854775808") == 0)
+                    return quantity_literal(number, signed_integer_literal());
+            }
+            advance();
+            auto term = quantity_atom(depth + 1);
+            if (!term.i32) {
+                auto negated = make_expression(Expression::Kind::Negate, start.offset);
+                negated->left = std::move(term.expression);
+                return {std::move(negated), std::move(term.unit), term.depth + 1,
+                    VerifiedI64Range(0, 0).subtract(term.range), {}};
+            }
+            auto unit = term.unit;
+            auto zero = make_expression(Expression::Kind::Integer, start.offset);
+            zero->integer = 0;
+            return quantity_binary(Expression::Kind::Subtract, start.offset,
+                {std::move(zero), unit, 0, VerifiedI64Range(0, 0), {}},
+                std::move(term), unit);
+        }
+        if (verified_callable_ && start.kind == Kind::Identifier) return verified_reference(depth);
+        if (start.kind != Kind::Integer) fail("E_UNIT_EXPRESSION: expected an integer quantity expression");
+        return quantity_literal(start, integer_literal());
+    }
+
+    std::unique_ptr<Expression> return_expression() {
+        if (!has_quantity_return()) return expression();
+        auto term = quantity_sum(0);
+        if (!term.unit.scalar()) fail("E_UNIT_ERASURE: an unannotated int requires dimensionless scale one");
+        return std::move(term.expression);
+    }
+
     std::unique_ptr<Expression> expression() {
         auto value = conditional();
         std::size_t stages = 0;
@@ -7408,9 +8190,11 @@ private:
                 return;
             }
             case Expression::Kind::Cast:
+            case Expression::Kind::CheckRefinement:
                 validate_expression(*expr.left, parameters, functions, depth + 1);
                 return;
             case Expression::Kind::Negate:
+            case Expression::Kind::CheckedI32:
             case Expression::Kind::Abs:
             case Expression::Kind::LogicalNot:
             case Expression::Kind::Copy:
@@ -7423,6 +8207,7 @@ private:
             case Expression::Kind::Add:
             case Expression::Kind::Subtract:
             case Expression::Kind::Multiply:
+            case Expression::Kind::DivideQuantity:
             case Expression::Kind::Remainder:
             case Expression::Kind::ShiftLeft:
             case Expression::Kind::ShiftRight:
@@ -7658,10 +8443,17 @@ private:
                         std::to_string(expr.offset));
                 return expr.resolved_type = expr.cast_target;
             }
-            case Expression::Kind::Negate: {
+            case Expression::Kind::Negate:
+            case Expression::Kind::CheckedI32: {
                 ScalarType operand = validate_scalar_expression(
                     *expr.left, variables, functions, depth + 1);
                 require_type(operand, ScalarType::I64, "unary '-'");
+                return ScalarType::I64;
+            }
+            case Expression::Kind::CheckRefinement: {
+                ScalarType operand = validate_scalar_expression(
+                    *expr.left, variables, functions, depth + 1);
+                require_type(operand, ScalarType::I64, "checked refinement");
                 return ScalarType::I64;
             }
             case Expression::Kind::Abs: {
@@ -7695,6 +8487,7 @@ private:
             }
             case Expression::Kind::Subtract:
             case Expression::Kind::Multiply:
+            case Expression::Kind::DivideQuantity:
             case Expression::Kind::Remainder:
             case Expression::Kind::ShiftLeft:
             case Expression::Kind::ShiftRight:
@@ -9337,6 +10130,14 @@ private:
     std::unordered_map<std::string, ForwardType> forwards_;
     std::unordered_map<std::string, std::string> actor_forwards_;
     std::unordered_map<std::string, ScalarAlias> defined_type_aliases_;
+    std::unordered_map<std::string, QuantityUnit> quantity_dimensions_;
+    std::unordered_map<std::string, QuantityUnit> quantity_units_;
+    std::unordered_set<std::string> quantity_canonical_units_;
+    std::unordered_map<std::string, RefinedQuantity> refinement_aliases_;
+    std::unordered_map<std::string, RefinedQuantity> verified_locals_;
+    std::unordered_map<std::string, std::unordered_set<std::string>> verified_upper_bounds_;
+    std::unordered_map<std::string, VerifiedFunction> verified_functions_;
+    bool verified_callable_ = false;
     std::string_view source_;
     Lexer lexer_;
     Token token_;
@@ -9685,6 +10486,14 @@ Program parse_program(std::string_view source, bool experimental_owned_int,
                       int language_version) {
     auto program = parse_unresolved_program(source, experimental_owned_int,
         experimental_rt_scalar_loop, experimental_pointer_int_aot, language_version);
+    resolve_and_validate_program(program);
+    return program;
+}
+
+Program parse_verified_protocol_actor_library(std::string_view source, int language_version) {
+    auto program = Parser(source, false, false, false, 0, false, language_version).parse(true);
+    if (program.protocol_actors.empty())
+        throw std::runtime_error("E_PROTOCOL_ACTOR: host protocol artifact requires a verified protocol actor");
     resolve_and_validate_program(program);
     return program;
 }

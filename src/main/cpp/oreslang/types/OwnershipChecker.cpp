@@ -320,6 +320,8 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
         case Expression::Kind::Share:
         case Expression::Kind::Cast: // Cast is checked static identity, but operand may move.
         case Expression::Kind::Negate:
+        case Expression::Kind::CheckedI32:
+        case Expression::Kind::CheckRefinement:
         case Expression::Kind::LogicalNot:
             check_value(*expr.left, locals, functions);
             return;
@@ -362,6 +364,7 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
         case Expression::Kind::Add:
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
+        case Expression::Kind::DivideQuantity:
         case Expression::Kind::Remainder:
         case Expression::Kind::ShiftLeft:
         case Expression::Kind::ShiftRight:
@@ -438,6 +441,8 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
         case Expression::Kind::Borrow:
         case Expression::Kind::BorrowMut:
             reject(expr, "borrowed reference may only be passed to a borrowed parameter");
+        case Expression::Kind::Abs:
+            break;
     }
     reject(expr, "invalid native ownership expression kind");
 }
@@ -464,6 +469,7 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
         case Expression::Kind::Add:
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
+        case Expression::Kind::DivideQuantity:
         case Expression::Kind::Remainder:
         case Expression::Kind::ShiftLeft:
         case Expression::Kind::ShiftRight:
@@ -511,6 +517,10 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
         case Expression::Kind::BorrowMut:
         case Expression::Kind::Console:
             reject(expr, "native guarded condition must be pure and cannot move, call or borrow");
+        case Expression::Kind::Abs:
+        case Expression::Kind::CheckedI32:
+        case Expression::Kind::CheckRefinement:
+            break;
     }
     reject(expr, "unsupported guarded condition");
 }
