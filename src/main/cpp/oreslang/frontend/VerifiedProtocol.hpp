@@ -3,6 +3,7 @@
 #include "oreslang/frontend/QuantityUnit.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -36,6 +37,18 @@ struct VerifiedProtocol {
     std::string initial_state;
     std::unordered_set<std::string> terminal_states;
     std::vector<ProtocolEdge> edges;
+};
+
+struct ProtocolHandler {
+    std::string message;
+    std::vector<ProtocolField> parameters;
+    std::string destination;
+};
+
+struct VerifiedProtocolActor {
+    std::string name;
+    std::shared_ptr<const VerifiedProtocol> protocol;
+    std::vector<ProtocolHandler> handlers;
 };
 
 } // namespace oreslang

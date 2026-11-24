@@ -5667,9 +5667,9 @@ private:
         return token_.text == "define" && peek_next().text == "protocol";
     }
 
-    void require_protocol(std::string_view text) {
+    void require_protocol(std::string_view text, std::string_view category = "E_PROTOCOL_SYNTAX") {
         if (!accept(text))
-            fail("E_PROTOCOL_SYNTAX: expected '" + std::string(text) + "'");
+            fail(std::string(category) + ": expected '" + std::string(text) + "'");
     }
 
     std::string protocol_name() {
@@ -5756,10 +5756,75 @@ private:
         return protocol;
     }
 
+    bool at_protocol_actor() const {
+        if (token_.text != "define") return false;
+        Lexer next = lexer_;
+        return next.next().text == "actor" && next.next().kind == Kind::Identifier &&
+            next.next().text == "implements";
+    }
+
+    std::shared_ptr<const VerifiedProtocolActor> parse_protocol_actor(
+            const std::vector<std::shared_ptr<const VerifiedProtocol>>& protocols,
+            std::unordered_set<std::string>& actor_names) {
+        require_protocol("define");
+        require_protocol("actor");
+        auto actor = std::make_shared<VerifiedProtocolActor>();
+        actor->name = protocol_name();
+        if (actor_names.size() >= 64) fail("E_PROTOCOL_LIMIT: too many protocol actors");
+        if (refinement_aliases_.count(actor->name) || !actor_names.insert(actor->name).second ||
+                std::any_of(protocols.begin(), protocols.end(), [&](const auto& protocol) {
+                    return protocol->name == actor->name;
+                })) fail("E_PROTOCOL_ACTOR: duplicate actor name");
+        require_protocol("implements");
+        const auto target = protocol_name();
+        const auto protocol = std::find_if(protocols.begin(), protocols.end(),
+            [&](const auto& candidate) { return candidate->name == target; });
+        if (protocol == protocols.end()) fail("E_PROTOCOL_ACTOR: unknown local protocol");
+        actor->protocol = *protocol;
+        require_protocol("as", "E_PROTOCOL_ACTOR");
+
+        std::unordered_map<std::string, const ProtocolEdge*> messages;
+        std::unordered_set<std::string> state_dependent_destinations;
+        for (const auto& edge : actor->protocol->edges) {
+            const auto [entry, inserted] = messages.emplace(edge.message, &edge);
+            if (!inserted && entry->second->target != edge.target)
+                state_dependent_destinations.insert(edge.message);
+        }
+        std::unordered_set<std::string> seen;
+        while (!accept("end")) {
+            if (token_.kind == Kind::End) fail("E_PROTOCOL_HANDLER: expected a protocol handler or 'end'");
+            auto message = protocol_name();
+            const auto edge = messages.find(message);
+            if (edge == messages.end()) fail("E_PROTOCOL_HANDLER: actor handles an undeclared message");
+            if (!seen.insert(message).second) fail("E_PROTOCOL_HANDLER: duplicate protocol handler");
+            if (token_.text != "(") fail("E_PROTOCOL_HANDLER: expected a parameter list");
+            auto parameters = parse_protocol_payload();
+            const auto& payload = edge->second->payload;
+            if (!std::equal(parameters.begin(), parameters.end(), payload.begin(), payload.end(),
+                    [](const auto& lhs, const auto& rhs) { return lhs.type == rhs.type; }))
+                fail("E_PROTOCOL_PAYLOAD: handler parameter types differ from the message");
+            require_protocol("->", "E_PROTOCOL_HANDLER");
+            require_protocol("void", "E_PROTOCOL_HANDLER");
+            require_protocol("{", "E_PROTOCOL_HANDLER");
+            require_protocol("transition", "E_PROTOCOL_TRANSITION");
+            auto destination = protocol_name();
+            if (state_dependent_destinations.count(message) || edge->second->target != destination)
+                fail("E_PROTOCOL_TRANSITION: handler destination must match every edge for its message");
+            require_protocol(";", "E_PROTOCOL_TRANSITION");
+            require_protocol("}", "E_PROTOCOL_TRANSITION");
+            actor->handlers.push_back({std::move(message), std::move(parameters), std::move(destination)});
+        }
+        if (seen.size() != messages.size()) fail("E_PROTOCOL_HANDLER: missing protocol handler");
+        return actor;
+    }
+
     void parse_verified_functions(Program& program) {
         while (at_refined_quantity_alias()) parse_refined_quantity_alias();
         std::unordered_set<std::string> protocol_names;
         while (at_protocol_declaration()) program.protocols.push_back(parse_protocol_declaration(protocol_names));
+        std::unordered_set<std::string> actor_names;
+        while (at_protocol_actor())
+            program.protocol_actors.push_back(parse_protocol_actor(program.protocols, actor_names));
         verified_callable_ = true;
         bool main_seen = false;
         while (token_.kind != Kind::End) {
