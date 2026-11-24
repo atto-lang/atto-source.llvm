@@ -5821,6 +5821,9 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_ownership_bang_copy_spaced_guest
         ownership-bang-v1/copy-spaced-native.atto
         --run 42 --clang "${ORE_CLANG}")
+    oreslang_contract_test(native_ownership_bang_copy_deep_scalars_guest
+        ownership-bang-v1/copy-deep-scalars-native.atto
+        --run 42 --clang "${ORE_CLANG}")
     oreslang_contract_test(native_ownership_bang_take_guest
         ownership-bang-v1/take-native.atto
         --run 42 --clang "${ORE_CLANG}")
@@ -5884,6 +5887,9 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_ownership_bang_share_class_reject
         ownership-bang-v1/share-class-reject.atto
         --diagnostic "class is non-Copy")
+    oreslang_contract_test(native_ownership_bang_copy_deep_graph_reject
+        ownership-bang-v1/copy-deep-string-reject.atto
+        --diagnostic "E_COPY_GRAPH_UNPROVEN")
 
     # A selected -R bang guest must not skip its reviewed .atto Git blob
     # verifier. CTest fixtures automatically pull the setup test into the
@@ -5901,6 +5907,7 @@ if(BUILD_TESTING)
     set(_ownership_bang_contracts
         native_ownership_bang_copy_compact_guest
         native_ownership_bang_copy_spaced_guest
+        native_ownership_bang_copy_deep_scalars_guest
         native_ownership_bang_take_guest
         native_ownership_bang_share_guest
         native_ownership_bang_borrow_call_guest
@@ -5910,7 +5917,8 @@ if(BUILD_TESTING)
         native_ownership_bang_borrow_sanitizer_runtime_smoke
         native_ownership_bang_use_after_move_reject
         native_ownership_bang_escaping_borrow_reject
-        native_ownership_bang_share_class_reject)
+        native_ownership_bang_share_class_reject
+        native_ownership_bang_copy_deep_graph_reject)
     foreach(mode IN ITEMS 0 2)
         list(APPEND _ownership_bang_contracts
             native_ownership_bang_copy_compact_O${mode}

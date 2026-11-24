@@ -1,0 +1,4 @@
+pub fnc main(): int {
+    stdio.println(copy!! "Atto");
+    return 42;
+}
