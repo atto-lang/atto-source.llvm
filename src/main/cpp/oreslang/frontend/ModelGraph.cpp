@@ -289,6 +289,10 @@ void rewrite_model_expression(std::unique_ptr<Expression>& expr,
             if (expr->arguments.size() != 1)
                 model_fail("MODEL_RUN_ARITY",
                            "native model.run expects exactly one input");
+            if (std::any_of(expr->argument_names.begin(), expr->argument_names.end(),
+                            [](const std::string& label) { return !label.empty(); }))
+                model_fail("MODEL_RUN_NAMED_UNSUPPORTED",
+                           "native model.run requires a positional input");
 
             std::vector<std::int64_t> config;
             config.reserve(model.parameters.size());
@@ -490,6 +494,10 @@ void admit_and_lower_models(Program& program) {
                            "no native model operation '" + operation.name +
                            "' with arity " + std::to_string(arity));
             const Function& fn = *family->second.at(arity);
+            if (fn.source_routine || fn.source_signature_has_scalar_alias)
+                model_fail("MODEL_INVALID_OP_SIGNATURE",
+                           "operation '" + operation.name +
+                           "' must use fnc with a direct int signature");
             if (!is_plain_scalar_operation(fn))
                 model_fail("MODEL_EFFECTFUL_BODY",
                            "operation '" + operation.name +

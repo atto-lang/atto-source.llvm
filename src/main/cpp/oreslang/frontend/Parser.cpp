@@ -3541,8 +3541,9 @@ private:
                 fail("native async gen* requires scheduler-owned async iterator continuation lowering");
             if (!accept("fnc"))
                 fail("native first async Future<int> producer requires async fnc");
-        } else if (owner.empty() && !accept("fnc") && !accept("routine")) {
-            fail("expected fnc or routine");
+        } else if (owner.empty() && !accept("fnc")) {
+            if (!accept("routine")) fail("expected fnc or routine");
+            value.source_routine = true;
         }
         // Compatibility spellings remain fail-closed in this first native
         // slice. Canonical bare sync gen* is handled by scalar_generator().
@@ -3732,6 +3733,9 @@ private:
                 value.return_type = ScalarType::I64;
             }
         }
+        value.source_signature_has_scalar_alias = !value.pending_return_type_alias.empty() ||
+            std::any_of(value.parameters.begin(), value.parameters.end(),
+                [](const Parameter& parameter) { return !parameter.pending_type_alias.empty(); });
         if (token_.text == "?")
             fail("E_OPTION_RETURN_ABI_UNSUPPORTED: type-level '?' returns Option<T>, "
                  "not an omitted argument; native tagged return ABI is missing");

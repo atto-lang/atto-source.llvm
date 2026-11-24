@@ -390,6 +390,9 @@ struct Function {
     // compiled as scheduler work; sync unary stages execute on that carrier.
     std::vector<SourceFuturePipelineI64Binding> future_pipelines;
     bool async_source_i64 = false;
+    bool source_routine = false;
+    // Model admission needs the source spelling after alias resolution.
+    bool source_signature_has_scalar_alias = false;
     /* Restricted lifecycle-await slice: exactly one actor lifecycle suspension. */
     std::string ready_await_actor;
     std::size_t ready_await_offset = 0;

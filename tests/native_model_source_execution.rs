@@ -193,6 +193,39 @@ fn verify(compiler: &Path, clang: &Path, corpus: &Path) -> Result<(), String> {
                  define model x as Identity() AddDelta(2) end\n\
                  pub fnc main(): int { return x().run(40); }\n".into(),
     });
+    for (id, diagnostic, source) in [
+        (
+            "reject-routine-operation",
+            "MODEL_INVALID_OP_SIGNATURE",
+            "routine Identity(int input): int { return input; }\n\
+             define model Adjust as Identity() end\n\
+             pub fnc main(): int { return Adjust().run(42); }\n",
+        ),
+        (
+            "reject-aliased-model-port",
+            "MODEL_INVALID_OP_SIGNATURE",
+            "declare type Wrapped = int;\n\
+             fnc Identity(Wrapped input): Wrapped { return input; }\n\
+             define model Adjust as Identity() end\n\
+             pub fnc main(): int { return Adjust().run(42); }\n",
+        ),
+        (
+            "reject-named-run-input",
+            "MODEL_RUN_NAMED_UNSUPPORTED",
+            "fnc Identity(int input): int { return input; }\n\
+             define model Adjust as Identity() end\n\
+             pub fnc main(): int { return Adjust().run(unrecognized: 42); }\n",
+        ),
+    ] {
+        cases.push(Case {
+            id: id.into(),
+            llvm_mode: "reject".into(),
+            diagnostic: Some(diagnostic.into()),
+            llvm_diagnostic: None,
+            expected_exit: None,
+            source: source.into(),
+        });
+    }
     let scratch = Scratch::new()?;
     for case in &cases {
         let extension = if case.id == "zero-formal-model-shorthand" { "atto" } else { "ores" };
@@ -245,12 +278,12 @@ fn verify(compiler: &Path, clang: &Path, corpus: &Path) -> Result<(), String> {
                 "{}: clang rc={}, stderr={:?}",
                 case.id, clang_rc, String::from_utf8_lossy(&clang_err)));
         }
-        let (exit, _, runtime_err) = run(&mut Command::new(&executable), &scratch.0)
+        let (exit, runtime_out, runtime_err) = run(&mut Command::new(&executable), &scratch.0)
             .map_err(|e| format!("{}: guest: {e}", case.id))?;
-        if i64::from(exit) != expected {
+        if i64::from(exit) != expected || !runtime_out.is_empty() || !runtime_err.is_empty() {
             return Err(format!(
-                "{}: guest exit={}, expected={}, stderr={:?}",
-                case.id, exit, expected, String::from_utf8_lossy(&runtime_err)));
+                "{}: guest exit={}, expected={} and no output, stdout={} bytes, stderr={} bytes",
+                case.id, exit, expected, runtime_out.len(), runtime_err.len()));
         }
         println!("PASS model guest {}: {}", case.id, expected);
         io::stdout().flush().map_err(|e| e.to_string())?;
