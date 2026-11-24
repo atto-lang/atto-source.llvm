@@ -877,6 +877,9 @@ llvm::Value* lower(const Expression& expr,
                 // Emit instructions in source order, not in formal-slot order.
                 ordered[target] = lower(*expr.arguments[i], builder, i64,
                                         storage, field_storage, functions, moves);
+                if (ordered[target]->getType()->isDoubleTy() !=
+                        callee->getFunctionType()->getParamType(target)->isDoubleTy())
+                    throw std::runtime_error("native call argument violates checked f64 ABI");
             }
             for (std::size_t parameter : hidden) {
                 const auto& arg = *ordered_source.at(parameter);
@@ -1173,6 +1176,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         }
     }
     if (wasm32_target && cortex_m_target) throw std::runtime_error("conflicting LLVM target selectors");
+    if ((wasm32_target || cortex_m_target || tenant_vm_guest || actor_region_v1 ||
+            !isolate_entry.empty()) &&
+            std::any_of(source.functions.begin(), source.functions.end(),
+                [](const Function& fn) { return fn.has_f64_signature(); }))
+        throw std::runtime_error("native f64 function ABI requires the host target");
     if (!source.models.empty() && (wasm32_target || cortex_m_target))
         throw std::runtime_error(
             "native model execution is host-i64-only in v1; wasm32/Cortex-M model lowering is not yet admitted");
@@ -1712,8 +1720,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
 
     for (const auto& type : source.sum_types) record_schemas.emplace(type.name, record_schemas.size() + 1);
 
-    // Exact by-value i64 / borrowed-i64-pointer argument types for all
-    // same-module functions; no unsound conversion to i64 is permitted.
+    // Numeric values retain their checked LLVM type at each direct call.
+    // Borrowed scalar slots keep the existing integer pointer ABI.
     // Unique free functions retain their ABI symbol, overloaded families use arity slots.
     std::unordered_map<std::string, std::size_t> family_sizes;
     for (const auto& fn : source.functions) ++family_sizes[fn.name];
@@ -1742,10 +1750,18 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         if (module.getNamedValue(symbol))
             throw std::runtime_error("native AOT direct dispatch linker symbol collision");
         std::vector<llvm::Type*> argument_types;
-        for (const auto& param : fn.parameters)
-            argument_types.push_back(param.class_name.empty()
-                ? (param.mode == Parameter::Mode::Value ? i64 : loan_ptr)
-                : native_pointer_type(context, class_types.at(param.class_name)));
+        for (const auto& param : fn.parameters) {
+            if (param.scalar_type == ScalarType::F64) {
+                if (param.mode != Parameter::Mode::Value || !param.class_name.empty() ||
+                        !param.sum_type.empty() || !param.generic_type.empty())
+                    throw std::runtime_error("invalid typed f64 parameter at native ABI boundary");
+                argument_types.push_back(llvm::Type::getDoubleTy(context));
+            } else {
+                argument_types.push_back(param.class_name.empty()
+                    ? (param.mode == Parameter::Mode::Value ? i64 : loan_ptr)
+                    : native_pointer_type(context, class_types.at(param.class_name)));
+            }
+        }
         std::vector<std::size_t> hidden;
         for (std::size_t i = 0; i < fn.parameters.size(); ++i)
             if (!fn.parameters[i].class_name.empty() && class_has_arrays.at(fn.parameters[i].class_name)) {
@@ -1756,9 +1772,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         const bool owning = class_owns_arrays(fn.return_class);
         owning_results.emplace(native_function_slot(fn.name, fn.parameters.size()), owning);
         if (owning) { argument_types.push_back(native_ptr); argument_types.push_back(native_ptr); }
-        llvm::FunctionType* signature = llvm::FunctionType::get(
-            fn.returns_void ? llvm::Type::getVoidTy(context) : i64,
-            argument_types, false);
+        llvm::Type* return_abi = i64;
+        if (fn.returns_void) return_abi = llvm::Type::getVoidTy(context);
+        else if (fn.return_type == ScalarType::F64) return_abi = llvm::Type::getDoubleTy(context);
+        llvm::FunctionType* signature = llvm::FunctionType::get(return_abi, argument_types, false);
         if (specialization != nullptr) {
             // Compare the LLVM physical ABI to the independently frozen
             // typed parameter modes before binding the direct-call symbol.
@@ -1880,7 +1897,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 }
                 register_subobjects(param.name, param.class_name, &arg);
             } else if (param.mode == Parameter::Mode::Value) {
-                llvm::Value* slot = builder.CreateAlloca(i64, nullptr, param.name + ".slot");
+                llvm::Value* slot = builder.CreateAlloca(arg.getType(), nullptr, param.name + ".slot");
                 llvm::Value* incoming = &arg;
                 if (param.scalar_type == ScalarType::Bool) {
                     // Public/native callers are not trusted to preserve the
@@ -2607,7 +2624,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         llvm::BasicBlock* structured_cleanup = structured_returns
             ? llvm::BasicBlock::Create(context, "exit.cleanup", function) : nullptr;
         llvm::Value* structured_snapshot = structured_returns && !fn.returns_void
-            ? builder.CreateAlloca(i64, nullptr, "return.snapshot.slot") : nullptr;
+            ? builder.CreateAlloca(function->getReturnType(), nullptr, "return.snapshot.slot") : nullptr;
         struct ScopedSlot { std::string name; llvm::Value* address; std::size_t bytes; std::vector<std::string> fields; std::vector<std::string> subobjects; llvm::Value* array_shadow = nullptr; };
         auto scoped_value = [&](const LocalBinding& local, llvm::Value* init) {
             const bool record = !local.class_name.empty();
@@ -3251,7 +3268,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             else builder.CreateRet(result);
         } else {
             llvm::Value* return_snapshot = fn.returns_void
-                ? nullptr : (structured_returns ? structured_snapshot : builder.CreateAlloca(i64, nullptr, "return.snapshot.slot"));
+                ? nullptr : (structured_returns ? structured_snapshot : builder.CreateAlloca(function->getReturnType(), nullptr, "return.snapshot.slot"));
             llvm::BasicBlock* cleanup = structured_returns ? structured_cleanup : llvm::BasicBlock::Create(
                 context, "exit.cleanup", function);
             auto branch_to_cleanup = [&](llvm::Value* value) {
@@ -3314,7 +3331,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             }
             emit_lexical_cleanup();
             if (fn.returns_void) builder.CreateRetVoid();
-            else builder.CreateRet(builder.CreateLoad(i64, return_snapshot, "return.snapshot"));
+            else builder.CreateRet(builder.CreateLoad(function->getReturnType(), return_snapshot, "return.snapshot"));
         }
         if (array_failure) {
             builder.SetInsertPoint(array_failure);

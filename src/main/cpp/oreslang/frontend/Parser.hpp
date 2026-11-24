@@ -431,6 +431,13 @@ struct Function {
     FunctionEffects declared_effects{};
     bool has_declared_effects = false;
     std::string return_sum;
+
+    bool has_f64_signature() const {
+        if (return_type == ScalarType::F64) return true;
+        for (const auto& parameter : parameters)
+            if (parameter.scalar_type == ScalarType::F64) return true;
+        return false;
+    }
 };
 
 /** Frozen scheduler tier, distinct from ActorGroup-wide parallelism. */

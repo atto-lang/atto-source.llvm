@@ -3666,8 +3666,10 @@ private:
                     parameter.scalar_type = ScalarType::Bool;
                 } else if (accept("string") || accept("String")) {
                     parameter.scalar_type = ScalarType::String;
-                } else if ((token_.text == "f64" || token_.text == "float")) {
-                    fail("native f64 function parameter ABI not yet admitted; lexical f64 locals only");
+                } else if (accept("f64") || accept("float")) {
+                    if (parameter.mode != Parameter::Mode::Value)
+                        fail("native f64 parameter requires a by-value binding");
+                    parameter.scalar_type = ScalarType::F64;
                 } else if (accept_pending_scalar_alias(parameter.pending_type_alias)) {
                     // Deferred scalar aliases are admitted only after full resolution.
                 } else if (token_.kind == Kind::Identifier &&
@@ -3712,8 +3714,8 @@ private:
                 value.return_type = ScalarType::Bool;
             } else if (accept("string") || accept("String")) {
                 value.return_type = ScalarType::String;
-            } else if ((token_.text == "f64" || token_.text == "float")) {
-                fail("native f64 return ABI not yet admitted; lexical f64 locals only");
+            } else if (accept("f64") || accept("float")) {
+                value.return_type = ScalarType::F64;
             } else if (accept_pending_scalar_alias(value.pending_return_type_alias)) {
                 // Deferred scalar aliases are admitted only after full resolution.
             } else if (token_.kind == Kind::Identifier &&
@@ -3752,6 +3754,18 @@ private:
                     fail("duplicate function effect '" + name + "'");
                 value.declared_effects.bits |= bit;
             } while (accept(","));
+        }
+        if (value.has_f64_signature()) {
+            if (value.name == "main")
+                fail("native main requires zero arguments and an int or void result");
+            if (!owner.empty() || alias_extension || value.async_source_i64 ||
+                    value.foreign_import || !value.generic_parameters.empty() ||
+                    !value.return_class.empty() || !value.return_sum.empty() ||
+                    std::any_of(value.parameters.begin(), value.parameters.end(),
+                        [](const Parameter& parameter) {
+                            return !parameter.class_name.empty() || !parameter.sum_type.empty();
+                        }))
+                fail("native f64 call ABI requires a synchronous non-generic scalar function");
         }
         if (!owner.empty() && value.has_declared_effects)
             fail("native method using effects require receiver effect summaries");

@@ -113,14 +113,14 @@ positive() {
 }
 
 negative() {
-  local name="$1" source="$2" expected_diagnostic="$3"
+  local name="$1" source="$2" expected_diagnostic="$3" target="${4:-host}"
   register_case "$name"
   [[ "${#source}" -le 8192 && "${#expected_diagnostic}" -gt 8 &&
      "${#expected_diagnostic}" -le 300 ]] ||
     { echo "NATIVE_F64_BAD_NEGATIVE_INPUT: $name" >&2; exit 1; }
   printf '%s\n' "$source" > "$scratch/$name.atto"
   local compile_rc=0
-  "$compiler" --target=host "$scratch/$name.atto" \
+  "$compiler" "--target=$target" "$scratch/$name.atto" \
       > "$scratch/$name.ll" 2> "$scratch/$name.stderr" || compile_rc=$?
   # The actual compiler's caught source-error contract is exactly exit 1
   # and a structured oreslang-llvmc: diagnostic. Signals, crashes, timeouts,
@@ -275,11 +275,40 @@ positive num_m1_scalar_reduction_seed 'pub fnc main(): int {
 }'
 
 
-negative float_alias_function_parameter 'pub fnc helper(float value): int {
+positive typed_f64_calls 'fnc blend(float left, f64 right): f64 {
+  return left * 2.0 + right;
+}
+pub fnc main(): int {
+  val f64 result = blend(right: 7.0, left: 18.0);
+  if result == 43.0; then return 43; fi
+  return 86;
+}' 43
+positive f64_branch_return 'fnc magnitude(f64 value): float {
+  if value < 0.0; then return -value; fi
+  return value;
+}
+pub fnc main(): int {
+  val float result = magnitude(-8.0) + magnitude(3.5);
+  if result == 11.5; then return 44; fi
+  return 86;
+}' 44
+cat > "$scratch/f64_kernel.atto" <<'ATTO'
+pub fnc squared(f64 value): float {
+  return value * value;
+}
+ATTO
+positive imported_f64_call 'import fnc squared from "./f64_kernel.atto";
+pub fnc main(): int {
+  val f64 result = squared(3.5);
+  if result == 12.25; then return 45; fi
+  return 86;
+}' 45
+
+negative integer_argument_at_f64_call 'fnc helper(float value): int {
   return 42;
 }
-pub fnc main(): int { return 42; }' 'native f64 function parameter ABI not yet admitted'
-negative float_alias_function_return 'pub fnc main(): float { return 0.3; }' 'native f64 return ABI not yet admitted'
+pub fnc main(): int { return helper(1); }' 'requires f64'
+negative float_alias_entry_return 'pub fnc main(): float { return 0.3; }' 'native main requires zero arguments and an int or void result'
 negative decimal_suffix_not_ieee_f64 'pub fnc main(): int {
   val float value = 1.25d;
   return 42;
@@ -326,11 +355,15 @@ negative mixed_division 'pub fnc main(): int {
   val f64 value = 7.0 / 2;
   return 42;
 }' 'f64 division (no implicit int conversion)'
-negative unsupported_f64_return_abi 'pub fnc main(): f64 { return 0.3; }' 'native f64 return ABI not yet admitted'
-negative unsupported_f64_parameter_abi 'pub fnc f(f64 value): int {
+negative f64_entry_return 'pub fnc main(): f64 { return 0.3; }' 'native main requires zero arguments and an int or void result'
+negative f64_borrow_parameter 'fnc f(borrow f64 value): int {
   return 42;
 }
-pub fnc main(): int { return 42; }' 'native f64 function parameter ABI not yet admitted'
+pub fnc main(): int { return 42; }' 'native f64 parameter requires a by-value binding'
+negative f64_non_host_call 'fnc helper(float value): f64 {
+  return value * value;
+}
+pub fnc main(): int { return 42; }' 'native f64 function ABI requires the host target' wasm32
 negative unsupported_branch_f64_local 'pub fnc main(): int {
   if true; then
     val f64 value = 0.3;
@@ -338,6 +371,6 @@ negative unsupported_branch_f64_local 'pub fnc main(): int {
   else return 86; fi
 }' 'native branch-local f64 storage requires scoped double lowering'
 
-[[ "$pass" -eq 25 && "$reject" -eq 16 && "$native_executions" -eq 50 ]] ||
+[[ "$pass" -eq 28 && "$reject" -eq 17 && "$native_executions" -eq 56 ]] ||
   { echo "NATIVE_F64_TEST_COUNT_MISMATCH positive=$pass negative=$reject" >&2; exit 1; }
-echo "NATIVE_F64_SCALAR_GUESTS_PASS=25; NATIVE_F64_O0_O2_EXECUTIONS=50; NEGATIVE_NO_IR_PASS=16 (M1 scalar prereqs only; NOT full num.atto library execution)"
+echo "NATIVE_F64_SCALAR_GUESTS_PASS=28; NATIVE_F64_O0_O2_EXECUTIONS=56; NEGATIVE_NO_IR_PASS=17 (M1 scalar prereqs only; NOT full num.atto library execution)"

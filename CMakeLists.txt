@@ -3334,8 +3334,8 @@ if(BUILD_TESTING)
                 "${CMAKE_CURRENT_SOURCE_DIR}")
         set_tests_properties(native_orie_stdout_alias PROPERTIES TIMEOUT 180)
         # Native LLVM f64 scalar guests, exact per-case exits at Clang O0/O2:
-        # 25 positive source programs -> 50 actual native executions, plus
-        # 16 negative compiler cases requiring precise diagnostics/zero IR.
+        # 28 positive source programs -> 56 actual native executions, plus
+        # 17 negative compiler cases requiring precise diagnostics/zero IR.
         # Not full List<float>/Result or the 16-case num.atto library suite.
         add_test(NAME native_f64_scalar_e2e
             COMMAND "${ORE_ORIE_STDOUT_BASH}"

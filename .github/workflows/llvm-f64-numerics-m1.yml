@@ -72,9 +72,9 @@ jobs:
           bash -n tests/native_f64_gate_security_selftest.sh
           bash tests/native_f64_gate_security_selftest.sh tests/native_f64_lexical_gate.sh
           echo "HOST_ONLY_MUTATION_MATRIX_PASS=6 — no compiler or guest executed"
-          test "$(grep -c '^positive ' tests/native_f64_lexical_gate.sh)" -eq 25
-          test "$(grep -c '^negative ' tests/native_f64_lexical_gate.sh)" -eq 16
-          echo "F64_SOURCE_CASES=25 POSITIVE; 16 NEGATIVE; TWO OPTIMIZATION EXECUTIONS EACH"
+          test "$(grep -c '^positive ' tests/native_f64_lexical_gate.sh)" -eq 28
+          test "$(grep -c '^negative ' tests/native_f64_lexical_gate.sh)" -eq 17
+          echo "F64_SOURCE_CASES=28 POSITIVE; 17 NEGATIVE; TWO OPTIMIZATION EXECUTIONS EACH"
 
       - name: Install Ubuntu LLVM/Clang 18 packages (major version only; digests recorded later)
         shell: bash
@@ -109,7 +109,7 @@ jobs:
           test -x build/f64-m1/oreslang-llvmc
           sha256sum build/f64-m1/oreslang-llvmc /usr/bin/clang-18
 
-      - name: Execute 25 positive and 16 negative AttoLang native compiler guests
+      - name: Execute 28 positive and 17 negative AttoLang native compiler guests
         shell: bash
         run: |
           set -euo pipefail
