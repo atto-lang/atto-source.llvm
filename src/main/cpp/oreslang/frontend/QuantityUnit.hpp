@@ -40,6 +40,9 @@ class QuantityUnit {
 
 public:
     QuantityUnit() = default;
+    bool operator==(const QuantityUnit& other) const {
+        return powers_ == other.powers_ && numerator_ == other.numerator_ && denominator_ == other.denominator_;
+    }
 
     static QuantityUnit base(const std::string& name) {
         return QuantityUnit({{name, 1}}, llvm::APInt(WorkingBits, 1),

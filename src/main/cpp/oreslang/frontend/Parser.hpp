@@ -586,6 +586,8 @@ struct InvertedSourceMain {
     std::vector<InvertedSourceOperation> operations;
 };
 
+struct VerifiedProtocol;
+
 struct Program {
     // Host compilation authority, injected by the trusted CLI/loader only.
     // Source code cannot forge this bit; parsed programs default denied.
@@ -603,6 +605,7 @@ struct Program {
     std::string module;
     std::vector<ClassDecl> classes;
     std::vector<ActorDecl> actors;
+    std::vector<std::shared_ptr<const VerifiedProtocol>> protocols;
     std::vector<Function> functions;
     std::vector<ModuleContract> contracts;
     std::vector<TypeOnlyDecl> type_only_declarations;

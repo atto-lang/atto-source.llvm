@@ -5,6 +5,7 @@
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/QuantityUnit.hpp"
 #include "oreslang/frontend/VerifiedI64Range.hpp"
+#include "oreslang/frontend/VerifiedProtocol.hpp"
 #include "oreslang/types/CoreTypeRegistry.hpp"
 #include "oreslang/frontend/PointerIntSyntax.hpp"
 #include "oreslang/frontend/NativeTelemetryLiteralV1.hpp"
@@ -1295,10 +1296,10 @@ public:
         while (token_.text == "define" &&
                 (peek_next().text == "dimension" || peek_next().text == "unit"))
             quantity_declaration();
-        if (at_refined_quantity_alias()) {
+        if (at_refined_quantity_alias() || at_protocol_declaration()) {
             if (!program.namespace_name.empty() || !program.imports.empty()
                     || !program.namespace_imports.empty() || !program.exports.empty())
-                fail("E_REFINEMENT_SCOPE: refined quantities require a standalone source file");
+                fail("E_REFINEMENT_SCOPE: Verified Core requires a standalone source file");
             parse_verified_functions(program);
             return program;
         }
@@ -5662,8 +5663,103 @@ private:
         return type;
     }
 
+    bool at_protocol_declaration() const {
+        return token_.text == "define" && peek_next().text == "protocol";
+    }
+
+    void require_protocol(std::string_view text) {
+        if (!accept(text))
+            fail("E_PROTOCOL_SYNTAX: expected '" + std::string(text) + "'");
+    }
+
+    std::string protocol_name() {
+        if (token_.kind != Kind::Identifier || (reserved(token_.text) && token_.text != "pattern") ||
+                token_.text == "i32")
+            fail("E_PROTOCOL_SYNTAX: expected a protocol identifier");
+        return identifier();
+    }
+
+    std::vector<ProtocolField> parse_protocol_payload() {
+        std::vector<ProtocolField> payload;
+        if (!accept("(")) return payload;
+        std::unordered_set<std::string> names;
+        if (!accept(")")) {
+            do {
+                if (payload.size() >= 16) fail("E_PROTOCOL_LIMIT: too many payload fields");
+                if (token_.text != "int" && token_.text != "i32" &&
+                        !refinement_aliases_.count(std::string(token_.text)))
+                    fail("E_PROTOCOL_PAYLOAD: unknown scalar payload type");
+                auto type = read_refined_type();
+                auto field = protocol_name();
+                if (!names.insert(field).second) fail("E_PROTOCOL_PAYLOAD: duplicate payload field name");
+                payload.push_back({std::move(field), {
+                    type.i32, type.range.minimum(), type.range.maximum(), std::move(type.unit)
+                }});
+            } while (accept(","));
+            if (!accept(")")) fail("E_PROTOCOL_PAYLOAD: expected ')' after protocol payload");
+        }
+        return payload;
+    }
+
+    std::shared_ptr<const VerifiedProtocol> parse_protocol_declaration(
+            std::unordered_set<std::string>& protocol_names) {
+        require_protocol("define");
+        require_protocol("protocol");
+        auto protocol = std::make_shared<VerifiedProtocol>();
+        if (token_.text == "int" || token_.text == "i32")
+            fail("E_PROTOCOL_DUPLICATE: reserved protocol name");
+        protocol->name = protocol_name();
+        if (protocol_names.size() >= 64) fail("E_PROTOCOL_LIMIT: too many protocols");
+        if (refinement_aliases_.count(protocol->name) || !protocol_names.insert(protocol->name).second)
+            fail("E_PROTOCOL_DUPLICATE: duplicate protocol name");
+        require_protocol("as");
+        std::unordered_set<std::string> states;
+        std::unordered_map<std::string, std::unordered_set<std::string>> outgoing;
+        std::unordered_map<std::string, std::vector<ProtocolScalar>> signatures;
+        while (!accept("end")) {
+            if (token_.kind == Kind::End) fail("E_PROTOCOL_SYNTAX: expected a protocol clause or 'end'");
+            auto first = protocol_name();
+            if (token_.text != "->" && first == "initial") {
+                if (!protocol->initial_state.empty()) fail("E_PROTOCOL_INITIAL: duplicate initial state");
+                protocol->initial_state = protocol_name();
+                states.insert(protocol->initial_state);
+            } else if (token_.text != "->" && first == "terminal") {
+                if (!protocol->terminal_states.insert(protocol_name()).second)
+                    fail("E_PROTOCOL_TERMINAL: duplicate terminal state");
+                if (protocol->terminal_states.size() > 128) fail("E_PROTOCOL_LIMIT: too many terminal states");
+            } else {
+                if (protocol->edges.size() >= 256) fail("E_PROTOCOL_LIMIT: too many protocol edges");
+                require_protocol("->");
+                auto target = protocol_name();
+                require_protocol("on");
+                auto message = protocol_name();
+                states.insert(first);
+                states.insert(target);
+                if (!outgoing[first].insert(message).second)
+                    fail("E_PROTOCOL_DUPLICATE: duplicate source state and message edge");
+                auto payload = parse_protocol_payload();
+                std::vector<ProtocolScalar> signature;
+                for (const auto& field : payload) signature.push_back(field.type);
+                const auto [entry, inserted] = signatures.try_emplace(message, std::move(signature));
+                if (!inserted && entry->second != signature)
+                    fail("E_PROTOCOL_PAYLOAD: inconsistent message payload type");
+                protocol->edges.push_back({std::move(first), std::move(target), std::move(message), std::move(payload)});
+            }
+            if (states.size() > 128) fail("E_PROTOCOL_LIMIT: too many protocol states");
+            require_protocol(";");
+        }
+        if (protocol->initial_state.empty()) fail("E_PROTOCOL_INITIAL: missing initial state");
+        for (const auto& terminal : protocol->terminal_states) {
+            if (!states.count(terminal)) fail("E_PROTOCOL_TERMINAL: unknown terminal state");
+            if (outgoing.count(terminal)) fail("E_PROTOCOL_TERMINAL: terminal state has outgoing edges");
+        }
+        return protocol;
+    }
+
     void parse_verified_functions(Program& program) {
         while (at_refined_quantity_alias()) parse_refined_quantity_alias();
+        std::unordered_set<std::string> protocol_names;
+        while (at_protocol_declaration()) program.protocols.push_back(parse_protocol_declaration(protocol_names));
         verified_callable_ = true;
         bool main_seen = false;
         while (token_.kind != Kind::End) {
