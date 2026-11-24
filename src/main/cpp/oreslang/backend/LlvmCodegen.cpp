@@ -489,6 +489,22 @@ llvm::Value* lower(const Expression& expr,
             builder.SetInsertPoint(valid);
             return extended;
         }
+        case Expression::Kind::CheckRefinement: {
+            auto* value = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            auto* minimum = llvm::ConstantInt::getSigned(i64, expr.arguments[0]->integer);
+            auto* maximum = llvm::ConstantInt::getSigned(i64, expr.arguments[1]->integer);
+            auto* below = builder.CreateICmpSLT(value, minimum, "refinement.below");
+            auto* above = builder.CreateICmpSGT(value, maximum, "refinement.above");
+            auto* parent = builder.GetInsertBlock()->getParent();
+            auto* invalid = llvm::BasicBlock::Create(builder.getContext(), "refinement.bounds.invalid", parent);
+            auto* valid = llvm::BasicBlock::Create(builder.getContext(), "refinement.bounds.valid", parent);
+            builder.CreateCondBr(builder.CreateOr(below, above), invalid, valid);
+            builder.SetInsertPoint(invalid);
+            builder.CreateCall(native_trap(*parent->getParent()));
+            builder.CreateUnreachable();
+            builder.SetInsertPoint(valid);
+            return value;
+        }
         case Expression::Kind::Negate: {
             auto* value = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             return checked_signed_arithmetic(builder, llvm::Intrinsic::ssub_with_overflow,

@@ -51,7 +51,7 @@ struct Expression {
         LogicalAnd, LogicalOr, LogicalXor,
         Conditional, Cast,
         Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field,
-        ShiftLeft, ShiftRight, ShiftUnsignedRight, DivideQuantity, CheckedI32
+        ShiftLeft, ShiftRight, ShiftUnsignedRight, DivideQuantity, CheckedI32, CheckRefinement
     };
     Kind kind;
     std::size_t offset = 0;

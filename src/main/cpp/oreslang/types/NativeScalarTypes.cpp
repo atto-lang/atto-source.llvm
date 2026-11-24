@@ -144,6 +144,13 @@ void validate_native_scalar_types(const Program& program) {
             case E::CheckedI32:
                 require(expression(*e.left, locals), scalar(false), e.offset, "checked i32 requires int");
                 return scalar(false);
+            case E::CheckRefinement:
+                if (!e.left || e.right || e.arguments.size() != 2 || !e.arguments[0] || !e.arguments[1] ||
+                        e.arguments[0]->kind != E::Integer || e.arguments[1]->kind != E::Integer ||
+                        e.arguments[0]->integer > e.arguments[1]->integer)
+                    fail(e.offset, "invalid internal refinement bounds");
+                require(expression(*e.left, locals), scalar(false), e.offset, "checked refinement requires int");
+                return scalar(false);
             case E::Negate:
                 require(expression(*e.left, locals), scalar(false), e.offset, "unary - requires int");
                 return scalar(false);

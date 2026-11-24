@@ -41,6 +41,9 @@ public:
         return actual.bounds_.entails(bounds_);
     }
 
+    std::int64_t minimum() const { return bounds_.minimum; }
+    std::int64_t maximum() const { return bounds_.maximum; }
+
     bool nonnegative() const { return bounds_.minimum >= 0; }
     bool positive() const { return bounds_.minimum > 0; }
     bool nonpositive() const { return bounds_.maximum <= 0; }

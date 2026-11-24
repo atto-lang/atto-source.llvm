@@ -5746,7 +5746,7 @@ private:
                     local.name = identifier();
                 }
                 require("=");
-                auto value = quantity_sum(0);
+                auto value = verified_expression(0);
                 type.require(value.type(), "E_REFINEMENT_BINDING", "binding " + local.name);
                 require(";");
                 if (!verified_locals_.emplace(local.name, RefinedQuantity{type.unit, value.range, type.i32}).second)
@@ -5757,7 +5757,7 @@ private:
             }
             if (!accept("return"))
                 fail("E_REFINEMENT_BODY: expected an explicit return after immutable bindings");
-            auto result = quantity_sum(0);
+            auto result = verified_expression(0);
             declared_result.require(result.type(), "E_REFINEMENT_RETURN", "return from " + name);
             guaranteed_result.require(result.type(), "E_REFINEMENT_POSTCONDITION", "ensures of " + name);
             for (const auto index : signature.upper_parameters) {
@@ -5797,7 +5797,7 @@ private:
             do {
                 const auto index = call->arguments.size();
                 if (index >= signature.parameters.size()) fail("E_REFINEMENT_CALL: incorrect arity");
-                auto arg = quantity_sum(depth + 1);
+                auto arg = verified_expression(depth + 1);
                 signature.parameters[index].require(arg.type(),
                     "E_REFINEMENT_PRECONDITION", "argument " + std::to_string(index + 1) + " of " + name);
                 call->arguments.push_back(std::move(arg.expression));
@@ -5845,6 +5845,32 @@ private:
         }
         return {std::move(expression), std::move(unit), depth, result,
                 bounded_by_left ? std::move(left.upper_bounds) : std::unordered_set<std::string>{}, i32};
+    }
+
+    QuantityTerm verified_expression(std::size_t depth) {
+        auto term = quantity_sum(depth);
+        while (token_.text == "as") {
+            const auto offset = token_.offset;
+            advance();
+            if (token_.text == "?")
+                fail("E_REFINEMENT_CAST: optional refinement casts are unsupported");
+            auto target = read_refined_type();
+            target.unit.require_compatible(term.unit);
+            if (++term.depth >= kMaxNativeExpressionDepth)
+                fail("E_UNIT_LIMIT: quantity expression is too deep");
+            auto checked = make_expression(Expression::Kind::CheckRefinement, offset);
+            checked->left = std::move(term.expression);
+            for (auto bound : {target.range.minimum(), target.range.maximum()}) {
+                auto limit = make_expression(Expression::Kind::Integer, offset);
+                limit->integer = bound;
+                checked->arguments.push_back(std::move(limit));
+            }
+            term.expression = std::move(checked);
+            term.unit = std::move(target.unit);
+            term.range = term.range.on_normal_result_within(target.range);
+            term.i32 = target.i32;
+        }
+        return term;
     }
 
     QuantityTerm quantity_sum(std::size_t depth) {
@@ -5902,7 +5928,7 @@ private:
     QuantityTerm quantity_atom(std::size_t depth) {
         if (depth >= kMaxNativeExpressionDepth) fail("E_UNIT_LIMIT: quantity expression is too deep");
         if (accept("(")) {
-            auto term = quantity_sum(depth + 1);
+            auto term = verified_callable_ ? verified_expression(depth + 1) : quantity_sum(depth + 1);
             require(")");
             return term;
         }
@@ -7873,6 +7899,7 @@ private:
                 return;
             }
             case Expression::Kind::Cast:
+            case Expression::Kind::CheckRefinement:
                 validate_expression(*expr.left, parameters, functions, depth + 1);
                 return;
             case Expression::Kind::Negate:
@@ -8130,6 +8157,12 @@ private:
                 ScalarType operand = validate_scalar_expression(
                     *expr.left, variables, functions, depth + 1);
                 require_type(operand, ScalarType::I64, "unary '-'");
+                return ScalarType::I64;
+            }
+            case Expression::Kind::CheckRefinement: {
+                ScalarType operand = validate_scalar_expression(
+                    *expr.left, variables, functions, depth + 1);
+                require_type(operand, ScalarType::I64, "checked refinement");
                 return ScalarType::I64;
             }
             case Expression::Kind::Abs: {
