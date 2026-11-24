@@ -15,8 +15,10 @@ trap 'rm -rf "$OUT"' EXIT
 # API. The same native process, function address and binary are used for
 # each runtime transition. No JIT, code rewrite or recompilation occurs.
 cat > "$OUT/toggle.atto" <<'ATTO'
+define macro operation(Syntax<Expr> value) -> Syntax<Expr> { return value; }
+
 pub fnc trace_once(): int {
-  using telemetry.span("host-toggle") as scope {
+  using telemetry.span(operation!(syntax expr "host-toggle")) as scope {
     return 51;
   }
   return 0;
@@ -32,6 +34,11 @@ grep -Eq 'define (dso_local )?i64 @trace_once\(' "$OUT/toggle.ll" ||
   { echo "no reusable exported Atto trace_once symbol" >&2; exit 1; }
 grep -q 'ores_native_telemetry_span_begin' "$OUT/toggle.ll"
 grep -q 'ores_native_telemetry_span_end' "$OUT/toggle.ll"
+grep -q 'c"host-toggle' "$OUT/toggle.ll"
+if grep -Eq '@operation\(' "$OUT/toggle.ll"; then
+  echo "compile-time span name macro leaked into guest code" >&2
+  exit 1
+fi
 
 cat > "$OUT/host-toggle.c" <<'C'
 #include "oreslang/runtime/NativeTelemetrySpan.h"

@@ -18,9 +18,26 @@ pub fnc main(): int {
 ```
 
 The compiler parses a dedicated `UsingTelemetrySpan` statement, not a
-numeric handle or a guest-implementable method call. It allows exactly
-one nonempty **literal** operation string (up to 256 UTF-8 bytes) and
-a named lexical alias. The opaque alias may not be observed or
+numeric handle or a guest-implementable method call. It requires one
+nonempty operation string literal (up to 256 UTF-8 bytes) after macro
+expansion and a named lexical alias. An expression macro can provide it:
+
+```atto
+define macro operation(Syntax<Expr> value) -> Syntax<Expr> { return value; }
+
+pub fnc main(): int {
+  using telemetry.span(operation!(syntax expr "checkout")) as span {
+    return 42;
+  }
+  return 1;
+}
+```
+
+The compiler validates the expanded literal before emitting the same
+span begin/end calls used for a handwritten name. The host can enable
+recording at that site after the native binary has been linked.
+
+The opaque alias may not be observed or
 transferred by source expressions; it is only a scope marker for now.
 
 The compiler rejects dynamic operation expressions, unknown factories,
