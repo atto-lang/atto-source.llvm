@@ -4,6 +4,7 @@
 #include "oreslang/frontend/ChannelGuestGate.hpp"
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/QuantityUnit.hpp"
+#include "oreslang/frontend/VerifiedI64Range.hpp"
 #include "oreslang/types/CoreTypeRegistry.hpp"
 #include "oreslang/frontend/PointerIntSyntax.hpp"
 #include "oreslang/frontend/NativeTelemetryLiteralV1.hpp"
@@ -1294,6 +1295,13 @@ public:
         while (token_.text == "define" &&
                 (peek_next().text == "dimension" || peek_next().text == "unit"))
             quantity_declaration();
+        if (at_refined_quantity_alias()) {
+            if (!program.namespace_name.empty() || !program.imports.empty()
+                    || !program.namespace_imports.empty() || !program.exports.empty())
+                fail("E_REFINEMENT_SCOPE: refined quantities require a standalone source file");
+            parse_verified_functions(program);
+            return program;
+        }
         while (token_.text == "export" || token_.text == "define" || token_.text == "declare" ||
                at_bare_type_alias() ||
                 (token_.text == "pub" &&
@@ -5555,11 +5563,249 @@ private:
         return false;
     }
 
+    struct RefinedQuantity {
+        QuantityUnit unit;
+        VerifiedI64Range range;
+
+        void require(const RefinedQuantity& actual, const char* category, const std::string& operation) const {
+            if (unit.scalar() && !actual.unit.scalar())
+                throw std::runtime_error("E_UNIT_ERASURE: " + operation + " requires dimensionless scale one");
+            unit.require_compatible(actual.unit);
+            if (!range.includes(actual.range))
+                throw std::runtime_error(std::string(category) + ": cannot prove " + operation);
+        }
+    };
+
+    struct VerifiedFunction {
+        std::string lowered_name;
+        std::vector<RefinedQuantity> parameters;
+        RefinedQuantity result;
+        std::vector<std::size_t> upper_parameters;
+    };
+
     struct QuantityTerm {
         std::unique_ptr<Expression> expression;
         QuantityUnit unit;
         std::size_t depth = 0;
+        VerifiedI64Range range;
+        std::unordered_set<std::string> upper_bounds;
+
+        RefinedQuantity type() const { return {unit, range}; }
     };
+
+    bool at_refined_quantity_alias() const {
+        if (token_.text != "type") return false;
+        Lexer next = lexer_;
+        return next.next().kind == Kind::Identifier && next.next().text == "="
+            && next.next().text == "int" && next.next().text == "where";
+    }
+
+    std::string read_quantity_comparison() {
+        const auto op = token_.text;
+        if (op != "<" && op != ">" && op != "<=" && op != ">=" && op != "eq")
+            fail("E_REFINEMENT_PREDICATE: expected a signed interval comparison");
+        advance();
+        return std::string(op);
+    }
+
+    RefinedQuantity read_refined_type() {
+        if (accept("int")) return {};
+        const auto name = identifier();
+        auto found = refinement_aliases_.find(name);
+        if (found == refinement_aliases_.end())
+            fail("E_REFINEMENT_NAME: unknown verified scalar type '" + name + "'");
+        return found->second;
+    }
+
+    void parse_refined_quantity_alias() {
+        require("type");
+        const auto name = identifier();
+        require("=");
+        require("int");
+        require("where");
+        RefinedQuantity type;
+        bool has_unit = false;
+        do {
+            if (accept("units")) {
+                if (has_unit) fail("E_UNIT_DUPLICATE: repeated unit clause");
+                require("in");
+                type.unit = read_quantity_unit();
+                has_unit = true;
+            } else {
+                require("self");
+                const auto op = read_quantity_comparison();
+                type.range = type.range.constrain(op, signed_integer_literal());
+            }
+        } while (accept("and"));
+        require(";");
+        if (refinement_aliases_.size() >= 128) fail("E_REFINEMENT_LIMIT: too many aliases");
+        if (!refinement_aliases_.emplace(name, std::move(type)).second)
+            fail("E_REFINEMENT_DUPLICATE: duplicate refinement name");
+    }
+
+    RefinedQuantity read_verified_bound(RefinedQuantity type, std::string_view op) {
+        const auto number = token_.text == "-" ? peek_next() : token_;
+        const auto value = signed_integer_literal();
+        QuantityUnit unit;
+        if (token_.text == "<" && token_.offset == number.offset + number.text.size()) {
+            advance();
+            unit = read_quantity_unit();
+            require(">");
+        }
+        type.unit.require_compatible(unit);
+        type.range = type.range.constrain(op, value);
+        return type;
+    }
+
+    void parse_verified_functions(Program& program) {
+        while (at_refined_quantity_alias()) parse_refined_quantity_alias();
+        verified_callable_ = true;
+        bool main_seen = false;
+        while (token_.kind != Kind::End) {
+            if (program.functions.size() >= 64) fail("E_REFINEMENT_LIMIT: too many verified functions");
+            if (main_seen) fail("E_REFINEMENT_SCOPE: main must be the final verified function");
+            const bool exported = accept("pub");
+            if (!exported) accept("private");
+            require("fnc");
+            Function function;
+            function.offset = token_.offset;
+            const auto name = identifier();
+            const bool main = name == "main";
+            if (exported != main) fail("E_REFINEMENT_EXPORT: only the scalar main may be public");
+            if (verified_functions_.count(name)) fail("E_REFINEMENT_DUPLICATE: duplicate verified function");
+            function.name = main ? name : "$verified$" + name;
+            function.exported = exported;
+            function.native_internal = !exported;
+            verified_locals_.clear();
+            verified_upper_bounds_.clear();
+            require("(");
+            if (token_.text != ")") {
+                do {
+                    if (function.parameters.size() >= 16) fail("E_REFINEMENT_LIMIT: too many parameters");
+                    auto type = read_refined_type();
+                    Parameter parameter;
+                    parameter.name = identifier();
+                    if (!verified_locals_.emplace(parameter.name, std::move(type)).second)
+                        fail("E_REFINEMENT_DUPLICATE: duplicate parameter");
+                    verified_upper_bounds_.emplace(parameter.name, std::unordered_set<std::string>{parameter.name});
+                    function.parameters.push_back(std::move(parameter));
+                } while (accept(","));
+            }
+            require(")");
+            require("->");
+            const auto declared_result = read_refined_type();
+            auto guaranteed_result = declared_result;
+            if (main && (!function.parameters.empty() || !declared_result.unit.scalar()
+                    || !declared_result.range.includes(VerifiedI64Range())))
+                fail("E_REFINEMENT_EXPORT: main must have signature () -> int");
+            while (accept("requires")) {
+                if (main) fail("E_REFINEMENT_EXPORT: main cannot require caller facts");
+                const auto parameter = identifier();
+                auto actual = verified_locals_.find(parameter);
+                if (actual == verified_locals_.end()) fail("E_REFINEMENT_NAME: requires must name a parameter");
+                actual->second = read_verified_bound(actual->second, read_quantity_comparison());
+            }
+            VerifiedFunction signature;
+            signature.lowered_name = function.name;
+            for (const auto& parameter : function.parameters)
+                signature.parameters.push_back(verified_locals_.at(parameter.name));
+            while (accept("ensures")) {
+                require("result");
+                const auto op = read_quantity_comparison();
+                if (op == "<=" && token_.kind == Kind::Identifier) {
+                    const auto name = identifier();
+                    auto parameter = std::find_if(function.parameters.begin(), function.parameters.end(),
+                        [&](const Parameter& param) { return param.name == name; });
+                    if (parameter == function.parameters.end())
+                        fail("E_REFINEMENT_NAME: ensures must name a parameter");
+                    const auto index = static_cast<std::size_t>(parameter - function.parameters.begin());
+                    guaranteed_result.unit.require_compatible(signature.parameters[index].unit);
+                    signature.upper_parameters.push_back(index);
+                } else {
+                    guaranteed_result = read_verified_bound(std::move(guaranteed_result), op);
+                }
+            }
+            signature.result = guaranteed_result;
+            require("{");
+            while (accept("val")) {
+                if (function.locals.size() >= 128) fail("E_REFINEMENT_LIMIT: too many immutable bindings");
+                LocalBinding local;
+                local.offset = token_.offset;
+                RefinedQuantity type;
+                if (peek_next().text == ":") {
+                    local.name = identifier();
+                    require(":");
+                    type = read_refined_type();
+                } else {
+                    type = read_refined_type();
+                    local.name = identifier();
+                }
+                require("=");
+                auto value = quantity_sum(0);
+                type.require(value.type(), "E_REFINEMENT_BINDING", "binding " + local.name);
+                require(";");
+                if (!verified_locals_.emplace(local.name, value.type()).second)
+                    fail("E_REFINEMENT_DUPLICATE: duplicate verified binding");
+                verified_upper_bounds_.emplace(local.name, std::move(value.upper_bounds));
+                local.initializer = std::move(value.expression);
+                function.locals.push_back(std::move(local));
+            }
+            if (!accept("return"))
+                fail("E_REFINEMENT_BODY: expected an explicit return after immutable bindings");
+            auto result = quantity_sum(0);
+            declared_result.require(result.type(), "E_REFINEMENT_RETURN", "return from " + name);
+            guaranteed_result.require(result.type(), "E_REFINEMENT_POSTCONDITION", "ensures of " + name);
+            for (const auto index : signature.upper_parameters) {
+                const auto& parameter = function.parameters[index].name;
+                if (!result.upper_bounds.count(parameter) && !result.range.at_most(signature.parameters[index].range))
+                    fail("E_REFINEMENT_POSTCONDITION: cannot prove result <= " + parameter);
+            }
+            require(";");
+            require("}");
+            function.result = std::move(result.expression);
+            program.functions.push_back(std::move(function));
+            verified_functions_.emplace(name, std::move(signature));
+            main_seen = main;
+        }
+        if (!main_seen) fail("E_REFINEMENT_EXPORT: verified source requires a public main");
+    }
+
+    QuantityTerm verified_reference(std::size_t depth) {
+        const auto offset = token_.offset;
+        const auto name = identifier();
+        if (!accept("(")) {
+            auto found = verified_locals_.find(name);
+            if (found == verified_locals_.end()) fail("E_REFINEMENT_NAME: unknown immutable value '" + name + "'");
+            auto value = make_expression(Expression::Kind::Variable, offset);
+            value->name = name;
+            return {std::move(value), found->second.unit, 0, found->second.range, verified_upper_bounds_.at(name)};
+        }
+        const auto found = verified_functions_.find(name);
+        if (found == verified_functions_.end()) fail("E_REFINEMENT_CALL: expected an earlier verified function");
+        const auto& signature = found->second;
+        auto call = make_expression(Expression::Kind::Call, offset);
+        call->name = signature.lowered_name;
+        std::size_t height = 1;
+        std::unordered_set<std::string> upper_bounds;
+        if (token_.text != ")") {
+            do {
+                const auto index = call->arguments.size();
+                if (index >= signature.parameters.size()) fail("E_REFINEMENT_CALL: incorrect arity");
+                auto arg = quantity_sum(depth + 1);
+                signature.parameters[index].require(arg.type(),
+                    "E_REFINEMENT_PRECONDITION", "argument " + std::to_string(index + 1) + " of " + name);
+                call->arguments.push_back(std::move(arg.expression));
+                if (std::find(signature.upper_parameters.begin(), signature.upper_parameters.end(), index)
+                        != signature.upper_parameters.end())
+                    upper_bounds.insert(arg.upper_bounds.begin(), arg.upper_bounds.end());
+                height = std::max(height, arg.depth + 1);
+            } while (accept(","));
+        }
+        require(")");
+        if (call->arguments.size() != signature.parameters.size()) fail("E_REFINEMENT_CALL: incorrect arity");
+        if (height >= kMaxNativeExpressionDepth) fail("E_UNIT_LIMIT: quantity expression is too deep");
+        return {std::move(call), signature.result.unit, height, signature.result.range, std::move(upper_bounds)};
+    }
 
     QuantityTerm quantity_binary(Expression::Kind kind, std::size_t offset, QuantityTerm left,
                                  QuantityTerm right, QuantityUnit unit) {
@@ -5568,7 +5814,20 @@ private:
         auto expression = make_expression(kind, offset);
         expression->left = std::move(left.expression);
         expression->right = std::move(right.expression);
-        return {std::move(expression), std::move(unit), depth};
+        VerifiedI64Range result;
+        switch (kind) {
+            case Expression::Kind::Add: result = left.range.add(right.range); break;
+            case Expression::Kind::Subtract: result = left.range.subtract(right.range); break;
+            case Expression::Kind::Multiply: result = left.range.multiply(right.range); break;
+            case Expression::Kind::DivideQuantity: result = left.range.divide(right.range); break;
+            default: throw std::logic_error("unexpected verified arithmetic kind");
+        }
+        const bool bounded_by_left = (kind == Expression::Kind::Add && right.range.nonpositive())
+            || (kind == Expression::Kind::Subtract && right.range.nonnegative())
+            || (kind == Expression::Kind::DivideQuantity && left.range.nonnegative()
+                && right.range.positive() && right.unit.scalar());
+        return {std::move(expression), std::move(unit), depth, result,
+                bounded_by_left ? std::move(left.upper_bounds) : std::unordered_set<std::string>{}};
     }
 
     QuantityTerm quantity_sum(std::size_t depth) {
@@ -5620,7 +5879,7 @@ private:
         }
         auto expression = make_expression(Expression::Kind::Integer, number.offset);
         expression->integer = value;
-        return {std::move(expression), std::move(unit)};
+        return {std::move(expression), std::move(unit), 0, VerifiedI64Range(value, value), {}};
     }
 
     QuantityTerm quantity_atom(std::size_t depth) {
@@ -5645,9 +5904,11 @@ private:
             auto term = quantity_atom(depth + 1);
             auto negated = make_expression(Expression::Kind::Negate, start.offset);
             negated->left = std::move(term.expression);
-            return {std::move(negated), std::move(term.unit), term.depth + 1};
+            return {std::move(negated), std::move(term.unit), term.depth + 1,
+                VerifiedI64Range(0, 0).subtract(term.range), {}};
         }
-        if (start.kind != Kind::Integer) fail("E_UNIT_EXPRESSION: expected a closed integer quantity expression");
+        if (verified_callable_ && start.kind == Kind::Identifier) return verified_reference(depth);
+        if (start.kind != Kind::Integer) fail("E_UNIT_EXPRESSION: expected an integer quantity expression");
         return quantity_literal(start, integer_literal());
     }
 
@@ -9521,6 +9782,11 @@ private:
     std::unordered_map<std::string, QuantityUnit> quantity_dimensions_;
     std::unordered_map<std::string, QuantityUnit> quantity_units_;
     std::unordered_set<std::string> quantity_canonical_units_;
+    std::unordered_map<std::string, RefinedQuantity> refinement_aliases_;
+    std::unordered_map<std::string, RefinedQuantity> verified_locals_;
+    std::unordered_map<std::string, std::unordered_set<std::string>> verified_upper_bounds_;
+    std::unordered_map<std::string, VerifiedFunction> verified_functions_;
+    bool verified_callable_ = false;
     std::string_view source_;
     Lexer lexer_;
     Token token_;
