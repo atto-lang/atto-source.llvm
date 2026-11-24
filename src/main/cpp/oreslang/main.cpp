@@ -1348,6 +1348,18 @@ int main(int argc, char** argv) {
             admitted_provider_bits, static_ffi_i64_capability, language_version);
         source_module = ast.module;
         source_namespace = ast.namespace_name;
+        if (ast.protocol_guest) {
+            if (wasm32_target || cortex_m_target || tenant_vm_guest || freestanding ||
+                experimental_owned_int || experimental_rt_scalar_loop || static_ffi_i64_capability ||
+                native_hard_rt_profile || rt_check_only || rt_report_seen || rt_entry_seen ||
+                tree_shake || !tree_shake_roots.empty() || constraint_descriptors_only ||
+                allocator_provider_seen || library_profile_seen || actor_region_v1_guest ||
+                actor_region_v2_guest || sealed_scalar_aot || sealed_class_fields_aot ||
+                actor_region_v1_aot || isolate_entry_seen || source_log_manifest_seen)
+                throw std::runtime_error("E_PROTOCOL_GUEST: verified protocol main requires the host profile");
+            if (!frontend_check_only) std::cout << oreslang::protocol_actor_codegen::emit(ast);
+            return 0;
+        }
         // A lexical scalar loop has valid native CFG continuation semantics,
         // but no static WCET / termination proof or actor scheduler yield.
         // Preserve strict target admission for hard-RT and freestanding ABIs.

@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define SOURCE_ACTOR_MAGIC UINT64_C(0x4f52455353504157)
 #define SOURCE_GROUP_SLOTS 64u
@@ -78,6 +79,7 @@ typedef struct {
 typedef struct {
     pthread_mutex_t mutex;
     pthread_cond_t observer_drained;
+    pthread_cond_t protocol_receipt_ready;
     OresNativeVM* vm;
     OresNativeActorRef root_ref;
     OresNativeExecutionContextStore* executions;
@@ -100,7 +102,8 @@ typedef struct {
  */
 static SourceActorGroup group = {
     .mutex = PTHREAD_MUTEX_INITIALIZER,
-    .observer_drained = PTHREAD_COND_INITIALIZER
+    .observer_drained = PTHREAD_COND_INITIALIZER,
+    .protocol_receipt_ready = PTHREAD_COND_INITIALIZER
 };
 /* Protected by group.mutex. Never wraps or resets across VM group reopen. */
 static uint64_t next_actor_id = UINT64_C(4100);
@@ -690,13 +693,15 @@ static void deliver_protocol(SourceActor* actor, uint64_t ticket) {
     ensure(protocol->receipt_count < SOURCE_GROUP_MAILBOX);
     const uint16_t source = protocol->state;
     uint16_t destination = source;
-    unsigned status = protocol_transition(protocol, frame, &destination);
+    int64_t staged = protocol->value;
+    unsigned status = protocol_transition(protocol, frame, &destination, &staged);
     if (status == PROTOCOL_COMMITTED) {
         if (atomic_load_explicit(&actor->stop_requested, memory_order_acquire)) {
             status = PROTOCOL_INTERRUPTED;
             destination = source;
         } else {
             protocol->state = destination;
+            protocol->value = staged;
         }
     }
     frame->occupied = 0;
@@ -712,6 +717,7 @@ static void deliver_protocol(SourceActor* actor, uint64_t ticket) {
     protocol_write_u16(receipt + 30, source);
     protocol_write_u16(receipt + 32, destination);
     ++protocol->receipt_count;
+    ensure(pthread_cond_broadcast(&group.protocol_receipt_ready) == 0);
     atomic_fetch_add_explicit(&actor->successful, 1, memory_order_release);
     atomic_fetch_add_explicit(&actor->processed, 1, memory_order_release);
     group_unlock();
@@ -1051,6 +1057,34 @@ int oreslang_source_actor_try_pop_protocol_receipt_id(
     }
     group_unlock();
     return available;
+}
+
+int oreslang_source_actor_complete_protocol_send_id(OresSourceActorId id, int admitted) {
+    /* Only the compiler-generated trusted main calls this blocking boundary. */
+    struct timespec deadline;
+    ensure(timespec_get(&deadline, TIME_UTC) == TIME_UTC);
+    deadline.tv_sec += 15;
+    int status = 0;
+    group_lock();
+    SourceActor* actor = lookup_actor_id_locked(id);
+    while (admitted && actor && actor->protocol &&
+            !atomic_load_explicit(&actor->stop_requested, memory_order_acquire)) {
+        SourceProtocol* protocol = actor->protocol;
+        if (protocol->receipt_count) {
+            status = protocol->receipts[protocol->receipt_head][29];
+            protocol->receipt_head = (protocol->receipt_head + 1) % SOURCE_GROUP_MAILBOX;
+            --protocol->receipt_count;
+            break;
+        }
+        if (pthread_cond_timedwait(&group.protocol_receipt_ready, &group.mutex, &deadline) != 0) break;
+        actor = lookup_actor_id_locked(id);
+    }
+    group_unlock();
+    if (!status) {
+        if (oreslang_source_actor_try_request_stop_id(id)) oreslang_source_actor_join_done_id(id);
+        ensure(0);
+    }
+    return status;
 }
 
 /* Checked identity is a minted value, not an encoded host pointer. The

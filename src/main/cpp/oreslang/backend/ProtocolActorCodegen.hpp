@@ -54,7 +54,8 @@ struct Layout {
         for (auto& state : states) state.second = ordinal++;
     }
 
-    std::vector<std::uint8_t> descriptor(const VerifiedProtocol& protocol) const {
+    std::vector<std::uint8_t> descriptor(const VerifiedProtocolActor& actor) const {
+        const auto& protocol = *actor.protocol;
         std::vector<std::uint8_t> canonical;
         write_string(canonical, "atto.protocol.mailbox.v1");
         write_string(canonical, protocol.name);
@@ -111,6 +112,17 @@ struct Layout {
             write_little_endian(plan, tags.at(key.second), 2);
             write_little_endian(plan, states.at(destination), 2);
         }
+        if (actor.field) {
+            const auto& field = *actor.field;
+            write_little_endian(plan, field.initial, 8);
+            write_little_endian(plan, field.field.type.minimum, 8);
+            write_little_endian(plan, field.field.type.maximum, 8);
+            for (const auto& entry : messages) {
+                const auto handler = std::find_if(actor.handlers.begin(), actor.handlers.end(),
+                    [&](const auto& candidate) { return candidate.message == entry.first; });
+                write_little_endian(plan, handler->increment_parameter.value_or(UINT16_MAX), 2);
+            }
+        }
         return plan;
     }
 };
@@ -131,7 +143,7 @@ inline std::string emit(const Program& program) {
 
     for (const auto& actor : program.protocol_actors) {
         const Layout layout(*actor->protocol);
-        const auto plan = layout.descriptor(*actor->protocol);
+        const auto plan = layout.descriptor(*actor);
         auto* contents = llvm::ConstantDataArray::get(context, plan);
         auto* descriptor = new llvm::GlobalVariable(module, contents->getType(), true,
             llvm::GlobalValue::PrivateLinkage, contents, "plan." + actor->name);
@@ -177,6 +189,32 @@ inline std::string emit(const Program& program) {
             auto* length = ir.CreateCall(encode, encode_args);
             ir.CreateRet(ir.CreateCall(send_runtime, {send->getArg(0), frame, length}));
         }
+    }
+    if (program.protocol_guest) {
+        const auto& guest = *program.protocol_guest;
+        const auto complete = module.getOrInsertFunction(
+            "oreslang_source_actor_complete_protocol_send_id", i32, i64, i32);
+        const auto stop = module.getOrInsertFunction(
+            "oreslang_source_actor_stop_id", ir.getVoidTy(), i64);
+        auto* main = llvm::Function::Create(llvm::FunctionType::get(i32, false),
+            llvm::GlobalValue::ExternalLinkage, "main", module);
+        ir.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", main));
+        auto* actor = ir.CreateCall(module.getFunction("oreslang_protocol_spawn_" + guest.actor));
+        llvm::Value* result = nullptr;
+        const auto prefix = "oreslang_protocol_send_" + std::to_string(guest.actor.size()) +
+            "_" + guest.actor + "_";
+        for (std::size_t i = 0; i < guest.turns.size(); ++i) {
+            const auto& turn = guest.turns[i];
+            auto* send = module.getFunction(prefix + turn.message);
+            std::vector<llvm::Value*> arguments{actor};
+            for (std::size_t j = 0; j < turn.payload.size(); ++j)
+                arguments.push_back(llvm::ConstantInt::get(send->getArg(j + 1)->getType(), turn.payload[j], true));
+            auto* admitted = ir.CreateCall(send, arguments);
+            auto* status = ir.CreateCall(complete, {actor, admitted});
+            if (i == guest.result) result = status;
+        }
+        ir.CreateCall(stop, {actor});
+        ir.CreateRet(result);
     }
     std::string output;
     llvm::raw_string_ostream stream(output);

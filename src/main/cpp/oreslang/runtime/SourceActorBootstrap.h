@@ -105,6 +105,7 @@ int oreslang_source_actor_try_send_protocol_id(
     OresSourceActorId id, const uint8_t* bytes, uint64_t length);
 int oreslang_source_actor_try_pop_protocol_receipt_id(
     OresSourceActorId id, uint8_t* out, uint64_t capacity);
+int oreslang_source_actor_complete_protocol_send_id(OresSourceActorId id, int admitted);
 
 /* Returns 1 on admitted message, 0 for invalid/revoked/closed/full.
  * The compiler can use the fail-stop variant until Result lowering exists. */

@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -43,12 +44,30 @@ struct ProtocolHandler {
     std::string message;
     std::vector<ProtocolField> parameters;
     std::string destination;
+    std::optional<std::uint16_t> increment_parameter;
+};
+
+struct ProtocolStateField {
+    ProtocolField field;
+    std::int64_t initial;
 };
 
 struct VerifiedProtocolActor {
     std::string name;
     std::shared_ptr<const VerifiedProtocol> protocol;
     std::vector<ProtocolHandler> handlers;
+    std::optional<ProtocolStateField> field;
+};
+
+struct ProtocolGuestTurn {
+    std::string message;
+    std::vector<std::int64_t> payload;
+};
+
+struct VerifiedProtocolGuest {
+    std::string actor;
+    std::vector<ProtocolGuestTurn> turns;
+    std::size_t result;
 };
 
 } // namespace oreslang

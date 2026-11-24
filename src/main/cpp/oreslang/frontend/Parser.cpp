@@ -5784,6 +5784,21 @@ private:
         if (protocol == protocols.end()) fail("E_PROTOCOL_ACTOR: unknown local protocol");
         actor->protocol = *protocol;
         require_protocol("as", "E_PROTOCOL_ACTOR");
+        if (token_.text == "state" && peek_next().text == "{") {
+            advance();
+            require_protocol("{", "E_PROTOCOL_STATE");
+            const auto type = read_refined_type();
+            auto field = protocol_name();
+            require_protocol("=", "E_PROTOCOL_STATE");
+            const auto number = token_.text == "-" ? peek_next() : token_;
+            const auto literal = signed_integer_literal();
+            auto initial = quantity_literal(number, literal);
+            type.require(initial.type(), "E_PROTOCOL_INVARIANT", "the initial actor field value");
+            actor->field = ProtocolStateField{{std::move(field), {type.i32,
+                type.range.minimum(), type.range.maximum(), type.unit}}, initial.range.minimum()};
+            require_protocol(";", "E_PROTOCOL_STATE");
+            require_protocol("}", "E_PROTOCOL_STATE");
+        }
 
         std::unordered_map<std::string, const ProtocolEdge*> messages;
         std::unordered_set<std::string> state_dependent_destinations;
@@ -5808,16 +5823,109 @@ private:
             require_protocol("->", "E_PROTOCOL_HANDLER");
             require_protocol("void", "E_PROTOCOL_HANDLER");
             require_protocol("{", "E_PROTOCOL_HANDLER");
+            std::optional<std::uint16_t> increment_parameter;
+            if (actor->field) {
+                const auto& field = actor->field->field;
+                if (std::any_of(parameters.begin(), parameters.end(),
+                        [&](const auto& parameter) { return parameter.name == field.name; }))
+                    fail("E_PROTOCOL_STATE: handler parameter shadows the actor field");
+                if (accept(field.name)) {
+                    require_protocol("=", "E_PROTOCOL_STATE");
+                    require_protocol(field.name, "E_PROTOCOL_STATE");
+                    require_protocol("+", "E_PROTOCOL_STATE");
+                    const auto operand = protocol_name();
+                    const auto parameter = std::find_if(parameters.begin(), parameters.end(),
+                        [&](const auto& candidate) { return candidate.name == operand; });
+                    if (parameter == parameters.end())
+                        fail("E_PROTOCOL_STATE: increment must name a handler parameter");
+                    if (parameter->type.i32 != field.type.i32)
+                        fail("E_PROTOCOL_STATE: increment carrier differs from the actor field");
+                    field.type.unit.require_compatible(parameter->type.unit);
+                    increment_parameter = static_cast<std::uint16_t>(parameter - parameters.begin());
+                    require_protocol(";", "E_PROTOCOL_STATE");
+                }
+            }
             require_protocol("transition", "E_PROTOCOL_TRANSITION");
             auto destination = protocol_name();
             if (state_dependent_destinations.count(message) || edge->second->target != destination)
                 fail("E_PROTOCOL_TRANSITION: handler destination must match every edge for its message");
             require_protocol(";", "E_PROTOCOL_TRANSITION");
             require_protocol("}", "E_PROTOCOL_TRANSITION");
-            actor->handlers.push_back({std::move(message), std::move(parameters), std::move(destination)});
+            actor->handlers.push_back({std::move(message), std::move(parameters), std::move(destination),
+                increment_parameter});
         }
         if (seen.size() != messages.size()) fail("E_PROTOCOL_HANDLER: missing protocol handler");
         return actor;
+    }
+
+    void parse_protocol_guest(Program& program) {
+        require_protocol("val", "E_PROTOCOL_GUEST");
+        const auto local = identifier();
+        require_protocol("=", "E_PROTOCOL_GUEST");
+        require_protocol("spawn", "E_PROTOCOL_GUEST");
+        auto guest = std::make_shared<VerifiedProtocolGuest>();
+        guest->actor = protocol_name();
+        const auto actor = std::find_if(program.protocol_actors.begin(), program.protocol_actors.end(),
+            [&](const auto& candidate) { return candidate->name == guest->actor; });
+        if (actor == program.protocol_actors.end()) fail("E_PROTOCOL_GUEST: unknown actor type");
+        require_protocol("(", "E_PROTOCOL_GUEST");
+        require_protocol(")", "E_PROTOCOL_GUEST");
+        require_protocol(";", "E_PROTOCOL_GUEST");
+
+        std::unordered_map<std::string, std::size_t> receipts;
+        while (true) {
+            require_protocol(local, "E_PROTOCOL_GUEST");
+            require_protocol(".", "E_PROTOCOL_GUEST");
+            if (accept("stop")) {
+                require_protocol("(", "E_PROTOCOL_GUEST");
+                require_protocol(")", "E_PROTOCOL_GUEST");
+                require_protocol(";", "E_PROTOCOL_GUEST");
+                break;
+            }
+            if (guest->turns.size() >= 64) fail("E_PROTOCOL_LIMIT: too many guest protocol turns");
+            require_protocol("send", "E_PROTOCOL_GUEST");
+            require_protocol("(", "E_PROTOCOL_GUEST");
+            ProtocolGuestTurn turn;
+            turn.message = protocol_name();
+            const auto& handlers = (*actor)->handlers;
+            const auto handler = std::find_if(handlers.begin(), handlers.end(),
+                [&](const auto& candidate) { return candidate.message == turn.message; });
+            if (handler == handlers.end()) fail("E_PROTOCOL_GUEST: unknown message tag");
+            require_protocol("(", "E_PROTOCOL_GUEST");
+            for (const auto& parameter : handler->parameters) {
+                if (!turn.payload.empty()) require_protocol(",", "E_PROTOCOL_PAYLOAD");
+                const auto number = token_.text == "-" ? peek_next() : token_;
+                const auto literal = signed_integer_literal();
+                const auto actual = quantity_literal(number, literal);
+                const auto& type = parameter.type;
+                RefinedQuantity expected{type.unit, VerifiedI64Range(type.minimum, type.maximum), type.i32};
+                expected.require(actual.type(), "E_PROTOCOL_PAYLOAD", "the typed send argument");
+                turn.payload.push_back(actual.range.minimum());
+            }
+            require_protocol(")", "E_PROTOCOL_PAYLOAD");
+            require_protocol(")", "E_PROTOCOL_GUEST");
+            require_protocol(";", "E_PROTOCOL_GUEST");
+            require_protocol("val", "E_PROTOCOL_GUEST");
+            const auto receipt = identifier();
+            if (receipt == local || !receipts.emplace(receipt, guest->turns.size()).second)
+                fail("E_PROTOCOL_GUEST: duplicate local binding");
+            require_protocol("=", "E_PROTOCOL_GUEST");
+            require_protocol(local, "E_PROTOCOL_GUEST");
+            require_protocol(".", "E_PROTOCOL_GUEST");
+            require_protocol("get_receipt", "E_PROTOCOL_GUEST");
+            require_protocol("(", "E_PROTOCOL_GUEST");
+            require_protocol(")", "E_PROTOCOL_GUEST");
+            require_protocol(";", "E_PROTOCOL_GUEST");
+            guest->turns.push_back(std::move(turn));
+        }
+        require_protocol("return", "E_PROTOCOL_GUEST");
+        const auto selected = receipts.find(identifier());
+        if (selected == receipts.end()) fail("E_PROTOCOL_GUEST: return requires a known receipt status");
+        require_protocol(";", "E_PROTOCOL_GUEST");
+        require_protocol("}", "E_PROTOCOL_GUEST");
+        if (token_.kind != Kind::End) fail("E_PROTOCOL_GUEST: main must be the last declaration");
+        guest->result = selected->second;
+        program.protocol_guest = std::move(guest);
     }
 
     void parse_verified_functions(Program& program, bool protocol_actor_library) {
@@ -5895,6 +6003,19 @@ private:
             }
             signature.result = guaranteed_result;
             require("{");
+            if (main && !program.protocol_actors.empty() && token_.text == "val") {
+                auto lookahead = lexer_;
+                if (lookahead.next().kind == Kind::Identifier && lookahead.next().text == "=" &&
+                    lookahead.next().text == "spawn") {
+                    if (protocol_actor_library || !program.functions.empty() ||
+                        guaranteed_result.range.minimum() != declared_result.range.minimum() ||
+                        guaranteed_result.range.maximum() != declared_result.range.maximum() ||
+                        !signature.upper_parameters.empty())
+                        fail("E_PROTOCOL_GUEST: actor main requires a standalone uncontracted entrypoint");
+                    parse_protocol_guest(program);
+                    return;
+                }
+            }
             while (accept("val")) {
                 if (function.locals.size() >= 128) fail("E_REFINEMENT_LIMIT: too many immutable bindings");
                 LocalBinding local;

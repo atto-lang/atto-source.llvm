@@ -14,6 +14,7 @@ enum {
     PROTOCOL_INVALID_PAYLOAD,
     PROTOCOL_INVALID_ENVELOPE,
     PROTOCOL_INTERRUPTED,
+    PROTOCOL_INVARIANT_FAILED,
 };
 
 enum {
@@ -27,7 +28,7 @@ enum {
 };
 
 typedef struct {
-    uint16_t count;
+    uint16_t count, increment_parameter;
     struct { int64_t minimum, maximum; } bounds[PROTOCOL_MAX_FIELDS];
 } SourceProtocolMessage;
 
@@ -42,6 +43,7 @@ typedef struct {
 typedef struct {
     uint8_t digest[PROTOCOL_DIGEST_SIZE];
     uint16_t state;
+    int64_t value, minimum, maximum;
     uint16_t message_count, edge_count;
     SourceProtocolMessage messages[PROTOCOL_MAX_MESSAGES];
     SourceProtocolEdge edges[PROTOCOL_MAX_EDGES];
@@ -95,6 +97,7 @@ static SourceProtocol* protocol_open(const uint8_t* plan, size_t length) {
         if (length - offset < 2) goto invalid;
         SourceProtocolMessage* message = &protocol->messages[i];
         message->count = protocol_read_u16(plan + offset);
+        message->increment_parameter = UINT16_MAX;
         offset += 2;
         if (message->count > PROTOCOL_MAX_FIELDS ||
             length - offset < 16u * message->count) goto invalid;
@@ -108,7 +111,7 @@ static SourceProtocol* protocol_open(const uint8_t* plan, size_t length) {
         }
     }
 
-    if (length - offset != 6u * edges) goto invalid;
+    if (length - offset < 6u * edges) goto invalid;
     uint32_t previous = 0;
     for (size_t i = 0; i < edges; ++i) {
         SourceProtocolEdge edge = {
@@ -123,6 +126,21 @@ static SourceProtocol* protocol_open(const uint8_t* plan, size_t length) {
         previous = key;
         offset += 6;
     }
+    if (offset != length) {
+        if (length - offset != 24u + 2u * messages) goto invalid;
+        protocol->value = protocol_read_i64(plan + offset);
+        protocol->minimum = protocol_read_i64(plan + offset + 8);
+        protocol->maximum = protocol_read_i64(plan + offset + 16);
+        if (protocol->value < protocol->minimum || protocol->value > protocol->maximum) goto invalid;
+        offset += 24;
+        for (size_t i = 0; i < messages; ++i) {
+            SourceProtocolMessage* message = &protocol->messages[i];
+            const uint16_t increment = protocol_read_u16(plan + offset);
+            if (increment != UINT16_MAX && increment >= message->count) goto invalid;
+            message->increment_parameter = increment;
+            offset += 2;
+        }
+    }
     return protocol;
 
 invalid:
@@ -131,7 +149,7 @@ invalid:
 }
 
 static unsigned protocol_transition(const SourceProtocol* protocol,
-        const SourceProtocolFrame* frame, uint16_t* destination) {
+        const SourceProtocolFrame* frame, uint16_t* destination, int64_t* staged) {
     if (frame->length < PROTOCOL_HEADER_SIZE ||
         memcmp(frame->bytes, "ATPM\1", 5) ||
         memcmp(frame->bytes + 5, protocol->digest, sizeof(protocol->digest)))
@@ -152,6 +170,16 @@ static unsigned protocol_transition(const SourceProtocol* protocol,
             if (value < message->bounds[field].minimum ||
                 value > message->bounds[field].maximum)
                 return PROTOCOL_INVALID_PAYLOAD;
+        }
+        if (message->increment_parameter != UINT16_MAX) {
+            const int64_t delta = protocol_read_i64(frame->bytes + PROTOCOL_HEADER_SIZE +
+                8u * message->increment_parameter);
+            if ((delta > 0 && *staged > INT64_MAX - delta) ||
+                (delta < 0 && *staged < INT64_MIN - delta))
+                return PROTOCOL_INVARIANT_FAILED;
+            *staged += delta;
+            if (*staged < protocol->minimum || *staged > protocol->maximum)
+                return PROTOCOL_INVARIANT_FAILED;
         }
         *destination = edge.to;
         return PROTOCOL_COMMITTED;
