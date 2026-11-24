@@ -34,7 +34,7 @@
 namespace oreslang {
 namespace {
 
-enum class Kind { Identifier, Integer, String, Template, Symbol, End };
+enum class Kind { Identifier, Integer, Floating, String, Template, Symbol, End };
 struct Token {
     Kind kind;
     std::string_view text;
@@ -346,44 +346,37 @@ public:
             while (at_ < source_.size() && (digit(source_[at_]) || source_[at_] == '_')) {
                 ++at_;
             }
-            // Match Java/Graal's real-literal boundaries before returning an
-            // integer token. Native LLVM is intentionally i64-only today:
-            // splitting 1.25 into 1 '.' 25, or 1e4 into 1 'e4', can
-            // misdiagnose or accidentally compile a different program.
-            bool real = false;
+            // Keep Java/Graal's complete decimal/scientific token boundary;
+            // never split 1.25 or 1e4 into an unrelated integer parse.
+            bool floating = false;
             if (at_ + 1 < source_.size() && source_[at_] == '.' &&
                     digit(source_[at_ + 1])) {
-                real = true;
+                floating = true;
                 at_ += 2;
                 while (at_ < source_.size() &&
                         (digit(source_[at_]) || source_[at_] == '_')) ++at_;
             }
-            if (at_ < source_.size() && (source_[at_] == 'e' || source_[at_] == 'E')) {
-                const std::size_t exponent = at_;
+            if (at_ < source_.size() &&
+                    (source_[at_] == 'e' || source_[at_] == 'E')) {
+                floating = true;
                 ++at_;
                 if (at_ < source_.size() &&
                         (source_[at_] == '+' || source_[at_] == '-')) ++at_;
-                if (at_ < source_.size() && digit(source_[at_])) {
-                    real = true;
-                    ++at_;
-                    while (at_ < source_.size() &&
-                            (digit(source_[at_]) || source_[at_] == '_')) ++at_;
-                } else {
-                    at_ = exponent; // Let existing parser diagnose malformed syntax.
-                }
+                if (at_ == source_.size() || !digit(source_[at_]))
+                    throw std::runtime_error("malformed native floating exponent at byte " +
+                                             std::to_string(start));
+                while (at_ < source_.size() &&
+                        (digit(source_[at_]) || source_[at_] == '_')) ++at_;
             }
+            // Decimal suffix remains rejected until an exact Decimal type,
+            // distinct from IEEE f64, has checked native lowering.
             if (at_ < source_.size() && source_[at_] == 'd' &&
                     (at_ + 1 == source_.size() || !identifier_part(source_[at_ + 1]))) {
-                ++at_;
-                real = true;
-            }
-            if (real) {
                 throw std::runtime_error(
-                        "native floating-point/decimal literal unsupported until typed "
-                        "LLVM f32/f64 and exact decimal lowering (at byte " +
-                        std::to_string(start) + ")");
+                        "native exact decimal literal unsupported until typed Decimal lowering");
             }
-            return {Kind::Integer, source_.substr(start, at_ - start), start};
+            return {floating ? Kind::Floating : Kind::Integer,
+                    source_.substr(start, at_ - start), start};
         }
         // !eq is an atomic AttoLang inequality token. Never split it into
         // unary ! and identifier eq, and never consume the prefix of !eqname.
@@ -879,6 +872,7 @@ bool native_constructor_scalar_tree(const Expression& expr,
 std::unique_ptr<Expression> clone_native_expression(const Expression& source) {
     auto result = make_expression(source.kind, source.offset);
     result->integer = source.integer;
+    result->floating = source.floating;
     result->boolean = source.boolean;
     result->resolved_type = source.resolved_type;
     result->cast_target = source.cast_target;
@@ -3672,6 +3666,8 @@ private:
                     parameter.scalar_type = ScalarType::Bool;
                 } else if (accept("string") || accept("String")) {
                     parameter.scalar_type = ScalarType::String;
+                } else if ((token_.text == "f64" || token_.text == "float")) {
+                    fail("native f64 function parameter ABI not yet admitted; lexical f64 locals only");
                 } else if (accept_pending_scalar_alias(parameter.pending_type_alias)) {
                     // Deferred scalar aliases are admitted only after full resolution.
                 } else if (token_.kind == Kind::Identifier &&
@@ -3716,6 +3712,8 @@ private:
                 value.return_type = ScalarType::Bool;
             } else if (accept("string") || accept("String")) {
                 value.return_type = ScalarType::String;
+            } else if ((token_.text == "f64" || token_.text == "float")) {
+                fail("native f64 return ABI not yet admitted; lexical f64 locals only");
             } else if (accept_pending_scalar_alias(value.pending_return_type_alias)) {
                 // Deferred scalar aliases are admitted only after full resolution.
             } else if (token_.kind == Kind::Identifier &&
@@ -4105,7 +4103,8 @@ private:
                     sum_look.next().kind == Kind::Identifier;
             if (alias_prefixed || type_first_const || type_right_const ||
                     ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
-                    (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "String" || sum_first.text == "string"))) {
+                    (sum_first.text == "int" || sum_first.text == "bool" ||
+                     sum_first.text == "float" || sum_first.text == "f64" || sum_first.text == "String" || sum_first.text == "string"))) {
                 const std::string mode = type_first_const ? "const" : std::string(token_.text);
                 if (!type_first_const) { advance(); if (mode == "let") accept("mut"); }
                 binding.owner_mutable = mode != "const"; binding.assignable = mode == "let";
@@ -4118,8 +4117,10 @@ private:
                     advance();
                     binding.scalar_type = resolve_scalar_alias(binding.pending_type_alias);
                 } else {
-                    binding.scalar_type = accept("bool") ? ScalarType::Bool : (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
-                    if (binding.scalar_type == ScalarType::I64) require("int");
+                    if (accept("bool")) binding.scalar_type = ScalarType::Bool;
+                    else if (accept("float") || accept("f64")) binding.scalar_type = ScalarType::F64;
+                    else if (accept("String") || accept("string")) binding.scalar_type = ScalarType::String;
+                    else require("int");
                 }
                 if (!type_right_const) binding.name = identifier();
                 require("=");
@@ -4566,6 +4567,7 @@ private:
             if (accept(":")) { local->name = first; type = type_name(); }
             else { type = first; local->name = identifier(); }
             if (type == "owned") fail("branch-local owned value requires destructor/drop lowering");
+            if (type == "f64" || type == "float") fail("native branch-local f64 storage requires scoped double lowering; unsupported");
             if (type == "Array") fail("ordered owning local requires scoped region/drop lowering");
             if (type == "int") local->scalar_type = ScalarType::I64;
             else if (type == "bool") local->scalar_type = ScalarType::Bool;
@@ -5884,19 +5886,15 @@ private:
     std::unique_ptr<Expression> product() {
         auto left = unary();
         while (token_.text == "*" || token_.text == "/" || token_.text == "%") {
-            // Java defines int/int division as a FLOAT result; this native
-            // source compiler lowers expressions only to signed i64. Reject
-            // at the operator before either lowering or emitting partial IR.
-            if (token_.text == "/")
-                fail("native floating division unsupported: int/int yields float in Java; "
-                     "LLVM float typing and zero-divisor semantics are not implemented");
             if (token_.text == "%")
                 fail("'%' is reserved and is not AttoLang source syntax; "
                      "use Integer.rem(a, b) or Integer.mod(a, b)");
             const auto offset = token_.offset;
+            const bool division = token_.text == "/";
             advance();
             auto right = unary();
-            auto expr = make_expression(Expression::Kind::Multiply, offset);
+            auto expr = make_expression(
+                division ? Expression::Kind::Divide : Expression::Kind::Multiply, offset);
             expr->left = std::move(left);
             expr->right = std::move(right);
             left = std::move(expr);
@@ -6739,6 +6737,23 @@ private:
             require(")");
             return inner;
         }
+        if (token_.kind == Kind::Floating) {
+            // Locale-independent, bounded, once-rounded IEEE binary64 input.
+            // Preserve f64 identity throughout checking and LLVM lowering.
+            const std::string_view literal = token_.text;
+            if (literal.find('_') != std::string_view::npos)
+                fail("native f64 literal does not admit digit separators");
+            double number = 0.0;
+            const auto parsed = std::from_chars(literal.data(),
+                literal.data() + literal.size(), number, std::chars_format::general);
+            if (parsed.ec != std::errc{} ||
+                    parsed.ptr != literal.data() + literal.size())
+                fail("native f64 literal outside finite binary64 range or malformed");
+            auto expr = make_expression(Expression::Kind::Floating, offset);
+            expr->floating = number;
+            advance();
+            return expr;
+        }
         if (token_.kind == Kind::Integer) {
             auto expr = make_expression(Expression::Kind::Integer, offset);
             expr->integer = integer_literal();
@@ -7411,6 +7426,7 @@ private:
         require_expression_depth(depth, expr);
         switch (expr.kind) {
             case Expression::Kind::Integer:
+            case Expression::Kind::Floating:
             case Expression::Kind::Boolean:
             case Expression::Kind::String:
                 return;
@@ -7562,6 +7578,7 @@ private:
             case Expression::Kind::Add:
             case Expression::Kind::Subtract:
             case Expression::Kind::Multiply:
+            case Expression::Kind::Divide:
             case Expression::Kind::Remainder:
             case Expression::Kind::ShiftLeft:
             case Expression::Kind::ShiftRight:
@@ -7595,7 +7612,7 @@ private:
     }
 
     static const char* scalar_type_name(ScalarType type) {
-        return type == ScalarType::String ? "string" : type == ScalarType::Bool ? "bool" : "int";
+        return type == ScalarType::F64 ? "f64" : type == ScalarType::String ? "string" : type == ScalarType::Bool ? "bool" : "int";
     }
 
     static ScalarType validate_scalar_expression(
@@ -7619,6 +7636,8 @@ private:
 
             case Expression::Kind::Integer:
                 return ScalarType::I64;
+            case Expression::Kind::Floating:
+                return expr.resolved_type = ScalarType::F64;
             case Expression::Kind::Boolean:
                 return ScalarType::Bool;
             case Expression::Kind::String:
@@ -7636,12 +7655,12 @@ private:
                 // Non-scalar class/array/actor names are rejected by ownership
                 // if used as scalar values; treat their placeholder as i64 here
                 // only so field/borrow syntax can reach that stricter pass.
-                return found == variables.end() ? ScalarType::I64 : found->second;
+                return expr.resolved_type = found == variables.end() ? ScalarType::I64 : found->second;
             }
             case Expression::Kind::Field: {
                 if (expr.left) {
                     auto found = variables.find(native_place_key(expr));
-                    if (found != variables.end()) return found->second;
+                    if (found != variables.end()) return expr.resolved_type = found->second;
                 }
                 return ScalarType::I64;
             }
@@ -7800,8 +7819,9 @@ private:
             case Expression::Kind::Negate: {
                 ScalarType operand = validate_scalar_expression(
                     *expr.left, variables, functions, depth + 1);
-                require_type(operand, ScalarType::I64, "unary '-'");
-                return ScalarType::I64;
+                if (operand != ScalarType::I64 && operand != ScalarType::F64)
+                    throw std::runtime_error("unary '-' requires int or f64");
+                return expr.resolved_type = operand;
             }
             case Expression::Kind::Abs: {
                 ScalarType operand = validate_scalar_expression(
@@ -7827,13 +7847,15 @@ private:
                 auto right = validate_scalar_expression(*expr.right, variables, functions, depth + 1);
                 if (left == ScalarType::String) require_type(right, ScalarType::String, "string concatenation");
                 else {
-                    require_type(left, ScalarType::I64, "arithmetic");
-                    require_type(right, ScalarType::I64, "arithmetic");
+                    if (left != ScalarType::I64 && left != ScalarType::F64)
+                        throw std::runtime_error("arithmetic requires int or f64");
+                    require_type(right, left, "arithmetic; implicit int/f64 conversion prohibited");
                 }
                 return expr.resolved_type = left;
             }
             case Expression::Kind::Subtract:
             case Expression::Kind::Multiply:
+            case Expression::Kind::Divide:
             case Expression::Kind::Remainder:
             case Expression::Kind::ShiftLeft:
             case Expression::Kind::ShiftRight:
@@ -7844,9 +7866,17 @@ private:
                     *expr.left, variables, functions, depth + 1);
                 ScalarType right = validate_scalar_expression(
                     *expr.right, variables, functions, depth + 1);
-                require_type(left, ScalarType::I64, "arithmetic");
-                require_type(right, ScalarType::I64, "arithmetic");
-                return ScalarType::I64;
+                if (expr.kind == Expression::Kind::Divide) {
+                    require_type(left, ScalarType::F64, "f64 division (int/int unsupported)");
+                    require_type(right, ScalarType::F64, "f64 division (no implicit int conversion)");
+                } else {
+                    const bool float_operation = expr.kind == Expression::Kind::Subtract ||
+                        expr.kind == Expression::Kind::Multiply;
+                    if (left != ScalarType::I64 && !(float_operation && left == ScalarType::F64))
+                        throw std::runtime_error("arithmetic requires int or an admitted f64 operation");
+                    require_type(right, left, "arithmetic; implicit int/f64 conversion prohibited");
+                }
+                return expr.resolved_type = left;
             }
             case Expression::Kind::Less:
             case Expression::Kind::LessEqual:
@@ -7856,9 +7886,10 @@ private:
                     *expr.left, variables, functions, depth + 1);
                 ScalarType right = validate_scalar_expression(
                     *expr.right, variables, functions, depth + 1);
-                require_type(left, ScalarType::I64, "ordered comparison");
-                require_type(right, ScalarType::I64, "ordered comparison");
-                return ScalarType::Bool;
+                if (left != ScalarType::I64 && left != ScalarType::F64)
+                    throw std::runtime_error("ordered comparison requires int or f64");
+                require_type(right, left, "ordered comparison; implicit int/f64 conversion prohibited");
+                return expr.resolved_type = ScalarType::Bool;
             }
             case Expression::Kind::Equal:
             case Expression::Kind::NotEqual: {
@@ -7894,7 +7925,7 @@ private:
                 if (when_true != when_false)
                     throw std::runtime_error("ternary arms require a common scalar type at byte " +
                         std::to_string(expr.offset));
-                return when_true;
+                return expr.resolved_type = when_true;
             }
         }
         throw std::runtime_error("internal invalid native scalar expression kind");

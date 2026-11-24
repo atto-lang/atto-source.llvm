@@ -8,7 +8,7 @@
 
 namespace oreslang {
 namespace {
-enum class Kind { Int, Bool, String, Class, Array, Sum, Void, NativeBoxI64 };
+enum class Kind { Int, Bool, String, F64, Class, Array, Sum, Void, NativeBoxI64 };
 struct Type {
     Kind kind = Kind::Int;
     std::string name;
@@ -16,7 +16,7 @@ struct Type {
 };
 using Locals = std::unordered_map<std::string, Type>;
 Type scalar(bool boolean) { return {boolean ? Kind::Bool : Kind::Int, {}}; }
-Type scalar(ScalarType type) { return {type == ScalarType::String ? Kind::String : type == ScalarType::Bool ? Kind::Bool : Kind::Int, {}}; }
+Type scalar(ScalarType type) { return {type == ScalarType::F64 ? Kind::F64 : type == ScalarType::String ? Kind::String : type == ScalarType::Bool ? Kind::Bool : Kind::Int, {}}; }
 Type declared_field_type(const ClassField& field) {
     if (!field.sum_type.empty()) return {Kind::Sum, field.sum_type};
     if (!field.class_name.empty()) return {Kind::Class, field.class_name};
@@ -112,6 +112,7 @@ void validate_native_scalar_types(const Program& program) {
                 return query ? scalar(true) : scalar(type.value_type);
             }
             case E::Integer: return scalar(false);
+            case E::Floating: return scalar(ScalarType::F64);
             case E::Boolean: return scalar(true);
             case E::String: return scalar(ScalarType::String);
             case E::Console: {
@@ -141,9 +142,12 @@ void validate_native_scalar_types(const Program& program) {
             case E::Field: return field_type(expression(*e.left, locals), e.name, e.offset);
             case E::Copy: case E::Take: case E::Share: case E::Borrow: case E::BorrowMut:
                 return expression(*e.left, locals);
-            case E::Negate:
-                require(expression(*e.left, locals), scalar(false), e.offset, "unary - requires int");
-                return scalar(false);
+            case E::Negate: {
+                const auto input = expression(*e.left, locals);
+                if (input.kind != Kind::Int && input.kind != Kind::F64)
+                    fail(e.offset, "unary - requires matching int or f64");
+                return input;
+            }
             case E::LogicalNot:
                 require(expression(*e.left, locals), scalar(true), e.offset, "! requires bool");
                 return scalar(true);
@@ -157,13 +161,17 @@ void validate_native_scalar_types(const Program& program) {
             }
             case E::Equal: case E::NotEqual: {
                 auto left = expression(*e.left, locals), right = expression(*e.right, locals);
-                if (!(left == right) || (left.kind != Kind::Int && left.kind != Kind::Bool && left.kind != Kind::String)) fail(e.offset, "equality operand types");
+                if (!(left == right) || (left.kind != Kind::Int && left.kind != Kind::Bool && left.kind != Kind::String && left.kind != Kind::F64)) fail(e.offset, "equality operand types");
                 return scalar(true);
             }
-            case E::Less: case E::LessEqual: case E::Greater: case E::GreaterEqual:
-                require(expression(*e.left, locals), scalar(false), e.offset, "ordered comparison requires int");
-                require(expression(*e.right, locals), scalar(false), e.offset, "ordered comparison requires int");
+            case E::Less: case E::LessEqual: case E::Greater: case E::GreaterEqual: {
+                const auto lhs = expression(*e.left, locals);
+                const auto rhs = expression(*e.right, locals);
+                require(lhs, rhs, e.offset, "ordered comparison operand types must match (no int/f64 conversion)");
+                if (lhs.kind != Kind::Int && lhs.kind != Kind::F64)
+                    fail(e.offset, "ordered comparison requires int or f64");
                 return scalar(true);
+            }
             case E::LogicalAnd: case E::LogicalOr: case E::LogicalXor:
                 require(expression(*e.left, locals), scalar(true), e.offset, "logical operator requires bool");
                 require(expression(*e.right, locals), scalar(true), e.offset, "logical operator requires bool");
@@ -181,14 +189,26 @@ void validate_native_scalar_types(const Program& program) {
             case E::Add: {
                 auto left = expression(*e.left, locals), right = expression(*e.right, locals);
                 require(left, right, e.offset, "addition operand types");
-                if (left.kind != Kind::Int && left.kind != Kind::String) fail(e.offset, "addition requires int or string");
+                if (left.kind != Kind::Int && left.kind != Kind::String && left.kind != Kind::F64) fail(e.offset, "addition requires int, f64 or string");
                 return left;
             }
-            case E::Subtract: case E::Multiply: case E::Remainder: case E::Modulo: case E::BitXor:
+            case E::Remainder: case E::Modulo: case E::BitXor:
             case E::ShiftLeft: case E::ShiftRight: case E::ShiftUnsignedRight:
                 require(expression(*e.left, locals), scalar(false), e.offset, "arithmetic requires int");
                 require(expression(*e.right, locals), scalar(false), e.offset, "arithmetic requires int");
                 return scalar(false);
+            case E::Subtract: case E::Multiply: case E::Divide: {
+                const auto lhs = expression(*e.left, locals);
+                const auto rhs = expression(*e.right, locals);
+                require(lhs, rhs, e.offset, "arithmetic operand types must match (no int/f64 conversion)");
+                if (e.kind == E::Divide) {
+                    if (lhs.kind != Kind::F64)
+                        fail(e.offset, "native division requires f64/f64 (int/int unsupported)");
+                } else if (lhs.kind != Kind::Int && lhs.kind != Kind::F64) {
+                    fail(e.offset, "arithmetic requires int or f64");
+                }
+                return lhs;
+            }
             case E::ArrayCall: {
                 const auto owner = expression(*e.left, locals);
                 // The parser admits String.contains_literal(String) as a pure,
@@ -268,7 +288,8 @@ void validate_native_scalar_types(const Program& program) {
         // the ABI boundary, so codegen must never infer String equality from
         // their physical representation or from syntax alone.
         if (result.kind == Kind::Sum) e.sum_type = result.name;
-        if (result.kind == Kind::String) e.resolved_type = ScalarType::String;
+        if (result.kind == Kind::F64) e.resolved_type = ScalarType::F64;
+        else if (result.kind == Kind::String) e.resolved_type = ScalarType::String;
         else if (result.kind == Kind::Bool) e.resolved_type = ScalarType::Bool;
         else if (result.kind == Kind::Int) e.resolved_type = ScalarType::I64;
         else if (result.kind == Kind::Class) e.resolved_class = result.name;

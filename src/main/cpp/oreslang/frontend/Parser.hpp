@@ -18,7 +18,7 @@ namespace oreslang {
 // Deliberately restricted native scalar expression AST. The source type system
 // distinguishes int and bool even though the initial same-module ABI canonicalizes
 // both into i64 slots/results; bool values are always normalized to 0 or 1.
-enum class ScalarType { I64, Bool, String };
+enum class ScalarType { I64, Bool, String, F64 };
 
 // Sum payloads are values, never untyped integer handles or class pointers.
 struct NativeSumType {
@@ -44,9 +44,9 @@ struct GenericParameter {
 
 struct Expression {
     enum class Kind {
-        Integer, Boolean, String, Console, Variable,
+        Integer, Floating, Boolean, String, Console, Variable,
         Negate, Abs, LogicalNot,
-        Add, Subtract, Multiply, Remainder, Modulo, BitXor,
+        Add, Subtract, Multiply, Divide, Remainder, Modulo, BitXor,
         Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
         LogicalAnd, LogicalOr, LogicalXor,
         Conditional, Cast,
@@ -56,6 +56,7 @@ struct Expression {
     Kind kind;
     std::size_t offset = 0;
     std::int64_t integer = 0;
+    double floating = 0.0; // typed source f64, never an i64 carrier
     bool boolean = false;
     // Minted ONLY by the parser for a compiler-owned Box<int>.get() call.
     // The raw Box owner is non-Copy and must never lower as an i64 value.
