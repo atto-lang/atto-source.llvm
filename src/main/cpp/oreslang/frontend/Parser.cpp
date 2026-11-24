@@ -5566,6 +5566,7 @@ private:
     struct RefinedQuantity {
         QuantityUnit unit;
         VerifiedI64Range range;
+        bool i32 = false;
 
         void require(const RefinedQuantity& actual, const char* category, const std::string& operation) const {
             if (unit.scalar() && !actual.unit.scalar())
@@ -5589,15 +5590,17 @@ private:
         std::size_t depth = 0;
         VerifiedI64Range range;
         std::unordered_set<std::string> upper_bounds;
+        bool i32 = false;
 
-        RefinedQuantity type() const { return {unit, range}; }
+        RefinedQuantity type() const { return {unit, range, i32}; }
     };
 
     bool at_refined_quantity_alias() const {
         if (token_.text != "type") return false;
         Lexer next = lexer_;
-        return next.next().kind == Kind::Identifier && next.next().text == "="
-            && next.next().text == "int" && next.next().text == "where";
+        if (next.next().kind != Kind::Identifier || next.next().text != "=") return false;
+        const auto carrier = next.next().text;
+        return (carrier == "int" || carrier == "i32") && next.next().text == "where";
     }
 
     std::string read_quantity_comparison() {
@@ -5610,6 +5613,7 @@ private:
 
     RefinedQuantity read_refined_type() {
         if (accept("int")) return {};
+        if (accept("i32")) return {QuantityUnit(), VerifiedI64Range::signed_i32(), true};
         const auto name = identifier();
         auto found = refinement_aliases_.find(name);
         if (found == refinement_aliases_.end())
@@ -5621,9 +5625,10 @@ private:
         require("type");
         const auto name = identifier();
         require("=");
-        require("int");
+        const bool i32 = accept("i32");
+        if (!i32) require("int");
         require("where");
-        RefinedQuantity type;
+        RefinedQuantity type{QuantityUnit(), i32 ? VerifiedI64Range::signed_i32() : VerifiedI64Range(), i32};
         bool has_unit = false;
         do {
             if (accept("units")) {
@@ -5639,7 +5644,7 @@ private:
         } while (accept("and"));
         require(";");
         if (refinement_aliases_.size() >= 128) fail("E_REFINEMENT_LIMIT: too many aliases");
-        if (!refinement_aliases_.emplace(name, std::move(type)).second)
+        if (name == "int" || name == "i32" || !refinement_aliases_.emplace(name, std::move(type)).second)
             fail("E_REFINEMENT_DUPLICATE: duplicate refinement name");
     }
 
@@ -5744,7 +5749,7 @@ private:
                 auto value = quantity_sum(0);
                 type.require(value.type(), "E_REFINEMENT_BINDING", "binding " + local.name);
                 require(";");
-                if (!verified_locals_.emplace(local.name, value.type()).second)
+                if (!verified_locals_.emplace(local.name, RefinedQuantity{type.unit, value.range, type.i32}).second)
                     fail("E_REFINEMENT_DUPLICATE: duplicate verified binding");
                 verified_upper_bounds_.emplace(local.name, std::move(value.upper_bounds));
                 local.initializer = std::move(value.expression);
@@ -5778,7 +5783,8 @@ private:
             if (found == verified_locals_.end()) fail("E_REFINEMENT_NAME: unknown immutable value '" + name + "'");
             auto value = make_expression(Expression::Kind::Variable, offset);
             value->name = name;
-            return {std::move(value), found->second.unit, 0, found->second.range, verified_upper_bounds_.at(name)};
+            return {std::move(value), found->second.unit, 0, found->second.range,
+                    verified_upper_bounds_.at(name), found->second.i32};
         }
         const auto found = verified_functions_.find(name);
         if (found == verified_functions_.end()) fail("E_REFINEMENT_CALL: expected an earlier verified function");
@@ -5804,12 +5810,17 @@ private:
         require(")");
         if (call->arguments.size() != signature.parameters.size()) fail("E_REFINEMENT_CALL: incorrect arity");
         if (height >= kMaxNativeExpressionDepth) fail("E_UNIT_LIMIT: quantity expression is too deep");
-        return {std::move(call), signature.result.unit, height, signature.result.range, std::move(upper_bounds)};
+        return {std::move(call), signature.result.unit, height, signature.result.range,
+                std::move(upper_bounds), signature.result.i32};
     }
 
     QuantityTerm quantity_binary(Expression::Kind kind, std::size_t offset, QuantityTerm left,
                                  QuantityTerm right, QuantityUnit unit) {
-        const auto depth = 1 + std::max(left.depth, right.depth);
+        const bool i32 = left.i32 || right.i32;
+        const auto carrier = VerifiedI64Range::signed_i32();
+        if (i32 && (!carrier.includes(left.range) || !carrier.includes(right.range)))
+            fail("E_I32_RANGE: checked i32 arithmetic requires both operands to fit i32");
+        const auto depth = (i32 ? 2 : 1) + std::max(left.depth, right.depth);
         if (depth >= kMaxNativeExpressionDepth) fail("E_UNIT_LIMIT: quantity expression is too deep");
         auto expression = make_expression(kind, offset);
         expression->left = std::move(left.expression);
@@ -5826,8 +5837,14 @@ private:
             || (kind == Expression::Kind::Subtract && right.range.nonnegative())
             || (kind == Expression::Kind::DivideQuantity && left.range.nonnegative()
                 && right.range.positive() && right.unit.scalar());
+        if (i32) {
+            auto checked = make_expression(Expression::Kind::CheckedI32, offset);
+            checked->left = std::move(expression);
+            expression = std::move(checked);
+            result = result.on_normal_result_within(carrier);
+        }
         return {std::move(expression), std::move(unit), depth, result,
-                bounded_by_left ? std::move(left.upper_bounds) : std::unordered_set<std::string>{}};
+                bounded_by_left ? std::move(left.upper_bounds) : std::unordered_set<std::string>{}, i32};
     }
 
     QuantityTerm quantity_sum(std::size_t depth) {
@@ -5851,7 +5868,7 @@ private:
             advance();
             auto right = quantity_atom(depth);
             const bool divide = op.text == "/";
-            if (divide && left.unit.scalar() && right.unit.scalar())
+            if (divide && !left.i32 && !right.i32 && left.unit.scalar() && right.unit.scalar())
                 fail("E_UNIT_SCALAR_DIVISION: two plain int operands use ordinary division");
             auto unit = left.unit.combine(right.unit, divide);
             left = quantity_binary(divide ? Expression::Kind::DivideQuantity : Expression::Kind::Multiply,
@@ -5902,10 +5919,18 @@ private:
             }
             advance();
             auto term = quantity_atom(depth + 1);
-            auto negated = make_expression(Expression::Kind::Negate, start.offset);
-            negated->left = std::move(term.expression);
-            return {std::move(negated), std::move(term.unit), term.depth + 1,
-                VerifiedI64Range(0, 0).subtract(term.range), {}};
+            if (!term.i32) {
+                auto negated = make_expression(Expression::Kind::Negate, start.offset);
+                negated->left = std::move(term.expression);
+                return {std::move(negated), std::move(term.unit), term.depth + 1,
+                    VerifiedI64Range(0, 0).subtract(term.range), {}};
+            }
+            auto unit = term.unit;
+            auto zero = make_expression(Expression::Kind::Integer, start.offset);
+            zero->integer = 0;
+            return quantity_binary(Expression::Kind::Subtract, start.offset,
+                {std::move(zero), unit, 0, VerifiedI64Range(0, 0), {}},
+                std::move(term), unit);
         }
         if (verified_callable_ && start.kind == Kind::Identifier) return verified_reference(depth);
         if (start.kind != Kind::Integer) fail("E_UNIT_EXPRESSION: expected an integer quantity expression");
@@ -7851,6 +7876,7 @@ private:
                 validate_expression(*expr.left, parameters, functions, depth + 1);
                 return;
             case Expression::Kind::Negate:
+            case Expression::Kind::CheckedI32:
             case Expression::Kind::Abs:
             case Expression::Kind::LogicalNot:
             case Expression::Kind::Copy:
@@ -8099,7 +8125,8 @@ private:
                         std::to_string(expr.offset));
                 return expr.resolved_type = expr.cast_target;
             }
-            case Expression::Kind::Negate: {
+            case Expression::Kind::Negate:
+            case Expression::Kind::CheckedI32: {
                 ScalarType operand = validate_scalar_expression(
                     *expr.left, variables, functions, depth + 1);
                 require_type(operand, ScalarType::I64, "unary '-'");

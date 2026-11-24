@@ -46,6 +46,16 @@ public:
     bool nonpositive() const { return bounds_.maximum <= 0; }
     bool at_most(const VerifiedI64Range& right) const { return bounds_.maximum <= right.bounds_.minimum; }
 
+    static VerifiedI64Range signed_i32() {
+        return {std::numeric_limits<std::int32_t>::min(), std::numeric_limits<std::int32_t>::max()};
+    }
+
+    VerifiedI64Range on_normal_result_within(const VerifiedI64Range& carrier) const {
+        const auto low = std::max(bounds_.minimum, carrier.bounds_.minimum);
+        const auto high = std::min(bounds_.maximum, carrier.bounds_.maximum);
+        return low <= high ? VerifiedI64Range(low, high) : carrier;
+    }
+
     VerifiedI64Range constrain(std::string_view op, std::int64_t bound) const {
         if (op == "eq") return {std::max(bounds_.minimum, bound), std::min(bounds_.maximum, bound)};
         if (op == "<=") return {bounds_.minimum, std::min(bounds_.maximum, bound)};

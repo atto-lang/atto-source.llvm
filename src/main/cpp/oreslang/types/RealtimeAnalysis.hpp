@@ -180,6 +180,7 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
         case Expression::Kind::BitXor:
             break;
         case Expression::Kind::DivideQuantity:
+        case Expression::Kind::CheckedI32:
             add_effect(facts, FunctionEffect::Panic);
             break;
         case Expression::Kind::Modulo:

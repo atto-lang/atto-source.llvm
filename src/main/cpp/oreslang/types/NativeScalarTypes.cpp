@@ -141,9 +141,14 @@ void validate_native_scalar_types(const Program& program) {
             case E::Field: return field_type(expression(*e.left, locals), e.name, e.offset);
             case E::Copy: case E::Take: case E::Share: case E::Borrow: case E::BorrowMut:
                 return expression(*e.left, locals);
+            case E::CheckedI32:
+                require(expression(*e.left, locals), scalar(false), e.offset, "checked i32 requires int");
+                return scalar(false);
             case E::Negate:
                 require(expression(*e.left, locals), scalar(false), e.offset, "unary - requires int");
                 return scalar(false);
+            case E::Abs:
+                break;
             case E::LogicalNot:
                 require(expression(*e.left, locals), scalar(true), e.offset, "! requires bool");
                 return scalar(true);

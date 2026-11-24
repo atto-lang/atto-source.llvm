@@ -474,6 +474,21 @@ llvm::Value* lower(const Expression& expr,
             }
             return storage.at(expr.left->name);
         }
+        case Expression::Kind::CheckedI32: {
+            auto* value = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            auto* narrowed = builder.CreateTrunc(value, builder.getInt32Ty(), "i32.narrowed");
+            auto* extended = builder.CreateSExt(narrowed, i64, "i32.extended");
+            auto* module = builder.GetInsertBlock()->getModule();
+            auto* parent = builder.GetInsertBlock()->getParent();
+            auto* invalid = llvm::BasicBlock::Create(builder.getContext(), "i32.range.invalid", parent);
+            auto* valid = llvm::BasicBlock::Create(builder.getContext(), "i32.range.valid", parent);
+            builder.CreateCondBr(builder.CreateICmpEQ(value, extended), valid, invalid);
+            builder.SetInsertPoint(invalid);
+            builder.CreateCall(native_trap(*module));
+            builder.CreateUnreachable();
+            builder.SetInsertPoint(valid);
+            return extended;
+        }
         case Expression::Kind::Negate: {
             auto* value = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             return checked_signed_arithmetic(builder, llvm::Intrinsic::ssub_with_overflow,
