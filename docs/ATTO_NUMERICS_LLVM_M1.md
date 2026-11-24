@@ -8,6 +8,18 @@ This branch starts from LLVM main commit `e816303202c098f122c684320072005eea0534
 
 It preserves the newer lexer fail-closed decimal-suffix rejection, and extends lexical `float` spelling to map to internal native `ScalarType::F64` without any implicit int/bool conversion. `f64` remains an admitted explicit synonym for the narrow native lexical subset. Ordinary synchronous scalar functions pass f64 values as LLVM double arguments and results. Calls preserve their checked source type across named arguments, branch returns, and linked source units. The process entrypoint retains its integer/void ABI and f64 parameters are by value. Numerical arrays and branch-local f64 storage have separate lowering gates.
 
+## Floating-point model operations
+
+The host compiler admits linear `define model` chains of pure arithmetic
+functions over `int` or `float`. Adjacent scalar ports and configuration
+arguments must match exactly. Floating-point literals, including signed
+zero, bind their binary64 bits into the blueprint or configured digest.
+The shared integer model profile and its existing digest vectors retain
+their meaning. Float models currently use the native host path.
+
+Typed tensor ports, tensor storage lowering, and GPU placement have
+separate admission and execution gates.
+
 ## Native compiler evidence required
 
 CTest `native_f64_scalar_e2e` uses `tests/native_f64_lexical_gate.sh` on actual canonical `.atto` source files. It requires a real `oreslang-llvmc` to emit nonempty LLVM IR, Clang to link it, and the resulting executable to exit its case-specific expected status without stdout/stderr for **28 positive scalar fixtures** (including 42, 86, 17, 29, 37 and 95 exits). **17 negative fixtures** must be rejected with source-error exit 1, a matching precise diagnostic and **zero LLVM IR**, not a crash or missing compiler. The five numerical prerequisites cover negative-domain, tiny/huge magnitudes, finite-input overflow to infinity, and addition of four scalar floats. Every positive fixture must be compiled to an actual native executable **twice** from the same compiler-emitted IR, at Clang `-O0` and `-O2`, for **56 expected native executions**. The required per-case exit status and empty stdout/stderr must hold at both optimization levels. A compiler-only pass or O0-only result is insufficient. One positive and one negative fixture cover `float` source aliasing. Five divergent-exit positive guests catch any compiler path that merely emits a constant 42 program. Two additional positive guests exercise nested and repeated f64 variable reads rather than only literal operands. The harness rejects duplicate or unsafe test-case IDs (including across positive and negative groups) before invoking the compiler. The negative fixtures also reject source alias `float` at unsupported function ABI boundaries and preserve the exact Decimal suffix denial.

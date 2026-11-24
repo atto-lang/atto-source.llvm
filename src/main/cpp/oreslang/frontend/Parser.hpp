@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 #include "oreslang/types/PointerIntHIR.hpp"
 #include "oreslang/types/FunctionEffects.hpp"
@@ -597,17 +598,16 @@ struct InvertedSourceMain {
     std::vector<InvertedSourceOperation> operations;
 };
 
+using ModelScalar = std::variant<std::int64_t, double>;
+
 struct ModelParameter {
     std::string name;
-    bool has_default = false;
-    std::int64_t default_value = 0;
+    ScalarType type = ScalarType::I64;
+    std::optional<ModelScalar> default_value;
 };
 
 struct ModelStaticArg {
-    enum class Kind { Integer, Parameter };
-    Kind kind = Kind::Integer;
-    std::int64_t integer = 0;
-    std::string parameter;
+    std::variant<ModelScalar, std::string> value;
 };
 
 struct ModelOperation {
@@ -630,7 +630,7 @@ struct ModelRunReceipt {
     std::string model_name;
     std::string blueprint_graph_digest;
     std::string configured_graph_digest;
-    std::vector<std::int64_t> configuration;
+    std::vector<ModelScalar> configuration;
 };
 
 struct Program {

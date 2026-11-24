@@ -1665,26 +1665,21 @@ private:
         program.models.push_back(model_declaration(exported));
     }
 
+    ModelScalar model_scalar_literal() {
+        const bool negative = accept("-");
+        if (token_.kind == Kind::Integer)
+            return negative ? negative_integer_literal() : model_integer_literal();
+        if (token_.kind == Kind::Floating) {
+            const double number = floating_literal();
+            return negative ? -number : number;
+        }
+        fail("MODEL_NONCONSTANT_CONFIG: expected a numeric model literal");
+    }
+
     ModelStaticArg model_static_argument() {
-        ModelStaticArg argument;
-        if (accept("-")) {
-            if (token_.kind != Kind::Integer)
-                fail("MODEL_NONCONSTANT_CONFIG: expected integer literal after '-'");
-            argument.kind = ModelStaticArg::Kind::Integer;
-            argument.integer = negative_integer_literal();
-            return argument;
-        }
-        if (token_.kind == Kind::Integer) {
-            argument.kind = ModelStaticArg::Kind::Integer;
-            argument.integer = model_integer_literal();
-            return argument;
-        }
-        if (token_.kind == Kind::Identifier && !reserved(token_.text)) {
-            argument.kind = ModelStaticArg::Kind::Parameter;
-            argument.parameter = identifier();
-            return argument;
-        }
-        fail("MODEL_NONCONSTANT_CONFIG: model operation arguments must be integer literals or model parameters");
+        if (token_.kind == Kind::Identifier && !reserved(token_.text))
+            return {identifier()};
+        return {model_scalar_literal()};
     }
 
     ModelDecl model_declaration(bool exported) {
@@ -1707,12 +1702,10 @@ private:
                     if (!names.insert(parameter.name).second)
                         fail("MODEL_DUPLICATE_PARAMETER: duplicate model parameter '" + parameter.name + "'");
                     require(":");
-                    require("int");
+                    if (accept("float") || accept("f64")) parameter.type = ScalarType::F64;
+                    else require("int");
                     if (accept("=")) {
-                        const bool negative = accept("-");
-                        parameter.has_default = true;
-                        parameter.default_value =
-                            negative ? negative_integer_literal() : model_integer_literal();
+                        parameter.default_value = model_scalar_literal();
                         seen_default = true;
                     } else if (seen_default) {
                         fail("MODEL_CONFIG_DEFAULT_ORDER: required model parameters cannot follow defaults");
@@ -3154,6 +3147,20 @@ private:
         if (gap.find('\n') == std::string_view::npos &&
                 gap.find('\r') == std::string_view::npos)
             fail("class field requires ';' or a line break");
+    }
+
+    double floating_literal() {
+        // Parse locale-independently and round exactly once to binary64.
+        const std::string_view literal = token_.text;
+        if (literal.find('_') != std::string_view::npos)
+            fail("native f64 literal does not admit digit separators");
+        double number = 0.0;
+        const auto parsed = std::from_chars(literal.data(),
+            literal.data() + literal.size(), number, std::chars_format::general);
+        if (parsed.ec != std::errc{} || parsed.ptr != literal.data() + literal.size())
+            fail("native f64 literal outside finite binary64 range or malformed");
+        advance();
+        return number;
     }
 
     std::string checked_integer_digits() const {
@@ -6752,20 +6759,8 @@ private:
             return inner;
         }
         if (token_.kind == Kind::Floating) {
-            // Locale-independent, bounded, once-rounded IEEE binary64 input.
-            // Preserve f64 identity throughout checking and LLVM lowering.
-            const std::string_view literal = token_.text;
-            if (literal.find('_') != std::string_view::npos)
-                fail("native f64 literal does not admit digit separators");
-            double number = 0.0;
-            const auto parsed = std::from_chars(literal.data(),
-                literal.data() + literal.size(), number, std::chars_format::general);
-            if (parsed.ec != std::errc{} ||
-                    parsed.ptr != literal.data() + literal.size())
-                fail("native f64 literal outside finite binary64 range or malformed");
             auto expr = make_expression(Expression::Kind::Floating, offset);
-            expr->floating = number;
-            advance();
+            expr->floating = floating_literal();
             return expr;
         }
         if (token_.kind == Kind::Integer) {

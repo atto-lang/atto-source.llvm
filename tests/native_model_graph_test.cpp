@@ -2,6 +2,7 @@
 #include "oreslang/frontend/Parser.hpp"
 
 #include <cassert>
+#include <cmath>
 #include <fstream>
 #include <iostream>
 #include <limits>
@@ -174,7 +175,7 @@ int main() {
             assert(accepted.model_runs.front().configured_graph_digest ==
                    item.configured_digest);
             assert(accepted.model_runs.front().configuration.size() == 1);
-            assert(std::to_string(accepted.model_runs.front().configuration.front()) ==
+            assert(std::to_string(std::get<std::int64_t>(accepted.model_runs.front().configuration.front())) ==
                    item.configuration_i64);
         }
     }
@@ -258,7 +259,7 @@ int main() {
     assert(program.model_runs.front().configured_graph_digest ==
            "3975a5571cb2fddcc6206ee0b3f0f893dcb3fa9bfbe591b8c5b9f5ab8ff539e1");
     assert(program.model_runs.front().configuration.size() == 1);
-    assert(program.model_runs.front().configuration.front() == 2);
+    assert(std::get<std::int64_t>(program.model_runs.front().configuration.front()) == 2);
 
     const auto& main_fn = program.functions.back();
     assert(main_fn.name == "main");
@@ -350,7 +351,7 @@ int main() {
     assert(negative.model_runs.front().configured_graph_digest ==
            "15ca34acbdc5478bc2971ae7895d708aca2d324be418819a2e60b3c04bc20a5c");
     assert(negative.model_runs.front().configuration.size() == 1);
-    assert(negative.model_runs.front().configuration.front() == -2);
+    assert(std::get<std::int64_t>(negative.model_runs.front().configuration.front()) == -2);
 
     const std::string min_source = R"ores(
         fnc Identity(int input): int {
@@ -389,7 +390,7 @@ int main() {
     assert(min_run.model_runs.front().configured_graph_digest ==
            "27ed4d26451fa960a8271495ee8ac96bbb67bc3369ca45cf2205222a962de5a3");
     assert(min_run.model_runs.front().configuration.size() == 1);
-    assert(min_run.model_runs.front().configuration.front() ==
+    assert(std::get<std::int64_t>(min_run.model_runs.front().configuration.front()) ==
            std::numeric_limits<std::int64_t>::min());
 
     // No-formal shorthand is canonical syntax, with the same portable
@@ -543,6 +544,21 @@ int main() {
         fnc Identity(int input): int { return input; }
         define model Adjust as Identity() end
     )ores");
+
+    const auto float_model = oreslang::parse_program(R"atto(
+        fnc Scale(float factor, float value): float { return factor * value; }
+        define model Adjust(factor: float = -0.0) as Scale(factor) end
+        fnc use(): float { return Adjust().run(42.0) + Adjust(0.0).run(42.0); }
+    )atto");
+    assert(float_model.models.size() == 1);
+    assert(float_model.models.front().portable_profile.empty());
+    assert(float_model.model_runs.size() == 2);
+    const auto& default_run = float_model.model_runs.front();
+    const auto& explicit_run = float_model.model_runs.back();
+    assert(std::signbit(std::get<double>(default_run.configuration.front())));
+    assert(!std::signbit(std::get<double>(explicit_run.configuration.front())));
+    assert(default_run.blueprint_graph_digest == explicit_run.blueprint_graph_digest);
+    assert(default_run.configured_graph_digest != explicit_run.configured_graph_digest);
 
     std::string long_chain =
         "fnc Identity(int input): int { return input; }\n"

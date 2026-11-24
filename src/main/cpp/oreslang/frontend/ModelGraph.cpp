@@ -1,10 +1,13 @@
 #include "oreslang/frontend/ModelGraph.hpp"
 
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/SHA256.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -49,8 +52,31 @@ void validate_identifier(const std::string& name, std::string_view label) {
     }
 }
 
-std::string canonical_constant(std::int64_t value) {
-    return "i64:" + std::to_string(value);
+bool is_model_scalar(ScalarType type) {
+    return type == ScalarType::I64 || type == ScalarType::F64;
+}
+
+ScalarType model_scalar_type(const ModelScalar& value) {
+    return std::holds_alternative<double>(value) ? ScalarType::F64 : ScalarType::I64;
+}
+
+const char* model_scalar_name(ScalarType type) {
+    if (!is_model_scalar(type))
+        model_fail("MODEL_INVALID_OP_SIGNATURE", "model scalar must be int or float");
+    return type == ScalarType::F64 ? "float" : "int";
+}
+
+std::string canonical_constant(const ModelScalar& value) {
+    if (const auto* integer = std::get_if<std::int64_t>(&value))
+        return "i64:" + std::to_string(*integer);
+
+    const double number = std::get<double>(value);
+    if (!std::isfinite(number))
+        model_fail("MODEL_NONFINITE_CONST", "model float literal must be finite");
+    std::uint64_t bits;
+    static_assert(sizeof(bits) == sizeof(number));
+    std::memcpy(&bits, &number, sizeof(bits));
+    return "f64bits:" + llvm::utohexstr(bits, /*LowerCase=*/true, /*Width=*/16);
 }
 
 std::string canonical_expression(
@@ -60,6 +86,8 @@ std::string canonical_expression(
     switch (expr.kind) {
         case Kind::Integer:
             return canonical_constant(expr.integer);
+        case Kind::Floating:
+            return canonical_constant(expr.floating);
         case Kind::Variable: {
             const auto found = parameter_indexes.find(expr.name);
             if (found == parameter_indexes.end())
@@ -73,11 +101,13 @@ std::string canonical_expression(
             return "unary:-(" + canonical_expression(*expr.left, parameter_indexes) + ")";
         case Kind::Add:
         case Kind::Subtract:
-        case Kind::Multiply: {
+        case Kind::Multiply:
+        case Kind::Divide: {
             if (!expr.left || !expr.right)
                 model_fail("MODEL_EFFECTFUL_BODY", "malformed binary model expression");
             const char op = expr.kind == Kind::Add ? '+' :
-                            expr.kind == Kind::Subtract ? '-' : '*';
+                            expr.kind == Kind::Subtract ? '-' :
+                            expr.kind == Kind::Multiply ? '*' : '/';
             return std::string("binary:") + op + "(" +
                 canonical_expression(*expr.left, parameter_indexes) + "," +
                 canonical_expression(*expr.right, parameter_indexes) + ")";
@@ -88,13 +118,14 @@ std::string canonical_expression(
     }
 }
 
-std::string operation_abi(std::size_t arity) {
+std::string operation_abi(const Function& fn) {
     std::string out = "ores-model-op-v1(";
-    for (std::size_t i = 0; i < arity; ++i) {
+    for (std::size_t i = 0; i < fn.parameters.size(); ++i) {
         if (i) out += ",";
-        out += "int";
+        out += model_scalar_name(fn.parameters[i].scalar_type);
     }
-    out += ")->int";
+    out += ")->";
+    out += model_scalar_name(fn.return_type);
     return out;
 }
 
@@ -110,13 +141,13 @@ std::string operation_impl_digest(const Function& fn) {
                        fn.parameters[i].name + "'");
     }
     const std::string canonical =
-        operation_abi(fn.parameters.size()) + "|return=" +
+        operation_abi(fn) + "|return=" +
         canonical_expression(*fn.result, parameter_indexes);
     return model_sha256(canonical);
 }
 
 bool is_plain_scalar_operation(const Function& fn) {
-    if (fn.returns_void || fn.return_type != ScalarType::I64 ||
+    if (fn.returns_void || !is_model_scalar(fn.return_type) ||
         !fn.return_class.empty() || !fn.return_sum.empty() ||
         !fn.pending_return_type_alias.empty() || !fn.result || fn.parameters.empty() ||
         !fn.method_owner.empty() || fn.async_source_i64 || fn.foreign_import ||
@@ -134,7 +165,7 @@ bool is_plain_scalar_operation(const Function& fn) {
         return false;
     for (const auto& parameter : fn.parameters) {
         if (parameter.mode != Parameter::Mode::Value ||
-            parameter.scalar_type != ScalarType::I64 ||
+            !is_model_scalar(parameter.scalar_type) ||
             !parameter.class_name.empty() || !parameter.generic_type.empty() ||
             !parameter.pending_type_alias.empty() || !parameter.sum_type.empty())
             return false;
@@ -146,44 +177,48 @@ std::string qualified_model_name(const Program& program, const ModelDecl& model)
     return program.module.empty() ? model.name : program.module + "." + model.name;
 }
 
-std::string static_arg_canonical(const ModelStaticArg& arg) {
-    if (arg.kind == ModelStaticArg::Kind::Parameter)
-        return "param:" + arg.parameter + ":int";
-    return "lit:" + canonical_constant(arg.integer) + ":int";
+using ModelParameterTypes = std::unordered_map<std::string, ScalarType>;
+
+ScalarType static_arg_type(const ModelStaticArg& arg, const ModelParameterTypes& types) {
+    if (const auto* name = std::get_if<std::string>(&arg.value))
+        return types.at(*name);
+    return model_scalar_type(std::get<ModelScalar>(arg.value));
+}
+
+std::string static_arg_canonical(const ModelStaticArg& arg,
+                                 const ModelParameterTypes& types) {
+    const char* type = model_scalar_name(static_arg_type(arg, types));
+    if (const auto* name = std::get_if<std::string>(&arg.value))
+        return "param:" + *name + ":" + type;
+    return "lit:" + canonical_constant(std::get<ModelScalar>(arg.value)) + ":" + type;
 }
 
 std::string graph_digest(const Program& program,
                          const ModelDecl& model,
-                         const std::unordered_map<std::string,
-                             std::unordered_map<std::size_t, const Function*>>& functions) {
+                         const ModelParameterTypes& types,
+                         const std::vector<const Function*>& functions) {
     std::string canonical = "ores-model-graph-v1|" +
         qualified_model_name(program, model) + "|";
     for (const auto& parameter : model.parameters) {
-        canonical += "p:" + parameter.name + ":int:";
-        canonical += parameter.has_default ?
-            canonical_constant(parameter.default_value) : "required";
+        canonical += "p:" + parameter.name + ":" + model_scalar_name(parameter.type) + ":";
+        canonical += parameter.default_value ?
+            canonical_constant(*parameter.default_value) : "required";
         canonical += "|";
     }
     for (std::size_t i = 0; i < model.operations.size(); ++i) {
         const auto& operation = model.operations[i];
-        const std::size_t arity = operation.static_arguments.size() + 1;
-        const auto family = functions.find(operation.name);
-        if (family == functions.end() || !family->second.count(arity))
-            model_fail("MODEL_UNKNOWN_OP",
-                       "no native model operation '" + operation.name +
-                       "' with arity " + std::to_string(arity));
-        const Function& fn = *family->second.at(arity);
+        const Function& fn = *functions.at(i);
         canonical += "n" + std::to_string(i) + ":" + operation.name + ":" +
-            operation_abi(arity) + ":" + operation_impl_digest(fn) + ":";
+            operation_abi(fn) + ":" + operation_impl_digest(fn) + ":";
         for (const auto& arg : operation.static_arguments)
-            canonical += static_arg_canonical(arg) + ",";
+            canonical += static_arg_canonical(arg, types) + ",";
         canonical += "|";
     }
     return model_sha256(canonical);
 }
 
 std::string configured_digest(const ModelDecl& model,
-                              const std::vector<std::int64_t>& configuration) {
+                              const std::vector<ModelScalar>& configuration) {
     if (configuration.size() != model.parameters.size())
         model_fail("MODEL_CONFIG_SHAPE",
                    "configured model has wrong parameter cardinality");
@@ -195,25 +230,33 @@ std::string configured_digest(const ModelDecl& model,
     return model_sha256(canonical);
 }
 
-std::unique_ptr<Expression> integer_expression(std::int64_t value,
-                                               std::size_t offset) {
+std::unique_ptr<Expression> scalar_expression(const ModelScalar& value,
+                                              std::size_t offset) {
     auto result = std::make_unique<Expression>();
-    result->kind = Expression::Kind::Integer;
-    result->integer = value;
     result->offset = offset;
+    if (const auto* integer = std::get_if<std::int64_t>(&value)) {
+        result->kind = Expression::Kind::Integer;
+        result->integer = *integer;
+    } else {
+        result->kind = Expression::Kind::Floating;
+        result->floating = std::get<double>(value);
+    }
     return result;
 }
 
-std::int64_t constant_integer(const Expression& expr) {
+ModelScalar constant_scalar(const Expression& expr) {
     if (expr.kind == Expression::Kind::Integer) return expr.integer;
-    if (expr.kind == Expression::Kind::Negate && expr.left &&
-        expr.left->kind == Expression::Kind::Integer) {
-        if (expr.left->integer == std::numeric_limits<std::int64_t>::min())
-            model_fail("MODEL_CONST_OVERFLOW", "negated model constant overflows i64");
-        return -expr.left->integer;
+    if (expr.kind == Expression::Kind::Floating) return expr.floating;
+    if (expr.kind == Expression::Kind::Negate && expr.left) {
+        if (expr.left->kind == Expression::Kind::Floating) return -expr.left->floating;
+        if (expr.left->kind == Expression::Kind::Integer) {
+            if (expr.left->integer == std::numeric_limits<std::int64_t>::min())
+                model_fail("MODEL_CONST_OVERFLOW", "negated model constant overflows i64");
+            return -expr.left->integer;
+        }
     }
     model_fail("MODEL_NONCONSTANT_CONFIG",
-               "native model constructor arguments must be integer literals");
+               "native model constructor arguments must be numeric literals");
 }
 
 using ModelMap = std::unordered_map<std::string, ModelDecl*>;
@@ -294,20 +337,24 @@ void rewrite_model_expression(std::unique_ptr<Expression>& expr,
                 model_fail("MODEL_RUN_NAMED_UNSUPPORTED",
                            "native model.run requires a positional input");
 
-            std::vector<std::int64_t> config;
+            std::vector<ModelScalar> config;
             config.reserve(model.parameters.size());
             if (expr->left->arguments.size() > model.parameters.size())
                 model_fail("MODEL_CONFIG_ARITY",
                            "too many native model configuration arguments");
             for (std::size_t i = 0; i < model.parameters.size(); ++i) {
+                const auto& parameter = model.parameters[i];
                 if (i < expr->left->arguments.size())
-                    config.push_back(constant_integer(*expr->left->arguments[i]));
-                else if (model.parameters[i].has_default)
-                    config.push_back(model.parameters[i].default_value);
+                    config.push_back(constant_scalar(*expr->left->arguments[i]));
+                else if (parameter.default_value)
+                    config.push_back(*parameter.default_value);
                 else
                     model_fail("MODEL_CONFIG_ARITY",
-                               "missing native model parameter '" +
-                               model.parameters[i].name + "'");
+                               "missing native model parameter '" + parameter.name + "'");
+                if (model_scalar_type(config.back()) != parameter.type)
+                    model_fail("MODEL_CONFIG_TYPE_MISMATCH",
+                               "native model parameter '" + parameter.name + "' requires " +
+                               model_scalar_name(parameter.type));
             }
 
             if (model.operations.size() > remaining_operations)
@@ -316,7 +363,7 @@ void rewrite_model_expression(std::unique_ptr<Expression>& expr,
             auto current = std::move(expr->arguments.front());
             rewrite_model_expression(current, program, models,
                                      remaining_operations - model.operations.size());
-            std::unordered_map<std::string, std::int64_t> bound;
+            std::unordered_map<std::string, ModelScalar> bound;
             for (std::size_t i = 0; i < model.parameters.size(); ++i)
                 bound.emplace(model.parameters[i].name, config[i]);
 
@@ -326,18 +373,10 @@ void rewrite_model_expression(std::unique_ptr<Expression>& expr,
                 call->name = operation.name;
                 call->offset = operation.offset;
                 for (const auto& argument : operation.static_arguments) {
-                    if (argument.kind == ModelStaticArg::Kind::Integer) {
-                        call->arguments.push_back(
-                            integer_expression(argument.integer, operation.offset));
-                    } else {
-                        const auto value = bound.find(argument.parameter);
-                        if (value == bound.end())
-                            model_fail("MODEL_UNKNOWN_FORMAL",
-                                       "unknown model parameter '" +
-                                       argument.parameter + "'");
-                        call->arguments.push_back(
-                            integer_expression(value->second, operation.offset));
-                    }
+                    const auto* parameter = std::get_if<std::string>(&argument.value);
+                    const ModelScalar& value = parameter ? bound.at(*parameter) :
+                        std::get<ModelScalar>(argument.value);
+                    call->arguments.push_back(scalar_expression(value, operation.offset));
                 }
                 call->arguments.push_back(std::move(current));
                 current = std::move(call);
@@ -428,10 +467,18 @@ void admit_and_lower_models(Program& program) {
             if (!parameter_names.insert(parameter.name).second)
                 model_fail("MODEL_DUPLICATE_PARAMETER",
                            "duplicate model parameter '" + parameter.name + "'");
-            if (parameter.has_default) default_seen = true;
-            else if (default_seen)
+            if (!is_model_scalar(parameter.type))
+                model_fail("MODEL_CONFIG_TYPE_MISMATCH", "model configuration must be int or float");
+            if (parameter.default_value) {
+                if (model_scalar_type(*parameter.default_value) != parameter.type)
+                    model_fail("MODEL_CONFIG_TYPE_MISMATCH",
+                               "default for model parameter '" + parameter.name + "' requires " +
+                               model_scalar_name(parameter.type));
+                default_seen = true;
+            } else if (default_seen) {
                 model_fail("MODEL_CONFIG_DEFAULT_ORDER",
                            "required model parameters cannot follow defaults");
+            }
         }
         for (const auto& operation : model.operations) {
             validate_identifier(operation.name, "model operation");
@@ -443,11 +490,12 @@ void admit_and_lower_models(Program& program) {
                 model_fail("MODEL_STATIC_ARG_BUDGET",
                            "native model exceeds static argument budget");
             static_total += operation.static_arguments.size();
-            for (const auto& argument : operation.static_arguments)
-                if (argument.kind == ModelStaticArg::Kind::Parameter &&
-                    !parameter_names.count(argument.parameter))
+            for (const auto& argument : operation.static_arguments) {
+                const auto* parameter = std::get_if<std::string>(&argument.value);
+                if (parameter && !parameter_names.count(*parameter))
                     model_fail("MODEL_UNKNOWN_FORMAL",
-                               "unknown model parameter '" + argument.parameter + "'");
+                               "unknown model parameter '" + *parameter + "'");
+            }
         }
     }
 
@@ -483,6 +531,14 @@ void admit_and_lower_models(Program& program) {
 
     detect_cycles(models);
     for (auto& model : program.models) {
+        ModelParameterTypes types;
+        bool portable_i64 = true;
+        for (const auto& parameter : model.parameters) {
+            types.emplace(parameter.name, parameter.type);
+            portable_i64 &= parameter.type == ScalarType::I64;
+        }
+
+        std::vector<const Function*> resolved;
         for (const auto& operation : model.operations) {
             if (models.count(operation.name))
                 model_fail("MODEL_COMPOSITION_NOT_ENABLED",
@@ -497,18 +553,26 @@ void admit_and_lower_models(Program& program) {
             if (fn.source_routine || fn.source_signature_has_scalar_alias)
                 model_fail("MODEL_INVALID_OP_SIGNATURE",
                            "operation '" + operation.name +
-                           "' must use fnc with a direct int signature");
+                           "' must use fnc with a direct numeric signature");
             if (!is_plain_scalar_operation(fn))
                 model_fail("MODEL_EFFECTFUL_BODY",
                            "operation '" + operation.name +
                            "' is not a verified pure scalar function");
-            (void)operation_impl_digest(fn); // validates the return expression.
+
+            for (std::size_t i = 0; i < operation.static_arguments.size(); ++i)
+                if (static_arg_type(operation.static_arguments[i], types) != fn.parameters[i].scalar_type)
+                    model_fail("MODEL_CONFIG_TYPE_MISMATCH",
+                               "static argument of '" + operation.name + "' requires " +
+                               model_scalar_name(fn.parameters[i].scalar_type));
+            if (!resolved.empty() && resolved.back()->return_type != fn.parameters.back().scalar_type)
+                model_fail("MODEL_PORT_TYPE_MISMATCH",
+                           "model output from '" + resolved.back()->name +
+                           "' does not match the input to '" + operation.name + "'");
+            portable_i64 &= !fn.has_f64_signature();
+            resolved.push_back(&fn);
         }
-        model.graph_digest = graph_digest(program, model, functions);
-        // Native executable-v1 is deliberately the exact portable i64 subset:
-        // ordered linear topology, i64 configuration, and verified
-        // literal/parameter/negate/add/subtract/multiply operation expressions.
-        model.portable_profile = "model-core-i64-v1";
+        model.graph_digest = graph_digest(program, model, types, resolved);
+        model.portable_profile = portable_i64 ? "model-core-i64-v1" : "";
     }
 
     for (auto& function : program.functions)
