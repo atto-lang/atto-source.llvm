@@ -630,6 +630,9 @@ Program parse_program(std::string_view source, bool experimental_owned_int = fal
                       bool experimental_pointer_int_aot = false,
                       int language_version = 0);
 
+// Standalone host protocol artifact admission. Scalar main is optional.
+Program parse_verified_protocol_actor_library(std::string_view source, int language_version = 0);
+
 // Internal module-linking stages: syntax trees are NOT admitted for codegen.
 // resolve_and_validate_program must run after all module names are resolved.
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int = false,

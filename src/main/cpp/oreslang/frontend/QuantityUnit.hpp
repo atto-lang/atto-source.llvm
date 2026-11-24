@@ -40,6 +40,10 @@ class QuantityUnit {
 
 public:
     QuantityUnit() = default;
+    const std::map<std::string, int>& powers() const { return powers_; }
+    const llvm::APInt& numerator() const { return numerator_; }
+    const llvm::APInt& denominator() const { return denominator_; }
+
     bool operator==(const QuantityUnit& other) const {
         return powers_ == other.powers_ && numerator_ == other.numerator_ && denominator_ == other.denominator_;
     }

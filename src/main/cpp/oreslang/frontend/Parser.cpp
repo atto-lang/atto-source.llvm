@@ -1093,7 +1093,7 @@ public:
         if (!experimental_pointer_int_aot_) reject_unlowered_with_update();
     }
 
-    Program parse() {
+    Program parse(bool protocol_actor_library = false) {
         Program program;
         if (experimental_pointer_int_aot_) {
             // One canonical native scanner for both ordinary scalar programs
@@ -1300,9 +1300,11 @@ public:
             if (!program.namespace_name.empty() || !program.imports.empty()
                     || !program.namespace_imports.empty() || !program.exports.empty())
                 fail("E_REFINEMENT_SCOPE: Verified Core requires a standalone source file");
-            parse_verified_functions(program);
+            parse_verified_functions(program, protocol_actor_library);
             return program;
         }
+        if (protocol_actor_library)
+            fail("E_PROTOCOL_ACTOR: host protocol artifact requires a verified protocol actor");
         while (token_.text == "export" || token_.text == "define" || token_.text == "declare" ||
                at_bare_type_alias() ||
                 (token_.text == "pub" &&
@@ -5818,7 +5820,7 @@ private:
         return actor;
     }
 
-    void parse_verified_functions(Program& program) {
+    void parse_verified_functions(Program& program, bool protocol_actor_library) {
         while (at_refined_quantity_alias()) parse_refined_quantity_alias();
         std::unordered_set<std::string> protocol_names;
         while (at_protocol_declaration()) program.protocols.push_back(parse_protocol_declaration(protocol_names));
@@ -5933,7 +5935,14 @@ private:
             verified_functions_.emplace(name, std::move(signature));
             main_seen = main;
         }
-        if (!main_seen) fail("E_REFINEMENT_EXPORT: verified source requires a public main");
+        if (protocol_actor_library) {
+            if (program.protocol_actors.empty())
+                fail("E_PROTOCOL_ACTOR: host protocol artifact requires a verified protocol actor");
+            if (!program.functions.empty() && !main_seen)
+                fail("E_REFINEMENT_EXPORT: verified functions require a public main");
+        } else if (!main_seen) {
+            fail("E_REFINEMENT_EXPORT: verified source requires a public main");
+        }
     }
 
     QuantityTerm verified_reference(std::size_t depth) {
@@ -10356,6 +10365,14 @@ Program parse_program(std::string_view source, bool experimental_owned_int,
                       int language_version) {
     auto program = parse_unresolved_program(source, experimental_owned_int,
         experimental_rt_scalar_loop, experimental_pointer_int_aot, language_version);
+    resolve_and_validate_program(program);
+    return program;
+}
+
+Program parse_verified_protocol_actor_library(std::string_view source, int language_version) {
+    auto program = Parser(source, false, false, false, 0, false, language_version).parse(true);
+    if (program.protocol_actors.empty())
+        throw std::runtime_error("E_PROTOCOL_ACTOR: host protocol artifact requires a verified protocol actor");
     resolve_and_validate_program(program);
     return program;
 }
