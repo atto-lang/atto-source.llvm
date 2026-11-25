@@ -19,7 +19,7 @@ if(NOT "${good_status}" STREQUAL "0" OR NOT good_ir MATCHES "define [^\n]*@")
 endif()
 
 # Exact Java/Graal guest fixture. LLVM may reject it until real native
-# tagged payload, ownership-safe throw and caller-side Option lowering exist.
+# tagged payload, ownership-safe throw and caller-side Result lowering exist.
 if(NOT EXISTS "${ORES_TRAP_SHARED_SOURCE}")
     message(FATAL_ERROR "shared AttoLang trap fixture is missing")
 endif()
@@ -68,8 +68,8 @@ foreach(n RANGE 1 10)
     if(diagnostic STREQUAL "")
         message(FATAL_ERROR "missing negative source diagnostic in case ${n}")
     endif()
-    if(n EQUAL 7 AND NOT diagnostic MATCHES "E_TRAP_BANG_RESULT_UNVERIFIED")
-        message(FATAL_ERROR "canonical trap! was not rejected as checked Result<T,Error>: ${diagnostic}")
+    if((n EQUAL 1 OR n EQUAL 7) AND NOT diagnostic MATCHES "E_TRAP_BANG_RESULT_UNVERIFIED")
+        message(FATAL_ERROR "bare/bang trap was not rejected as checked Result<T,Error>: ${diagnostic}")
     endif()
     if(n EQUAL 8 AND NOT diagnostic MATCHES "E_THROW_BANG_ERROR_TYPE_UNVERIFIED")
         message(FATAL_ERROR "canonical throw! reached legacy scalar catch path: ${diagnostic}")
