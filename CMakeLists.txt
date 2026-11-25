@@ -3812,6 +3812,12 @@ if(BUILD_TESTING)
         dispatch-do-match-default-run.ores --ir "return.snapshot.slot")
     oreslang_contract_test(native_do_match_default_only_ir
         dispatch-do-match-default-only-run.ores --ir "return.snapshot.slot")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_value_match_wildcard_first_runtime
+            dispatch-value-match-wildcard-first-run.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_do_match_wildcard_first_runtime
+            dispatch-do-match-wildcard-first-run.ores --run 42 --clang "${ORE_CLANG}")
+    endif()
     oreslang_contract_test(native_value_match_default_first_ir
         dispatch-value-match-default-not-last-reject.ores --ir "ternary.merge")
     if(ORE_CLANG)
