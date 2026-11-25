@@ -90,6 +90,7 @@ struct RegionMoveLowering {
     // Source-owned Box<int> identifiers remain non-Copy even though the
     // native owned region stores their values as opaque generation tokens.
     const std::unordered_set<std::string>* native_box_names = nullptr;
+    bool hosted_trap_arithmetic = false;
 };
 
 llvm::Value* receiver_array_region(const Expression& receiver, const RegionMoveLowering* moves) {
@@ -163,6 +164,38 @@ llvm::Value* checked_signed_arithmetic(llvm::IRBuilder<>& builder,
     return value;
 }
 
+// Closed i64 trap operands contain no owners, calls, suspension or effects.
+// Each checked arithmetic operation branches to the same local Err edge;
+// later operands are evaluated only on success. Ordinary untrapped lowering
+// still uses the existing terminal checked_signed_arithmetic path.
+llvm::Value* lower_trapped_i64(const Expression& e, llvm::IRBuilder<>& builder,
+                              llvm::Type* i64, llvm::BasicBlock* failure) {
+    using K = Expression::Kind;
+    if (e.kind == K::Integer)
+        return llvm::ConstantInt::getSigned(i64, e.integer);
+    const bool negate = e.kind == K::Negate;
+    if (!negate && e.kind != K::Add && e.kind != K::Subtract && e.kind != K::Multiply)
+        throw std::runtime_error("unproved arithmetic operand in native trap");
+    if (!e.left || (!negate && !e.right))
+        throw std::runtime_error("incomplete native trap arithmetic");
+    auto* lhs = negate ? llvm::ConstantInt::get(i64, 0)
+                       : lower_trapped_i64(*e.left, builder, i64, failure);
+    auto* rhs = lower_trapped_i64(negate ? *e.left : *e.right, builder, i64, failure);
+    const auto op = negate || e.kind == K::Subtract ? llvm::Intrinsic::ssub_with_overflow
+        : e.kind == K::Multiply ? llvm::Intrinsic::smul_with_overflow
+        : llvm::Intrinsic::sadd_with_overflow;
+    auto* module = builder.GetInsertBlock()->getModule();
+    auto* function = builder.GetInsertBlock()->getParent();
+    auto* intrinsic = native_intrinsic(*module, op, {i64});
+    auto* checked = builder.CreateCall(intrinsic, {lhs, rhs}, "trap.arithmetic.checked");
+    auto* value = builder.CreateExtractValue(checked, {0}, "trap.arithmetic.value");
+    auto* overflow = builder.CreateExtractValue(checked, {1}, "trap.arithmetic.overflow");
+    auto* proceed = llvm::BasicBlock::Create(builder.getContext(), "trap.arithmetic.ok", function);
+    builder.CreateCondBr(overflow, failure, proceed);
+    builder.SetInsertPoint(proceed);
+    return value;
+}
+
 llvm::Value* lower(const Expression& expr,
                    llvm::IRBuilder<>& builder,
                    llvm::Type* i64,
@@ -188,6 +221,40 @@ llvm::Value* lower(const Expression& expr,
                     !native_trap_pure_integer(*expr.arguments.front()) ||
                     expr.sum_type != "Result<int,Error>")))
                 throw std::runtime_error("unproved native trap AST reached LLVM codegen");
+            // The legacy nominal Error slot is opaque to source code. In
+            // this hosted slice it carries the stable arithmetic ABI ID,
+            // not a String handle or a fabricated guest Error object.
+            if (expr.trap_origin && moves->hosted_trap_arithmetic &&
+                    expr.arguments.front()->kind != Expression::Kind::Integer) {
+                constexpr std::uint64_t arithmetic_overflow_id = 65537;
+                auto* function = builder.GetInsertBlock()->getParent();
+                auto* failed = llvm::BasicBlock::Create(builder.getContext(),
+                    "trap.arithmetic.err", function);
+                auto* join = llvm::BasicBlock::Create(builder.getContext(),
+                    "trap.arithmetic.result", function);
+                auto* payload = lower_trapped_i64(*expr.arguments.front(), builder, i64, failed);
+                auto* success = builder.GetInsertBlock();
+                builder.CreateBr(join);
+                builder.SetInsertPoint(failed);
+                builder.CreateBr(join);
+                builder.SetInsertPoint(join);
+                auto* tag = builder.CreatePHI(i64, 2, "trap.result.tag");
+                auto* ok = builder.CreatePHI(i64, 2, "trap.result.ok");
+                auto* error = builder.CreatePHI(i64, 2, "trap.result.error");
+                tag->addIncoming(llvm::ConstantInt::get(i64, 0), success);
+                tag->addIncoming(llvm::ConstantInt::get(i64, 1), failed);
+                ok->addIncoming(payload, success);
+                ok->addIncoming(llvm::ConstantInt::get(i64, 0), failed);
+                error->addIncoming(llvm::ConstantInt::get(i64, 0), success);
+                error->addIncoming(llvm::ConstantInt::get(i64, arithmetic_overflow_id), failed);
+                auto* fields = entry_alloca(builder, i64, llvm::ConstantInt::get(i64, 3), "trap.result.fields");
+                builder.CreateStore(tag, fields);
+                builder.CreateStore(ok, builder.CreateGEP(i64, fields, llvm::ConstantInt::get(i64, 1)));
+                builder.CreateStore(error, builder.CreateGEP(i64, fields, llvm::ConstantInt::get(i64, 2)));
+                return builder.CreateCall(moves->record_new,
+                    {llvm::ConstantInt::get(i64, moves->record_schemas->at(expr.sum_type)),
+                     llvm::ConstantInt::get(i64, 3), fields}, "trap.result");
+            }
             const bool option = type.kind == NativeSumType::Kind::Option;
             const std::size_t count = option ? 2 : 3;
             const bool error = expr.name == "Err";
@@ -2018,6 +2085,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         region_moves.native_box_names = &native_box_names;
         region_moves.sum_program = &source;
         region_moves.sum_check = sum_check;
+        region_moves.hosted_trap_arithmetic = !wasm32_target && !cortex_m_target &&
+            !bounded_allocator_provider && !tenant_vm_guest && !actor_region_v1 &&
+            source.actors.empty();
         region_moves.frozen_scalar_dispatch = &frozen_i64_dispatch;
         region_moves.frozen_scalar_callees = &frozen_scalar_callees;
         region_moves.frozen_scalar_symbols = &frozen_scalar_symbols;
