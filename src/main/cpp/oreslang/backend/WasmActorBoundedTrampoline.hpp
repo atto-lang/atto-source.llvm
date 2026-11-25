@@ -223,10 +223,10 @@ inline std::string emit(const Program& source) {
     trap_if_invalid(b, handler,
         b.CreateICmpSGE(&*handler->arg_begin(), zero));
 
-    auto* current = b.CreateAlloca(i64, nullptr, "atto.trampoline.current");
-    auto* answer = b.CreateAlloca(i64, nullptr, "atto.trampoline.answer");
-    b.CreateStore(&*handler->arg_begin(), current);
-    b.CreateStore(zero, answer);
+    // The iterative machine needs no native-stack local allocations.
+    // Transient scalar loop state is SSA; logical call data lives only in
+    // the actor-owned frame slab.
+    auto* initial = b.GetInsertBlock();
 
     auto* push = llvm::BasicBlock::Create(context, "atto.trampoline.push", handler);
     auto* enter = llvm::BasicBlock::Create(context, "atto.trampoline.enter", handler);
@@ -238,24 +238,28 @@ inline std::string emit(const Program& source) {
     b.CreateBr(push);
 
     b.SetInsertPoint(push);
+    auto* current = b.CreatePHI(i64, 2, "atto.trampoline.current");
+    current->addIncoming(&*handler->arg_begin(), initial);
     auto* before = b.CreateLoad(i64, depth, "atto.frame.depth.before");
     b.CreateCondBr(b.CreateICmpULT(before, limit), enter, overflow);
 
     b.SetInsertPoint(enter);
     auto* slot = b.CreateInBoundsGEP(slotsType, slots, {zero, before},
         "atto.frame.private.slot");
-    auto* value = b.CreateLoad(i64, current);
+    auto* value = current;
     b.CreateStore(value, slot)->setVolatile(true);
     b.CreateStore(b.CreateAdd(before, one), depth);
     b.CreateCondBr(b.CreateICmpEQ(value, zero), unwind, down);
 
     b.SetInsertPoint(down);
-    // LLVM integer subtraction is wrapping without nsw; negative inputs
-    // cannot trap the carrier and instead hit the finite frame quota.
-    b.CreateStore(b.CreateSub(value, one), current);
+    // Only positive values reach this block, so signed subtraction is safe.
+    auto* next = b.CreateSub(value, one, "atto.trampoline.next");
+    current->addIncoming(next, down);
     b.CreateBr(push);
 
     b.SetInsertPoint(unwind);
+    auto* answer = b.CreatePHI(i64, 2, "atto.trampoline.answer");
+    answer->addIncoming(zero, enter);
     auto* count = b.CreateLoad(i64, depth, "atto.frame.unwind.depth");
     b.CreateCondBr(b.CreateICmpEQ(count, zero), done, pop);
 
@@ -267,11 +271,12 @@ inline std::string emit(const Program& source) {
     b.CreateStore(zero, address)->setVolatile(true);
     b.CreateStore(index, depth);
     auto* delta = b.CreateZExt(b.CreateICmpNE(parent, zero), i64);
-    b.CreateStore(b.CreateAdd(b.CreateLoad(i64, answer), delta), answer);
+    auto* accumulated = b.CreateAdd(answer, delta, "atto.trampoline.accumulated");
+    answer->addIncoming(accumulated, pop);
     b.CreateBr(unwind);
 
     b.SetInsertPoint(done);
-    b.CreateRet(b.CreateLoad(i64, answer));
+    b.CreateRet(answer);
 
     b.SetInsertPoint(overflow);
     // Never leave a stale guest frame after typed terminal exhaustion.
