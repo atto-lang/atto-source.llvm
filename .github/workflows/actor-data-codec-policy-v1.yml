@@ -6,6 +6,8 @@ on:
     paths:
       - '**/*ActorDataCodecPolicyV1*'
       - '**/*actor_data_codec_policy_v1*'
+      - '**/*MessagePackWireV2*'
+      - '**/*messagepack_decode_budget_v1*'
       - '.github/workflows/actor-data-codec-policy-v1.yml'
 permissions:
   contents: read
@@ -29,4 +31,6 @@ jobs:
           c++ --version
           c++ -std=c++17 -Wall -Wextra -Werror -pedantic -fsanitize=address,undefined -fno-omit-frame-pointer -Isrc/main/cpp tests/actor_data_codec_policy_v1_test.cpp -o "$RUNNER_TEMP/policy"
           "$RUNNER_TEMP/policy"
+          c++ -std=c++17 -Wall -Wextra -Werror -pedantic -fsanitize=address,undefined -fno-omit-frame-pointer -Isrc/main/cpp tests/messagepack_decode_budget_v1_test.cpp -lcrypto -o "$RUNNER_TEMP/decode-budget"
+          "$RUNNER_TEMP/decode-budget"
           echo 'GUEST_CONFORMANCE=NOT_EXECUTED'
