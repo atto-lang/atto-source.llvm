@@ -5882,3 +5882,52 @@ if(BUILD_TESTING AND UNIX)
             PROPERTIES TIMEOUT 30)
     endif()
 endif()
+
+# Real native scheduler + private Bytes inbox: adversarial four-producer
+# DATA-vs-sealed-STOP linearization. HOST ONLY; does not compile .atto source.
+# An intentional test-only held actor carrier makes queued-abandon explicit.
+if(BUILD_TESTING AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(Threads REQUIRED)
+    foreach(optimization IN ITEMS 0 2)
+        set(target_name "oreslang-native-bytes-stop-race-o${optimization}")
+        add_executable(${target_name}
+            tests/native_actor_bytes_atomic_stop_race_test.c
+            src/main/cpp/oreslang/runtime/NativeActorBytesInbox.c
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+        target_include_directories(${target_name} PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_definitions(${target_name}
+            PRIVATE ORESLANG_ACTOR_BYTES_TESTING=1)
+        target_compile_features(${target_name} PRIVATE c_std_11)
+        target_link_libraries(${target_name} PRIVATE Threads::Threads)
+        target_compile_options(${target_name} PRIVATE
+            $<$<C_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG -O${optimization}>)
+        add_test(NAME native_bytes_atomic_stop_race_o${optimization}_host_only
+            COMMAND ${target_name})
+        set_tests_properties(native_bytes_atomic_stop_race_o${optimization}_host_only
+            PROPERTIES TIMEOUT 30)
+    endforeach()
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        add_executable(oreslang-native-bytes-stop-race-sanitizer
+            tests/native_actor_bytes_atomic_stop_race_test.c
+            src/main/cpp/oreslang/runtime/NativeActorBytesInbox.c
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+        target_include_directories(oreslang-native-bytes-stop-race-sanitizer
+            PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-native-bytes-stop-race-sanitizer
+            PRIVATE Threads::Threads)
+        target_compile_features(oreslang-native-bytes-stop-race-sanitizer
+            PRIVATE c_std_11)
+        target_compile_definitions(oreslang-native-bytes-stop-race-sanitizer
+            PRIVATE ORESLANG_ACTOR_BYTES_TESTING=1)
+        target_compile_options(oreslang-native-bytes-stop-race-sanitizer PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG -O1 -g
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(oreslang-native-bytes-stop-race-sanitizer PRIVATE
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        add_test(NAME native_bytes_atomic_stop_race_asan_ubsan_host_only
+            COMMAND oreslang-native-bytes-stop-race-sanitizer)
+        set_tests_properties(native_bytes_atomic_stop_race_asan_ubsan_host_only
+            PROPERTIES TIMEOUT 30)
+    endif()
+endif()
