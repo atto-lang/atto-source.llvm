@@ -2,6 +2,7 @@
 
 #include "oreslang/runtime/ActorExecutionLedger.hpp"
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -35,6 +36,8 @@ public:
         Token owner{};
         std::uint64_t nonce=0;
         std::uint32_t depth=0;
+        // Physical frame-arena instance; not derived from reusable actor IDs.
+        std::uint64_t instance=0;
     };
     struct Snapshot {
         std::size_t live_stacks=0;
@@ -45,7 +48,8 @@ public:
     };
 
     ActorInvocationFrames(std::uint64_t actor, std::uint64_t generation) noexcept
-        : actor_(actor), generation_(generation), poisoned_(!actor || !generation) {}
+        : actor_(actor), generation_(generation), instance_(mintInstance()),
+          poisoned_(!actor || !generation || !instance_) {}
     ActorInvocationFrames(const ActorInvocationFrames&) = delete;
     ActorInvocationFrames& operator=(const ActorInvocationFrames&) = delete;
 
@@ -56,9 +60,11 @@ public:
         if (!validIdentity(t)) return Status::Stale;
         if (poisoned_) return Status::Poisoned;
         Slot& s=slots_[t.slot];
-        if (s.phase!=Phase::Free) return Status::Busy;
+        // After a slot is recycled, an old token remains stale even when the
+        // new incarnation is actively queued/running in the same slot.
         if (t.sequence<=s.last_sequence ||
             t.slot_generation<=s.last_slot_generation) return Status::Stale;
+        if (s.phase!=Phase::Free) return Status::Busy;
         s.owner=t;
         s.phase=Phase::Queued;
         s.depth=0;
@@ -119,7 +125,7 @@ public:
         ++live_frames_;
         charged_+=bytes;
         if (charged_>peak_) peak_=charged_;
-        out={t,nonce,static_cast<std::uint32_t>(s->depth)};
+        out={t,nonce,static_cast<std::uint32_t>(s->depth),instance_};
         return Status::Ok;
     }
 
@@ -210,6 +216,22 @@ private:
         std::size_t depth=0,used=0;
     };
 
+    // Token sequences restart on a newly constructed actor ledger. A frame
+    // handle must also bind to the particular physical frame-arena object.
+    // This per-template counter is sufficient because FrameRef types from
+    // different instantiations are not interchangeable. Exhaustion poisons
+    // construction rather than wrapping to an earlier instance identity.
+    static std::uint64_t mintInstance() noexcept {
+        static std::atomic<std::uint64_t> next{1};
+        std::uint64_t expected=next.load(std::memory_order_relaxed);
+        while (expected!=0 && expected!=std::numeric_limits<std::uint64_t>::max()) {
+            if (next.compare_exchange_weak(expected,expected+1,
+                    std::memory_order_relaxed,std::memory_order_relaxed))
+                return expected;
+        }
+        return 0;
+    }
+
     static bool same(Token a, Token b) noexcept {
         return a.actor==b.actor && a.generation==b.generation &&
             a.sequence==b.sequence && a.slot_generation==b.slot_generation &&
@@ -228,7 +250,8 @@ private:
         slot=find(t); if (!slot) return Status::Stale;
         if (poisoned_) return Status::Poisoned;
         if (slot->phase!=Phase::Running) return Status::NotRunning;
-        if (!same(t,ref.owner) || !slot->depth) return Status::NoFrame;
+        if (!same(t,ref.owner) || !slot->depth ||
+            ref.instance!=instance_) return Status::NoFrame;
         frame=&slot->frames[slot->depth-1];
         if (ref.depth!=slot->depth || ref.nonce!=frame->nonce) return Status::NoFrame;
         return Status::Ok;
@@ -251,7 +274,7 @@ private:
     }
 
     std::array<Slot,Slots> slots_{};
-    std::uint64_t actor_,generation_;
+    std::uint64_t actor_,generation_,instance_;
     std::size_t charged_=0,peak_=0,live_frames_=0;
     bool poisoned_=false;
 };
