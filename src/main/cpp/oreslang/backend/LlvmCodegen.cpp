@@ -131,6 +131,9 @@ llvm::Value* lower(const Expression& expr,
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
             return builder.CreateMul(left, right, "mul");
         }
+        case Expression::Kind::Trap:
+            throw std::runtime_error(
+                "native trap expression requires typed Option and guest failure lowering");
         case Expression::Kind::ModuleCall: {
             // This path is admitted only by the whole-program, pre-IR scan
             // above. i64 primitive equality is widened into no host callback.
