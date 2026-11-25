@@ -2,8 +2,10 @@
 #include "oreslang/runtime/PinnedContinuationGate.hpp"
 #include <csignal>
 #include <cstdint>
+#include <initializer_list>
 #include <stdexcept>
 #include <thread>
+#include <atomic>
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -42,6 +44,28 @@ static void expect_unretired_frame_abort() {
           "unretired pinned continuation did not fail closed");
 }
 
+// A valid heap turn is not enough: a continuation ticket for a
+// different actor must never pin this heap's physical lifetime.
+static void expect_foreign_ticket_abort() {
+    const pid_t child = fork();
+    check(child >= 0, "fork failed");
+    if (child == 0) {
+        struct rlimit limit = {0, 0};
+        (void) setrlimit(RLIMIT_CORE, &limit);
+        const std::uint64_t actor = 900002;
+        OresActorI64Heap* heap = ores_actor_i64_heap_open(actor, 1, 1);
+        const OresActorTurn turn = ores_actor_i64_heap_enter(heap, actor, 1);
+        const AsyncIoTicket foreign{actor + 1, 1, 1};
+        PinnedContinuationGate frame(foreign, heap, turn);
+        (void)frame;
+        _exit(0); // MUST never reach this point.
+    }
+    int status = 0;
+    check(waitpid(child, &status, 0) == child, "waitpid failed");
+    check(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT,
+          "foreign actor's continuation ticket was permitted to pin heap");
+}
+
 static void expect_field_write_abort(OresActorI64Heap* heap,
                                      std::uint64_t actor, std::uint64_t index) {
     const pid_t child = fork();
@@ -61,6 +85,7 @@ static void expect_field_write_abort(OresActorI64Heap* heap,
 
 int main() {
     expect_unretired_frame_abort();
+    expect_foreign_ticket_abort();
     for (std::uint64_t round = 1; round <= 128; ++round) {
         const std::uint64_t actor = round + 400;
         OresActorI64Heap* heap = ores_actor_i64_heap_open(actor, 1, 2);
@@ -76,6 +101,23 @@ int main() {
         const AsyncIoTicket ticket{actor, 1, round};
         PinnedContinuationGate frame(ticket, heap, init);
         check(frame.lifetime_pinned(), "continuation did not pin actor heap lifetime");
+        // Matching turn identity alone must never authorize a foreign or
+        // stale async operation to borrow, settle, or retire this frame.
+        const AsyncIoTicket wrongActor{actor + 1, 1, round};
+        const AsyncIoTicket wrongGeneration{actor, 2, round};
+        const AsyncIoTicket wrongOperation{actor, 1, round + 1};
+        for (const AsyncIoTicket wrong : {wrongActor, wrongGeneration, wrongOperation}) {
+            check(!frame.acquire(wrong, PinnedContinuationGate::Loan::shared),
+                  "foreign ticket acquired a continuation loan");
+            check(!frame.settle(wrong, AsyncIoTerminal::closed),
+                  "foreign ticket settled the continuation");
+            check(!frame.broker_acknowledge(wrong),
+                  "foreign ticket ACKed the broker");
+            check(!frame.try_claim_resume(wrong),
+                  "foreign ticket claimed cleanup");
+            check(!frame.try_retire(wrong),
+                  "foreign ticket retired the heap pin");
+        }
         ores_actor_i64_heap_leave(heap, init);
 
         // An actor's shared loan survives physical carrier turnover, but it
@@ -109,13 +151,19 @@ int main() {
         ores_actor_i64_heap_retire(other);
         check(ores_actor_i64_heap_try_destroy(other), "unrelated actor heap not reclaimed");
 
+        const AsyncIoTerminal outcome = round % 5 == 0 ? AsyncIoTerminal::success
+            : round % 5 == 1 ? AsyncIoTerminal::failure
+            : round % 5 == 2 ? AsyncIoTerminal::cancelled
+            : round % 5 == 3 ? AsyncIoTerminal::timed_out
+                             : AsyncIoTerminal::closed;
         std::thread broker([&] {
-            check(frame.settle(ticket, AsyncIoTerminal::cancelled), "terminal cancellation lost");
+            check(frame.settle(ticket, outcome), "terminal outcome lost");
             check(frame.broker_acknowledge(ticket), "broker quiescence ACK missing");
         });
         broker.join();
         check(!frame.settle(ticket, AsyncIoTerminal::success),
-              "late success overwrote cancellation");
+              "late terminal event overwrote the winner");
+        check(frame.terminal() == outcome, "terminal winner was overwritten");
         check(frame.try_claim_resume(ticket) && !frame.try_claim_resume(ticket),
               "cancellation cleanup resumed twice");
         check(!frame.try_retire(ticket), "unfinished cleanup retired actor frame");
@@ -133,8 +181,21 @@ int main() {
         ores_actor_i64_heap_release(heap, loan);
         check(!ores_actor_i64_heap_try_destroy(heap),
               "continuation lifetime lease disappeared before frame retirement");
+        // Read-only observers may run on another carrier. The retirement
+        // publish edge must be after native lease release, never before it.
+        std::atomic<bool> retiredWithPin{false};
+        std::thread observer([&] {
+            while (!frame.retired()) {
+                (void)frame.lifetime_pinned();
+                std::this_thread::yield();
+            }
+            if (frame.lifetime_pinned()) retiredWithPin.store(true);
+        });
         check(frame.try_retire(ticket) && !frame.try_retire(ticket),
               "pinned continuation double-retired");
+        observer.join();
+        check(!retiredWithPin.load(),
+              "published retirement before actor-heap lifetime release");
         check(!frame.lifetime_pinned(),
               "retired continuation retained actor heap lifetime authority");
         check(ores_actor_i64_heap_try_destroy(heap),
