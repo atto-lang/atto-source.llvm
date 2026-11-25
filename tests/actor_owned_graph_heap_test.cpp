@@ -953,7 +953,75 @@ static void transactional_pod_clone_rejects_nested_owned_payloads() {
           "clone could not recover after refusal");
 }
 
+static void trusted_pod_sweep_preserves_root_closure_and_revokes_unreachable_handles() {
+    using Heap = ActorOwnedGraphHeap<8, 32, 3>;
+    const ActorHeapIdentity owner{62, 83, 7};
+    Heap heap(owner);
+    std::atomic<bool> cancelled{false};
+    std::uint64_t bytes = 42;
+    const auto a = heap.allocate(owner, &bytes, sizeof(bytes)).value();
+    const auto b = heap.allocate(owner, &bytes, sizeof(bytes)).value();
+    const auto c = heap.allocate(owner, &bytes, sizeof(bytes)).value();
+    const auto d = heap.allocate(owner, &bytes, sizeof(bytes)).value();
+    check(heap.link(owner, a, b) && heap.link(owner, b, a) &&
+          heap.link(owner, c, d) && heap.link(owner, d, c) &&
+          heap.link(owner, d, a), "cannot build sweep fixture");
+    std::array<Heap::Handle, 2> roots{a, a};
+    // Eight commit slots, sixteen preflight/classification slots, five
+    // preflight edges, two root occurrences, two marked nodes, two edges.
+    check(!heap.reclaim_unreachable_trusted_pod_graph(owner, roots.data(), roots.size(),
+            34, cancelled), "one-over-work sweep was admitted");
+    cancelled.store(true);
+    check(!heap.reclaim_unreachable_trusted_pod_graph(owner, roots.data(), roots.size(),
+            35, cancelled), "cancelled sweep changed live graph");
+    cancelled.store(false);
+    auto loan = heap.borrow(owner);
+    check(loan.has_value(), "missing read loan");
+    must_reject([&] { (void)heap.reclaim_unreachable_trusted_pod_graph(owner,
+                roots.data(), roots.size(), 35, cancelled); },
+                "sweep raced a live read loan");
+    loan->reset();
+    check(heap.live_nodes(owner) == 4 && heap.live_edges(owner) == 5,
+          "refused sweep altered graph");
+    check(heap.reclaim_unreachable_trusted_pod_graph(owner, roots.data(), roots.size(),
+            35, cancelled).value() == 2, "unrooted mutual cycle not reclaimed");
+    check(heap.live_nodes(owner) == 2 && heap.live_edges(owner) == 2 &&
+          heap.is_linked(owner, a, b) && heap.is_linked(owner, b, a),
+          "retained rooted cycle damaged");
+    must_reject([&] { (void)heap.copy_out(owner, c, &bytes, sizeof(bytes)); },
+                "reclaimed handle still resolves");
+    const auto replacement = heap.allocate(owner, &bytes, sizeof(bytes)).value();
+    check(replacement.slot == c.slot && replacement.generation > c.generation,
+          "swept slot did not advance generation");
+    const std::array<Heap::Handle, 1> stale{c};
+    must_reject([&] { (void)heap.reclaim_unreachable_trusted_pod_graph(owner,
+                stale.data(), stale.size(), 100, cancelled); },
+                "stale root authorized reclamation");
+    check(heap.live_nodes(owner) == 3, "stale root corrupted ledger");
+    check(heap.reclaim_unreachable_trusted_pod_graph(owner, nullptr, 0, 100,
+            cancelled).value() == 3, "empty trusted root set did not clear graph");
+    check(heap.live_nodes(owner) == 0 && heap.live_edges(owner) == 0,
+          "sweep leaked nodes/edges");
+}
+
+static void trusted_pod_sweep_refuses_destructor_bearing_slots() {
+    using Heap = ActorOwnedGraphHeap<4, 64, 2>;
+    const ActorHeapIdentity owner{62, 84, 7};
+    std::atomic<int> drops{0};
+    Heap heap(owner);
+    std::atomic<bool> cancelled{false};
+    const auto object = heap.emplace_owned<DroppableActorObject>(owner, &drops).value();
+    must_reject([&] { (void)heap.reclaim_unreachable_trusted_pod_graph(owner,
+                nullptr, 0, 100, cancelled); }, "sweep admitted owned resource");
+    check(heap.live_nodes(owner) == 1 && drops.load() == 0,
+          "refused sweep ran destructor or invalidated resource");
+    heap.remove(owner, object);
+    check(drops.load() == 1, "owned resource was not dropped exactly once");
+}
+
 int main() {
+    trusted_pod_sweep_preserves_root_closure_and_revokes_unreachable_handles();
+    trusted_pod_sweep_refuses_destructor_bearing_slots();
     transactional_pod_clone_preserves_cycles_and_shared_nodes();
     transactional_pod_clone_rejects_nested_owned_payloads();
     retirement_cohort_registry_does_not_grow_with_actor_churn();
