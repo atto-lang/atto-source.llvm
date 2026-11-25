@@ -1,0 +1,32 @@
+name: Actor DATA codec policy v1 (host only)
+on:
+  push:
+    branches: [draft/actor-data-codec-policy-v1-20261124]
+  pull_request:
+    paths:
+      - '**/*ActorDataCodecPolicyV1*'
+      - '**/*actor_data_codec_policy_v1*'
+      - '.github/workflows/actor-data-codec-policy-v1.yml'
+permissions:
+  contents: read
+jobs:
+  host-policy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact head and execute host-only policy tests
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git rev-parse 'HEAD^{tree}'
+          c++ --version
+          c++ -std=c++17 -Wall -Wextra -Werror -pedantic -fsanitize=address,undefined -fno-omit-frame-pointer -Isrc/main/cpp tests/actor_data_codec_policy_v1_test.cpp -o "$RUNNER_TEMP/policy"
+          "$RUNNER_TEMP/policy"
+          echo 'GUEST_CONFORMANCE=NOT_EXECUTED'
