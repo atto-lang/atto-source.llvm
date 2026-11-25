@@ -5798,7 +5798,7 @@ private:
             return result;
         }
         // Preferred contextual ownership prefixes lower into the existing
-        // Copy/Take/Borrow/BorrowMut/Share expression kinds and checker.
+        // Copy/DeepCopy/Take/Borrow/BorrowMut/Share expression kinds and checker.
         // Only the verb must touch '!'; the operand may be separated by trivia.
         {
             bool mutable_borrow = token_.text == "mut";
@@ -5827,8 +5827,11 @@ private:
                 const Token marker = probe.next();
                 if (marker.text == "!" &&
                         marker.offset == token_.offset + token_.text.size()) {
+                    const bool deep_copy = operation == "copy" &&
+                            source_.substr(marker.offset, 2) == "!!";
                     advance();
                     require("!");
+                    if (deep_copy) require("!");
                     // Canonical mutable borrowing puts the qualifier after
                     // the attached bang: borrow! mut value.
                     const bool canonical_mutable_borrow =
@@ -5836,6 +5839,7 @@ private:
                     if (canonical_mutable_borrow && token_.text == "mut")
                         fail("duplicate mutable borrow qualifier");
                     auto result = make_expression(
+                        deep_copy ? Expression::Kind::DeepCopy :
                         operation == "copy" ? Expression::Kind::Copy :
                         operation == "take" ? Expression::Kind::Take :
                         operation == "share" ? Expression::Kind::Share :
@@ -7418,6 +7422,7 @@ private:
             case Expression::Kind::Abs:
             case Expression::Kind::LogicalNot:
             case Expression::Kind::Copy:
+            case Expression::Kind::DeepCopy:
             case Expression::Kind::Take:
             case Expression::Kind::Share:
             case Expression::Kind::Borrow:
@@ -7687,6 +7692,15 @@ private:
             case Expression::Kind::BorrowMut:
                 return validate_scalar_expression(
                     *expr.left, variables, functions, depth + 1);
+            case Expression::Kind::DeepCopy: {
+                auto operand = validate_scalar_expression(
+                    *expr.left, variables, functions, depth + 1);
+                if (operand != ScalarType::I64 && operand != ScalarType::Bool)
+                    throw std::runtime_error(
+                        "E_COPY_GRAPH_UNPROVEN: copy!! requires an int or bool value at byte " +
+                        std::to_string(expr.offset));
+                return expr.resolved_type = operand;
+            }
             case Expression::Kind::Add: {
                 auto left = validate_scalar_expression(*expr.left, variables, functions, depth + 1);
                 auto right = validate_scalar_expression(*expr.right, variables, functions, depth + 1);
