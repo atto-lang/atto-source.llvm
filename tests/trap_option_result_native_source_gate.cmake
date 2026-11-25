@@ -79,3 +79,18 @@ foreach(n RANGE 1 10)
     endif()
 endforeach()
 message(STATUS "LLVM_TRAP_OPTION_RESULT_NATIVE_SOURCE_GATE=10_REJECTED_1_POSITIVE (not semantic parity)")
+
+# Independent lexical rejection checks must run the native compiler.
+foreach(keyword trap! throw! raise! panic! copy! copy!! take! borrow! share! pin! drop! pipe! rpipe! stop! expand!)
+    foreach(tail "value" "(42)" "/*comment*/ value" "")
+        set(path "${CMAKE_CURRENT_BINARY_DIR}/ores_bang_separator.atto")
+        file(WRITE "${path}" "pub fnc main():int { return ${keyword}${tail}; }\n")
+        execute_process(COMMAND "${ORES_TRAP_LLVM_CLI}" "${path}"
+            RESULT_VARIABLE status OUTPUT_VARIABLE ir ERROR_VARIABLE diagnostic TIMEOUT 15)
+        file(REMOVE "${path}")
+        if("${status}" STREQUAL "0" OR NOT diagnostic MATCHES "E_BANG_KEYWORD_WHITESPACE"
+            OR ir MATCHES "define [^\n]*@" OR ir MATCHES "target triple")
+            message(FATAL_ERROR "compact bang keyword was not rejected before emission: ${keyword}${tail}: ${diagnostic}")
+        endif()
+    endforeach()
+endforeach()
