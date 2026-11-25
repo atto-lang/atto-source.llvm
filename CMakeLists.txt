@@ -1704,6 +1704,21 @@ if(BUILD_TESTING)
     set_tests_properties(native_actor_execution_ledger_serialization
         PROPERTIES TIMEOUT 20)
 
+    # Bounded, actor-owned logical stacks keyed by live ledger event tokens.
+    # This exercises a native host reference bridge, NOT source-compiled
+    # suspending receive lowering or hardware-isolated native stacks.
+    add_executable(oreslang-actor-invocation-frames-test
+        tests/native_actor_invocation_frames_test.cpp)
+    target_include_directories(oreslang-actor-invocation-frames-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-actor-invocation-frames-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-actor-invocation-frames-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_actor_invocation_frame_ownership_host_only
+        COMMAND oreslang-actor-invocation-frames-test)
+    set_tests_properties(native_actor_invocation_frame_ownership_host_only
+        PROPERTIES TIMEOUT 30)
+
     # Lease-authenticated native scheduler DATA/WAKE callbacks interacting
     # with an actor-private ledger. Deliberately host-only: the legacy
     # scheduler's native "processed" receipt still precedes ledgered guest B.
