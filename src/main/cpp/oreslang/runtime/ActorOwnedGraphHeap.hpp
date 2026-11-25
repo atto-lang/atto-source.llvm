@@ -419,6 +419,18 @@ public:
         return Handle{heap_id_, id, slots_[id].generation};
     }
 
+    // Read one adjacency position under a loan. Unlike a raw pointer, the
+    // returned handle is checked again by every subsequent heap operation.
+    std::optional<Handle> edge_at(ActorHeapIdentity actor, Handle source,
+                                  std::size_t index) {
+        auto loan = require_read_access(actor);
+        const Slot& from = require_node(source);
+        if (index >= from.link_count) return std::nullopt;
+        const Handle target = from.links[index];
+        (void)require_node(target);
+        return target;
+    }
+
     // Invalidating a node also purges incoming non-owning edges, to avoid
     // dangling links consuming a bounded edge budget across slot reuse.
     void remove(ActorHeapIdentity actor, Handle id) {
