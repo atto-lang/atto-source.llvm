@@ -379,7 +379,7 @@ int main(void) {
     /* A fresh actor after failure runs on a functioning carrier and heap. */
     void* fresh = oreslang_source_actor_spawn(
         init, post_failure_message, 1);
-    check(fresh);
+    check(fresh != NULL);
     oreslang_source_actor_send(fresh, 77);
     check(wait_for(&sibling_after_failure, 1));
     oreslang_source_actor_stop(fresh);
@@ -387,7 +387,7 @@ int main(void) {
     /* Invalid program admission is also actor-local and terminal. */
     void* malformed = oreslang_source_actor_spawn(
         init, malformed_message, 1);
-    check(malformed);
+    check(malformed != NULL);
     oreslang_source_actor_send(malformed, 1);
     check(wait_for(&malformed_processed, 1));
     /* wait_done is trusted host-only; malformed actor must automatically
@@ -399,21 +399,21 @@ int main(void) {
      * so depth(63) must return cleanly before depth(64) would overflow. */
     void* boundary = oreslang_source_actor_spawn(
         init, bounded_depth_message, 1);
-    check(boundary);
+    check(boundary != NULL);
     oreslang_source_actor_send(boundary, 63);
     check(wait_for(&bounded_processed, 1));
     oreslang_source_actor_stop(boundary);
 
     void* wrong_tag = oreslang_source_actor_spawn(
         init, wrong_tag_message, 1);
-    check(wrong_tag);
+    check(wrong_tag != NULL);
     oreslang_source_actor_send(wrong_tag, 1);
     check(wait_for(&tag_failure_processed, 1));
     oreslang_source_actor_stop(wrong_tag);
 
     void* infinite = oreslang_source_actor_spawn(
         init, fuel_exhausted_message, 1);
-    check(infinite);
+    check(infinite != NULL);
     oreslang_source_actor_send(infinite, 1);
     check(wait_for(&fuel_failure_processed, 1));
     oreslang_source_actor_stop(infinite);
@@ -425,7 +425,7 @@ int main(void) {
     oreslang_source_actor_test_hold_scalar_checkpoint(1);
     void* cancelled = oreslang_source_actor_spawn(
         init, cancelled_message, 1);
-    check(cancelled);
+    check(cancelled != NULL);
     oreslang_source_actor_send(cancelled, 1);
     check(wait_checkpoint_entry());
     check(oreslang_source_actor_test_scalar_checkpoint_count(cancelled) >= 1);
@@ -445,21 +445,21 @@ int main(void) {
     oreslang_source_actor_test_reenter_scalar_vm_once();
     void* reentrant = oreslang_source_actor_spawn(
         init, nested_entry_message, 1);
-    check(reentrant);
+    check(reentrant != NULL);
     oreslang_source_actor_send(reentrant, 1);
     check(wait_for(&nested_reentry_denied, 1));
     oreslang_source_actor_stop(reentrant);
 
     void* tail_bad = oreslang_source_actor_spawn(
         init, invalid_tail_message, 1);
-    check(tail_bad);
+    check(tail_bad != NULL);
     oreslang_source_actor_send(tail_bad, 1);
     check(wait_for(&tail_operands_denied, 1));
     oreslang_source_actor_stop(tail_bad);
 
     void* arithmetic = oreslang_source_actor_spawn(
         init, arithmetic_message, 1);
-    check(arithmetic);
+    check(arithmetic != NULL);
     oreslang_source_actor_send(arithmetic, 1);
     check(wait_for(&scalar_arithmetic_verified, 1));
     oreslang_source_actor_stop(arithmetic);

@@ -1,4 +1,5 @@
 mod checked_i64;
+mod actor_isolation;
 
 use std::{
     env,
@@ -1009,6 +1010,12 @@ fn path_arg(args: &[String], index: usize, usage: &str) -> Result<PathBuf, Strin
 fn real_main() -> Result<(), String> {
     let args: Vec<String> = env::args().collect();
     match args.get(1).map(String::as_str) {
+        Some("actor-isolation") => {
+            let compiler = path_arg(&args, 2, "usage: actor-isolation <compiler> <clang> <root>")?;
+            let clang = path_arg(&args, 3, "usage: actor-isolation <compiler> <clang> <root>")?;
+            let root = path_arg(&args, 4, "usage: actor-isolation <compiler> <clang> <root>")?;
+            actor_isolation::run_cases(&compiler, &clang, &root)
+        }
         Some("checked-i64") => {
             let compiler = path_arg(&args, 2, "usage: checked-i64 <compiler> <clang>")?;
             let clang = path_arg(&args, 3, "usage: checked-i64 <compiler> <clang>")?;

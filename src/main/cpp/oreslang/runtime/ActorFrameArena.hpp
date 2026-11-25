@@ -155,7 +155,10 @@ public:
 
     // Non-LIFO release is a permanent actor-local protocol failure.
     bool pop(FrameRef ref) noexcept {
-        if (!owns_turn()) return false;
+        // Reject another actor/execution's capability before applying this
+        // actor's unwind protocol. A foreign token must not poison its target.
+        if (!owns_turn() || ref.arena_ != arena_id_ ||
+            ref.execution_ != execution_) return false;
         Frame* frame = find(ref);
         if (!frame || ref.index_ + 1 != count_) {
             poisoned_.store(true, std::memory_order_release);

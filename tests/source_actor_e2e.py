@@ -120,11 +120,11 @@ def main():
         "atto-actor-scalar-unsafe-nested-call-reject.atto":
             "native actor typed scalar frame admission: actor callback may only directly return pure unary fnc(message)",
         "atto-actor-scalar-abi-shadow-reject.atto":
-            "reserved native actor runtime symbol collision",
+            "reserved native runtime ABI symbol 'oreslang_source_actor_scalar_vm_execute'",
         "atto-actor-frame-internal-symbol-reject.atto":
-            "reserved native actor runtime symbol collision",
+            "reserved native runtime ABI symbol 'oreslang_source_actor_frame_i64_slot'",
         "atto-actor-heap-internal-symbol-reject.atto":
-            "reserved native actor runtime symbol collision",
+            "reserved native runtime ABI symbol 'ores_actor_i64_heap_enter'",
         "source-actor-owned-unknown-initializer-reject.ores":
             "unknown parameter 'not_yet_declared'",
         "source-actor-owned-forward-reference-reject.ores":
