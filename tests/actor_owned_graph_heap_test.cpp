@@ -874,7 +874,88 @@ static void concurrent_graph_read_write_links_are_exclusive() {
           static_cast<std::size_t>(edgesAdded.load()), "concurrent edge ledger corrupted");
 }
 
+static void transactional_pod_clone_preserves_cycles_and_shared_nodes() {
+    using Heap = ActorOwnedGraphHeap<8, 16, 2>;
+    const ActorHeapIdentity owner{62, 81, 7};
+    Heap heap(owner);
+    std::atomic<bool> cancelled{false};
+    const std::uint64_t one = 1, two = 2, three = 3, four = 4;
+    const auto a = heap.allocate(owner, &one, sizeof(one)).value();
+    const auto b = heap.allocate(owner, &two, sizeof(two)).value();
+    const auto c = heap.allocate(owner, &three, sizeof(three)).value();
+    const auto d = heap.allocate(owner, &four, sizeof(four)).value();
+    check(heap.link(owner, a, b) && heap.link(owner, a, c) &&
+          heap.link(owner, b, d) && heap.link(owner, c, d) &&
+          heap.link(owner, d, a) && heap.link(owner, d, d),
+          "failed to construct clone fixture");
+    check(!heap.clone_trusted_pod_graph(owner, a, 3, 6, cancelled),
+          "node budget exceeded");
+    check(!heap.clone_trusted_pod_graph(owner, a, 4, 5, cancelled),
+          "edge budget exceeded");
+    cancelled.store(true);
+    check(!heap.clone_trusted_pod_graph(owner, a, 4, 6, cancelled),
+          "cancelled clone published a root");
+    cancelled.store(false);
+    auto lease = heap.borrow(owner);
+    must_reject([&] { (void)heap.clone_trusted_pod_graph(owner, a, 4, 6, cancelled); },
+                "clone raced a live read lease");
+    lease->reset();
+    check(heap.live_nodes(owner) == 4 && heap.live_edges(owner) == 6,
+          "failed clone modified ledger");
+
+    const auto aa = heap.clone_trusted_pod_graph(owner, a, 4, 6, cancelled).value();
+    const auto bb = heap.edge_at(owner, aa, 0).value();
+    const auto cc = heap.edge_at(owner, aa, 1).value();
+    const auto dd = heap.edge_at(owner, bb, 0).value();
+    check(!(aa == a) && !(bb == b) && !(cc == c) && !(dd == d),
+          "clone reused original identity");
+    check(heap.edge_at(owner, cc, 0).value() == dd &&
+          heap.edge_at(owner, dd, 0).value() == aa &&
+          heap.edge_at(owner, dd, 1).value() == dd,
+          "clone lost repeated identity or a backedge");
+    check(heap.live_nodes(owner) == 8 && heap.live_edges(owner) == 12,
+          "clone ledger incorrect");
+    std::uint64_t output = 0;
+    check(heap.copy_out(owner, dd, &output, sizeof(output)) == sizeof(output) &&
+          output == four, "cloned bytes differ");
+    const std::uint64_t changed = 99;
+    heap.write(owner, dd, &changed, sizeof(changed));
+    heap.copy_out(owner, d, &output, sizeof(output));
+    check(output == four, "cloned bytes alias original");
+    check(!heap.clone_trusted_pod_graph(owner, aa, 4, 6, cancelled),
+          "full heap unexpectedly admitted clone");
+    check(heap.live_nodes(owner) == 8 && heap.live_edges(owner) == 12,
+          "capacity refusal mutated graph");
+    heap.remove(owner, dd);
+    must_reject([&] { (void)heap.edge_at(owner, dd, 0); },
+                "stale clone handle accepted");
+    check(heap.is_linked(owner, b, d) && heap.is_linked(owner, c, d),
+          "removing clone corrupted original");
+}
+
+static void transactional_pod_clone_rejects_nested_owned_payloads() {
+    using Heap = ActorOwnedGraphHeap<4, 64, 2>;
+    const ActorHeapIdentity owner{62, 82, 7};
+    std::atomic<int> drops{0};
+    Heap heap(owner);
+    std::atomic<bool> cancelled{false};
+    const std::uint64_t value = 42;
+    const auto root = heap.allocate(owner, &value, sizeof(value)).value();
+    const auto owned = heap.emplace_owned<DroppableActorObject>(owner, &drops).value();
+    check(heap.link(owner, root, owned), "failed nested owned fixture");
+    must_reject([&] { (void)heap.clone_trusted_pod_graph(owner, root, 2, 1, cancelled); },
+                "nested native destructor-bearing object copied as bytes");
+    check(heap.live_nodes(owner) == 2 && heap.live_edges(owner) == 1 &&
+          drops.load() == 0, "rejected clone modified owned resource");
+    heap.remove(owner, owned);
+    check(drops.load() == 1, "owned resource not dropped exactly once");
+    check(heap.clone_trusted_pod_graph(owner, root, 1, 0, cancelled).has_value(),
+          "clone could not recover after refusal");
+}
+
 int main() {
+    transactional_pod_clone_preserves_cycles_and_shared_nodes();
+    transactional_pod_clone_rejects_nested_owned_payloads();
     retirement_cohort_registry_does_not_grow_with_actor_churn();
     multi_lane_cohort_requires_every_carrier_to_join();
     failed_final_lane_cleanup_never_publishes_retirement_proof();
