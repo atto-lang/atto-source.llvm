@@ -47,6 +47,21 @@ typedef struct {
 int oreslang_source_actor_identity(
     void* actor, OresSourceActorIdentity* out_identity);
 
+/*
+ * Runtime-minted identity of the ACTUAL current compiler-generated source
+ * actor turn. Unlike oreslang_source_actor_identity(opaque), no guest-supplied
+ * ActorRef/pointer is accepted: the scheduler authenticates its carrier and
+ * actor generation; the source group checks the live slot under its lifetime
+ * fence. Returns 0 with a cleared output from host/main, foreign scheduler,
+ * root CONTROL continuation, retired/stale turn, or NULL output.
+ *
+ * Trusted compiler/runtime bridge only, NOT a guest-visible source callable.
+ * ActorGroup membership and policy still require independent validation at
+ * the native pub/sub admission boundary.
+ */
+int oreslang_source_actor_current_identity(
+    OresSourceActorIdentity* out_identity);
+
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
 /* Deterministic startup-race proof hooks. They pause only the reserved
  * initialization CONTROL callback before it decides whether construction may

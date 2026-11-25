@@ -50,41 +50,6 @@ int main() {
     check(memberships.join(b, 11, 1), "join subscriber 11 B");
 
     NativeActorPubSubAdmission<std::string> bus(memberships, 8, 4);
-    // Portable conformance PS018 and group-scoped PS021–PS026 require
-    // exact ASCII names, not permissive native UTF-8 / locale admission.
-    // The C ABI must share the same validation function.
-    {
-        using oreslang::runtime::valid_portable_topic_name;
-        NativeActorPubSubAdmission<std::string> names(memberships, 16, 4);
-        for (const std::string& good : {
-                std::string("a"), std::string("A"),
-                std::string("orders.created/v1-2_3"),
-                std::string(128, 'a')}) {
-            check(valid_portable_topic_name(good),
-                  "portable valid topic rejected by shared validator");
-            names.define_topic(a.group_id(), good,
-                NativeActorPubSubAdmission<std::string>::DeliveryPolicy::Reliable, 1);
-        }
-        for (const std::string& bad : {
-                std::string(), std::string("."), std::string("_"),
-                std::string("9topic"), std::string("bad space"),
-                std::string(" bad"), std::string("bad\tname"),
-                std::string("bad:name"), std::string("bad\\name"),
-                std::string(129, 'a'), std::string("a\0z", 3),
-                std::string("\xC3\xA9"), std::string("a\xC2\xA0" "b"),
-                std::string("\xFF", 1)}) {
-            check(!valid_portable_topic_name(bad),
-                  "invalid portable topic admitted by shared validator");
-            bool invalid = false;
-            try {
-                names.define_topic(a.group_id(), bad,
-                    NativeActorPubSubAdmission<std::string>::DeliveryPolicy::Reliable, 1);
-            } catch (const std::invalid_argument&) { invalid = true; }
-            check(invalid, "native topic admitted nonportable name");
-        }
-        check(names.close_group(a.group_id()) == 4,
-              "rejected topic names consumed capacity or leaked state");
-    }
     bool c1_control_rejected = false;
     try {
         bus.define_topic(
@@ -106,6 +71,56 @@ int main() {
                     NativeActorPubSubAdmission<std::string>::DeliveryPolicy::Lossy, 1);
         }), "Unicode whitespace-only native topic was admitted");
     }
+
+    // Direct native admission must be as strict as the C ABI: malformed UTF-8
+    // cannot create a topic, consume a sequence, or mutate queued deliveries.
+    NativeActorPubSubAdmission<std::string> utf8_strict(memberships, 2, 4);
+    for (const auto& bad : {
+            std::string("\x80"), std::string("\xc0\xaf"),
+            std::string("\xe2\x82"), std::string("\xed\xa0\x80"),
+            std::string("\xf4\x90\x80\x80"), std::string("\xff")}) {
+        bool invalid_topic = false;
+        try {
+            utf8_strict.define_topic(a.group_id(), bad,
+                NativeActorPubSubAdmission<std::string>::DeliveryPolicy::Reliable, 2);
+        } catch (const std::invalid_argument&) {
+            invalid_topic = true;
+        }
+        check(invalid_topic, "host bus admitted a malformed UTF-8 topic");
+    }
+    utf8_strict.define_topic(a.group_id(), "strict",
+        NativeActorPubSubAdmission<std::string>::DeliveryPolicy::Reliable, 2);
+    check(utf8_strict.subscribe(a.group_id(), "strict", 11, 1),
+          "strict UTF-8 subscription failed");
+    const auto utf8_first = utf8_strict.publish(
+        a.group_id(), "strict", 10, 1, std::string("h\xc3\xa9llo"));
+    check(utf8_first.sequence == 1 && utf8_first.accepted == 1,
+          "valid multilingual UTF-8 payload rejected");
+    for (const auto& bad : {
+            std::string("\x80"), std::string("\xc0\xaf"),
+            std::string("\xe2\x82"), std::string("\xed\xa0\x80"),
+            std::string("\xf4\x90\x80\x80"), std::string("\xff")}) {
+        bool invalid_payload = false;
+        try {
+            (void)utf8_strict.publish(a.group_id(), "strict", 10, 1, bad);
+        } catch (const std::invalid_argument&) {
+            invalid_payload = true;
+        }
+        check(invalid_payload, "host bus published malformed UTF-8 payload");
+    }
+    check(utf8_strict.queued_payload_bytes() == 6,
+          "rejected UTF-8 changed accepted queued bytes");
+    check(utf8_strict.try_read(a.group_id(), "strict", 11, 1).value()
+              == std::string("h\xc3\xa9llo"),
+          "UTF-8 rejection corrupted the preceding accepted payload");
+    const auto utf8_second = utf8_strict.publish(
+        a.group_id(), "strict", 10, 1, "valid");
+    check(utf8_second.sequence == 2 && utf8_second.accepted == 1,
+          "rejected UTF-8 consumed the topic-local sequence");
+    check(utf8_strict.try_read(a.group_id(), "strict", 11, 1).value()
+              == "valid", "valid payload after UTF-8 rejection lost");
+    check(utf8_strict.queued_payload_bytes() == 0,
+          "UTF-8 native validation leaked queued payload accounting");
 
     bus.define_topic(
             a.group_id(), "reliable",

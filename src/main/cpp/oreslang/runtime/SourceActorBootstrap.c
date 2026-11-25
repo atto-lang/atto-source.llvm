@@ -194,6 +194,60 @@ int oreslang_source_actor_identity(
     return 1;
 }
 
+/*
+ * Authenticate against the live scheduler TLS for THIS carrier/actor turn,
+ * never an opaque pointer or an identity supplied by the invoking guest.
+ * The lifetime fence protects group.vm and the live slot table from
+ * concurrent trusted-host join_done teardown. The scheduler validates
+ * current-turn authority before returning a context.
+ *
+ * Root CONTROL continuations use the reserved root slot and cannot borrow an
+ * actor's membership; foreign threads and retired callbacks return 0.
+ */
+int oreslang_source_actor_current_identity(
+        OresSourceActorIdentity* out_identity) {
+    if (!out_identity) return 0;
+    *out_identity = (OresSourceActorIdentity){0};
+
+    group_lock();
+    if (!group.vm) {
+        group_unlock();
+        return 0;
+    }
+
+    OresNativeExecutionContext physical = {0};
+    if (!ores_native_vm_current_execution_context(
+            group.vm, ORES_NATIVE_VM_MAIN, &physical)
+            || physical.allocation.kind != ORES_ALLOCATION_DOMAIN_ACTOR
+            || physical.allocation.owner >= SOURCE_GROUP_ROOT_SLOT
+            || physical.allocation.owner >= group.next_slot) {
+        group_unlock();
+        return 0;
+    }
+
+    const size_t slot = (size_t)physical.allocation.owner;
+    SourceActor* instance = group.actors[slot];
+    if (!instance || instance->magic != SOURCE_ACTOR_MAGIC
+            || instance->id == 0
+            || instance->ref.actor_slot != slot
+            || instance->ref.scheduler_domain == 0
+            || instance->ref.scheduler_domain != physical.allocation.domain
+            || instance->ref.generation == 0
+            || instance->ref.generation != physical.allocation.generation) {
+        group_unlock();
+        return 0;
+    }
+
+    *out_identity = (OresSourceActorIdentity){
+        .logical_id = instance->id,
+        .scheduler_domain = instance->ref.scheduler_domain,
+        .actor_slot = instance->ref.actor_slot,
+        .scheduler_generation = instance->ref.generation
+    };
+    group_unlock();
+    return 1;
+}
+
 typedef struct {
     OresNativeActorFuture* future;
     int status;

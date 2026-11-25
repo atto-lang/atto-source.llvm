@@ -93,3 +93,14 @@ LLVM source parity.
 The original actor.group and Topic<T> preflight did not explicitly reject a call to `imported_topic.try_publish(share! event)?` where the topic handle is provided by an enclosing scope. The parser gate now recognizes the bare `.try_publish` member and fails with the existing `native ActorGroup/Topic source lowering unsupported` diagnostic before native IR emission; it does not reserve free functions named `try_publish`. `tests/actor_pubsub_source_gate.py` pins a new `.atto` negative fixture by Git blob `c562ad380bb283da9ffa26160653c1186ab63462` and makes the exact compiler-negative CTest require it.
 
 **NOT_IMPLEMENTED / NOT_EXECUTED:** This is a compiler preflight hardening change on the existing LLVM pub/sub PR. It is not successful LLVM guest lowering, not a typed Result ABI, not sanitizer execution, and not Atto Ensemble 28-case guest parity. See [cross-backend gate #551](https://github.com/atto-lang/atto-platform-conformance/pull/551). Independent source-local CTest, ASan and UBSan evidence remains required.
+
+
+## Tagged RELIABLE-only publication ABI for future guest lowering (2026-11-21)
+
+The stacked [native UTF-8/sequence ABI PR #590](https://github.com/atto-lang/atto-source.llvm/pull/590) now contains two separate **trusted C ABI** symbols,
+`ores_native_actor_pubsub_try_publish_i64_result_v1` and
+`ores_native_actor_pubsub_try_publish_utf8_result_v1`, in addition to existing V1/V2 publish entrypoints. These take a trusted, generation-fenced `OresSourceActorIdentity` minted by the runtime bootstrap, not caller-controlled guest actor IDs. They use `NativeActorPubSubAdmission<T>::try_publish_reliable` and the same quota, locked membership, and sequence policy as the existing native substrate.
+
+`OresNativePubSubTryPublishResultV1` is a new C layout carrying an explicit tag plus V2 sequence/count receipt. The status return is **mandatory**: a non-`OK` status is a hard validation, stale-authority, invalid-policy, or resource failure; tag is forcibly `INVALID` with zero receipt. `OK + FULL` means a recoverable typed Full refusal with no sequence or credit consumption; `OK + OK` means atomic RELIABLE admission with a nonzero sequence. A success is **not a subscriber processing acknowledgement**. The typed C structure deliberately does not append fields to the frozen original V1 receipt.
+
+The existing native C ABI test now asserts i64/UTF-8 success, Full, exact sequence continuity on retry, denied foreign authority, invalid policy, null out pointer, and reset-on-error. This is **not an AttoLang compiler-generated guest**, even when the tests execute. The native frontend still refuses `Topic<T>`, `actor.group`, and `.try_publish` before producing IR. Next compiler steps must lower checked `share!`/Result ownership, actor-turn authority, ABI calls and error unwind, then execute compiled `.atto` fixtures on the exact tree before any guest-parity claim.

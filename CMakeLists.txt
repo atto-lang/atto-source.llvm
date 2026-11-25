@@ -1472,6 +1472,14 @@ if(BUILD_TESTING)
             --source-root "${CMAKE_CURRENT_SOURCE_DIR}"
             --verify-fixtures-only)
     set_tests_properties(source_actor_pubsub_atto_fixture_identity PROPERTIES TIMEOUT 15)
+    # Source-free adversarial validation of the negative-checker itself:
+    # a compiler that writes IR, modifies input or emits stdout must NOT pass
+    # just by exiting nonzero with the expected rejection diagnostic.
+    add_test(NAME source_actor_pubsub_negative_checker_selftest
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_pubsub_source_gate.py"
+            --self-test)
+    set_tests_properties(source_actor_pubsub_negative_checker_selftest PROPERTIES TIMEOUT 20)
     # Compiler-negative gate: both legacy extensions and the canonical
     # suspends-only .atto and canonical share! try_publish negative must fail closed.
     # Successful rejection is not native source pub-sub execution.

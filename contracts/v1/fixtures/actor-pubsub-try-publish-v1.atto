@@ -1,0 +1,50 @@
+define actor Subscriber as
+  suspends receive(ActorMail<String> mail): void {
+    val group = actor.group("payments");
+    val topic = group.topic<String>("payment.completed");
+    val subscription = topic.subscribe();
+
+    self.send("subscribed");
+    val value = await subscription.next();
+    self.send(value);
+
+    subscription.close();
+    self.end();
+    return;
+  }
+end
+
+pub suspends fnc main(): void {
+  val group = actor.group("payments");
+  val topic = group.topic<String>(
+    "payment.completed",
+    "reliable",
+    4
+  );
+
+  val subscriber = spawn Subscriber();
+  await subscriber.get_ready();
+  group.join(subscriber);
+
+  subscriber.send("start");
+
+  val ready = (await subscriber.outputs.next()).value.unwrap();
+  stdio.stdout.write(ready.value);
+  stdio.stdout.write("|");
+
+  val String event = "p-1";
+  val Result<PublishReceipt, PublishError> receipt = topic.try_publish(share! event);
+  // Snapshot just the immutable unsigned sequence before the next await;
+  // an actor-affine receipt need not live across the task suspension.
+  val String sequence = receipt.unwrap().sequence;
+
+  val received = (await subscriber.outputs.next()).value.unwrap();
+  stdio.stdout.write(received.value);
+  stdio.stdout.write("|");
+  stdio.stdout.write(sequence);
+
+  await subscriber.get_done();
+  group.leave(subscriber);
+  group.close();
+  return;
+}

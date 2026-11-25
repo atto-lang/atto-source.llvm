@@ -11,7 +11,6 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -19,23 +18,39 @@
 
 namespace oreslang::runtime {
 
-// Shared C++/C-ABI topic identity gate for portable ActorGroup PubSub v1.
-// No locale, Unicode normalization, allocation or implicit case folding.
-// Exact grammar: ^[A-Za-z][A-Za-z0-9._/-]{0,127}$ (1..128 bytes).
-inline bool valid_portable_topic_name(std::string_view name) noexcept {
-    if (name.empty() || name.size() > 128) return false;
-    for (std::size_t i = 0; i < name.size(); ++i) {
-        const unsigned char ch = static_cast<unsigned char>(name[i]);
-        const bool letter = (ch >= 'A' && ch <= 'Z')
-            || (ch >= 'a' && ch <= 'z');
-        const bool digit = ch >= '0' && ch <= '9';
-        if (i == 0 ? !letter
-                : !(letter || digit || ch == '.' || ch == '_'
-                        || ch == '/' || ch == '-'))
+// Strict Unicode scalar UTF-8 validation shared by the trusted C++ topic
+// admission path. The C ABI already rejects these encodings, but direct
+// native bus users must not bypass the same portable contract.
+namespace detail {
+inline bool valid_pubsub_utf8(const std::string& value) noexcept {
+    std::size_t i = 0;
+    while (i < value.size()) {
+        const auto a = static_cast<unsigned char>(value[i++]);
+        if (a < 0x80u) continue;
+        std::size_t tails = 0;
+        std::uint32_t codepoint = 0;
+        std::uint32_t minimum = 0;
+        if (a >= 0xc2u && a <= 0xdfu) {
+            tails = 1; codepoint = a & 0x1fu; minimum = 0x80u;
+        } else if (a >= 0xe0u && a <= 0xefu) {
+            tails = 2; codepoint = a & 0x0fu; minimum = 0x800u;
+        } else if (a >= 0xf0u && a <= 0xf4u) {
+            tails = 3; codepoint = a & 0x07u; minimum = 0x10000u;
+        } else return false;
+        if (tails > value.size() - i) return false;
+        for (std::size_t n = 0; n < tails; ++n) {
+            const auto b = static_cast<unsigned char>(value[i++]);
+            if ((b & 0xc0u) != 0x80u) return false;
+            codepoint = (codepoint << 6) | (b & 0x3fu);
+        }
+        if (codepoint < minimum || codepoint > 0x10ffffu
+                || (codepoint >= 0xd800u && codepoint <= 0xdfffu))
             return false;
     }
     return true;
 }
+} // namespace detail
+
 
 template<class T>
 struct NativeActorPubSubPayloadBytes final {
@@ -352,6 +367,14 @@ private:
             throw std::logic_error(
                 "publication requires live ActorGroup membership");
 
+        if constexpr (std::is_same_v<T, std::string>) {
+            // Reject malformed source buffers before freezing payloads or
+            // consuming topic sequences; C ABI and direct host calls agree.
+            if (!detail::valid_pubsub_utf8(value))
+                throw std::invalid_argument(
+                    "native pub-sub payload must contain valid UTF-8");
+        }
+
         const std::size_t payload_bytes =
             NativeActorPubSubPayloadBytes<T>::size(value);
         if (payload_bytes > max_bytes_per_subscription_) {
@@ -605,14 +628,71 @@ private:
         std::uint64_t last_sequence = 0;
     };
 
+    // Portable fail-closed topic admission: Unicode whitespace-only names
+    // are not meaningful topic identities. Match the Java/.NET/Wasm host
+    // admission behavior without depending on the process C locale.
+    static bool unicode_whitespace_only(const std::string& name) noexcept {
+        for (std::size_t i = 0; i < name.size();) {
+            const auto byte = [&](std::size_t pos) -> unsigned int {
+                return pos < name.size()
+                    ? static_cast<unsigned char>(name[pos]) : 0x100u;
+            };
+            const unsigned int b0 = byte(i);
+            if (b0 == 0x20u || (b0 >= 0x09u && b0 <= 0x0du)) {
+                ++i;
+                continue;
+            }
+            if (b0 == 0xc2u && byte(i + 1) == 0xa0u) {
+                i += 2;
+                continue;
+            }
+            if (b0 == 0xe1u && byte(i + 1) == 0x9au
+                    && byte(i + 2) == 0x80u) {
+                i += 3;
+                continue;
+            }
+            if (b0 == 0xe2u && byte(i + 1) == 0x80u
+                    && ((byte(i + 2) >= 0x80u && byte(i + 2) <= 0x8au)
+                        || byte(i + 2) == 0xa8u || byte(i + 2) == 0xa9u
+                        || byte(i + 2) == 0xafu)) {
+                i += 3;
+                continue;
+            }
+            if (b0 == 0xe2u && byte(i + 1) == 0x81u
+                    && byte(i + 2) == 0x9fu) {
+                i += 3;
+                continue;
+            }
+            if (b0 == 0xe3u && byte(i + 1) == 0x80u
+                    && byte(i + 2) == 0x80u) {
+                i += 3;
+                continue;
+            }
+            return false;
+        }
+        return true;
+    }
+
     void validate_topic(
             std::uint64_t group_id,
             const std::string& name,
             DeliveryPolicy policy,
             std::size_t capacity) const {
-        if (group_id == 0 || !valid_portable_topic_name(name)
+        if (group_id == 0 || name.empty() || name.size() > 256
+                || !detail::valid_pubsub_utf8(name)
+                || unicode_whitespace_only(name)
                 || capacity == 0 || capacity > max_queue_capacity_)
             throw std::invalid_argument("invalid native pub-sub topic");
+        for (std::size_t i = 0; i < name.size(); ++i) {
+            const unsigned char ch =
+                static_cast<unsigned char>(name[i]);
+            if (ch < 0x20 || ch == 0x7f
+                    || (ch == 0xc2 && i + 1 < name.size()
+                        && static_cast<unsigned char>(name[i + 1]) >= 0x80
+                        && static_cast<unsigned char>(name[i + 1]) <= 0x9f))
+                throw std::invalid_argument(
+                    "native pub-sub topic contains control character");
+        }
         if (policy == DeliveryPolicy::Latest && capacity != 1)
             throw std::invalid_argument(
                 "LATEST native pub-sub topic capacity must be one");

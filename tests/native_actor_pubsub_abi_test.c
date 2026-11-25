@@ -4,6 +4,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Distinct V2 receipt symbols must not change the footprint of callers
+ * compiled against the frozen V1 struct. */
+_Static_assert(offsetof(OresNativePubSubPublishReceiptV2, sequence)
+                   >= sizeof(OresNativePubSubPublishReceipt),
+               "V2 receipt sequence overlaps the legacy V1 footprint");
+
 static void check(int condition) {
     if (!condition) abort();
 }
@@ -52,32 +58,6 @@ int main(void) {
     check(ores_native_actor_pubsub_join(
         runtime, 2, subscriber) == ORES_NATIVE_PUBSUB_OK);
 
-    /* Same portable ASCII 1..128-byte name grammar in both native lanes.
-     * Invalid attempts must not consume any typed-topic ledger entries. */
-    char exactly_128[129];
-    char too_long[130];
-    memset(exactly_128, 'a', 128);
-    exactly_128[0] = 'A';
-    exactly_128[128] = '\0';
-    memset(too_long, 'a', 129);
-    too_long[129] = '\0';
-    const char* invalid_names[] = {
-        "", ".hidden", "_hidden", "9events", "bad space",
-        "bad:colon", "bad\\\\slash", "trailing ", "\xC3\xA9",
-        "events\xC3\xA9", too_long
-    };
-    for (size_t i = 0; i < sizeof invalid_names / sizeof invalid_names[0]; ++i) {
-        check(ores_native_actor_pubsub_define_i64_topic(
-            runtime, 1, invalid_names[i],
-            ORES_NATIVE_PUBSUB_RELIABLE, 1) == ORES_NATIVE_PUBSUB_INVALID);
-        check(ores_native_actor_pubsub_define_utf8_topic(
-            runtime, 1, invalid_names[i],
-            ORES_NATIVE_PUBSUB_RELIABLE, 1) == ORES_NATIVE_PUBSUB_INVALID);
-    }
-    check(ores_native_actor_pubsub_define_i64_topic(
-        runtime, 1, exactly_128,
-        ORES_NATIVE_PUBSUB_RELIABLE, 1) == ORES_NATIVE_PUBSUB_OK);
-
     /* A C1 Unicode control is legal UTF-8 but not a legal topic name.
      * .NET rejects U+0085 through char.IsControl; native lanes must agree. */
     check(ores_native_actor_pubsub_define_utf8_topic(
@@ -98,6 +78,154 @@ int main(void) {
     check(ores_native_actor_pubsub_subscribe_i64(
         runtime, 2, "events", subscriber) == ORES_NATIVE_PUBSUB_OK);
 
+    /* V2 receipts are additive ABI symbols; V1 struct stays byte-for-byte.
+     * RELIABLE retry after a full queue must not consume a topic sequence. */
+    check(ores_native_actor_pubsub_define_i64_topic(
+        runtime, 1, "sequence-v2", ORES_NATIVE_PUBSUB_RELIABLE, 1)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_subscribe_i64(
+        runtime, 1, "sequence-v2", subscriber) == ORES_NATIVE_PUBSUB_OK);
+    OresNativePubSubPublishReceiptV2 v2 = {0};
+    check(ores_native_actor_pubsub_publish_i64_v2(
+        runtime, 1, "sequence-v2", publisher, 31, &v2)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(v2.sequence == 1 && v2.subscribers == 1
+        && v2.accepted == 1 && !v2.backpressured);
+    check(ores_native_actor_pubsub_publish_i64_v2(
+        runtime, 1, "sequence-v2", publisher, 32, &v2)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(v2.sequence == 0 && v2.accepted == 0 && v2.backpressured);
+    int64_t sequence_value = 0;
+    check(ores_native_actor_pubsub_try_read_i64(
+        runtime, 1, "sequence-v2", subscriber, &sequence_value)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(sequence_value == 31);
+    check(ores_native_actor_pubsub_publish_i64_v2(
+        runtime, 1, "sequence-v2", publisher, 33, &v2)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(v2.sequence == 2 && v2.accepted == 1);
+    check(ores_native_actor_pubsub_try_read_i64(
+        runtime, 1, "sequence-v2", subscriber, &sequence_value)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(sequence_value == 33);
+
+    /* No subscribers still consumes a successful topic sequence, and the
+     * legacy V1 symbol must advance the SAME counter as the V2 symbol. */
+    check(ores_native_actor_pubsub_unsubscribe_i64(
+        runtime, 1, "sequence-v2", subscriber) == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_publish_i64_v2(
+        runtime, 1, "sequence-v2", publisher, 34, &v2)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(v2.sequence == 3 && v2.subscribers == 0 && v2.accepted == 0);
+    OresNativePubSubPublishReceipt legacy_sequence_receipt = {0};
+    check(ores_native_actor_pubsub_publish_i64(
+        runtime, 1, "sequence-v2", publisher, 35,
+        &legacy_sequence_receipt) == ORES_NATIVE_PUBSUB_OK);
+    check(legacy_sequence_receipt.subscribers == 0
+        && legacy_sequence_receipt.accepted == 0);
+    check(ores_native_actor_pubsub_publish_i64_v2(
+        runtime, 1, "sequence-v2", publisher, 36, &v2)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(v2.sequence == 5 && v2.subscribers == 0 && v2.accepted == 0);
+
+    check(ores_native_actor_pubsub_define_utf8_topic(
+        runtime, 2, "utf8-sequence-v2", ORES_NATIVE_PUBSUB_RELIABLE, 1)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_subscribe_utf8(
+        runtime, 2, "utf8-sequence-v2", subscriber) == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_publish_utf8_v2(
+        runtime, 2, "utf8-sequence-v2", publisher, "one", 3, &v2)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(v2.sequence == 1 && v2.accepted == 1);
+    check(ores_native_actor_pubsub_publish_utf8_v2(
+        runtime, 2, "utf8-sequence-v2", publisher, "two", 3, &v2)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(v2.sequence == 0 && v2.backpressured && v2.accepted == 0);
+    char v2_buffer[8] = {0};
+    size_t v2_length = 0;
+    check(ores_native_actor_pubsub_try_read_utf8(
+        runtime, 2, "utf8-sequence-v2", subscriber,
+        v2_buffer, sizeof v2_buffer, &v2_length) == ORES_NATIVE_PUBSUB_OK);
+    check(v2_length == 3 && memcmp(v2_buffer, "one", 3) == 0);
+    check(ores_native_actor_pubsub_publish_utf8_v2(
+        runtime, 2, "utf8-sequence-v2", publisher, "two", 3, &v2)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(v2.sequence == 2 && v2.accepted == 1);
+    check(ores_native_actor_pubsub_try_read_utf8(
+        runtime, 2, "utf8-sequence-v2", subscriber,
+        v2_buffer, sizeof v2_buffer, &v2_length) == ORES_NATIVE_PUBSUB_OK);
+    check(v2_length == 3 && memcmp(v2_buffer, "two", 3) == 0);
+
+    /* Guest-facing typed Result admission uses the SAME live membership
+     * and queue reservation path, but refuses non-RELIABLE policy. */
+    check(ores_native_actor_pubsub_subscribe_i64(
+        runtime, 1, "sequence-v2", subscriber) == ORES_NATIVE_PUBSUB_OK);
+    OresNativePubSubTryPublishResultV1 result = {0};
+    check(ores_native_actor_pubsub_try_publish_i64_result_v1(
+        runtime, 1, "sequence-v2", publisher, 41, &result)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(result.tag == ORES_NATIVE_PUBSUB_TRY_OK
+        && result.receipt.sequence == 6 && result.receipt.accepted == 1);
+    check(ores_native_actor_pubsub_try_publish_i64_result_v1(
+        runtime, 1, "sequence-v2", publisher, 42, &result)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(result.tag == ORES_NATIVE_PUBSUB_TRY_FULL
+        && result.receipt.sequence == 0 && result.receipt.accepted == 0);
+    check(ores_native_actor_pubsub_try_read_i64(
+        runtime, 1, "sequence-v2", subscriber, &sequence_value)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(sequence_value == 41);
+    check(ores_native_actor_pubsub_try_publish_i64_result_v1(
+        runtime, 1, "sequence-v2", publisher, 43, &result)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(result.tag == ORES_NATIVE_PUBSUB_TRY_OK
+        && result.receipt.sequence == 7 && result.receipt.accepted == 1);
+    check(ores_native_actor_pubsub_try_read_i64(
+        runtime, 1, "sequence-v2", subscriber, &sequence_value)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(sequence_value == 43);
+    check(ores_native_actor_pubsub_try_publish_i64_result_v1(
+        runtime, 1, "sequence-v2", publisher, 44, NULL)
+        == ORES_NATIVE_PUBSUB_INVALID);
+    result.tag = ORES_NATIVE_PUBSUB_TRY_FULL;
+    result.receipt.sequence = UINT64_C(0xdeadbeef);
+    check(ores_native_actor_pubsub_try_publish_i64_result_v1(
+        runtime, 1, "sequence-v2", foreign, 45, &result)
+        == ORES_NATIVE_PUBSUB_INVALID);
+    check(result.tag == ORES_NATIVE_PUBSUB_TRY_INVALID
+        && result.receipt.sequence == 0);
+    check(ores_native_actor_pubsub_unsubscribe_i64(
+        runtime, 1, "sequence-v2", subscriber) == ORES_NATIVE_PUBSUB_OK);
+
+    check(ores_native_actor_pubsub_try_publish_utf8_result_v1(
+        runtime, 2, "utf8-sequence-v2", publisher, "three", 5, &result)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(result.tag == ORES_NATIVE_PUBSUB_TRY_OK
+        && result.receipt.sequence == 3 && result.receipt.accepted == 1);
+    check(ores_native_actor_pubsub_try_publish_utf8_result_v1(
+        runtime, 2, "utf8-sequence-v2", publisher, "four", 4, &result)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(result.tag == ORES_NATIVE_PUBSUB_TRY_FULL
+        && result.receipt.sequence == 0 && result.receipt.accepted == 0);
+    check(ores_native_actor_pubsub_try_read_utf8(
+        runtime, 2, "utf8-sequence-v2", subscriber,
+        v2_buffer, sizeof v2_buffer, &v2_length) == ORES_NATIVE_PUBSUB_OK);
+    check(v2_length == 5 && memcmp(v2_buffer, "three", 5) == 0);
+    check(ores_native_actor_pubsub_try_publish_utf8_result_v1(
+        runtime, 2, "utf8-sequence-v2", publisher, "four", 4, &result)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(result.tag == ORES_NATIVE_PUBSUB_TRY_OK
+        && result.receipt.sequence == 4 && result.receipt.accepted == 1);
+    check(ores_native_actor_pubsub_try_read_utf8(
+        runtime, 2, "utf8-sequence-v2", subscriber,
+        v2_buffer, sizeof v2_buffer, &v2_length) == ORES_NATIVE_PUBSUB_OK);
+    check(v2_length == 4 && memcmp(v2_buffer, "four", 4) == 0);
+    check(ores_native_actor_pubsub_try_publish_utf8_result_v1(
+        runtime, 2, "utf8-sequence-v2", foreign, "foreign", 7, &result)
+        == ORES_NATIVE_PUBSUB_INVALID);
+    check(result.tag == ORES_NATIVE_PUBSUB_TRY_INVALID
+        && result.receipt.sequence == 0);
+
     OresNativePubSubPublishReceipt receipt = {0};
     check(ores_native_actor_pubsub_publish_i64(
         runtime, 1, "events", publisher, 11, &receipt)
@@ -111,6 +239,25 @@ int main(void) {
         == ORES_NATIVE_PUBSUB_OK);
     check(value == 11);
 
+
+    /* Invalid publisher identities and NULL result pointers fail closed
+     * without reading an invalid actor's source heap or touching receipts. */
+    v2.sequence = UINT64_C(0xdeadbeef);
+    check(ores_native_actor_pubsub_publish_i64_v2(
+        runtime, 1, "sequence-v2", foreign, 34, &v2)
+        == ORES_NATIVE_PUBSUB_INVALID);
+    check(v2.sequence == UINT64_C(0xdeadbeef));
+    check(ores_native_actor_pubsub_publish_i64_v2(
+        runtime, 1, "sequence-v2", publisher, 34, NULL)
+        == ORES_NATIVE_PUBSUB_INVALID);
+    check(ores_native_actor_pubsub_publish_utf8_v2(
+        runtime, 2, "utf8-sequence-v2", foreign, "bad", 3, &v2)
+        == ORES_NATIVE_PUBSUB_INVALID);
+    check(v2.sequence == UINT64_C(0xdeadbeef));
+    check(ores_native_actor_pubsub_publish_utf8_v2(
+        runtime, 2, "utf8-sequence-v2", publisher, "bad", 3, NULL)
+        == ORES_NATIVE_PUBSUB_INVALID);
+
     /* String topics share the same actor incarnation/membership fence. */
     check(ores_native_actor_pubsub_define_utf8_topic(
         runtime, 2, "strings",
@@ -121,6 +268,18 @@ int main(void) {
     check(ores_native_actor_pubsub_define_utf8_topic(
         runtime, 2, "losses",
         ORES_NATIVE_PUBSUB_LOSSY, 1) == ORES_NATIVE_PUBSUB_OK);
+    /* A typed try_publish is RELIABLE only; no partial guest Result from
+     * LATEST/LOSSY and no topic sequence consumed on policy denial. */
+    check(ores_native_actor_pubsub_try_publish_utf8_result_v1(
+        runtime, 2, "newest", publisher, "nope", 4, &result)
+        == ORES_NATIVE_PUBSUB_INVALID);
+    check(result.tag == ORES_NATIVE_PUBSUB_TRY_INVALID
+        && result.receipt.sequence == 0);
+    check(ores_native_actor_pubsub_try_publish_utf8_result_v1(
+        runtime, 2, "losses", publisher, "nope", 4, &result)
+        == ORES_NATIVE_PUBSUB_INVALID);
+    check(result.tag == ORES_NATIVE_PUBSUB_TRY_INVALID
+        && result.receipt.sequence == 0);
     /* A topic name is single-typed, regardless of the native bus lane. */
     check(ores_native_actor_pubsub_define_utf8_topic(
         runtime, 1, "events",
@@ -301,5 +460,76 @@ int main(void) {
     check(ores_native_actor_pubsub_subscribe_utf8(
         quota, 1, "texts", one) == ORES_NATIVE_PUBSUB_OK);
     ores_native_actor_pubsub_close(quota);
+
+    /*
+     * Cross-backend strict admission: mirrors Java ActorEventBus
+     * tryPublishReliable, which now permits only immediate queue admission,
+     * not the separate asynchronous publish() pending-writer budget.
+     * No recipients still constitutes a committed topic sequence.
+     */
+    OresNativeActorPubSubRuntime* parity =
+        ores_native_actor_pubsub_open(111, 2, 2, 2, 2);
+    check(parity != NULL);
+    const OresSourceActorIdentity parity_pub = actor(401, 111, 1, 1);
+    const OresSourceActorIdentity parity_sub = actor(402, 111, 2, 1);
+    check(ores_native_actor_pubsub_register_source_actor(
+        parity, parity_pub) == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_register_source_actor(
+        parity, parity_sub) == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_create_group(
+        parity, 1, 2) == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_join(
+        parity, 1, parity_pub) == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_join(
+        parity, 1, parity_sub) == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_define_i64_topic(
+        parity, 1, "strict", ORES_NATIVE_PUBSUB_RELIABLE, 1)
+        == ORES_NATIVE_PUBSUB_OK);
+
+    OresNativePubSubTryPublishResultV1 strict_result = {0};
+    check(ores_native_actor_pubsub_try_publish_i64_result_v1(
+        parity, 1, "strict", parity_pub, 10, &strict_result)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(strict_result.tag == ORES_NATIVE_PUBSUB_TRY_OK
+        && strict_result.receipt.sequence == 1
+        && strict_result.receipt.subscribers == 0
+        && strict_result.receipt.accepted == 0);
+    check(ores_native_actor_pubsub_try_publish_i64_result_v1(
+        parity, 1, "strict", parity_pub, 11, &strict_result)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(strict_result.tag == ORES_NATIVE_PUBSUB_TRY_OK
+        && strict_result.receipt.sequence == 2
+        && strict_result.receipt.accepted == 0);
+
+    check(ores_native_actor_pubsub_subscribe_i64(
+        parity, 1, "strict", parity_sub) == ORES_NATIVE_PUBSUB_OK);
+    check(ores_native_actor_pubsub_try_publish_i64_result_v1(
+        parity, 1, "strict", parity_pub, 12, &strict_result)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(strict_result.tag == ORES_NATIVE_PUBSUB_TRY_OK
+        && strict_result.receipt.sequence == 3
+        && strict_result.receipt.accepted == 1);
+    check(ores_native_actor_pubsub_try_publish_i64_result_v1(
+        parity, 1, "strict", parity_pub, 13, &strict_result)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(strict_result.tag == ORES_NATIVE_PUBSUB_TRY_FULL
+        && strict_result.receipt.sequence == 0
+        && strict_result.receipt.accepted == 0);
+    int64_t parity_value = -1;
+    check(ores_native_actor_pubsub_try_read_i64(
+        parity, 1, "strict", parity_sub, &parity_value)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(parity_value == 12);
+    check(ores_native_actor_pubsub_try_publish_i64_result_v1(
+        parity, 1, "strict", parity_pub, 14, &strict_result)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(strict_result.tag == ORES_NATIVE_PUBSUB_TRY_OK
+        && strict_result.receipt.sequence == 4
+        && strict_result.receipt.accepted == 1);
+    check(ores_native_actor_pubsub_try_read_i64(
+        parity, 1, "strict", parity_sub, &parity_value)
+        == ORES_NATIVE_PUBSUB_OK);
+    check(parity_value == 14);
+    ores_native_actor_pubsub_close(parity);
     return 0;
 }

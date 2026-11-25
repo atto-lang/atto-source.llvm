@@ -1,13 +1,38 @@
 #include "oreslang/runtime/NativeActorPubSubABI.h"
 #include "oreslang/runtime/SourceActorBootstrap.h"
 
+#include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <cstdlib>
 #include <sched.h>
 #include <stdexcept>
 
 static void check(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
+}
+
+// Only the native integration harness owns this host-side runtime pointer.
+// Source actors cannot create or pass unverified publisher identities.
+static std::atomic<OresNativeActorPubSubRuntime*> live_pubsub{nullptr};
+static std::atomic<std::uint64_t> publisher_turn_id{0};
+static std::atomic<std::uint64_t> publisher_turn_generation{0};
+static std::atomic<std::uint64_t> subscriber_turn_id{0};
+static std::atomic<std::uint64_t> subscriber_turn_generation{0};
+static std::atomic<int> turn_publish_status{-1};
+static std::atomic<int> turn_publish_tag{-1};
+static std::atomic<std::uint64_t> turn_publish_sequence{0};
+
+static void require_probe(
+        const std::atomic<std::uint64_t>& value, const char* message) {
+    const auto deadline = std::chrono::steady_clock::now()
+            + std::chrono::seconds(5);
+    while (value.load(std::memory_order_acquire) == 0
+            && std::chrono::steady_clock::now() < deadline) {
+        sched_yield();
+    }
+    check(value.load(std::memory_order_acquire) != 0, message);
 }
 
 static void actor_init(
@@ -25,6 +50,41 @@ static std::int64_t actor_message(
         std::int64_t payload) {
     (void)heap;
     if (domain == 0 || epoch == 0) std::abort();
+    if (payload == INT64_C(701) || payload == INT64_C(702)
+            || payload == INT64_C(703) || payload == INT64_C(704)) {
+        OresSourceActorIdentity current{};
+        if (!oreslang_source_actor_current_identity(&current)
+                || current.logical_id == 0
+                || current.scheduler_domain == 0
+                || current.scheduler_generation == 0) std::abort();
+        if (payload == INT64_C(701)) {
+            publisher_turn_generation.store(
+                    current.scheduler_generation, std::memory_order_relaxed);
+            publisher_turn_id.store(
+                    current.logical_id, std::memory_order_release);
+        } else if (payload == INT64_C(702)) {
+            subscriber_turn_generation.store(
+                    current.scheduler_generation, std::memory_order_relaxed);
+            subscriber_turn_id.store(
+                    current.logical_id, std::memory_order_release);
+        } else {
+            auto* pubsub = live_pubsub.load(std::memory_order_acquire);
+            if (!pubsub) std::abort();
+            OresNativePubSubTryPublishResultV1 receipt{};
+            const auto status = payload == INT64_C(703)
+                ? ores_native_actor_pubsub_try_publish_i64_result_v1(
+                    pubsub, 1, "source-identity", current, INT64_C(73),
+                    &receipt)
+                : ores_native_actor_pubsub_try_publish_utf8_result_v1(
+                    pubsub, 1, "source-identity-text", current,
+                    "payment-1", 9, &receipt);
+            turn_publish_tag.store(receipt.tag, std::memory_order_relaxed);
+            turn_publish_sequence.store(
+                    receipt.receipt.sequence, std::memory_order_relaxed);
+            turn_publish_status.store(
+                    static_cast<int>(status), std::memory_order_release);
+        }
+    }
     return payload;
 }
 
@@ -66,6 +126,29 @@ int main() {
             && subscriber_id.scheduler_generation != 0,
           "source actor generation fence missing");
 
+    // A host/main thread is NOT an authenticated compiler-generated actor
+    // turn even if it holds an otherwise valid opaque ActorRef.
+    OresSourceActorIdentity denied_host{};
+    denied_host.logical_id = UINT64_C(99999);
+    check(!oreslang_source_actor_current_identity(&denied_host),
+          "host thread forged a source actor turn");
+    check(denied_host.logical_id == 0
+            && denied_host.scheduler_generation == 0,
+          "failed source turn identity leaked stale caller bytes");
+    check(!oreslang_source_actor_current_identity(nullptr),
+          "null current-identity output was accepted");
+
+    oreslang_source_actor_send(publisher, INT64_C(701));
+    oreslang_source_actor_send(subscriber, INT64_C(702));
+    require_probe(publisher_turn_id, "publisher's source turn was not observed");
+    require_probe(subscriber_turn_id, "subscriber's source turn was not observed");
+    check(publisher_turn_id.load() == publisher_id.logical_id
+            && publisher_turn_generation.load() == publisher_id.scheduler_generation,
+          "publisher current-turn identity differs from trusted host snapshot");
+    check(subscriber_turn_id.load() == subscriber_id.logical_id
+            && subscriber_turn_generation.load() == subscriber_id.scheduler_generation,
+          "subscriber current-turn identity differs from trusted host snapshot");
+
     OresNativeActorPubSubRuntime* pubsub =
         ores_native_actor_pubsub_open(
             publisher_id.scheduler_domain, 8, 4, 4, 4);
@@ -96,6 +179,15 @@ int main() {
               == ORES_NATIVE_PUBSUB_OK,
           "source subscriber admission failed");
 
+    check(ores_native_actor_pubsub_define_utf8_topic(
+              pubsub, 1, "source-identity-text",
+              ORES_NATIVE_PUBSUB_RELIABLE, 1) == ORES_NATIVE_PUBSUB_OK,
+          "source UTF-8 topic definition failed");
+    check(ores_native_actor_pubsub_subscribe_utf8(
+              pubsub, 1, "source-identity-text", subscriber_id)
+              == ORES_NATIVE_PUBSUB_OK,
+          "source UTF-8 subscriber admission failed");
+
     OresNativePubSubPublishReceipt receipt{};
     check(ores_native_actor_pubsub_publish_i64(
               pubsub, 1, "source-identity",
@@ -113,6 +205,141 @@ int main() {
           "source identity subscriber read failed");
     check(value == INT64_C(42),
           "source identity subscriber read mismatch");
+
+    // The same source actor callback (not the outer host) obtains its
+    // publisher identity from live scheduler TLS and crosses the actual
+    // native tagged Result pub/sub admission ABI. No actor pointer or
+    // arbitrary OresSourceActorIdentity is handed in by source code.
+    live_pubsub.store(pubsub, std::memory_order_release);
+    oreslang_source_actor_send(publisher, INT64_C(703));
+    const auto typed_deadline = std::chrono::steady_clock::now()
+            + std::chrono::seconds(5);
+    while (turn_publish_status.load(std::memory_order_acquire) == -1
+            && std::chrono::steady_clock::now() < typed_deadline) {
+        sched_yield();
+    }
+    check(turn_publish_status.load(std::memory_order_acquire)
+                    == ORES_NATIVE_PUBSUB_OK
+            && turn_publish_tag.load() == ORES_NATIVE_PUBSUB_TRY_OK
+            && turn_publish_sequence.load() == 2,
+          "native typed Result publication from authenticated actor turn failed");
+    value = 0;
+    check(ores_native_actor_pubsub_try_read_i64(
+              pubsub, 1, "source-identity", subscriber_id, &value)
+              == ORES_NATIVE_PUBSUB_OK && value == INT64_C(73),
+          "native typed publication did not deliver to the subscribed actor");
+    // A valid scheduler-minted turn is necessary but NOT sufficient for a
+    // publication. Revoking group membership must deny the same live actor
+    // and refuse to create a typed receipt; rejoin restores only a fresh
+    // authorized membership, not old unguarded publication privileges.
+    check(ores_native_actor_pubsub_leave(
+              pubsub, 1, publisher_id) == ORES_NATIVE_PUBSUB_OK,
+          "publisher leave admission failed");
+    turn_publish_status.store(-1, std::memory_order_release);
+    turn_publish_tag.store(-1, std::memory_order_relaxed);
+    turn_publish_sequence.store(0, std::memory_order_relaxed);
+    oreslang_source_actor_send(publisher, INT64_C(703));
+    const auto revoked_deadline = std::chrono::steady_clock::now()
+            + std::chrono::seconds(5);
+    while (turn_publish_status.load(std::memory_order_acquire) == -1
+            && std::chrono::steady_clock::now() < revoked_deadline) {
+        sched_yield();
+    }
+    check(turn_publish_status.load(std::memory_order_acquire)
+                    == ORES_NATIVE_PUBSUB_DENIED_OR_STALE
+            && turn_publish_tag.load() == ORES_NATIVE_PUBSUB_TRY_INVALID
+            && turn_publish_sequence.load() == 0,
+          "revoked source actor turn must not publish or mint a receipt");
+    value = 0;
+    check(ores_native_actor_pubsub_try_read_i64(
+              pubsub, 1, "source-identity", subscriber_id, &value)
+              == ORES_NATIVE_PUBSUB_EMPTY,
+          "revoked publisher delivered unauthorized DATA");
+
+    check(ores_native_actor_pubsub_join(
+              pubsub, 1, publisher_id) == ORES_NATIVE_PUBSUB_OK,
+          "publisher rejoin admission failed");
+    turn_publish_status.store(-1, std::memory_order_release);
+    oreslang_source_actor_send(publisher, INT64_C(703));
+    const auto rejoined_deadline = std::chrono::steady_clock::now()
+            + std::chrono::seconds(5);
+    while (turn_publish_status.load(std::memory_order_acquire) == -1
+            && std::chrono::steady_clock::now() < rejoined_deadline) {
+        sched_yield();
+    }
+    check(turn_publish_status.load(std::memory_order_acquire)
+                    == ORES_NATIVE_PUBSUB_OK
+            && turn_publish_tag.load() == ORES_NATIVE_PUBSUB_TRY_OK
+            && turn_publish_sequence.load() == 3,
+          "rejoined source actor failed contiguous sequence publication");
+    value = 0;
+    check(ores_native_actor_pubsub_try_read_i64(
+              pubsub, 1, "source-identity", subscriber_id, &value)
+              == ORES_NATIVE_PUBSUB_OK && value == INT64_C(73),
+          "rejoined publisher was not delivered exactly once");
+    // UTF-8 typed Result exercises the actual String payload lane from
+    // a live source-actor callback. The first admission fills a one-slot
+    // queue; the second must return Full with no committed sequence.
+    turn_publish_status.store(-1, std::memory_order_release);
+    oreslang_source_actor_send(publisher, INT64_C(704));
+    const auto first_text_deadline = std::chrono::steady_clock::now()
+            + std::chrono::seconds(5);
+    while (turn_publish_status.load(std::memory_order_acquire) == -1
+            && std::chrono::steady_clock::now() < first_text_deadline) {
+        sched_yield();
+    }
+    check(turn_publish_status.load(std::memory_order_acquire)
+                    == ORES_NATIVE_PUBSUB_OK
+            && turn_publish_tag.load() == ORES_NATIVE_PUBSUB_TRY_OK
+            && turn_publish_sequence.load() == 1,
+          "authenticated source actor UTF-8 try_publish failed");
+
+    turn_publish_status.store(-1, std::memory_order_release);
+    oreslang_source_actor_send(publisher, INT64_C(704));
+    const auto full_text_deadline = std::chrono::steady_clock::now()
+            + std::chrono::seconds(5);
+    while (turn_publish_status.load(std::memory_order_acquire) == -1
+            && std::chrono::steady_clock::now() < full_text_deadline) {
+        sched_yield();
+    }
+    check(turn_publish_status.load(std::memory_order_acquire)
+                    == ORES_NATIVE_PUBSUB_OK
+            && turn_publish_tag.load() == ORES_NATIVE_PUBSUB_TRY_FULL
+            && turn_publish_sequence.load() == 0,
+          "native UTF-8 source actor turn must return Full without a sequence");
+
+    char text_buffer[32] = {};
+    std::size_t text_length = 0;
+    check(ores_native_actor_pubsub_try_read_utf8(
+              pubsub, 1, "source-identity-text", subscriber_id,
+              text_buffer, sizeof text_buffer, &text_length)
+              == ORES_NATIVE_PUBSUB_OK
+            && text_length == 9
+            && std::memcmp(text_buffer, "payment-1", 9) == 0,
+          "native String delivery mismatch after first typed Result");
+
+    turn_publish_status.store(-1, std::memory_order_release);
+    oreslang_source_actor_send(publisher, INT64_C(704));
+    const auto retry_text_deadline = std::chrono::steady_clock::now()
+            + std::chrono::seconds(5);
+    while (turn_publish_status.load(std::memory_order_acquire) == -1
+            && std::chrono::steady_clock::now() < retry_text_deadline) {
+        sched_yield();
+    }
+    check(turn_publish_status.load(std::memory_order_acquire)
+                    == ORES_NATIVE_PUBSUB_OK
+            && turn_publish_tag.load() == ORES_NATIVE_PUBSUB_TRY_OK
+            && turn_publish_sequence.load() == 2,
+          "UTF-8 retry after Full must consume the next contiguous sequence");
+    text_length = 0;
+    check(ores_native_actor_pubsub_try_read_utf8(
+              pubsub, 1, "source-identity-text", subscriber_id,
+              text_buffer, sizeof text_buffer, &text_length)
+              == ORES_NATIVE_PUBSUB_OK
+            && text_length == 9
+            && std::memcmp(text_buffer, "payment-1", 9) == 0,
+          "retry did not deliver exactly one String event");
+    live_pubsub.store(nullptr, std::memory_order_release);
 
     /*
      * Physical source actor retirement invalidates the opaque identity.
