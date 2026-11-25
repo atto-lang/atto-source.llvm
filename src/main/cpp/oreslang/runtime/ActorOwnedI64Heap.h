@@ -13,7 +13,7 @@ typedef struct OresActorI64Heap OresActorI64Heap;
 typedef struct { uint64_t domain, epoch; } OresActorTurn;
 typedef struct { uint64_t domain, index, generation; } OresActorSlot;
 typedef struct { uint64_t domain, nonce, index, generation; } OresActorLoan;
-typedef struct { uint64_t domain, nonce; } OresActorLifetimePin;
+typedef struct { uint64_t domain, index, generation; } OresActorExternalLease;
 
 /* Allocated once per actor incarnation, survives any number of turns. */
 OresActorI64Heap* ores_actor_i64_heap_open(uint64_t actor_id,
@@ -39,18 +39,17 @@ void ores_actor_i64_heap_drop(OresActorI64Heap* heap,
 OresActorLoan ores_actor_i64_heap_borrow(OresActorI64Heap* heap,
                                           OresActorTurn turn, OresActorSlot slot);
 void ores_actor_i64_heap_release(OresActorI64Heap* heap, OresActorLoan loan);
-/* Lifetime-only pin for continuations/FFI/I/O completions. It is registered
- * during an admitted turn, carries no slot coordinates, and may be released
- * from any completion carrier after logical retirement.
- *
- * Pins are linear host authority: EACH independently racing completion holder
- * must own its own pin and release it exactly once. A duplicate release is a
- * contract violation, not an idempotent cleanup operation. This is required
- * because final heap destroy may run immediately after the last pin releases. */
-OresActorLifetimePin ores_actor_i64_heap_pin_external(
+/* Lifetime-only authority for an admitted continuation/FFI/I/O callback.
+ * It carries no slot index or memory dereference capability. Release may run
+ * on any native carrier. The scheduler owns one mutable token per callback:
+ * successful/stale release consumes it by zeroing the token, so retrying that
+ * same token is safe even after CONTROL has destroyed the heap. Do not clone a
+ * token into independently live owners; copied stale tokens are only supported
+ * for replay/ABA rejection while the heap is still alive. */
+OresActorExternalLease ores_actor_i64_heap_external_acquire(
     OresActorI64Heap* heap, OresActorTurn turn);
-void ores_actor_i64_heap_release_external(
-    OresActorI64Heap* heap, OresActorLifetimePin pin);
+void ores_actor_i64_heap_external_release(
+    OresActorI64Heap* heap, OresActorExternalLease* lease);
 /* Compiler-emitted, serial actor field ABI. Only admitted turns may access
  * fixed-layout owned fields. Field initialization is single-use. */
 void ores_actor_i64_heap_field_init(OresActorI64Heap* heap,
@@ -68,11 +67,10 @@ void ores_actor_i64_heap_field_write(OresActorI64Heap* heap,
                                      uint64_t domain, uint64_t epoch,
                                      uint64_t index, int64_t value);
 void ores_actor_i64_heap_retire(OresActorI64Heap* heap);
-/* Returns zero while a turn, read loan, or external lifetime pin is outstanding;
- * returns one and frees native memory after quiescence. Never call with an
- * invalidated heap pointer. The supervisor must give every independently racing
- * callback/continuation its own external pin and fence any raw heap-pointer
- * holders before or as part of final destroy. */
+/* Returns zero while a turn, read loan, or external lifetime lease is
+ * outstanding; returns one and frees native memory after quiescence. Never
+ * call with an invalidated heap pointer. The supervisor is responsible for
+ * dropping its heap pointer after successful destroy and fencing stale users. */
 int ores_actor_i64_heap_try_destroy(OresActorI64Heap* heap);
 #ifdef __cplusplus
 }

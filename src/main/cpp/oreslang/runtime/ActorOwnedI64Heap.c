@@ -10,6 +10,7 @@
  * a compiler/scheduler admission barrier before they may use this backend. */
 #define MAX_SLOTS 4096u
 #define MAX_LOANS 64u
+#define MAX_EXTERNAL_LEASES 64u
 
 typedef struct {
     int64_t value;
@@ -26,6 +27,11 @@ typedef struct {
     uint64_t generation;
 } ActorLoanEntry;
 
+typedef struct {
+    uint64_t generation;
+    unsigned char active;
+} ActorExternalLeaseEntry;
+
 struct OresActorI64Heap {
     atomic_flag mutex;
     uint64_t domain;
@@ -37,7 +43,9 @@ struct OresActorI64Heap {
     int turn_active;
     int retiring;
     uint32_t active_loans;
+    uint32_t active_external_leases;
     ActorLoanEntry loan_entries[MAX_LOANS];
+    ActorExternalLeaseEntry external_leases[MAX_EXTERNAL_LEASES];
     ActorSlot slots[];
 };
 
@@ -49,6 +57,23 @@ static _Thread_local OresActorI64Heap* carrier_heap;
 static _Thread_local uint64_t carrier_epoch;
 
 static void rejected(void) { abort(); }
+
+/* Domain authority is never recycled. A wrapping fetch_add would transiently
+ * publish zero and then restart at one; use a saturating CAS loop instead so
+ * exhaustion is permanently fail-closed and stale handles can never regain a
+ * previously issued domain. */
+static uint64_t allocate_domain(void) {
+    uint64_t current = atomic_load_explicit(&next_domain, memory_order_relaxed);
+    for (;;) {
+        if (current == 0 || current == UINT64_MAX) rejected();
+        const uint64_t next = current + 1;
+        if (atomic_compare_exchange_weak_explicit(
+                &next_domain, &current, next,
+                memory_order_relaxed, memory_order_relaxed)) {
+            return current;
+        }
+    }
+}
 
 /* Short critical sections; bounded spinning fails rather than blocking an
  * uncooperative carrier forever. Production actor scheduling must not allow
@@ -93,9 +118,7 @@ OresActorI64Heap* ores_actor_i64_heap_open(uint64_t actor_id,
     OresActorI64Heap* heap = (OresActorI64Heap*) calloc(1, bytes);
     if (!heap) rejected();
     atomic_flag_clear(&heap->mutex);
-    const uint64_t id = atomic_fetch_add_explicit(&next_domain, 1, memory_order_relaxed);
-    if (id == 0 || id == UINT64_MAX) rejected();
-    heap->domain = id;
+    heap->domain = allocate_domain();
     heap->owner = actor_id;
     heap->incarnation = incarnation;
     heap->capacity = slot_capacity;
@@ -227,54 +250,71 @@ void ores_actor_i64_heap_release(OresActorI64Heap* heap, OresActorLoan loan) {
     rejected();
 }
 
-OresActorLifetimePin ores_actor_i64_heap_pin_external(
-        OresActorI64Heap* heap, OresActorTurn turn) {
+OresActorExternalLease ores_actor_i64_heap_external_acquire(
+    OresActorI64Heap* heap, OresActorTurn turn) {
     lock_heap(heap);
     require_turn(heap, turn);
-    if (heap->active_loans >= MAX_LOANS || heap->next_loan_nonce == UINT64_MAX)
-        rejected();
-    unsigned found = MAX_LOANS;
-    for (unsigned i = 0; i < MAX_LOANS; ++i) {
-        if (heap->loan_entries[i].nonce == 0) { found = i; break; }
+    if (heap->active_external_leases >= MAX_EXTERNAL_LEASES) rejected();
+
+    unsigned found = MAX_EXTERNAL_LEASES;
+    for (unsigned i = 0; i < MAX_EXTERNAL_LEASES; ++i) {
+        ActorExternalLeaseEntry* candidate = &heap->external_leases[i];
+        /*
+         * Generation exhaustion permanently retires only this bounded lease
+         * slot. Do not recycle its authority, but also do not let one retired
+         * slot deny admission while another slot remains safe to issue.
+         */
+        if (!candidate->active && candidate->generation != UINT64_MAX) {
+            found = i;
+            break;
+        }
     }
-    if (found == MAX_LOANS) rejected();
-    const uint64_t nonce = heap->next_loan_nonce++;
-    heap->loan_entries[found].nonce = nonce;
-    heap->loan_entries[found].index = UINT64_MAX;
-    heap->loan_entries[found].generation = 0;
-    ++heap->active_loans;
-    OresActorLifetimePin pin = {heap->domain, nonce};
+    if (found == MAX_EXTERNAL_LEASES) rejected();
+
+    ActorExternalLeaseEntry* entry = &heap->external_leases[found];
+    ++entry->generation;
+    entry->active = 1;
+    ++heap->active_external_leases;
+
+    OresActorExternalLease lease = {
+        heap->domain, (uint64_t) found, entry->generation
+    };
     unlock_heap(heap);
-    return pin;
+    return lease;
 }
 
-void ores_actor_i64_heap_release_external(
-        OresActorI64Heap* heap, OresActorLifetimePin pin) {
+void ores_actor_i64_heap_external_release(
+    OresActorI64Heap* heap, OresActorExternalLease* lease) {
+    if (!lease) rejected();
+
+    /* Same-token cleanup retry after successful release must not even inspect
+     * heap: CONTROL may already have reclaimed it. The scheduler must serialize
+     * ownership of this mutable token; copied tokens are stale-replay evidence,
+     * not independent lifetime owners. */
+    if (lease->domain == 0 && lease->index == 0 && lease->generation == 0) return;
+
     lock_heap(heap);
-    if (pin.domain != heap->domain || pin.nonce == 0
-            || pin.nonce >= heap->next_loan_nonce) {
+    if (lease->domain != heap->domain || lease->index >= MAX_EXTERNAL_LEASES
+        || lease->generation == 0) {
         rejected();
     }
-    for (unsigned i = 0; i < MAX_LOANS; ++i) {
-        ActorLoanEntry* entry = &heap->loan_entries[i];
-        if (entry->nonce != pin.nonce) continue;
-        if (entry->index != UINT64_MAX || entry->generation != 0
-                || !heap->active_loans) {
-            rejected();
-        }
-        --heap->active_loans;
-        memset(entry, 0, sizeof(*entry));
+
+    ActorExternalLeaseEntry* entry = &heap->external_leases[lease->index];
+    if (lease->generation > entry->generation) rejected();
+
+    /* An older generation cannot affect a newer lease occupying this bounded
+     * slot. Consume the stale token so further cleanup retries become no-ops. */
+    if (lease->generation < entry->generation || !entry->active) {
+        memset(lease, 0, sizeof(*lease));
         unlock_heap(heap);
         return;
     }
-    /* External pins are linear host authority. Treating an absent nonce as an
-     * idempotent retry is unsafe: after the last real pin releases, CONTROL may
-     * immediately destroy the heap, so a second cleanup caller could race into
-     * freed memory. Every independently racing holder must receive its own pin
-     * and release exactly once; duplicates fail closed while the heap is live. */
-    rejected();
+    if (!heap->active_external_leases) rejected();
+    entry->active = 0;
+    --heap->active_external_leases;
+    memset(lease, 0, sizeof(*lease));
+    unlock_heap(heap);
 }
-
 void ores_actor_i64_heap_field_init(OresActorI64Heap* heap,
                                     uint64_t domain, uint64_t epoch,
                                     uint64_t index, int64_t initial) {
@@ -344,7 +384,7 @@ int ores_actor_i64_heap_try_destroy(OresActorI64Heap* heap) {
     /* CONTROL try-destroy must not spin behind an in-flight actor operation. */
     if (!try_lock_heap(heap)) return 0;
     if (!heap->retiring) rejected();
-    if (heap->turn_active || heap->active_loans) {
+    if (heap->turn_active || heap->active_loans || heap->active_external_leases) {
         unlock_heap(heap);
         return 0;
     }
@@ -352,6 +392,7 @@ int ores_actor_i64_heap_try_destroy(OresActorI64Heap* heap) {
                        + (size_t) heap->capacity * sizeof(ActorSlot);
     memset(heap->slots, 0, (size_t) heap->capacity * sizeof(ActorSlot));
     memset(heap->loan_entries, 0, sizeof(heap->loan_entries));
+    memset(heap->external_leases, 0, sizeof(heap->external_leases));
     heap->domain = 0;
     /* Release lock before teardown; the supervisor must have fenced all
      * transport, scheduler, timer and callback handles to this heap. */
