@@ -16,7 +16,7 @@ endif()
 if(NOT DEFINED ORES_TRAP_CASE)
     set(ORES_TRAP_CASE "scalar")
 endif()
-if(NOT ORES_TRAP_CASE MATCHES "^(scalar|ok|err|nested|arithmetic_add|arithmetic_sub|arithmetic_mul|arithmetic_neg|arithmetic_nested_overflow)$")
+if(NOT ORES_TRAP_CASE MATCHES "^(scalar|ok|err|nested|arithmetic_add|arithmetic_sub|arithmetic_mul|arithmetic_neg|arithmetic_nested_overflow|arithmetic_rem_zero|arithmetic_mod_zero|arithmetic_rem_signed|arithmetic_mod_signed|arithmetic_rem_min|arithmetic_mod_min)$")
     message(FATAL_ERROR "unknown native trap test case")
 endif()
 # Check the actual compiler output for the stable nominal arithmetic ID.
@@ -29,6 +29,14 @@ if(ORES_TRAP_CASE MATCHES "^arithmetic_")
             NOT arithmetic_ir MATCHES "trap.arithmetic.err" OR
             NOT arithmetic_ir MATCHES "65537")
         message(FATAL_ERROR "missing real native arithmetic error edge/ID: ${ir_error}")
+    endif()
+endif()
+# Require the actual zero-divisor predecessor and matching ID in the
+# emitted Result error phi. This complements, not replaces, guest execution.
+if(ORES_TRAP_CASE MATCHES "^arithmetic_(rem|mod)_")
+    if(NOT arithmetic_ir MATCHES "br i1[^\n]*trap.division.zero.err" OR
+            NOT arithmetic_ir MATCHES "65538, %trap.division.zero.err")
+        message(FATAL_ERROR "missing checked divisor branch or nominal error ID 65538")
     endif()
 endif()
 set(work "${CMAKE_CURRENT_BINARY_DIR}/native_trap_int_aot_exec_${ORES_TRAP_CASE}")
