@@ -1717,6 +1717,37 @@ void upgrade_under_load_stress() {
     CHECK_EQ(host.snapshot(v.handle).phase, Phase::Running);
 }
 
+// Direct guest sends (raw ABI, not commit) carry the sending turn's span as the parent.
+void direct_sends_carry_trace_context() {
+    TenantVmHost host;
+    auto v = host.open(spec("direct"));
+    REQUIRE_OK(v);
+    auto relay = host.spawn_actor(v.handle, KIND_RELAY);
+    auto counter = host.spawn_actor(v.handle, KIND_COUNTER);
+    REQUIRE_OK(relay); REQUIRE_OK(counter);
+    CHECK_STATUS(host.set_tracing(v.handle, TraceSettings{true, 64}), Status::Ok);
+    TraceContext incoming;
+    CHECK(parse_traceparent("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01", incoming));
+    const auto target = static_cast<std::int64_t>(counter.actor.ref());
+    CHECK_EQ(word(host.call(relay.actor, words({target, 5}), incoming).get().payload), 1);
+    for (int i = 0; i < 2000 && host.snapshot(v.handle).spans_recorded < 2; ++i) std::this_thread::sleep_for(Ms(1));
+    auto spans = host.drain_spans(v.handle, 10);
+    CHECK_EQ(spans.size(), 2u);
+    if (spans.size() != 2) return;
+    const SpanRecord& r = spans[0].kind == KIND_RELAY ? spans[0] : spans[1];
+    const SpanRecord& c = spans[0].kind == KIND_RELAY ? spans[1] : spans[0];
+    CHECK(r.parent_span_id == incoming.span_id);
+    CHECK(c.trace_id == incoming.trace_id);
+    CHECK(c.has_parent && c.parent_span_id == r.span_id);
+    // Untraced again, the next turn's mail must not inherit the previous turn's context.
+    CHECK_STATUS(host.set_tracing(v.handle, TraceSettings{false, 64}), Status::Ok);
+    CHECK_EQ(word(host.call(relay.actor, words({target, 1})).get().payload), 1);
+    CHECK_STATUS(host.set_tracing(v.handle, TraceSettings{true, 64}), Status::Ok);
+    for (int i = 0; i < 2000 && word(host.call(counter.actor, words({0})).get().payload) != 6; ++i) std::this_thread::sleep_for(Ms(1));
+    spans = host.drain_spans(v.handle, 10);
+    for (const auto& s : spans) CHECK(s.trace_id != incoming.trace_id); // fresh roots only
+}
+
 struct Case { const char* name; void (*run)(); };
 const Case cases[] = {
     {"equal_offsets_are_different_memory", equal_offsets_are_different_memory},
@@ -1764,6 +1795,7 @@ const Case cases[] = {
     {"an_inflight_turn_finishes_on_the_old_code", an_inflight_turn_finishes_on_the_old_code},
     {"upgrade_refuses_unsafe_changes", upgrade_refuses_unsafe_changes},
     {"upgrade_under_load_stress", upgrade_under_load_stress},
+    {"direct_sends_carry_trace_context", direct_sends_carry_trace_context},
     {"thousand_vms_in_one_process", thousand_vms_in_one_process},
 };
 } // namespace

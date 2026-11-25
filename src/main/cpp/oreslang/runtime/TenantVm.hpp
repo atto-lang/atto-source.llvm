@@ -20,6 +20,7 @@
 // from a bug in this runtime. Both share one address space with every tenant, by design.
 #include "oreslang/runtime/TenantVmGuestAbi.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <future>
@@ -144,9 +145,46 @@ struct VmSnapshot {
     std::uint64_t actors_aborted = 0;
     std::uint64_t code_version = 0;     // 1 at open, +1 per accepted upgrade
     std::size_t actors_on_old_code = 0; // live actors still in a turn that started before the upgrade
+    bool tracing = false;
+    std::uint64_t spans_recorded = 0;
+    std::uint64_t spans_dropped = 0;  // the buffer was full
+    std::size_t spans_buffered = 0;
 };
 
 struct VmUpgradeResult { Status status = Status::HostClosed; std::uint64_t code_version = 0; };
+
+// W3C trace context, carried in the host-side envelope of actor mail. Guests never see it, so a tenant
+// cannot read or forge it, and it is correlation only: it never carries identity or authority.
+struct TraceContext {
+    std::array<std::uint8_t, 16> trace_id{};
+    std::array<std::uint8_t, 8> span_id{};
+    bool sampled = false;
+};
+// `00-<32 hex>-<16 hex>-<2 hex>`, lowercase, neither id all zero. Anything else is refused.
+bool parse_traceparent(const std::string& header, TraceContext& out);
+std::string format_traceparent(const TraceContext& context);
+
+// One actor turn, recorded only while tracing is on for its VM.
+struct SpanRecord {
+    std::array<std::uint8_t, 16> trace_id{};
+    std::array<std::uint8_t, 8> span_id{};
+    std::array<std::uint8_t, 8> parent_span_id{};
+    bool has_parent = false;
+    std::uint64_t actor_ref = 0;
+    std::uint32_t kind = 0;
+    std::uint64_t code_version = 0; // which code the turn ran on, so spans show an upgrade
+    std::uint64_t start_unix_ns = 0;
+    std::uint64_t end_unix_ns = 0;
+    Status status = Status::Ok;
+    FailReason failure = FailReason::None;
+};
+
+// Per VM, switchable while it runs. Off costs one relaxed load per turn. Spans go to a bounded buffer
+// that drops and counts when full; it never blocks a turn or grows.
+struct TraceSettings {
+    bool enabled = false;
+    std::uint32_t buffer_spans = 4096; // 1..1,048,576
+};
 
 struct TurnResult {
     Status status = Status::HostClosed;
@@ -203,6 +241,9 @@ public:
     VmSpawnResult spawn_actor(const VmHandle& vm, std::uint32_t kind);
     // Never blocks. Exactly one terminal result is delivered per admitted call.
     std::future<TurnResult> call(const VmActor& actor, std::vector<std::uint8_t> payload);
+    // The same, as a child of `parent` (for example from an incoming traceparent). Mail the turn sends
+    // carries the turn's own span as its parent, so a pipeline of actors becomes one trace.
+    std::future<TurnResult> call(const VmActor& actor, std::vector<std::uint8_t> payload, const TraceContext& parent);
     // Queued mail still runs; then the actor's memory is scrubbed and its slot reusable.
     Status stop_actor(const VmActor& actor);
 
@@ -217,6 +258,10 @@ public:
     // Which artifact to install is the caller's decision: like open, this checks layout, not provenance.
     VmUpgradeResult upgrade(const VmHandle& vm, const OresVmGuestModule* module,
                             std::shared_ptr<const void> module_owner);
+
+    Status set_tracing(const VmHandle& vm, TraceSettings settings);
+    // Oldest first. The exporter calls this off the execution path.
+    std::vector<SpanRecord> drain_spans(const VmHandle& vm, std::size_t max);
 
     Status begin_shutdown(const VmHandle& vm);
     Status kill(const VmHandle& vm);
