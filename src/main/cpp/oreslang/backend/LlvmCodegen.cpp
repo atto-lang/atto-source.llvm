@@ -1477,6 +1477,15 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
         }
     }
 
+    /* Cortex-M admission above rejects caught throws/effects and only lowers
+     * bounded synchronous scalar code. Mark every definition/declaration
+     * nounwind so ARM EHABI does not synthesize __aeabi_unwind_cpp_pr0 for
+     * ordinary non-leaf runtime calls in an otherwise no-libc image. */
+    if (cortex_m_target) {
+        for (auto& function : module.functions())
+            function.addFnAttr(llvm::Attribute::NoUnwind);
+    }
+
     std::string diagnostics;
     llvm::raw_string_ostream errors(diagnostics);
     if (llvm::verifyModule(module, &errors)) {
