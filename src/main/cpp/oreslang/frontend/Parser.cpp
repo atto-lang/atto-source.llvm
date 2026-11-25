@@ -597,6 +597,7 @@ bool native_pure_scalar_tree(const Expression& expr, std::size_t depth = 1) {
     if (expr.kind == Expression::Kind::Add ||
             expr.kind == Expression::Kind::Subtract ||
             expr.kind == Expression::Kind::Multiply ||
+            expr.kind == Expression::Kind::Divide ||
             expr.kind == Expression::Kind::Remainder ||
             expr.kind == Expression::Kind::ShiftLeft ||
             expr.kind == Expression::Kind::ShiftRight ||
@@ -5891,19 +5892,15 @@ private:
     std::unique_ptr<Expression> product() {
         auto left = unary();
         while (token_.text == "*" || token_.text == "/" || token_.text == "%") {
-            // Java defines int/int division as a FLOAT result; this native
-            // source compiler lowers expressions only to signed i64. Reject
-            // at the operator before either lowering or emitting partial IR.
-            if (token_.text == "/")
-                fail("native floating division unsupported: int/int yields float in Java; "
-                     "LLVM float typing and zero-divisor semantics are not implemented");
+            // Java's checked numeric contract now defines int/int as i64.
+            const bool divide = token_.text == "/";
             if (token_.text == "%")
                 fail("'%' is reserved and is not AttoLang source syntax; "
                      "use Integer.rem(a, b) or Integer.mod(a, b)");
             const auto offset = token_.offset;
             advance();
             auto right = unary();
-            auto expr = make_expression(Expression::Kind::Multiply, offset);
+            auto expr = make_expression(divide ? Expression::Kind::Divide : Expression::Kind::Multiply, offset);
             expr->left = std::move(left);
             expr->right = std::move(right);
             left = std::move(expr);
@@ -7564,6 +7561,7 @@ private:
             case Expression::Kind::Add:
             case Expression::Kind::Subtract:
             case Expression::Kind::Multiply:
+            case Expression::Kind::Divide:
             case Expression::Kind::Remainder:
             case Expression::Kind::ShiftLeft:
             case Expression::Kind::ShiftRight:
@@ -7845,6 +7843,7 @@ private:
             }
             case Expression::Kind::Subtract:
             case Expression::Kind::Multiply:
+            case Expression::Kind::Divide:
             case Expression::Kind::Remainder:
             case Expression::Kind::ShiftLeft:
             case Expression::Kind::ShiftRight:
