@@ -12,6 +12,7 @@ on:
       - 'src/main/cpp/oreslang/runtime/ActorHeapRetirementProof.hpp'
       - 'tests/actor_owned_graph_heap_test.cpp'
       - 'tests/actor_graph_sweep_plan_test.cpp'
+      - 'tests/actor_graph_sweep_heap_integration_test.cpp'
       - 'CMakeLists.txt'
       - '.github/workflows/llvm-ownership-gate-sanitizers.yml'
   push:
@@ -49,6 +50,17 @@ jobs:
             -I src/main/cpp tests/actor_graph_sweep_plan_test.cpp \
             -o "$RUNNER_TEMP/actor-graph-sweep-plan-test"
           "$RUNNER_TEMP/actor-graph-sweep-plan-test"
+      - name: Execute actual graph heap clone and sweep integration (native host)
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -O1 -g -Wall -Wextra -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -I src/main/cpp tests/actor_graph_sweep_heap_integration_test.cpp \
+            -o "$RUNNER_TEMP/actor-graph-sweep-heap-integration-test"
+          "$RUNNER_TEMP/actor-graph-sweep-heap-integration-test"
       - name: Install LLVM toolchain
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang llvm-dev
       - name: Configure sanitized ownership gate
