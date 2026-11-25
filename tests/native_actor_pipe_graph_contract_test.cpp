@@ -1,0 +1,138 @@
+#include "oreslang/runtime/ActorPipeContract.hpp"
+#include <stdexcept>
+#include <string>
+#include <vector>
+using namespace oreslang::runtime;
+
+static void expect(bool ok) {
+    if (!ok) throw std::runtime_error("native graph contract failure");
+}
+template<class F> static void deny(F run) {
+    bool seen = false;
+    try { run(); } catch (const std::invalid_argument&) { seen = true; }
+    expect(seen);
+}
+int main() {
+    std::vector<PipeStage> stages = {
+        {"Source", PipeRole::readable, "", "Payload"},
+        {"Left", PipeRole::transform, "Payload", "Payload"},
+        {"Right", PipeRole::transform, "Payload", "Payload"},
+        {"Sink", PipeRole::writable, "Payload", ""},
+    };
+    std::vector<PipeConnection> links = {
+        {"Source","Left","Payload"}, {"Source","Right","Payload"},
+        {"Left","Sink","Payload"}, {"Right","Sink","Payload"}
+    };
+    expect(check_actor_pipeline_graph(stages, links).size() == 4);
+    // Strict graph-string validation must match the Java planner.
+    deny([&] { auto wrong=stages;wrong[0].instance_id=std::string(1, char(0));
+               (void)check_actor_pipeline_graph(wrong, links); });
+    deny([&] { auto wrong=stages;wrong[0].instance_id=std::string(257, 'z');
+               (void)check_actor_pipeline_graph(wrong, links); });
+    deny([&] { auto wrong=stages;wrong[0].outbound=std::string(257, 'x');
+               (void)check_actor_pipeline_graph(wrong, links); });
+    deny([&] { auto wrong=links;wrong[0].payload=std::string(1, char(0));
+               (void)check_actor_pipeline_graph(stages, wrong); });
+    deny([&] { auto wrong=stages;wrong[0].instance_id=std::string(1, char(0x80));
+               (void)check_actor_pipeline_graph(wrong, links); });
+    deny([&] { auto wrong=stages;wrong[0].instance_id=std::string(1, char(0xc0));
+               (void)check_actor_pipeline_graph(wrong, links); });
+    {
+        auto unicode=stages;
+        unicode[0].instance_id=std::string({char(0xc3),char(0xa9)});
+        auto edges=links;
+        for (auto& link: edges)
+            if (link.source == "Source") link.source=unicode[0].instance_id;
+        expect(check_actor_pipeline_graph(unicode, edges).size() == 4);
+    }
+    // Two worker *instances* of one nominal actor type are legal. Graph
+    // endpoints resolve instance IDs, not nominal class names.
+    std::vector<PipeStage> identical_workers = {
+        {"Producer", PipeRole::readable, "", "Payload", "source-1"},
+        {"Worker", PipeRole::writable, "Payload", "", "worker-a"},
+        {"Worker", PipeRole::writable, "Payload", "", "worker-b"}
+    };
+    std::vector<PipeConnection> worker_edges = {
+        {"source-1", "worker-a", "Payload"},
+        {"source-1", "worker-b", "Payload"}
+    };
+    expect(check_actor_pipeline_graph(identical_workers, worker_edges).size() == 2);
+    deny([&] { auto wrong = identical_workers;
+               wrong[2].instance_id = "worker-a";
+               (void)check_actor_pipeline_graph(wrong, worker_edges); });
+    deny([&] { auto wrong = identical_workers;
+               wrong[2].actor_type = "";
+               (void)check_actor_pipeline_graph(wrong, worker_edges); });
+    deny([&] { auto wrong = identical_workers;
+               wrong[2].instance_id = std::string(257, 'x');
+               (void)check_actor_pipeline_graph(wrong, worker_edges); });
+    deny([&] { auto wrong=links;wrong[0].payload="Other";
+               (void)check_actor_pipeline_graph(stages,wrong); });
+    deny([&] { auto wrong=links;wrong.push_back(wrong[0]);
+               (void)check_actor_pipeline_graph(stages,wrong); });
+    // Right -> Left by itself is acyclic (both branches only join Sink).
+    // Close an actual two-node cycle with Left -> Right -> Left.
+    deny([&] { auto wrong=links;
+               wrong.push_back({"Left","Right","Payload"});
+               wrong.push_back({"Right","Left","Payload"});
+               (void)check_actor_pipeline_graph(stages,wrong); });
+    deny([&] { auto wrong=links;wrong[0].target="Missing";
+               (void)check_actor_pipeline_graph(stages,wrong); });
+    deny([&] { auto wrong=stages;wrong[2].actor_type="Left";
+               (void)check_actor_pipeline_graph(wrong,links); });
+    deny([&] { auto wrong=stages;wrong[2].role=PipeRole::supervisor_actor;
+               (void)check_actor_pipeline_graph(wrong,links); });
+    deny([&] { auto wrong=stages;wrong.pop_back();
+               (void)check_actor_pipeline_graph(wrong,links); });
+    // Endpoint pair uniqueness must not concatenate user-controlled names.
+    // Both pairs below would equal "a:b:c" if constructed naively.
+    {
+        std::vector<PipeStage> tricky = {
+            {"P", PipeRole::readable, "", "E", "a:b"},
+            {"P", PipeRole::readable, "", "E", "a"},
+            {"S", PipeRole::writable, "E", "", "c"},
+            {"S", PipeRole::writable, "E", "", "b:c"}
+        };
+        std::vector<PipeConnection> edges = {
+            {"a:b", "c", "E"}, {"a", "b:c", "E"}
+        };
+        expect(check_actor_pipeline_graph(tricky, edges).size() == 2);
+        deny([&] { auto duplicate = edges; duplicate.push_back(edges[0]);
+                   (void)check_actor_pipeline_graph(tricky, duplicate); });
+        // Canonically similar UTF-8 strings are still distinct instance IDs.
+        auto unicode=tricky;
+        unicode[0].instance_id=std::string({char(0xc3),char(0xa9)});
+        unicode[1].instance_id=std::string({char('e'),char(0xcc),char(0x81)});
+        std::vector<PipeConnection> unicode_edges = {
+            {unicode[0].instance_id,"c","E"},
+            {unicode[1].instance_id,"b:c","E"}
+        };
+        expect(check_actor_pipeline_graph(unicode,unicode_edges).size()==2);
+        std::string exact256;
+        for (int i=0;i<64;++i)
+            exact256+=std::string({char(0xf0),char(0x9f),char(0x8c),char(0x8d)});
+        auto upper=tricky;
+        upper[0].instance_id=exact256;
+        auto upper_edges=edges;
+        upper_edges[0].source=exact256;
+        expect(check_actor_pipeline_graph(upper,upper_edges).size()==2);
+        deny([&] { auto over=upper; over[0].instance_id+=
+                        std::string({char(0xf0),char(0x9f),char(0x8c),char(0x8d)});
+                   (void)check_actor_pipeline_graph(over,upper_edges); });
+    }
+    // A TRANSFORM with declared output type but no actual outgoing edge
+    // must not be admitted as a terminal writable sink.
+    deny([&] {
+        std::vector<PipeStage> stages = {
+            {"Producer", PipeRole::readable, "", "Event", "src"},
+            {"Worker", PipeRole::transform, "Event", "Event", "worker"}
+        };
+        std::vector<PipeConnection> edges = {{"src", "worker", "Event"}};
+        (void)check_actor_pipeline_graph(stages, edges);
+    });
+    // Budget checks operate before graph allocation and fail closed.
+    deny([&] { auto wrong=links;wrong.clear();
+               (void)check_actor_pipeline_graph(stages,wrong); });
+    deny([&] { auto wrong=stages;wrong.resize(1025,stages[1]);
+               (void)check_actor_pipeline_graph(wrong,links); });
+}

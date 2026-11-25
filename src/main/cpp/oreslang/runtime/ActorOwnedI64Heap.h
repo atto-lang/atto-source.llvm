@@ -6,12 +6,14 @@ extern "C" {
 
 /* Native actor heap experimental ABI. Actor IDs and enter tokens MUST remain
  * private to the scheduler, not exposed as forgeable guest-language values.
- * One actor turn runs at a time. This does not require stable carrier threads
- * and it does not use a tracing garbage collector. */
+ * One actor turn runs at a time and its memory authority is carrier-bound.
+ * Migration requires leave + fresh enter; stable carrier threads are not
+ * required. This heap does not use a tracing garbage collector. */
 typedef struct OresActorI64Heap OresActorI64Heap;
 typedef struct { uint64_t domain, epoch; } OresActorTurn;
 typedef struct { uint64_t domain, index, generation; } OresActorSlot;
 typedef struct { uint64_t domain, nonce, index, generation; } OresActorLoan;
+typedef struct { uint64_t domain, index, generation; } OresActorExternalLease;
 
 /* Allocated once per actor incarnation, survives any number of turns. */
 OresActorI64Heap* ores_actor_i64_heap_open(uint64_t actor_id,
@@ -37,6 +39,23 @@ void ores_actor_i64_heap_drop(OresActorI64Heap* heap,
 OresActorLoan ores_actor_i64_heap_borrow(OresActorI64Heap* heap,
                                           OresActorTurn turn, OresActorSlot slot);
 void ores_actor_i64_heap_release(OresActorI64Heap* heap, OresActorLoan loan);
+/* Lifetime-only authority for an admitted continuation/FFI/I/O callback.
+ * It carries no slot index or memory dereference capability. Release may run
+ * on any native carrier. The scheduler owns one mutable token per callback:
+ * successful/stale release consumes it by zeroing the token, so retrying that
+ * same token is safe even after CONTROL has destroyed the heap. Do not clone a
+ * token into independently live owners; copied stale tokens are only supported
+ * for replay/ABA rejection while the heap is still alive. */
+OresActorExternalLease ores_actor_i64_heap_external_acquire(
+    OresActorI64Heap* heap, OresActorTurn turn);
+/* A continuation's operation ticket must name the same actor whose active
+ * turn owns the pinned heap. This check and lifetime admission are atomic
+ * under the heap lock. Ticket generation is an operation identity, not
+ * necessarily the heap incarnation: do not equate the two. */
+OresActorExternalLease ores_actor_i64_heap_external_acquire_for_actor(
+    OresActorI64Heap* heap, OresActorTurn turn, uint64_t ticket_actor_id);
+void ores_actor_i64_heap_external_release(
+    OresActorI64Heap* heap, OresActorExternalLease* lease);
 /* Compiler-emitted, serial actor field ABI. Only admitted turns may access
  * fixed-layout owned fields. Field initialization is single-use. */
 void ores_actor_i64_heap_field_init(OresActorI64Heap* heap,
@@ -54,9 +73,10 @@ void ores_actor_i64_heap_field_write(OresActorI64Heap* heap,
                                      uint64_t domain, uint64_t epoch,
                                      uint64_t index, int64_t value);
 void ores_actor_i64_heap_retire(OresActorI64Heap* heap);
-/* Returns zero while a turn or loan is outstanding; returns one and frees
- * native memory after quiescence. Never call with an invalidated heap pointer.
- * The supervisor is responsible for fencing stale wakeups/callback holders. */
+/* Returns zero while a turn, read loan, or external lifetime lease is
+ * outstanding; returns one and frees native memory after quiescence. Never
+ * call with an invalidated heap pointer. The supervisor is responsible for
+ * dropping its heap pointer after successful destroy and fencing stale users. */
 int ores_actor_i64_heap_try_destroy(OresActorI64Heap* heap);
 #ifdef __cplusplus
 }
