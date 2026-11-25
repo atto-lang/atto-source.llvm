@@ -1824,6 +1824,22 @@ if(BUILD_TESTING)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/trap_int_native_aot_execution.cmake")
     set_tests_properties(native_trap_int_aot_guest_O0_O2 PROPERTIES TIMEOUT 300)
 
+    # Idempotent scalar Result references: real AOT + no-GC audit + guest
+    # exit at both optimization levels, without creating a second sum record.
+    foreach(case IN ITEMS ok err nested)
+        add_test(NAME native_trap_result_idempotent_${case}_O0_O2
+            COMMAND "${CMAKE_COMMAND}"
+                "-DORES_TRAP_LLVM_CLI=$<TARGET_FILE:oreslang-llvmc>"
+                "-DORES_TRAP_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/trap-result-idempotent-${case}.atto"
+                "-DORES_TRAP_AOT_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/scripts/compile-aot.sh"
+                "-DORES_TRAP_AUDITOR=${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit"
+                "-DORES_TRAP_CLANG=clang"
+                "-DORES_TRAP_CASE=${case}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/trap_int_native_aot_execution.cmake")
+        set_tests_properties(native_trap_result_idempotent_${case}_O0_O2 PROPERTIES TIMEOUT 300)
+    endforeach()
+
+
 
     # Trusted-host capability admission only; NOT source-level/hostile-native parity.
     find_package(Threads REQUIRED)
@@ -4292,9 +4308,15 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_try_throw_capable_return
         native-try-throw-capable-return-reject.ores
         --diagnostic "native protected try return requires nonthrowing scalar/field read")
-    # `trap e` now lowers to Option<int> (pure integer operand only). Using
+    # `trap e` lowers to Result<int,Error> for pure integer operands. Using
     # it where an int is required must still reject, as on Java: there is no
-    # implicit Option flatten/erase into a result, argument or operand.
+    # implicit tagged sum flatten/erase into a result, argument or operand.
+    oreslang_contract_test(native_trap_result_idempotent_option_reject
+        trap-result-idempotent-option-reject.atto
+        --diagnostic "native trap Option payload requires checked nested ownership ABI")
+    oreslang_contract_test(native_trap_result_idempotent_wrong_type_reject
+        trap-result-idempotent-wrong-type-reject.atto
+        --diagnostic "native trap existing Result type does not match expected Result")
     oreslang_contract_test(reject_unadmitted_trap_expression
         unsupported-trap-expression.ores
         --diagnostic "native result cannot implicitly wrap or erase Option/Result")
