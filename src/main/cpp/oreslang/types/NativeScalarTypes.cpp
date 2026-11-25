@@ -94,6 +94,14 @@ void validate_native_scalar_types(const Program& program) {
             case E::SumConstruct: {
                 const auto& type = native_sum(program, e.sum_type);
                 const bool option = type.kind == NativeSumType::Kind::Option;
+                // Independent type fence for compiler-created or rewritten ASTs.
+                if (type.trap_error && !e.trap_origin)
+                    fail(e.offset, "native Result<_, Error> values are minted only by trap");
+                if (e.trap_origin && (!type.trap_error || option ||
+                        type.value_type != ScalarType::I64 || e.name != "Ok" ||
+                        e.arguments.size() != 1 || !e.arguments.front() ||
+                        !native_trap_pure_integer(*e.arguments.front())))
+                    fail(e.offset, "invalid native trap Result construction");
                 if ((option && e.name != "Some" && e.name != "None") || (!option && e.name != "Ok" && e.name != "Err") ||
                         e.arguments.size() != (e.name == "None" ? 0u : 1u)) fail(e.offset, "sum variant/payload arity");
                 if (!e.arguments.empty()) require(expression(*e.arguments[0], locals), scalar(e.name == "Err" ? type.error_type : type.value_type), e.offset, "sum payload type");
