@@ -1181,10 +1181,11 @@ public:
                 if (!local_class_kinds.insert(name).second)
                     fail("NATIVE_KIND_DUPLICATE: duplicate local descriptor");
             }
+            if (token_.kind != Kind::Identifier) fail("NATIVE_KIND_HEADER_UNSUPPORTED: expected as token");
             require("as");
-            if (!accept("class"))
+            if (token_.kind != Kind::Identifier || !accept("class"))
                 fail("NATIVE_KIND_BASE_UNSUPPORTED: ordinary class only");
-            if (token_.text != "end")
+            if (token_.kind != Kind::Identifier || token_.text != "end")
                 fail("NATIVE_KIND_CONTRACT_UNSUPPORTED: typed interface/contract elaboration not yet lowered");
             require("end");
         };
@@ -1197,16 +1198,19 @@ public:
             if (reserved(token_.text) || name.size() > 128) return false;
             Lexer scan = lexer_;
             Token next = scan.next();
-            if (next.kind != Kind::Identifier || scan.next().text != "as") return false;
+            Token as = scan.next();
+            if (next.kind != Kind::Identifier || as.kind != Kind::Identifier || as.text != "as") return false;
             Token previous = next;
             for (Token candidate = scan.next(); candidate.kind != Kind::End; candidate = scan.next()) {
                 if (previous.kind == Kind::Identifier && previous.text == "define" &&
                         candidate.kind == Kind::Identifier && candidate.text == "keyword") {
                     Lexer look = scan;
                     Token declared = look.next();
+                    Token as_token = look.next(), base = look.next(), end = look.next();
                     if (declared.kind == Kind::Identifier && declared.text == name &&
-                            look.next().text == "as" && look.next().text == "class" &&
-                            look.next().text == "end") {
+                            as_token.kind == Kind::Identifier && as_token.text == "as" &&
+                            base.kind == Kind::Identifier && base.text == "class" &&
+                            end.kind == Kind::Identifier && end.text == "end") {
                         if (local_class_kinds.size() >= 128)
                             fail("NATIVE_KIND_BUDGET: at most 128 local descriptors");
                         local_class_kinds.insert(name);
@@ -1760,7 +1764,8 @@ public:
         }
         if (!provisional_kinds.empty())
             fail("NATIVE_KIND_FORWARD_NOT_ROOT: provisional descriptor was not confirmed at file root");
-        if (!local_class_kinds.empty() && (!program.namespace_name.empty() || wrapped_module))
+        if (!local_class_kinds.empty() && (!program.namespace_name.empty() || wrapped_module ||
+                !program.imports.empty() || !program.namespace_imports.empty() || !program.exports.empty()))
             fail("NATIVE_KIND_SCOPE_UNSUPPORTED: descriptor requires unwrapped file root");
         compile_type_constraint_descriptors(program);
         lower_extension_calls(program);
