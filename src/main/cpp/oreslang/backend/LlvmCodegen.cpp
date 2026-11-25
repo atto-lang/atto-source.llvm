@@ -210,7 +210,9 @@ llvm::Value* lower_trapped_i64(const Expression& e, llvm::IRBuilder<>& builder,
         builder.SetInsertPoint(proceed);
         // MIN % -1 is zero, not LLVM poison. Replace -1 with 1 before srem.
         auto* safe = builder.CreateSelect(
-            builder.CreateICmpEQ(rhs, llvm::ConstantInt::getSigned(i64, -1)),
+            builder.CreateOr(
+                builder.CreateICmpEQ(rhs, llvm::ConstantInt::getSigned(i64, -1)),
+                builder.CreateICmpEQ(rhs, llvm::ConstantInt::get(i64, 0))),
             llvm::ConstantInt::get(i64, 1), rhs);
         auto* rem = builder.CreateSRem(lhs, safe, "trap.rem");
         if (e.kind == K::Remainder) return rem;
