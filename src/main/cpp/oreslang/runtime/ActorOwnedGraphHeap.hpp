@@ -1,6 +1,7 @@
 #pragma once
 
 #include "oreslang/runtime/ActorHeapRetirementProof.hpp"
+#include "oreslang/runtime/ActorGraphSweepPlan.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -429,6 +430,71 @@ public:
         const Handle target = from.links[index];
         (void)require_node(target);
         return target;
+    }
+
+    /**
+     * Explicit bounded reachability reclamation, trusted native POD subset.
+     * The caller MUST supply every strong root (including suspended frames,
+     * mailboxes and other live runtime owners) from this actor generation.
+     * No guest root enumeration or concurrent/incremental collection implied.
+     * Weak handles are not roots and become stale on slot generation advance.
+     *
+     * The mutation gate excludes readers/writers and retirement throughout.
+     * Quota, cancellation, invalid roots/edges, or owned drop glue refuse
+     * before touching live storage. Retained nodes cannot point into the
+     * sweep set: the complete strong reachability closure was marked.
+     */
+    std::optional<std::size_t> reclaim_unreachable_trusted_pod_graph(
+            ActorHeapIdentity actor, const Handle* roots, std::size_t root_count,
+            std::size_t max_work, const std::atomic<bool>& cancelled) {
+        auto mutation = require_mutation_access(actor);
+        if (root_count && !roots)
+            throw std::invalid_argument("missing authoritative graph roots");
+        // Reserve work for the final capacity scan as well as the preflight.
+        // Payload/edge-array scrubbing costs are bounded by arena geometry,
+        // not measured as bytes by this logical work counter.
+        if (max_work < NodeCapacity) return std::nullopt;
+        auto plan = detail::plan_actor_graph_sweep<NodeCapacity>(
+            root_count, max_work - NodeCapacity, cancelled,
+            [&](std::size_t id) { return slots_[id].live; },
+            [&](std::size_t id) {
+                const Slot& slot = slots_[id];
+                if (slot.drop || slot.link_count > LinksPerNode)
+                    throw std::logic_error("graph sweep requires trusted POD slots");
+                return slot.link_count;
+            },
+            [&](std::size_t id, std::size_t e) {
+                const Handle target = slots_[id].links[e];
+                (void)require_node(target);
+                return static_cast<std::size_t>(target.slot);
+            },
+            [&](std::size_t i) {
+                const Handle root = roots[i];
+                (void)require_node(root);
+                return static_cast<std::size_t>(root.slot);
+            });
+        if (!plan) return std::nullopt;
+        if (plan->nodes > active_nodes_ || plan->edges > active_edges_)
+            throw std::logic_error("graph sweep accounting inconsistent");
+        if (cancelled.load(std::memory_order_acquire)) return std::nullopt;
+
+        // Commit point: cancellation after this check loses to completion.
+        // No allocations, destructor callbacks, or fallible validation follow.
+        for (std::size_t i = 0; i < NodeCapacity; ++i) {
+            if (!plan->reclaim[i]) continue;
+            Slot& slot = slots_[i];
+            slot.live = false;
+            if (slot.generation < std::numeric_limits<std::uint64_t>::max())
+                ++slot.generation;
+            std::fill(slot.payload.begin(), slot.payload.end(), std::byte{0});
+            slot.links.fill(Handle{0, 0, 0});
+            slot.length = 0;
+            slot.link_count = 0;
+            slot.drop = nullptr;
+        }
+        active_nodes_ -= plan->nodes;
+        active_edges_ -= plan->edges;
+        return plan->nodes;
     }
 
     // Invalidating a node also purges incoming non-owning edges, to avoid
