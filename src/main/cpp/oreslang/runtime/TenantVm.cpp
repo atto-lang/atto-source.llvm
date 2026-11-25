@@ -86,6 +86,8 @@ constexpr std::uint64_t kCageBytes = kAddressableBytes * 3 + (std::uint64_t{1} <
 constexpr std::uint64_t kCommitStepBytes = std::uint64_t{1} << 20;
 constexpr std::size_t kCarrierGuardBytes = std::size_t{1} << 20;
 constexpr std::size_t kSignalStackBytes = std::size_t{64} << 10;
+constexpr std::uint32_t kMaxRestartBudget = 65535;
+constexpr std::uint32_t kMaxRestartWindowMs = 24u * 60 * 60 * 1000;
 constexpr std::size_t kHostCallStackBytes = std::size_t{256} << 10; // malloc, locks, a first dynamic link
 constexpr std::uint32_t kAlignment = 16;
 constexpr std::uint32_t kMaxActorBytes = std::uint32_t{1} << 30;
@@ -565,7 +567,13 @@ struct TenantVmHost::Core {
                 if (!mail.has_promise) ++vm->mail_lost;
                 escalate = false;
                 if (restart_allowed_locked(vm, *actor, slot)) {
+                    // Scrubbing is work this tenant caused, so it is charged like a turn, keeping a crash
+                    // loop from taking carrier time that fair scheduling never sees.
+                    const std::uint64_t scrub_start = now_ns();
                     reset_actor_locked(*vm, *actor);
+                    const std::uint64_t scrubbed = now_ns() - scrub_start;
+                    vm->cpu_ns.fetch_add(scrubbed, std::memory_order_relaxed);
+                    vm->vtime_ns.fetch_add(scrubbed, std::memory_order_relaxed);
                     ++vm->actor_restarts;
                     actor_restarts.fetch_add(1, std::memory_order_relaxed);
                     restarted = true;
@@ -648,7 +656,10 @@ struct TenantVmHost::Core {
         const std::size_t failures = actor.recent_failures_ns.size();
         if (failures > limits.restart_budget) return false;
         if (limits.restart_backoff_ms) {
-            actor.backoff_until_ns = restart_backoff_deadline_ns(now, limits.restart_backoff_ms, failures);
+            // Exponential and saturating, but never past the window: open() bounds the window, so now + window_ns
+            // cannot overflow.
+            actor.backoff_until_ns =
+                std::min(restart_backoff_deadline_ns(now, limits.restart_backoff_ms, failures), now + window_ns);
             std::lock_guard<std::mutex> lock(backoff_mutex);
             backoff.push_back(Backoff{actor.backoff_until_ns, vm, slot, actor.generation});
             std::push_heap(backoff.begin(), backoff.end());
@@ -667,13 +678,27 @@ struct TenantVmHost::Core {
                 backoff.pop_back();
             }
         }
-        for (const Backoff& entry : due) {
-            std::lock_guard<std::mutex> lock(entry.vm->mutex);
+        std::vector<Backoff> busy;
+        for (Backoff& entry : due) {
+            // The watchdog enforces every tenant's deadline, so it must never wait on one VM's lock: a
+            // VM scrubbing a large actor would hold up deadlines everywhere. A busy one waits a tick.
+            std::unique_lock<std::mutex> lock(entry.vm->mutex, std::try_to_lock);
+            if (!lock.owns_lock()) {
+                busy.push_back(std::move(entry));
+                continue;
+            }
             Actor& actor = *entry.vm->actors[entry.slot];
             if (!actor.live || actor.generation != entry.generation || actor.backoff_until_ns != entry.until_ns) continue;
             actor.backoff_until_ns = 0;
             const Phase phase = entry.vm->current_phase();
             if (phase == Phase::Running || phase == Phase::Quiescing) make_ready_locked(entry.vm, entry.slot);
+        }
+        if (!busy.empty()) {
+            std::lock_guard<std::mutex> lock(backoff_mutex);
+            for (Backoff& entry : busy) {
+                backoff.push_back(std::move(entry));
+                std::push_heap(backoff.begin(), backoff.end());
+            }
         }
     }
 
@@ -1139,9 +1164,20 @@ struct TenantVmHost::Core {
         return 1;
     }
 
+    // A restartable turn may fail and be rolled back, but a send, spawn or stop it made would already be
+    // visible to other actors. Until those are held for the turn's commit, such a turn may not make them.
+    // Source handlers cannot today, so this only fails closed if a compiler starts to.
+    static bool reaches_outside_actor(const Carrier* c) {
+        return (c->actor->kind->flags & ORES_VM_KIND_RESTARTABLE) != 0;
+    }
+
     static int host_send(std::uint64_t target, std::uint32_t offset, std::uint32_t length) {
         Carrier* c = host_enter();
         int result = 0;
+        if (reaches_outside_actor(c)) {
+            host_leave(c);
+            return 0;
+        }
         try {
             result = static_cast<Core*>(c->core)->send_impl(*c->vm, target, offset, length);
         } catch (...) { // out of memory is this guest's refusal, not the process's end
@@ -1169,6 +1205,10 @@ struct TenantVmHost::Core {
     static std::uint64_t host_spawn(std::uint32_t kind) {
         Carrier* c = host_enter();
         std::uint64_t result = 0;
+        if (reaches_outside_actor(c)) {
+            host_leave(c);
+            return 0;
+        }
         try {
             result = static_cast<Core*>(c->core)->spawn_impl(*c->vm, *c->actor, kind);
         } catch (...) {
@@ -1190,6 +1230,10 @@ struct TenantVmHost::Core {
 
     static int host_stop(std::uint64_t target) {
         Carrier* c = host_enter();
+        if (reaches_outside_actor(c)) {
+            host_leave(c);
+            return 0;
+        }
         int result = 0;
         try {
             result = static_cast<Core*>(c->core)->stop_impl(*c->vm, target);
@@ -1514,7 +1558,10 @@ VmOpenResult TenantVmHost::open(VmSpec spec) {
         l.heap_bytes > kAddressableBytes - (std::uint64_t{1} << 20) || l.max_actors == 0 ||
         l.mailbox_capacity == 0 || l.max_inflight == 0 || l.max_parallel_turns == 0 ||
         l.max_payload_bytes == 0 || l.max_reply_bytes == 0 || l.turn_deadline_ms == 0 ||
-        l.restart_window_ms == 0)
+        // A zero window would let no failure count, so the budget would never end a crash loop. The
+        // budget's timestamps are host memory per actor, and these bounds keep the backoff from overflowing.
+        l.restart_window_ms == 0 || l.restart_window_ms > kMaxRestartWindowMs || l.restart_budget > kMaxRestartBudget ||
+        l.restart_backoff_ms > l.restart_window_ms)
         return refuse(Status::InvalidArgument);
     if (!handlers_are_ours()) return refuse(Status::SignalHandlerLost);
 

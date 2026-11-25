@@ -86,9 +86,9 @@ struct VmLimits {
     std::uint64_t cpu_budget_ms = 0;       // cumulative turn time, 0 = unlimited
     // Restarts one actor may have in the window. One more failure ends that actor for good, and
     // the rest of the VM goes on. A crash loop has to end somewhere, and stored state can be its cause.
-    std::uint32_t restart_budget = 3;
-    std::uint32_t restart_window_ms = 10000;
-    std::uint32_t restart_backoff_ms = 10; // before the next turn, doubling with each failure in the window
+    std::uint32_t restart_budget = 3;          // at most 65535
+    std::uint32_t restart_window_ms = 10000;   // 1 ms to 1 day
+    std::uint32_t restart_backoff_ms = 10;     // before the next turn, doubling, capped by the window
 };
 
 struct VmSpec {

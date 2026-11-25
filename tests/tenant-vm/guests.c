@@ -217,6 +217,14 @@ static int64_t restartable(const OresVmHostApi* h, void* inst, uint8_t* cage, ui
         case RESTART_SPIN_IN_HOST_CALLS: for (;;) (void)h->alloc(1, 1);
         case RESTART_STACK: return recurse(0);
         case RESTART_BAD_READ: return READ_I64(cage, 0); /* what bounds checks should have prevented */
+        /* Effects outside the actor, then a fault. A failed turn must leave none of them behind. */
+        case RESTART_SEND_THEN_TRAP:
+            WRITE_I64(cage, out, 1);
+            (void)h->send((uint64_t)a, out, 8);
+            h->trap();
+            break;
+        case RESTART_SPAWN_THEN_TRAP: (void)h->spawn(KIND_COUNTER); h->trap(); break;
+        case RESTART_STOP_THEN_TRAP: (void)h->stop((uint64_t)a); h->trap(); break;
         case RESTART_READ_HEAP_OK: { /* a restart must give back the heap */
             const uint32_t block = h->alloc(4096, 16);
             WRITE_I64(cage, out, block != 0);

@@ -1373,6 +1373,45 @@ void a_restart_waits_before_the_next_turn() {
     CHECK(host.wait_closed(v.handle).phase == Phase::Stopped);
 }
 
+// A failed turn commits nothing, so it may not reach outside its actor either. Until sends, spawns
+// and stops are held for the turn's commit, a restartable kind is refused them outright.
+void a_failed_turn_leaves_nothing_outside_its_actor() {
+    TenantVmHost host;
+    auto v = host.open(spec("effects"));
+    REQUIRE_OK(v);
+    auto a = host.spawn_actor(v.handle, KIND_RESTARTABLE);
+    auto target = host.spawn_actor(v.handle, KIND_COUNTER);
+    REQUIRE_OK(a);
+    REQUIRE_OK(target);
+    const std::int64_t ref = static_cast<std::int64_t>(target.actor.ref() | (std::uint64_t{1} << 63));
+    CHECK_STATUS(host.call(a.actor, words({RESTART_SEND_THEN_TRAP, ref})).get().status, Status::ActorRestarted);
+    CHECK_STATUS(host.call(a.actor, words({RESTART_SPAWN_THEN_TRAP, 0})).get().status, Status::ActorRestarted);
+    CHECK_STATUS(host.call(a.actor, words({RESTART_STOP_THEN_TRAP, ref})).get().status, Status::ActorRestarted);
+    const VmSnapshot snapshot = host.snapshot(v.handle);
+    CHECK_EQ(snapshot.inflight, std::size_t{0});       // the send went nowhere
+    CHECK_EQ(snapshot.live_actors, std::size_t{2});    // the spawn left no actor, and the stop stopped none
+    CHECK_EQ(snapshot.turns, std::uint64_t{3});        // and the target never ran
+    CHECK_STATUS(host.call(target.actor, words({1})).get().status, Status::Ok);
+}
+
+// Restart limits that would turn the budget off, or overflow the backoff, are refused.
+void restart_limits_are_checked() {
+    TenantVmHost host;
+    VmSpec s = spec("limits");
+    s.limits.restart_window_ms = 0; // every failure would fall outside the window, so none would count
+    CHECK_STATUS(host.open(s).status, Status::InvalidArgument);
+    s = spec("limits");
+    s.limits.restart_backoff_ms = s.limits.restart_window_ms + 1;
+    CHECK_STATUS(host.open(s).status, Status::InvalidArgument);
+    s = spec("limits");
+    s.limits.restart_budget = 70000; // its timestamps are host memory, per actor
+    CHECK_STATUS(host.open(s).status, Status::InvalidArgument);
+    s = spec("limits");
+    s.limits.restart_backoff_ms = 4000000000u;
+    s.limits.restart_window_ms = 4000000000u;
+    CHECK_STATUS(host.open(s).status, Status::InvalidArgument);
+}
+
 // Restart is for faults shown to be confined. Everything else still ends the VM.
 void an_unconfined_fault_still_fails_the_vm() {
     TenantVmHost host;
@@ -1631,6 +1670,8 @@ const Case cases[] = {
     {"repeated_failures_end_only_that_actor", repeated_failures_end_only_that_actor},
     {"zero_restart_window_is_rejected_and_zero_budget_is_bounded", zero_restart_window_is_rejected_and_zero_budget_is_bounded},
     {"the_restart_budget_refills_with_time", the_restart_budget_refills_with_time},
+    {"a_failed_turn_leaves_nothing_outside_its_actor", a_failed_turn_leaves_nothing_outside_its_actor},
+    {"restart_limits_are_checked", restart_limits_are_checked},
     {"a_restart_waits_before_the_next_turn", a_restart_waits_before_the_next_turn},
     {"an_unconfined_fault_still_fails_the_vm", an_unconfined_fault_still_fails_the_vm},
     {"a_clean_stop_still_reports_failures", a_clean_stop_still_reports_failures},
