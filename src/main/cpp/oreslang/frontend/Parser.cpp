@@ -1117,16 +1117,60 @@ public:
             return program;
         }
         // Initial bounded AOT slice: private file-header descriptors only.
-        // A deliberately disjoint kind_ prefix prevents capturing existing
-        // contextual declaration heads before shared symbol admission exists.
+        // Conservatively reserve the native parser's recognized token spellings
+        // and Java's declaration-kind inventory. This is a local admission
+        // list, not a change to the general identifier grammar.
         // These descriptors never become a runtime object or a new IR kind.
         std::unordered_set<std::string> local_class_kinds;
         while (token_.text == "define" && peek_next().text == "keyword") {
             advance(); // define
             require("keyword");
+            static const std::unordered_set<std::string> reserved_kinds = {
+                "Actor", "ActorGroup", "ActorGroupJoinCapability", "ActorMaxThreads", "ActorRef", "Array",
+                "Box", "CExportU32", "Const", "Entry", "Error", "Future",
+                "GpuArray", "GpuReadBuffer", "GpuWriteBuffer", "HIGH", "Integer", "InvertedArray",
+                "Iterator", "LOW", "List", "MEDIUM", "Map", "Math",
+                "MaxActorThreads", "Option", "Pair", "Record", "Result", "SelectCase",
+                "SelectPlan", "Set", "String", "Syntax", "Task", "Tuple",
+                "Vector", "Xor", "_", "abstract", "activity", "actor",
+                "alias", "and", "annotation", "any", "array_commit_filled", "as",
+                "ashr", "async", "await", "bool", "borrow", "break",
+                "capability", "case", "catch", "class", "component", "conforms",
+                "console", "const", "constructor", "container", "continue", "contract",
+                "cooperate", "cpu", "critical", "declare", "default", "defer",
+                "define", "derive", "dimension", "do", "duplex", "elif",
+                "else", "end", "enum", "eq", "erase_swap", "event",
+                "export", "extends", "extension", "extern", "external", "f32",
+                "f64", "false", "fi", "final", "finally", "first",
+                "fnc", "for", "forward", "from", "function", "gen",
+                "generator", "get", "get_ready", "gpu", "grain", "guard",
+                "http", "i64", "if", "ifnot", "impl", "implements",
+                "import", "infer", "info", "int", "interface", "internal",
+                "inverted", "isoactor", "isolated", "kernel", "keyword", "launch",
+                "let", "log", "loop", "macro", "mailman", "main",
+                "match", "max", "maybe", "method", "min", "model",
+                "module", "mtd", "mut", "namespace", "nb", "neq",
+                "new", "of", "on", "over", "owned", "panic",
+                "panics", "pattern", "pipe", "pkg", "private", "protected",
+                "protocol", "proxy", "pub", "pure", "push", "quantum",
+                "queue", "quote", "raise", "raises", "readable", "readch",
+                "receive", "receives", "record", "recover", "requires", "return",
+                "routine", "rpipe", "rt", "scheduler", "select", "self",
+                "sends", "serial", "service", "set", "share", "shared",
+                "shared_bytes", "singleton", "sleep", "span", "spawn", "state",
+                "static", "std", "stdio", "stop", "string", "struct",
+                "structural", "supervisor", "suspend", "suspends", "switch", "take",
+                "task", "tcp", "telemetry", "then", "thread", "throw",
+                "throws", "trait", "transform", "trap", "true", "try",
+                "tuple", "type", "u64", "unit", "unknown", "unless",
+                "untrusted", "use", "using", "val", "virtual", "void",
+                "websocket", "when", "while", "with", "with_capacity", "workflow",
+                "writable", "writech", "ws", "yield"
+            };
+            if (token_.kind != Kind::Identifier || reserved(token_.text) ||
+                    reserved_kinds.count(std::string(token_.text)) || token_.text.size() > 128)
+                fail("NATIVE_KIND_NAME_UNSUPPORTED: reserved declaration kind or invalid identifier");
             std::string name = identifier();
-            if (name.size() <= 5 || name.size() > 128 || name.compare(0, 5, "kind_") != 0)
-                fail("NATIVE_KIND_NAME_UNSUPPORTED: initial native descriptor requires kind_ prefix");
             if (local_class_kinds.size() >= 128)
                 fail("NATIVE_KIND_BUDGET: at most 128 local descriptors");
             if (!local_class_kinds.insert(name).second)
