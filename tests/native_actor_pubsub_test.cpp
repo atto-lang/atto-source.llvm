@@ -313,10 +313,26 @@ int main() {
           "graph subscriber 12 admission failed");
     auto graph_blocked =
         graph_bounded.publish(b.group_id(), "graph", 10, 1, "abc");
-    check(graph_blocked.backpressured && graph_blocked.accepted == 0,
+    check(graph_blocked.backpressured && graph_blocked.accepted == 0
+              && graph_blocked.sequence == 0,
           "graph byte quota allowed partial reliable fanout");
     check(graph_bounded.queued_payload_bytes() == 0,
           "graph-byte rejection changed payload ledger");
+    check(!graph_bounded.try_read(b.group_id(), "graph", 11, 1).has_value()
+              && !graph_bounded.try_read(b.group_id(), "graph", 12, 1).has_value(),
+          "graph-byte rejection left a partial delivery");
+    auto graph_recovered =
+        graph_bounded.publish(b.group_id(), "graph", 10, 1, "ab");
+    check(!graph_recovered.backpressured && graph_recovered.accepted == 2
+              && graph_recovered.sequence == 1,
+          "graph-byte refusal consumed sequence or prevented retry");
+    check(graph_bounded.queued_payload_bytes() == 4,
+          "retry did not charge both admitted deliveries");
+    check(graph_bounded.try_read(b.group_id(), "graph", 11, 1).value() == "ab"
+              && graph_bounded.try_read(b.group_id(), "graph", 12, 1).value() == "ab",
+          "retry failed to deliver exactly one value to both recipients");
+    check(graph_bounded.queued_payload_bytes() == 0,
+          "retry delivery leaked graph bytes");
     check(graph_bounded.close_group(b.group_id()) == 1,
           "graph-byte test topic cleanup failed");
     check(graph_bounded.allocated_queue_slots() == 0,
@@ -363,7 +379,8 @@ int main() {
           "UTF8 lane did not observe i64 graph-byte reservation");
     auto shared_blocked =
         shared_utf8.publish(b.group_id(), "shared-utf8", 10, 1, "xy");
-    check(shared_blocked.backpressured && shared_blocked.accepted == 0,
+    check(shared_blocked.backpressured && shared_blocked.accepted == 0
+              && shared_blocked.sequence == 0,
           "UTF8 lane bypassed graph bytes reserved by i64 lane");
     check(shared_utf8.queued_payload_bytes() == sizeof(std::int64_t),
           "failed cross-type admission changed shared byte ledger");
@@ -373,9 +390,11 @@ int main() {
           "shared i64 read mismatch");
     check(shared_utf8.queued_payload_bytes() == 0,
           "i64 read did not reclaim shared bytes for UTF8 lane");
-    check(shared_utf8.publish(
-              b.group_id(), "shared-utf8", 10, 1, "xy").accepted == 1,
-          "UTF8 lane did not observe reclaimed shared bytes");
+    auto shared_recovered =
+        shared_utf8.publish(b.group_id(), "shared-utf8", 10, 1, "xy");
+    check(shared_recovered.accepted == 1 && !shared_recovered.backpressured
+              && shared_recovered.sequence == 1,
+          "UTF8 retry failed or consumed a sequence on prior Full");
     check(shared_i64.queued_payload_bytes() == 2,
           "i64 lane did not observe UTF8 shared byte reservation");
     check(shared_utf8.try_read(
