@@ -210,6 +210,7 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
             // Their operands and lazy conditional arms are scanned above.
             break;
         case Expression::Kind::Copy:
+        case Expression::Kind::DeepCopy:
         case Expression::Kind::Share:
             // Until the typed MIR proves a register-only copy or a bounded
             // zero-allocation share, these operations cannot enter strict RT

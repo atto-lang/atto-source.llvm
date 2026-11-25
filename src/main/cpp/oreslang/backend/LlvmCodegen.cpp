@@ -493,6 +493,7 @@ llvm::Value* lower(const Expression& expr,
             return builder.CreateSelect(negative, negated, value, "abs");
         }
         case Expression::Kind::Copy:
+        case Expression::Kind::DeepCopy:
         case Expression::Kind::Share:
             return lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
         case Expression::Kind::Take: {

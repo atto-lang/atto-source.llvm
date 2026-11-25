@@ -141,6 +141,12 @@ void validate_native_scalar_types(const Program& program) {
             case E::Field: return field_type(expression(*e.left, locals), e.name, e.offset);
             case E::Copy: case E::Take: case E::Share: case E::Borrow: case E::BorrowMut:
                 return expression(*e.left, locals);
+            case E::DeepCopy: {
+                const auto operand = expression(*e.left, locals);
+                if (operand.kind != Kind::Int && operand.kind != Kind::Bool)
+                    fail(e.offset, "E_COPY_GRAPH_UNPROVEN: copy!! requires an int or bool value");
+                return operand;
+            }
             case E::Negate:
                 require(expression(*e.left, locals), scalar(false), e.offset, "unary - requires int");
                 return scalar(false);
