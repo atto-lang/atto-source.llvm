@@ -48,6 +48,12 @@ void ores_actor_i64_heap_release(OresActorI64Heap* heap, OresActorLoan loan);
  * for replay/ABA rejection while the heap is still alive. */
 OresActorExternalLease ores_actor_i64_heap_external_acquire(
     OresActorI64Heap* heap, OresActorTurn turn);
+/* A continuation's operation ticket must name the same actor whose active
+ * turn owns the pinned heap. This check and lifetime admission are atomic
+ * under the heap lock. Ticket generation is an operation identity, not
+ * necessarily the heap incarnation: do not equate the two. */
+OresActorExternalLease ores_actor_i64_heap_external_acquire_for_actor(
+    OresActorI64Heap* heap, OresActorTurn turn, uint64_t ticket_actor_id);
 void ores_actor_i64_heap_external_release(
     OresActorI64Heap* heap, OresActorExternalLease* lease);
 /* Compiler-emitted, serial actor field ABI. Only admitted turns may access
