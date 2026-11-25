@@ -14,8 +14,10 @@ namespace oreslang::frontend {
 
 // Source lowering is deliberately separate from general source admission.
 // Only a sealed, locally constructed, nullary enum with a complete match can
-// be encoded in the existing checked native i64 CFG. No enum parameter,
-// payload, mutable symbol, actor mail, external ABI, or user-visible tag exists.
+// be encoded in the existing checked native i64 CFG. V2 also checks a single
+// internal static helper with nominal argument and return types at source
+// level. No payload, mutable symbol, actor mail, public enum parameter ABI,
+// numeric guest tag, imported function, or raw-tag caller exists.
 inline std::string lower_nominal_enum_v1(std::string_view source) {
     struct Token { std::string value; std::size_t offset = 0; bool identifier = false; };
     auto alpha = [](unsigned char c) {
@@ -157,11 +159,66 @@ inline std::string lower_nominal_enum_v1(std::string_view source) {
     r.need("end"); r.take(";");
     if (variants.size() < 2)
         throw std::runtime_error("ADT v1 requires at least two nullary cases");
+    // Parse/check source-nominal helper signature and every return BEFORE
+    // lowering it to an internal private static scalar call. A foreign
+    // enum owner can never enter that helper as an untyped i64 argument.
+    std::string helper_name, helper_lowered;
+    if (r.take("fnc")) {
+        helper_name = r.name();
+        if (helper_name == owner ||
+                std::any_of(variants.begin(), variants.end(),
+                    [&](const Variant& v) { return v.name == helper_name; }))
+            throw std::runtime_error("ADT v2 helper conflicts with nominal symbol");
+        r.need("("); r.need(owner);
+        const auto param = r.name();
+        if (param == owner || param == helper_name)
+            throw std::runtime_error("ADT v2 helper parameter shadows nominal symbol");
+        r.need(")"); r.need(":"); r.need(owner); r.need("{");
+        r.need("match"); r.need(param); r.need("over");
+        struct TypedArm { std::int64_t tag = 0, returned = 0; };
+        std::vector<TypedArm> helper_arms;
+        std::unordered_set<std::string> helper_seen;
+        while (r.take("on")) {
+            const auto pattern = r.qualified();
+            if (pattern.first != owner)
+                throw std::runtime_error("ADT v2 helper pattern foreign nominal owner");
+            const auto which = std::find_if(variants.begin(), variants.end(),
+                [&](const Variant& v) { return v.name == pattern.second; });
+            if (which == variants.end())
+                throw std::runtime_error("ADT v2 helper pattern unknown case");
+            if (!helper_seen.insert(which->name).second)
+                throw std::runtime_error("ADT v2 helper duplicate match arm");
+            r.need("->"); r.need("{"); r.need("return");
+            const auto result = r.qualified();
+            if (result.first != owner)
+                throw std::runtime_error("ADT v2 helper return foreign nominal owner");
+            const auto returned = std::find_if(variants.begin(), variants.end(),
+                [&](const Variant& v) { return v.name == result.second; });
+            if (returned == variants.end())
+                throw std::runtime_error("ADT v2 helper returns unknown nominal case");
+            r.need(";"); r.need("}");
+            helper_arms.push_back({which->tag, returned->tag});
+        }
+        r.need("end"); r.need("}");
+        if (helper_seen.size() != variants.size())
+            throw std::runtime_error("ADT v2 helper nonexhaustive nominal match");
+        helper_lowered = "fnc " + helper_name + "(int " + param + "): int {\n";
+        for (std::size_t k = 0; k + 1 < helper_arms.size(); ++k)
+            helper_lowered += "  if " + param + " == " +
+                std::to_string(helper_arms[k].tag) + " then return " +
+                std::to_string(helper_arms[k].returned) + "; fi\n";
+        helper_lowered += "  return " +
+            std::to_string(helper_arms.back().returned) + ";\n}\n";
+    }
     r.need("pub"); r.need("fnc"); r.need("main"); r.need("("); r.need(")");
     r.need(":"); r.need("int"); r.need("{");
     r.need("val"); r.need(owner);
     const auto variable = r.name();
     r.need("=");
+    const bool calls_helper = !helper_name.empty() && r.current().value == helper_name;
+    if (calls_helper) {
+        r.need(helper_name); r.need("(");
+    }
     const auto ctor = r.qualified();
     if (ctor.first != owner)
         throw std::runtime_error("ADT v1 constructor has foreign nominal owner");
@@ -169,6 +226,7 @@ inline std::string lower_nominal_enum_v1(std::string_view source) {
         [&](const Variant& v) { return v.name == ctor.second; });
     if (selected == variants.end())
         throw std::runtime_error("ADT v1 unknown nominal case constructor");
+    if (calls_helper) r.need(")");
     r.need(";");
     r.need("match"); r.need(variable); r.need("over");
     struct Arm { std::int64_t tag, result; };
@@ -196,8 +254,11 @@ inline std::string lower_nominal_enum_v1(std::string_view source) {
     // Only the checked local constructor can reach the compiler-generated
     // numeric representation; no source enum input or numeric tag API exists.
     // Keep actual branches in emitted LLVM IR; don't host-evaluate the match.
-    std::string lowered = "pub fnc main(): int {\n  val int " + variable +
-        " = " + std::to_string(selected->tag) + ";\n";
+    const std::string initial_value = calls_helper
+        ? helper_name + "(" + std::to_string(selected->tag) + ")"
+        : std::to_string(selected->tag);
+    std::string lowered = helper_lowered + "pub fnc main(): int {\n  val int " +
+        variable + " = " + initial_value + ";\n";
     for (std::size_t k = 0; k + 1 < arms.size(); ++k) {
         lowered += "  if " + variable + " == " + std::to_string(arms[k].tag) +
             " then return " + std::to_string(arms[k].result) + "; fi\n";

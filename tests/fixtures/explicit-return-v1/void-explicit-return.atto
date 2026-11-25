@@ -1,0 +1,7 @@
+fnc trace(): void {
+  return;
+}
+pub fnc main(): int {
+  trace();
+  return 0;
+}
