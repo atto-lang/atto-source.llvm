@@ -53,6 +53,17 @@ int ores_native_actor_bytes_try_send(OresNativeActorBytesInbox* inbox,
 int ores_native_actor_bytes_try_send_sequenced(OresNativeActorBytesInbox* inbox,
     OresNativeActorBytesRef target, const void* bytes, size_t length,
     uint64_t source_mail_sequence);
+/* A single externally linked C function is registered as the scheduler's
+ * Bytes commit identity; header-local static inline functions have
+ * different addresses in different translation units. Trusted host only. */
+typedef struct {
+    OresNativeActorBytesInbox* inbox;
+    OresNativeActorBytesRef storage;
+    const void* bytes;
+    size_t length;
+} OresNativeActorBytesCommitContext;
+int ores_native_actor_bytes_commit_payload(
+    void* opaque, uint64_t source_mail_sequence);
 /* Only a trusted runtime actor turn may call this. A source-level receiver
  * capability/borrow checker is still required; the ref alone is not proof
  * of a physical actor turn. On SMALL, required_length is set and no read

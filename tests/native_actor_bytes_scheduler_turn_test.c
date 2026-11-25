@@ -13,6 +13,15 @@ typedef struct {
     atomic_int completed;
 } Context;
 static void check(int ok) { if (!ok) abort(); }
+OresNativeSendStatus ores_native_actor_bytes_test_send_cross_tu(
+    const OresNativeActorBytesSchedulerBinding* binding,
+    uint64_t payload, const void* bytes, size_t length);
+static int forged_payload_commits;
+static int forged_payload_commit(void* ignored, uint64_t sequence) {
+    (void)ignored; (void)sequence;
+    ++forged_payload_commits;
+    return 1;
+}
 
 /* Genuine existing native scheduler worker callback, not manual main call. */
 static void on_data(void* opaque, size_t actor_index, uint64_t payload) {
@@ -79,7 +88,11 @@ int main(void) {
         check(inbox[i] != NULL);
         check(ores_native_actor_bytes_bind_scheduler(
             &ctx.bindings[i], ctx.scheduler, actors[i], inbox[i]));
+        check(ores_native_actor_scheduler_try_send_committed(
+            ctx.scheduler, actors[i], 900 + i, forged_payload_commit, NULL)
+            == ORES_NATIVE_SEND_WRONG_MAIL_KIND);
     }
+    check(forged_payload_commits == 0);
     /* All scalar DATA entrypoints, including the legacy index-only
      * compatibility submit, must reject a bound Bytes-only actor. Rejecting
      * one send cannot mint a sequence or strand private inbox bytes. */
@@ -117,9 +130,12 @@ int main(void) {
         check(queued == 0 && used == 0);
         /* A valid atomic admission copies bytes, publishes the matching
          * ordinal and queues DATA before the worker can observe either. */
-        check(ores_native_actor_bytes_try_send_atomic(
-            &ctx.bindings[i], 900 + i, payload, sizeof(payload))
-            == ORES_NATIVE_SEND_ACCEPTED);
+        OresNativeSendStatus accepted = i == 0
+            ? ores_native_actor_bytes_try_send_atomic(
+                &ctx.bindings[i], 900 + i, payload, sizeof(payload))
+            : ores_native_actor_bytes_test_send_cross_tu(
+                &ctx.bindings[i], 900 + i, payload, sizeof(payload));
+        check(accepted == ORES_NATIVE_SEND_ACCEPTED);
     }
     struct timespec one_ms = {0, 1000000};
     for (unsigned i = 0; i < 3000 && atomic_load_explicit(
@@ -216,7 +232,8 @@ int main(void) {
     check(stopped_inbox != NULL);
     atomic_int rejected_bind_calls = 0;
     check(!ores_native_actor_scheduler_bind_bytes_only(
-        stopped.scheduler, stopped_ref, reject_initial_bind,
+        stopped.scheduler, stopped_ref,
+        ores_native_actor_bytes_commit_payload, reject_initial_bind,
         &rejected_bind_calls));
     check(atomic_load_explicit(
         &rejected_bind_calls, memory_order_relaxed) == 1);
@@ -258,6 +275,6 @@ int main(void) {
     ores_native_actor_scheduler_retire(stopped.scheduler);
     check(ores_native_actor_scheduler_drain(stopped.scheduler));
     check(ores_native_actor_scheduler_try_destroy(stopped.scheduler));
-    puts("NATIVE_ACTOR_BYTES_PHYSICAL_TURN_HOST_ONLY_PASS actors=2 current_data=2 foreign=DENIED external=DENIED atomic_admission=2 rejected_without_stray_data=2 sequence_fenced=2 mixed_scalar=DENIED scalar_lane=PASS failed_bind=ATOMIC rebind=DENIED stop_seal=PASS");
+    puts("NATIVE_ACTOR_BYTES_PHYSICAL_TURN_HOST_ONLY_PASS actors=2 current_data=2 foreign=DENIED external=DENIED atomic_admission=2 rejected_without_stray_data=2 sequence_fenced=2 mixed_scalar=DENIED scalar_lane=PASS failed_bind=ATOMIC rebind=DENIED stop_seal=PASS callback_identity=PINNED cross_tu=PASS");
     return 0;
 }

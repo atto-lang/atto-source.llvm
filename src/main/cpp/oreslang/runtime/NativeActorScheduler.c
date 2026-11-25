@@ -57,6 +57,7 @@ typedef struct {
     unsigned spawned, retired;
     /* Immutable after pristine bind; only affects DATA, never CONTROL/WAKE. */
     unsigned bytes_only_mailbox;
+    OresNativeActorPayloadCommitFn payload_commit; /* pinned at bind */
     uint64_t generation;
     uint64_t resource_loans; /* exact-incarnation external physical resources */
     uint64_t accepted_user_messages;
@@ -973,7 +974,8 @@ static int enqueue_with_commit_locked(
     ActorLane* a = &s->actors[i];
     /* Legacy index submit passes commit=NULL and must never inject a DATA
      * turn into a sequence-bound Bytes inbox. The reverse is also denied. */
-    if ((a->bytes_only_mailbox != 0) != (commit != NULL)) {
+    if ((a->bytes_only_mailbox != 0) != (commit != NULL) ||
+        (a->bytes_only_mailbox && a->payload_commit != commit)) {
         if (s->rejected != UINT64_MAX) ++s->rejected;
         return 0;
     }
@@ -1060,8 +1062,9 @@ OresNativeActorRef ores_native_actor_scheduler_spawn(
  * must not reenter this scheduler, allocate, wait or call user code. */
 int ores_native_actor_scheduler_bind_bytes_only(
     OresNativeActorScheduler* s, OresNativeActorRef actor,
+    OresNativeActorPayloadCommitFn expected_commit,
     OresNativeActorMailboxBindFn bind, void* context) {
-    if (!s || !bind) return 0;
+    if (!s || !bind || !expected_commit || executing == s) return 0;
     lock(s);
     int ok = matching(s, actor) && !s->retired;
     if (ok) {
@@ -1071,8 +1074,10 @@ int ores_native_actor_scheduler_bind_bytes_only(
             !lane->active && !lane->carrier_owner_valid &&
             !lane->has_control && !lane->wake_live && !lane->wake_ready &&
             !lane->resource_loans && !lane->terminal_valid;
-        if (ok && bind(context)) lane->bytes_only_mailbox = 1;
-        else ok = 0;
+        if (ok && bind(context)) {
+            lane->payload_commit = expected_commit;
+            lane->bytes_only_mailbox = 1;
+        } else ok = 0;
     }
     unlock(s);
     return ok;
@@ -1091,7 +1096,8 @@ OresNativeSendStatus ores_native_actor_scheduler_try_send_committed(
         ActorLane* lane = &s->actors[actor.actor_slot];
         if (s->retired || lane->retired) {
             status = ORES_NATIVE_SEND_TERMINATED;
-        } else if (!lane->bytes_only_mailbox) {
+        } else if (!lane->bytes_only_mailbox ||
+                lane->payload_commit != commit) {
             status = ORES_NATIVE_SEND_WRONG_MAIL_KIND;
         } else if (lane->accepted_user_messages == UINT64_MAX
                 || lane->queued + lane->active >= s->per_actor_capacity) {
