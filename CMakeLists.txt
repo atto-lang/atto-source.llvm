@@ -1856,6 +1856,27 @@ if(BUILD_TESTING)
         set_tests_properties(native_trap_arithmetic_${case}_O0_O2 PROPERTIES TIMEOUT 300)
     endforeach()
 
+    # Real native nominal Error projection; no guest integer Error handle.
+    add_test(NAME native_numeric_error_type_identity_O0_O2
+        COMMAND "${CMAKE_COMMAND}"
+            "-DORES_TRAP_LLVM_CLI=$<TARGET_FILE:oreslang-llvmc>"
+            "-DORES_TRAP_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/numeric-error-type-identity.atto"
+            "-DORES_TRAP_AOT_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/scripts/compile-aot.sh"
+            "-DORES_TRAP_AUDITOR=${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit"
+            "-DORES_TRAP_CLANG=clang"
+            "-DORES_TRAP_CASE=numeric_error_identity"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/trap_int_native_aot_execution.cmake")
+    set_tests_properties(native_numeric_error_type_identity_O0_O2 PROPERTIES TIMEOUT 300)
+    oreslang_contract_test(native_numeric_error_type_wrong_carrier_reject
+        numeric-error-type-wrong-carrier-reject.atto
+        --diagnostic "native numeric Error projection requires nominal Result<int,Error>")
+    oreslang_contract_test(native_numeric_error_type_unknown_reject
+        numeric-error-type-unknown-reject.atto
+        --diagnostic "native is type requires a checked numeric Result.unwrap_err() projection")
+    oreslang_contract_test(native_numeric_error_type_raw_reject
+        numeric-error-type-raw-reject.atto
+        --diagnostic "unsupported native sum method or arity")
+
     # Trusted-host capability admission only; NOT source-level/hostile-native parity.
     find_package(Threads REQUIRED)
     add_executable(oreslang-native-tenant-domain-host-test
