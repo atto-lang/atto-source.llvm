@@ -1116,6 +1116,121 @@ public:
                 pointer_int_aot::Parser(std::move(tokens)).parse());
             return program;
         }
+        // Initial bounded AOT slice: private file-header descriptors only.
+        // Conservatively reserve the native parser's recognized token spellings
+        // and Java's declaration-kind inventory. This is a local admission
+        // list, not a change to the general identifier grammar.
+        // These descriptors never become a runtime object or a new IR kind.
+        std::unordered_set<std::string> local_class_kinds;
+        std::unordered_map<std::string, std::size_t> provisional_kinds;
+        auto parse_kind_descriptor = [&]() {
+            const auto origin = token_.offset;
+            require("keyword");
+            static const std::unordered_set<std::string> reserved_kinds = {
+                "Actor", "ActorGroup", "ActorGroupJoinCapability", "ActorMaxThreads", "ActorRef", "Array",
+                "Box", "CExportU32", "Const", "Entry", "Error", "Future",
+                "GpuArray", "GpuReadBuffer", "GpuWriteBuffer", "HIGH", "Integer", "InvertedArray",
+                "Iterator", "LOW", "List", "MEDIUM", "Map", "Math",
+                "MaxActorThreads", "Option", "Pair", "Record", "Result", "SelectCase",
+                "SelectPlan", "Set", "String", "Syntax", "Task", "Tuple",
+                "Vector", "Xor", "_", "abstract", "activity", "actor",
+                "alias", "and", "annotation", "any", "array_commit_filled", "as",
+                "ashr", "async", "await", "bool", "borrow", "break",
+                "capability", "case", "catch", "class", "component", "conforms",
+                "console", "const", "constructor", "container", "continue", "contract",
+                "cooperate", "cpu", "critical", "declare", "default", "defer",
+                "define", "derive", "dimension", "do", "duplex", "elif",
+                "else", "end", "enum", "eq", "erase_swap", "event",
+                "export", "extends", "extension", "extern", "external", "f32",
+                "f64", "false", "fi", "final", "finally", "first",
+                "fnc", "for", "forward", "from", "function", "gen",
+                "generator", "get", "get_ready", "gpu", "grain", "guard",
+                "http", "i64", "if", "ifnot", "impl", "implements",
+                "import", "infer", "info", "int", "interface", "internal",
+                "inverted", "isoactor", "isolated", "kernel", "keyword", "launch",
+                "let", "log", "loop", "macro", "mailman", "main",
+                "match", "max", "maybe", "method", "min", "model",
+                "module", "mtd", "mut", "namespace", "nb", "neq",
+                "new", "of", "on", "over", "owned", "panic",
+                "panics", "pattern", "pipe", "pkg", "private", "protected",
+                "protocol", "proxy", "pub", "pure", "push", "quantum",
+                "queue", "quote", "raise", "raises", "readable", "readch",
+                "receive", "receives", "record", "recover", "requires", "return",
+                "routine", "rpipe", "rt", "scheduler", "select", "self",
+                "sends", "serial", "service", "set", "share", "shared",
+                "shared_bytes", "singleton", "sleep", "span", "spawn", "state",
+                "static", "std", "stdio", "stop", "string", "struct",
+                "structural", "supervisor", "suspend", "suspends", "switch", "take",
+                "task", "tcp", "telemetry", "then", "thread", "throw",
+                "throws", "trait", "transform", "trap", "true", "try",
+                "tuple", "type", "u64", "unit", "unknown", "unless",
+                "untrusted", "use", "using", "val", "virtual", "void",
+                "websocket", "when", "while", "with", "with_capacity", "workflow",
+                "writable", "writech", "ws", "yield"
+            };
+            if (token_.kind != Kind::Identifier || reserved(token_.text) ||
+                    reserved_kinds.count(std::string(token_.text)) || token_.text.size() > 128)
+                fail("NATIVE_KIND_NAME_UNSUPPORTED: reserved declaration kind or invalid identifier");
+            std::string name = identifier();
+            auto provisional = provisional_kinds.find(name);
+            if (provisional != provisional_kinds.end() && provisional->second == origin) {
+                provisional_kinds.erase(provisional);
+            } else {
+                if (local_class_kinds.size() >= 128)
+                    fail("NATIVE_KIND_BUDGET: at most 128 local descriptors");
+                if (!local_class_kinds.insert(name).second)
+                    fail("NATIVE_KIND_DUPLICATE: duplicate local descriptor");
+            }
+            if (token_.kind != Kind::Identifier) fail("NATIVE_KIND_HEADER_UNSUPPORTED: expected as token");
+            require("as");
+            if (token_.kind != Kind::Identifier || !accept("class"))
+                fail("NATIVE_KIND_BASE_UNSUPPORTED: ordinary class only");
+            if (token_.kind != Kind::Identifier || token_.text != "end")
+                fail("NATIVE_KIND_CONTRACT_UNSUPPORTED: typed interface/contract elaboration not yet lowered");
+            require("end");
+        };
+        // The copied scanner can find a candidate, but cannot grant scope.
+        // Only the actual root declaration parser confirms its byte origin.
+        auto is_local_kind = [&]() {
+            if (token_.kind != Kind::Identifier) return false;
+            std::string name(token_.text);
+            if (local_class_kinds.count(name)) return true;
+            if (reserved(token_.text) || name.size() > 128) return false;
+            Lexer scan = lexer_;
+            Token next = scan.next();
+            Token as = scan.next();
+            if (next.kind != Kind::Identifier || as.kind != Kind::Identifier || as.text != "as") return false;
+            Token previous = next;
+            for (Token candidate = scan.next(); candidate.kind != Kind::End; candidate = scan.next()) {
+                if (previous.kind == Kind::Identifier && previous.text == "define" &&
+                        candidate.kind == Kind::Identifier && candidate.text == "keyword") {
+                    Lexer look = scan;
+                    Token declared = look.next();
+                    Token as_token = look.next(), base = look.next(), end = look.next();
+                    if (declared.kind == Kind::Identifier && declared.text == name &&
+                            as_token.kind == Kind::Identifier && as_token.text == "as" &&
+                            base.kind == Kind::Identifier && base.text == "class" &&
+                            end.kind == Kind::Identifier && end.text == "end") {
+                        if (local_class_kinds.size() >= 128)
+                            fail("NATIVE_KIND_BUDGET: at most 128 local descriptors");
+                        local_class_kinds.insert(name);
+                        provisional_kinds.emplace(name, candidate.offset);
+                        return true;
+                    }
+                }
+                previous = candidate;
+            }
+            return false;
+        };
+        while (token_.text == "define" && peek_next().text == "keyword") {
+            advance();
+            parse_kind_descriptor();
+        }
+        if (!local_class_kinds.empty() &&
+                (token_.text == "namespace" || token_.text == "use" ||
+                 token_.text == "import" || token_.text == "export"))
+            fail("NATIVE_KIND_SCOPE_UNSUPPORTED: descriptors are file-local without imports or exports");
+
         // A namespace is a file-header declaration, not an import or module
         // wrapper. Parse it before any import/export; never let the imported
         // dependency graph silently turn a late header into a valid header.
@@ -1382,12 +1497,27 @@ public:
             if ((token_.text == "http" && peek_next().text == "actor") ||
                 (token_.text == "serial" && peek_next().text == "http"))
                 fail("HTTP_ACTOR_BACKEND_UNSUPPORTED: native HTTP actor requires bounded request/message admission and physical shutdown lowering");
+            if (token_.text == "keyword") {
+                if (exported) fail("NATIVE_KIND_SCOPE_UNSUPPORTED: public descriptors require verified linker");
+                parse_kind_descriptor();
+                continue;
+            }
+            if (is_local_kind()) {
+                advance();
+                auto cls = class_declaration();
+                cls.exported = exported;
+                remember_class_scalar_fields(cls);
+                program.classes.push_back(std::move(cls));
+                break;
+            }
             if (exported && token_.text != "class") fail("native public module wrapper is not supported in the i64 subset");
             if (accept("serial")) {
                 require("actor");
                 fail("native serial actor requires shared HTTP/message lane lowering");
             }
             if (accept("module")) {
+                if (!local_class_kinds.empty())
+                    fail("NATIVE_KIND_SCOPE_UNSUPPORTED: custom declaration descriptors do not enter modules");
                 if (!defined_type_aliases_.empty() || !forwards_.empty())
                     fail("native module wrapper cannot import file-root forward aliases");
                 program.module = identifier();
@@ -1568,6 +1698,22 @@ public:
                 if ((token_.text == "http" && peek_next().text == "actor") ||
                     (token_.text == "serial" && peek_next().text == "http"))
                     fail("HTTP_ACTOR_BACKEND_UNSUPPORTED: native HTTP actor requires bounded request/message admission and physical shutdown lowering");
+                if (token_.text == "keyword") {
+                    if (wrapped_module || public_class)
+                        fail("NATIVE_KIND_SCOPE_UNSUPPORTED: descriptor requires private file root");
+                    parse_kind_descriptor();
+                    continue;
+                }
+                if (is_local_kind()) {
+                    if (wrapped_module)
+                        fail("NATIVE_KIND_SCOPE_UNSUPPORTED: custom declaration descriptors do not enter modules");
+                    advance();
+                    auto cls = class_declaration();
+                    cls.exported = public_class;
+                    remember_class_scalar_fields(cls);
+                    program.classes.push_back(std::move(cls));
+                    continue;
+                }
                 if (public_class && token_.text != "class") fail("native pub define currently supports only class declarations");
                 if (accept("serial")) {
                     require("actor");
@@ -1616,6 +1762,11 @@ public:
             if (!checked_scalar_main)
                 fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: only standalone checked literal-arithmetic i64 main is native-lowered; multi-file actor namespaces remain gated");
         }
+        if (!provisional_kinds.empty())
+            fail("NATIVE_KIND_FORWARD_NOT_ROOT: provisional descriptor was not confirmed at file root");
+        if (!local_class_kinds.empty() && (!program.namespace_name.empty() || wrapped_module ||
+                !program.imports.empty() || !program.namespace_imports.empty() || !program.exports.empty()))
+            fail("NATIVE_KIND_SCOPE_UNSUPPORTED: descriptor requires unwrapped file root");
         compile_type_constraint_descriptors(program);
         lower_extension_calls(program);
         resolve_alias_uses(program);
