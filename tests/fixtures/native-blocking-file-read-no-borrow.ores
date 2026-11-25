@@ -1,0 +1,3 @@
+pub fnc bad_read(int fd, int offset, int out): int using io, block {
+  return rt file_read_i64_blocking(fd, offset, out);
+}

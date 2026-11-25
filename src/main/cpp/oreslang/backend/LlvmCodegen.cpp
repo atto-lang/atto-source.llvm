@@ -531,6 +531,14 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
                 signature, llvm::Function::ExternalLinkage, abi_name, module);
             declarations.emplace(native_function_slot(guest_name, arity), declaration);
         };
+        auto* read_signature = llvm::FunctionType::get(
+            i64, {i64, i64, loan_ptr}, false);
+        auto* read_declaration = llvm::Function::Create(
+            read_signature, llvm::Function::ExternalLinkage,
+            "oreslang_file_read_i64_blocking", module);
+        declarations.emplace(
+            native_function_slot("__oreslang_rt_file_read_i64_blocking", 3),
+            read_declaration);
         add_file_intrinsic("__oreslang_rt_file_write_i64_blocking",
                            "oreslang_file_write_i64_blocking", 3);
         add_file_intrinsic("__oreslang_rt_file_size_blocking",

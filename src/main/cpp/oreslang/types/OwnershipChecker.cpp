@@ -156,6 +156,25 @@ void release(const Loan& loan, Locals& locals) {
     else --source.shared_loans;
 }
 
+void check_blocking_file_intrinsic(const Expression& expr, Locals& locals,
+                                   const Functions& functions) {
+    if (expr.name == "__oreslang_rt_file_read_i64_blocking") {
+        if (expr.arguments.size() != 3)
+            reject(expr, "internal ownership error: checked file read arity");
+        check_value(*expr.arguments[0], locals, functions);
+        check_value(*expr.arguments[1], locals, functions);
+        Loan out = acquire(*expr.arguments[2], Mode::BorrowMut, locals);
+        const auto& source = locals.at(out.name);
+        if (!source.class_name.empty() || source.int_array)
+            reject(*expr.arguments[2],
+                   "checked file read output requires a plain mutable int");
+        release(out, locals);
+        return;
+    }
+    for (const auto& arg : expr.arguments)
+        check_value(*arg, locals, functions);
+}
+
 void check_call(const Expression& expr, Locals& locals, const Functions& functions) {
     const auto found = functions.find(native_function_slot(expr.name, expr.arguments.size()));
     if (found == functions.end())
@@ -318,8 +337,7 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
         }
         case Expression::Kind::Call:
             if (native_blocking_file_intrinsic(expr.name)) {
-                for (const auto& arg : expr.arguments)
-                    check_value(*arg, locals, functions);
+                check_blocking_file_intrinsic(expr, locals, functions);
                 return;
             }
             if (functions.at(native_function_slot(expr.name, expr.arguments.size()))->returns_void)
@@ -616,8 +634,7 @@ void validate_i64_ownership(const Program& program) {
                     for (const auto& arg : call.arguments) check_value(*arg, state, functions);
                 } else if (call.kind == Expression::Kind::Call) {
                     if (native_blocking_file_intrinsic(call.name)) {
-                        for (const auto& arg : call.arguments)
-                            check_value(*arg, state, functions);
+                        check_blocking_file_intrinsic(call, state, functions);
                     } else {
                         check_call(call, state, functions);
                     }

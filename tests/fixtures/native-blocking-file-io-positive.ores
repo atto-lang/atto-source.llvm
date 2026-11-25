@@ -1,3 +1,7 @@
+pub fnc durable_read(int fd, int offset, borrow mut int out): int using io, block {
+  return rt file_read_i64_blocking(fd, offset, rt borrow mut out);
+}
+
 pub fnc durable_write(int fd, int offset, int value): int using io, block {
   return rt file_write_i64_blocking(fd, offset, value);
 }

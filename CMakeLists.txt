@@ -1774,6 +1774,15 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_blocking_file_io_ir
         native-blocking-file-io-positive.ores
         --ir "oreslang_file_write_i64_blocking")
+    oreslang_contract_test(native_blocking_file_read_ir
+        native-blocking-file-io-positive.ores
+        --ir "oreslang_file_read_i64_blocking")
+    oreslang_contract_test(native_blocking_file_read_requires_mut_borrow
+        native-blocking-file-read-no-borrow.ores
+        --diagnostic "borrowed argument requires explicit rt borrow [mut]")
+    oreslang_contract_test(native_blocking_file_read_rejects_shared_borrow
+        native-blocking-file-read-shared-borrow.ores
+        --diagnostic "borrow mode does not match borrowed parameter")
     oreslang_contract_test(native_blocking_file_io_missing_effects
         native-blocking-file-io-missing-effects.ores
         --diagnostic "native blocking file intrinsic requires using io, block")
