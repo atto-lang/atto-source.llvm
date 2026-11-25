@@ -2251,19 +2251,18 @@ private:
             std::unordered_set<std::string> seen;
 
             while (token_.text != "end") {
-                if (arms.size() >= 32)
+                if (arms.size() + (has_fallback ? 1u : 0u) >= 32)
                     fail("native procedural dispatch arm limit exceeded (32)");
 
                 if (is_match) {
-                    require("on");
-                    if (accept("_")) {
+                    const bool bare_default = accept("default");
+                    if (!bare_default) require("on");
+                    if (bare_default || accept("_") || accept("default")) {
                         if (has_fallback)
                             fail("native do match can contain only one wildcard arm");
                         require("->"); require("{");
                         fallback = branch_arm(false, false); require("}");
                         has_fallback = true;
-                        if (token_.text != "end")
-                            fail("native do match wildcard arm must be last");
                         continue;
                     }
                     auto constant = expression();
@@ -3131,16 +3130,15 @@ private:
         std::unordered_set<std::string> seen;
 
         while (token_.text != "end") {
-            if (arms.size() >= 32)
+            if (arms.size() + (fallback ? 1u : 0u) >= 32)
                 fail("native value match arm limit exceeded (32)");
-            require("on");
-            if (accept("_")) {
+            const bool bare_default = accept("default");
+            if (!bare_default) require("on");
+            if (bare_default || accept("_") || accept("default")) {
                 if (fallback)
                     fail("native value match can contain only one wildcard arm");
                 require("->");
                 fallback = dispatch_value_arm("native value match");
-                if (token_.text != "end")
-                    fail("native value match wildcard arm must be last");
                 continue;
             }
             auto constant = expression();
