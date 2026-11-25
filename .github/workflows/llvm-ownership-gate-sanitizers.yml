@@ -7,6 +7,9 @@ on:
       - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
       - 'src/main/cpp/oreslang/frontend/Parser.cpp'
       - 'tests/llvm_emission_ownership_gate_test.cpp'
+      - 'src/main/cpp/oreslang/runtime/ActorOwnedGraphHeap.hpp'
+      - 'src/main/cpp/oreslang/runtime/ActorHeapRetirementProof.hpp'
+      - 'tests/actor_owned_graph_heap_test.cpp'
       - 'CMakeLists.txt'
       - '.github/workflows/llvm-ownership-gate-sanitizers.yml'
   workflow_dispatch:
@@ -21,7 +24,16 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Verify exact head and tree
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          git rev-parse 'HEAD^{tree}'
       - name: Install LLVM toolchain
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang llvm-dev
       - name: Configure sanitized ownership gate
@@ -36,12 +48,14 @@ jobs:
             -DCMAKE_CXX_FLAGS='-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined' \
             -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined'
       - name: Build direct-AST ownership gate
-        run: cmake --build build-sanitized --target oreslang-llvm-emission-ownership-gate-test --parallel 2
+        run: cmake --build build-sanitized --target oreslang-llvm-emission-ownership-gate-test oreslang-actor-graph-heap-test --parallel 2
       - name: Run direct-AST ownership gate under ASan and UBSan
         env:
           ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:strict_string_checks=1
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: |
           ctest --test-dir build-sanitized \
-            -R '^native_llvm_emission_checks_ownership_and_frame_layout$' \
+            -R '^(native_llvm_emission_checks_ownership_and_frame_layout|native_actor_owned_cyclic_graph_heap) \
+            --output-on-failure --timeout 120
+ \
             --output-on-failure --timeout 120
