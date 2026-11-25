@@ -197,6 +197,11 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             check_value(*expr.left, locals, functions);
             check_value(*expr.right, locals, functions);
             return;
+        case Expression::Kind::Trap:
+            // The trap loan is scoped to this expression; compiler admission
+            // preserves its value dependencies but must not emit an i64 Option.
+            check_value(*expr.left, locals, functions);
+            return;
         case Expression::Kind::ModuleCall:
             // Imported functions are not native IR yet. Validate every
             // argument's ownership without inventing a cross-module loan ABI.
@@ -240,6 +245,7 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
         case Expression::Kind::Take:
         case Expression::Kind::Call:
         case Expression::Kind::ModuleCall:
+        case Expression::Kind::Trap:
         case Expression::Kind::Borrow:
         case Expression::Kind::BorrowMut:
             reject(expr, "native guarded condition must be pure and cannot move, call or borrow");

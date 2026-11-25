@@ -34,10 +34,26 @@ void should_reject(const char* name, const Mutation& mutate,
 int main() {
     const auto ast = oreslang::parse_program(kValid);
     const auto ir = oreslang::emit_verified_llvm_ir(ast, false);
-    if (ir.find("define zeroext i1 @check_equal(i64 ") == std::string::npos ||
+    if ((ir.find("define zeroext i1 @check_equal(i64 ") == std::string::npos &&
+         ir.find("define i1 @check_equal(i64 ") == std::string::npos) ||
             ir.find("icmp eq i64") == std::string::npos)
         throw std::runtime_error("valid sealed call did not emit primitive bool IR");
 
+    const auto scoped = oreslang::parse_program(
+        "import module Assert from \"std/assert\"; "
+        "pub fnc check_equal(int a, int b): bool { return Assert::equal(a, b); }");
+    const auto scoped_ir = oreslang::emit_verified_llvm_ir(scoped, false);
+    if (scoped_ir != ir)
+        throw std::runtime_error(
+            "Assert:: and Assert. emitted different native IR or symbol contracts");
+
+    should_reject("forged inline trap wrapping a valid primitive", [](oreslang::Program& p) {
+        auto operand = std::move(p.functions[0].result);
+        auto trapped = std::make_unique<oreslang::Expression>();
+        trapped->kind = oreslang::Expression::Kind::Trap;
+        trapped->left = std::move(operand);
+        p.functions[0].result = std::move(trapped);
+    }, "direct equal/not_equal primitive return");
     should_reject("forged import qualifier", [](oreslang::Program& p) {
         p.functions[0].result->left->name = "Untrusted";
     }, "direct equal/not_equal primitive return");

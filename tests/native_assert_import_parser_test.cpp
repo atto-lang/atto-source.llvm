@@ -119,6 +119,52 @@ int main() {
             typed.functions[0].result->arguments.size() != 2)
             throw std::runtime_error("typed Assert module-call AST missing");
 
+        // Both call delimiters bind to the exact same sealed module AST.
+        // Ordinary throw + call-site trap are syntax/model admission only
+        // until the native Option / failure unwinder exists.
+        auto both = oreslang::parse_program(
+            "import module Assert from \"std/assert\"; "
+            "pub fnc equal_colon(): bool { return Assert::equal(7, 7); } "
+            "pub fnc main(): int { "
+            "  const success = Assert.equal_throws(10, 10); "
+            "  const failure = trap Assert::equal_throws(10, 20); "
+            "  return 0; }");
+        if (both.functions.size() != 2 ||
+                !both.functions[0].result ||
+                both.functions[0].result->kind != oreslang::Expression::Kind::ModuleCall ||
+                both.functions[0].result->name != "equal" ||
+                both.functions[1].locals.size() != 2 ||
+                both.functions[1].locals[0].initializer->kind !=
+                    oreslang::Expression::Kind::ModuleCall ||
+                both.functions[1].locals[1].initializer->kind !=
+                    oreslang::Expression::Kind::Trap ||
+                !both.functions[1].locals[1].initializer->left ||
+                both.functions[1].locals[1].initializer->left->kind !=
+                    oreslang::Expression::Kind::ModuleCall)
+            throw std::runtime_error("scoped Assert :: / call-site trap AST did not preserve effects");
+        auto reversed = oreslang::parse_program(
+            "import module Assert from \"std/assert\"; "
+            "pub fnc main(): int { "
+            "  const success = Assert::equal_throws(10, 10); "
+            "  const failure = trap Assert.equal_throws(10, 20); "
+            "  return 0; }");
+        if (reversed.functions[0].locals.size() != 2 ||
+                reversed.functions[0].locals[1].initializer->kind !=
+                    oreslang::Expression::Kind::Trap)
+            throw std::runtime_error("mixed qualified assertion spellings are not equivalent");
+
+        expect_rejected(
+            "import module Assert from \"std/assert\"; "
+            "pub fnc main(): int { return Assert::unknown(1, 1); }",
+            "unknown sealed Assert member");
+        expect_rejected(
+            "import module Assert from \"std/assert\"; "
+            "pub fnc main(): int { return Assert:::equal(1, 1); }",
+            "expected sealed Assert member");
+        expect_rejected(
+            "import module Assert from \"std/assert\"; "
+            "pub fnc main(): int { return Worker::equal(1, 1); }",
+            "requires a sealed static/module namespace");
         expect_rejected(
             "pub fnc main(): int { return Assert.equal(1, 1); }",
             "unbound native Assert module alias");
