@@ -13,7 +13,7 @@
 namespace oreslang::frontend {
 
 // Source lowering is deliberately separate from general source admission.
-// Only a sealed, locally constructed, nullary enum with a complete match can
+// Only a sealed, locally constructed enum with nullary or one Copy-int payload field per case can
 // be encoded in the existing checked native i64 CFG. V2 also checks a single
 // internal static helper with nominal argument and return types at source
 // level. No payload, mutable symbol, actor mail, public enum parameter ABI,
@@ -79,7 +79,7 @@ inline std::string lower_nominal_enum_v1(std::string_view source) {
         } else if (c == '-' && i + 1 < source.size() && source[i + 1] == '>') {
             i += 2;
         } else if (c == '(' || c == ')' || c == '{' || c == '}' ||
-                   c == '.' || c == ':' || c == ';' || c == '=') ++i;
+                   c == '.' || c == ':' || c == ';' || c == '=' || c == ',') ++i;
         else throw std::runtime_error("ADT v1 unsupported source token at byte " +
             std::to_string(at));
         if (tokens.size() >= 10000)
@@ -104,7 +104,7 @@ inline std::string lower_nominal_enum_v1(std::string_view source) {
         std::string name() {
             static constexpr std::string_view keywords[] = {
                 "int", "bool", "define", "enum", "end", "match", "over", "on",
-                "return", "pub", "fnc", "val", "let", "main", "when", "if",
+                "return", "pub", "fnc", "val", "let", "main", "when", "if", "as", "do",
                 "then", "else", "fi", "true", "false"
             };
             if (!current().identifier)
@@ -132,37 +132,103 @@ inline std::string lower_nominal_enum_v1(std::string_view source) {
             if (take("(")) need(")");
             return {std::move(owner), std::move(which)};
         }
+        // A pattern may omit its enum owner only when the scrutinee owns
+        // the complete closed nominal schema. Trailing `as alias` is scoped
+        // to the selected arm and never creates a guest runtime allocation.
+        struct CasePattern {
+            std::string first; // variant
+            std::string second; // whole-case alias
+            std::string field; // single statically checked i64 payload field
+        };
+        CasePattern nominal_pattern(
+                std::string_view owner, std::string_view foreign_error,
+                bool allow_int_field = false) {
+            const auto first = name();
+            std::string variant = first;
+            if (take(".")) {
+                if (first != owner)
+                    throw std::runtime_error(std::string(foreign_error));
+                variant = name();
+            }
+            std::string field;
+            if (take("{")) {
+                if (!allow_int_field)
+                    throw std::runtime_error(
+                        "ADT v4 helper cannot borrow payload-bearing nominal enums");
+                field = name();
+                if (!take("}"))
+                    throw std::runtime_error(
+                        "ADT v4 supports exactly one named integer field per pattern");
+            }
+            std::string alias;
+            if (take("as")) {
+                alias = name();
+                if (alias == owner || alias == variant)
+                    throw std::runtime_error("ADT v3 alias shadows nominal declaration or variant");
+                if (alias == field)
+                    throw std::runtime_error("ADT v4 whole alias conflicts with payload binding");
+            }
+            return {std::move(variant), std::move(alias), std::move(field)};
+        }
     };
     Reader r{std::move(tokens)};
     r.need("define"); r.need("enum");
     const auto owner = r.name();
-    r.need("as");
-    struct Variant { std::string name; std::int64_t tag = 0; };
+    // Legacy `define enum E as ... end` remains admitted in this opt-in
+    // compiler slice; canonical closed nullary syntax uses braces and commas.
+    const bool brace_enum = r.take("{");
+    if (!brace_enum) r.need("as");
+    struct Variant {
+        std::string name;
+        std::int64_t tag = 0;
+        std::string int_field; // empty for nullary; no owned/Bytes ABI here
+    };
     std::vector<Variant> variants;
     std::unordered_set<std::string> used_names;
     std::unordered_set<std::int64_t> used_tags;
     std::int64_t next_tag = 1;
-    while (r.current().value != "end") {
+    while (r.current().value != (brace_enum ? "}" : "end")) {
         if (variants.size() == 32 || r.current().value.empty())
             throw std::runtime_error("ADT v1 enum case count exceeds bounds");
         const auto name = r.name();
+        std::string int_field;
+        if (r.take("{")) {
+            if (!brace_enum)
+                throw std::runtime_error("ADT v4 payload syntax requires canonical enum braces");
+            int_field = r.name();
+            r.need(":");
+            if (!r.take("int"))
+                throw std::runtime_error(
+                    "ADT v4 payload AOT admits only Copy int, never Bytes/owned handles");
+            if (!r.take("}"))
+                throw std::runtime_error(
+                    "ADT v4 payload case must contain exactly one int field");
+        }
         if (!used_names.insert(name).second)
             throw std::runtime_error("ADT v1 duplicate nominal case");
         const auto tag = r.take("=") ? r.number() : next_tag;
         if (tag <= 0 || tag > std::numeric_limits<std::int32_t>::max() ||
                 !used_tags.insert(tag).second)
             throw std::runtime_error("ADT v1 duplicate/invalid case tag");
-        variants.push_back({name, tag});
+        variants.push_back({name, tag, int_field});
         next_tag = tag + 1;
-        r.take(";");
+        if (brace_enum) {
+            if (!r.take(",") && r.current().value != "}")
+                throw std::runtime_error("ADT v3 expected comma between enum variants");
+        } else r.take(";");
     }
-    r.need("end"); r.take(";");
+    r.need(brace_enum ? "}" : "end"); r.take(";");
     if (variants.size() < 2)
         throw std::runtime_error("ADT v1 requires at least two nullary cases");
     // Parse/check source-nominal helper signature and every return BEFORE
     // lowering it to an internal private static scalar call. A foreign
     // enum owner can never enter that helper as an untyped i64 argument.
     std::string helper_name, helper_lowered;
+    const bool has_int_payload = std::any_of(variants.begin(), variants.end(),
+        [](const Variant& v) { return !v.int_field.empty(); });
+    if (has_int_payload && r.current().value == "fnc")
+        throw std::runtime_error(
+            "ADT v4 nominal payload helpers need a checked aggregate calling convention");
     if (r.take("fnc")) {
         helper_name = r.name();
         if (helper_name == owner ||
@@ -174,30 +240,43 @@ inline std::string lower_nominal_enum_v1(std::string_view source) {
         if (param == owner || param == helper_name)
             throw std::runtime_error("ADT v2 helper parameter shadows nominal symbol");
         r.need(")"); r.need(":"); r.need(owner); r.need("{");
-        r.need("match"); r.need(param); r.need("over");
+        r.take("do"); r.need("match"); r.need(param); r.need("over");
         struct TypedArm { std::int64_t tag = 0, returned = 0; };
         std::vector<TypedArm> helper_arms;
         std::unordered_set<std::string> helper_seen;
         while (r.take("on")) {
-            const auto pattern = r.qualified();
-            if (pattern.first != owner)
-                throw std::runtime_error("ADT v2 helper pattern foreign nominal owner");
+            const auto pattern = r.nominal_pattern(
+                owner, "ADT v2 helper pattern foreign nominal owner");
+            if (!pattern.second.empty() &&
+                    (pattern.second == param || pattern.second == helper_name ||
+                    std::any_of(variants.begin(), variants.end(),
+                        [&](const Variant& v) { return v.name == pattern.second; })))
+                throw std::runtime_error("ADT v3 helper alias shadows an existing nominal binding");
             const auto which = std::find_if(variants.begin(), variants.end(),
-                [&](const Variant& v) { return v.name == pattern.second; });
+                [&](const Variant& v) { return v.name == pattern.first; });
             if (which == variants.end())
                 throw std::runtime_error("ADT v2 helper pattern unknown case");
             if (!helper_seen.insert(which->name).second)
                 throw std::runtime_error("ADT v2 helper duplicate match arm");
             r.need("->"); r.need("{"); r.need("return");
-            const auto result = r.qualified();
-            if (result.first != owner)
-                throw std::runtime_error("ADT v2 helper return foreign nominal owner");
-            const auto returned = std::find_if(variants.begin(), variants.end(),
-                [&](const Variant& v) { return v.name == result.second; });
-            if (returned == variants.end())
-                throw std::runtime_error("ADT v2 helper returns unknown nominal case");
+            std::int64_t return_tag = 0;
+            if (!pattern.second.empty() && r.take(pattern.second)) {
+                // A nullary enum is immutable and Copy. Returning its
+                // arm-local borrowed identity copies a validated tag, never
+                // moves an actor payload or escapes a non-Copy view.
+                return_tag = which->tag;
+            } else {
+                const auto result = r.qualified();
+                if (result.first != owner)
+                    throw std::runtime_error("ADT v2 helper return foreign nominal owner");
+                const auto returned = std::find_if(variants.begin(), variants.end(),
+                    [&](const Variant& v) { return v.name == result.second; });
+                if (returned == variants.end())
+                    throw std::runtime_error("ADT v2 helper returns unknown nominal case");
+                return_tag = returned->tag;
+            }
             r.need(";"); r.need("}");
-            helper_arms.push_back({which->tag, returned->tag});
+            helper_arms.push_back({which->tag, return_tag});
         }
         r.need("end"); r.need("}");
         if (helper_seen.size() != variants.size())
@@ -226,26 +305,61 @@ inline std::string lower_nominal_enum_v1(std::string_view source) {
         [&](const Variant& v) { return v.name == ctor.second; });
     if (selected == variants.end())
         throw std::runtime_error("ADT v1 unknown nominal case constructor");
+    std::int64_t selected_payload = 0;
+    if (selected->int_field.empty()) {
+        if (r.current().value == "{")
+            throw std::runtime_error("ADT v4 nullary constructor rejects payload");
+    } else {
+        r.need("{");
+        r.need(selected->int_field);
+        r.need(":");
+        selected_payload = r.number();
+        if (!r.take("}"))
+            throw std::runtime_error("ADT v4 constructor requires exactly one checked int field");
+    }
     if (calls_helper) r.need(")");
     r.need(";");
-    r.need("match"); r.need(variable); r.need("over");
-    struct Arm { std::int64_t tag, result; };
+    r.take("do"); r.need("match"); r.need(variable); r.need("over");
+    const std::string payload_var = variable + "_case_payload";
+    struct Arm { std::int64_t tag; std::string result; };
     std::vector<Arm> arms;
     std::unordered_set<std::string> seen;
     while (r.take("on")) {
-        const auto q = r.qualified();
-        if (q.first != owner)
-            throw std::runtime_error("ADT v1 match has foreign nominal owner");
+        const auto q = r.nominal_pattern(owner,
+            "ADT v1 match has foreign nominal owner", true);
+        if (!q.second.empty() &&
+                (q.second == variable ||
+                std::any_of(variants.begin(), variants.end(),
+                    [&](const Variant& v) { return v.name == q.second; })))
+            throw std::runtime_error("ADT v3 match alias shadows an existing nominal binding");
         const auto which = std::find_if(variants.begin(), variants.end(),
-            [&](const Variant& v) { return v.name == q.second; });
+            [&](const Variant& v) { return v.name == q.first; });
         if (which == variants.end())
             throw std::runtime_error("ADT v1 match has unknown case");
-        if (!seen.insert(q.second).second)
+        if (!seen.insert(q.first).second)
             throw std::runtime_error("ADT v1 duplicate match arm");
+        if (!q.field.empty() && q.field != which->int_field)
+            throw std::runtime_error("ADT v4 pattern field is not declared on the nominal case");
         r.need("->"); r.need("{"); r.need("return");
-        const auto number = r.number();
+        std::string result;
+        if (r.current().identifier) {
+            // Explicit case narrowing is the *only* route to the private
+            // integer payload register; no guest raw-tag API is exposed.
+            const auto reference = r.name();
+            if (which->int_field.empty())
+                throw std::runtime_error("ADT v4 nullary case has no payload projection");
+            if (!q.second.empty() && reference == q.second) {
+                r.need(".");
+                r.need(which->int_field);
+            } else if (reference != q.field || q.field.empty()) {
+                throw std::runtime_error("ADT v4 unknown or unbound case field projection");
+            }
+            result = payload_var;
+        } else {
+            result = std::to_string(r.number());
+        }
         r.need(";"); r.need("}");
-        arms.push_back({which->tag, number});
+        arms.push_back({which->tag, std::move(result)});
     }
     r.need("end"); r.need("}");
     r.need("");
@@ -259,11 +373,14 @@ inline std::string lower_nominal_enum_v1(std::string_view source) {
         : std::to_string(selected->tag);
     std::string lowered = helper_lowered + "pub fnc main(): int {\n  val int " +
         variable + " = " + initial_value + ";\n";
+    if (has_int_payload)
+        lowered += "  val int " + payload_var + " = " +
+            std::to_string(selected_payload) + ";\n";
     for (std::size_t k = 0; k + 1 < arms.size(); ++k) {
         lowered += "  if " + variable + " == " + std::to_string(arms[k].tag) +
-            " then return " + std::to_string(arms[k].result) + "; fi\n";
+            " then return " + arms[k].result + "; fi\n";
     }
-    lowered += "  return " + std::to_string(arms.back().result) + ";\n}\n";
+    lowered += "  return " + arms.back().result + ";\n}\n";
     return lowered;
 }
 

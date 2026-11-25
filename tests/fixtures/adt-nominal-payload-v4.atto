@@ -1,0 +1,14 @@
+// Restricted local Copy-int payload case: no network ABI or actor-owned bytes.
+define enum WorkerMsg {
+    Run { job_id: int },
+    Cancel { job_id: int },
+    Stop
+}
+pub fnc main(): int {
+    val WorkerMsg msg = WorkerMsg.Run { job_id: 37 };
+    do match msg over
+        on Run { job_id } as r -> { return r.job_id; }
+        on Cancel as c -> { return c.job_id; }
+        on Stop -> { return 0; }
+    end
+}
