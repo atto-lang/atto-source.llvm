@@ -258,7 +258,7 @@ public:
         // Admit '@' as a TOKEN only so existing parameter-local @Default guards
         // can issue their specific fail-closed diagnostic instead of a generic
         // unsupported-token error. No annotation execution is enabled.
-        if (std::string_view("(){},:;+-*/%=.<>@?!").find(ch) != std::string_view::npos) {
+        if (std::string_view("(){},:;+-*/%^=.<>@?!").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -548,10 +548,11 @@ bool entry_builtin_name(std::string_view name) {
 class Parser {
 public:
     explicit Parser(std::string_view source, bool experimental_owned_int,
-                    bool experimental_rt_scalar_loop)
+                    bool experimental_rt_scalar_loop, bool canonical_atto)
         : source_(source), lexer_(source), token_(lexer_.next()),
           experimental_owned_int_(experimental_owned_int),
-          experimental_rt_scalar_loop_(experimental_rt_scalar_loop) {}
+          experimental_rt_scalar_loop_(experimental_rt_scalar_loop),
+          canonical_atto_(canonical_atto) {}
 
     Program parse() {
         Program program;
@@ -1898,7 +1899,17 @@ private:
                     parameter.mode = accept("mut") ? Parameter::Mode::BorrowMut
                                                     : Parameter::Mode::Borrow;
                 }
-                if (accept("int")) {
+                // Legacy x:int is accepted only as the proven by-value i64
+                // ABI; canonical int x keeps existing type-first parsing.
+                const bool legacy_named_i64 =
+                    parameter.mode == Parameter::Mode::Value &&
+                    token_.kind == Kind::Identifier && peek_next().text == ":";
+                if (legacy_named_i64) {
+                    parameter.name = identifier();
+                    require(":");
+                    require("int");
+                    parameter.scalar_type = ScalarType::I64;
+                } else if (accept("int")) {
                     parameter.scalar_type = ScalarType::I64;
                 } else if (accept("bool")) {
                     parameter.scalar_type = ScalarType::Bool;
@@ -1922,9 +1933,9 @@ private:
                 }
                 if (token_.text == "?")
                     fail("native optional type '?' requires versioned Option/default ABI lowering");
-                if (alias_extension && token_.text == "self")
+                if (!legacy_named_i64) parameter.name = identifier();
+                if (alias_extension && parameter.name == "self")
                     fail("EXTENSION_SELF_SHADOW: explicit extension parameter cannot be named self");
-                parameter.name = identifier();
                 if (token_.text == "?")
                     fail("native optional parameter presence '?' requires versioned default/presence ABI lowering");
                 value.parameters.push_back(std::move(parameter));
@@ -2136,7 +2147,9 @@ private:
             require(";");
             return true;
         };
-        while (token_.text == "const" || token_.text == "val" || token_.text == "let" || token_.text == "stdio" || array_effect_ahead()) {
+        while (token_.text == "int" || token_.text == "const" ||
+               token_.text == "val" || token_.text == "let" ||
+               token_.text == "stdio" || array_effect_ahead()) {
             // Typed Future<void> is admitted ONLY as a linear lexical alias
             // for one already-spawned ActorRef.get_ready() lifecycle promise.
             // No scalar/object borrow crosses this suspension, and general
@@ -2148,7 +2161,17 @@ private:
             binding.offset = token_.offset;
             Lexer sum_look = lexer_; auto sum_first = sum_look.next();
             if (token_.text == "let" && sum_first.text == "mut") sum_first = sum_look.next();
-            if ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
+            if (token_.text == "int") {
+                // Canonical type-first locals are initialized once and have
+                // neither rebinding nor mutable-referent authority.
+                require("int");
+                binding.scalar_type = ScalarType::I64;
+                binding.owner_mutable = false;
+                binding.assignable = false;
+                binding.name = identifier();
+                require("=");
+                binding.initializer = expression();
+            } else if ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
                     (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "String" || sum_first.text == "string")) {
                 const auto mode = token_.text; advance(); if (mode == "let") accept("mut");
                 binding.owner_mutable = mode != "const"; binding.assignable = mode == "let";
@@ -2383,8 +2406,14 @@ private:
                     continue;
                 }
                 if (typed_actor_ref) fail("ActorRef<T> requires spawn initializer");
-                if (!explicit_type) fail("scalar local requires an explicit ': int' or ': bool' type");
+                if (!explicit_type && (binding.assignable || binding.owner_mutable))
+                    fail("scalar local requires an explicit ': int' or ': bool' type");
                 binding.initializer = expression();
+                // Inferred const is currently restricted to one checked i64
+                // integer literal. Other inferred types remain fail-closed.
+                if (!explicit_type &&
+                    binding.initializer->kind != Expression::Kind::Integer)
+                    fail("native inferred const requires a checked int literal initializer");
             }
             require(";");
             if (!binding.class_name.empty()) class_receivers_.insert(binding.name);
@@ -2404,12 +2433,33 @@ private:
         auto scoped_local = [&]() {
             Statement statement; statement.kind = Statement::Kind::ScopedLocal;
             statement.offset = token_.offset;
+            const bool type_first_readonly = token_.text == "int";
             const bool mutable_slot = token_.text == "let";
-            const bool mutable_referent = token_.text != "const";
+            const bool mutable_referent = token_.text != "const" && !type_first_readonly;
             advance(); const bool explicit_mutable = mutable_slot && accept("mut");
             if (token_.text == "owned") fail("branch-local owned value requires destructor/drop lowering");
             auto local = std::make_unique<LocalBinding>(); local->offset = statement.offset;
             local->assignable = mutable_slot; local->owner_mutable = mutable_referent;
+            // Inferred const must work in a structured lexical block just as
+            // it does at the top level. Admit only a checked integer literal,
+            // so a class/generic alias or untyped expression cannot silently
+            // become i64. The normal scoped ownership checker then rejects
+            // attempts to reassign this immutable binding.
+            if (!mutable_slot && !mutable_referent &&
+                    token_.kind == Kind::Identifier) {
+                Lexer look = lexer_;
+                if (look.next().text == "=") {
+                    local->scalar_type = ScalarType::I64;
+                    local->name = identifier();
+                    require("=");
+                    local->initializer = expression();
+                    if (local->initializer->kind != Expression::Kind::Integer)
+                        fail("native inferred const requires a checked int literal initializer");
+                    require(";");
+                    statement.branch_local = std::move(local);
+                    return statement;
+                }
+            }
             if (accept("Array")) {
                 local->owner_mutable = mutable_slot ? explicit_mutable : mutable_referent;
                 require("<"); array_element(*local); require(">");
@@ -2428,9 +2478,15 @@ private:
                     if (accept(scalar)) return scalar;
                 return type_identifier();
             };
-            const std::string first = type_name(); std::string type;
-            if (accept(":")) { local->name = first; type = type_name(); }
-            else { type = first; local->name = identifier(); }
+            std::string type;
+            if (type_first_readonly) {
+                type = "int";
+                local->name = identifier();
+            } else {
+                const std::string first = type_name();
+                if (accept(":")) { local->name = first; type = type_name(); }
+                else { type = first; local->name = identifier(); }
+            }
             if (type == "owned") fail("branch-local owned value requires destructor/drop lowering");
             if (type == "Array") fail("ordered owning local requires scoped region/drop lowering");
             if (type == "int") local->scalar_type = ScalarType::I64;
@@ -2542,7 +2598,8 @@ private:
                         fail("native statement follows terminal return");
                     continue;
                 }
-                if (token_.text == "const" || token_.text == "val" || token_.text == "let") {
+                if (token_.text == "int" || token_.text == "const" ||
+                    token_.text == "val" || token_.text == "let") {
                     actions.push_back(scoped_local());
                     continue;
                 }
@@ -3154,6 +3211,8 @@ private:
 
     std::unique_ptr<Expression> logical_xor() {
         auto left = logical_and();
+        if (canonical_atto_ && token_.text == "^^")
+            fail("ATTO_REMOVED_OPERATOR: ^^ is not valid canonical AttoLang source");
         while (token_.text == "^^") {
             const auto offset = token_.offset;
             advance();
@@ -3230,6 +3289,8 @@ private:
 
     std::unique_ptr<Expression> product() {
         auto left = unary();
+        if (canonical_atto_ && (token_.text == "%" || token_.text == "^"))
+            fail("ATTO_REMOVED_OPERATOR: % and ^ are not valid canonical AttoLang source");
         while (token_.text == "*" || token_.text == "/" || token_.text == "%") {
             // Java defines int/int division as a FLOAT result; this native
             // source compiler lowers expressions only to signed i64. Reject
@@ -3967,7 +4028,7 @@ private:
 
     std::unique_ptr<Expression> template_expression(std::string_view source,
                                                     std::size_t base_offset) {
-        Parser nested(source, experimental_owned_int_, experimental_rt_scalar_loop_);
+        Parser nested(source, experimental_owned_int_, experimental_rt_scalar_loop_, canonical_atto_);
         auto expr = nested.expression();
         if (nested.token_.kind != Kind::End)
             nested.fail("expected end of template interpolation expression");
@@ -5619,6 +5680,9 @@ private:
     std::vector<Function> methods_;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
+    // Source-unit scoped migration: .atto removes retired operators while
+    // .ores keeps compatibility syntax until a separate versioned rollout.
+    bool canonical_atto_;
     // Type-only declarations retain source alias identity until checked
     // catalog validation and extension-call rewriting complete.
     std::unordered_map<std::string, std::string> scalar_alias_targets_;
@@ -5785,9 +5849,9 @@ void resolve_future_pipeline_contracts(Program& program) {
 } // namespace
 
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int,
-                      bool experimental_rt_scalar_loop) {
+                      bool experimental_rt_scalar_loop, bool canonical_atto) {
     Program program = Parser(source, experimental_owned_int,
-                             experimental_rt_scalar_loop).parse();
+                             experimental_rt_scalar_loop, canonical_atto).parse();
     if (experimental_rt_scalar_loop &&
             (program.functions.size() != 1 || !program.functions.front().scalar_while ||
              !program.classes.empty() || !program.actors.empty() ||
@@ -5818,8 +5882,9 @@ void resolve_and_validate_program(Program& program) {
 }
 
 Program parse_program(std::string_view source, bool experimental_owned_int,
-                      bool experimental_rt_scalar_loop) {
-    auto program = parse_unresolved_program(source, experimental_owned_int, experimental_rt_scalar_loop);
+                      bool experimental_rt_scalar_loop, bool canonical_atto) {
+    auto program = parse_unresolved_program(source, experimental_owned_int,
+                                            experimental_rt_scalar_loop, canonical_atto);
     resolve_and_validate_program(program);
     return program;
 }

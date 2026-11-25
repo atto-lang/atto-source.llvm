@@ -1,4 +1,5 @@
 mod checked_i64;
+mod atto_scalar_v1;
 
 use std::{
     env,
@@ -792,6 +793,26 @@ fn path_arg(args: &[String], index: usize, usage: &str) -> Result<PathBuf, Strin
 fn real_main() -> Result<(), String> {
     let args: Vec<String> = env::args().collect();
     match args.get(1).map(String::as_str) {
+        Some("atto-scalar-source") => {
+            let root = path_arg(&args, 2, "usage: atto-scalar-source <source-root>")?;
+            atto_scalar_v1::source_only(&root)
+        }
+        Some("atto-scalar-selftest") => {
+            let root = path_arg(&args, 2, "usage: atto-scalar-selftest <source-root>")?;
+            atto_scalar_v1::self_test(&root)
+        }
+        Some("atto-scalar-negative") => {
+            let compiler = path_arg(&args, 2, "usage: atto-scalar-negative <compiler> <source-root>")?;
+            let root = path_arg(&args, 3, "usage: atto-scalar-negative <compiler> <source-root>")?;
+            atto_scalar_v1::removed_operators(&compiler, &root)
+        }
+        Some("atto-scalar-guest") => {
+            let compiler = path_arg(&args, 2, "usage: atto-scalar-guest <compiler> <clang> <source-root> <case-id>")?;
+            let clang = path_arg(&args, 3, "usage: atto-scalar-guest <compiler> <clang> <source-root> <case-id>")?;
+            let root = path_arg(&args, 4, "usage: atto-scalar-guest <compiler> <clang> <source-root> <case-id>")?;
+            let id = args.get(5).ok_or("usage: atto-scalar-guest <compiler> <clang> <source-root> <case-id>")?;
+            atto_scalar_v1::guest(&compiler, &clang, &root, id)
+        }
         Some("checked-i64") => {
             let compiler = path_arg(&args, 2, "usage: checked-i64 <compiler> <clang>")?;
             let clang = path_arg(&args, 3, "usage: checked-i64 <compiler> <clang>")?;
@@ -846,7 +867,7 @@ fn real_main() -> Result<(), String> {
             aot_driver(&driver, &compiler, &clang)
         }
         _ => Err(
-            "usage: oreslang-llvm-test-harness <realtime-profile|callable-nominal|nominal-type-binders|aot-driver|native-remainder-parity|named-call-order|actor-persistent-fields|tagged-message-wire|native-async-io-boundary|native-inline-self-arity> ..."
+            "usage: oreslang-llvm-test-harness <atto-scalar-source|atto-scalar-selftest|atto-scalar-negative|atto-scalar-guest|realtime-profile|callable-nominal|nominal-type-binders|aot-driver|native-remainder-parity|named-call-order|actor-persistent-fields|tagged-message-wire|native-async-io-boundary|native-inline-self-arity> ..."
                 .to_string(),
         ),
     }

@@ -1,0 +1,140 @@
+name: AttoLang LLVM LRU exact-head native M0
+on:
+  pull_request:
+    paths:
+      - 'contracts/atto-lru-llvm-v1/**'
+      - 'tests/atto_lru_llvm_source.py'
+      - 'tests/test_atto_lru_workflow_contract.py'
+      - 'tests/atto_lru_junit_gate.py'
+      - 'tests/test_atto_lru_junit_gate.py'
+      - 'tests/test_atto_lru_ctest_path.py'
+      - 'tests/atto_lru_ctest_admission.py'
+      - 'tests/test_atto_lru_ctest_admission.py'
+      - 'tests/contract.py'
+      - 'src/main/cpp/oreslang/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/atto-lru-llvm-m0.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  llvm-lru-native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout exact source-owned PR head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Record and verify immutable checkout
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet --exit-code
+          git diff --cached --quiet --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          printf 'ATTO_LRU_LLVM_EXACT_HEAD=%s\n' "$EXPECTED_HEAD"
+          printf 'ATTO_LRU_LLVM_EXACT_TREE=%s\n' "$(git rev-parse 'HEAD^{tree}')"
+
+      - name: Install real LLVM compiler toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y clang llvm-dev cmake build-essential python3 cargo
+          clang --version
+          llvm-config --version
+          cmake --version
+
+      - name: Verify reviewed fixture blobs and workflow admission
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -euo pipefail
+          python3 tests/atto_lru_llvm_source.py | tee /tmp/atto-lru-source-only.log
+          python3 -m unittest discover -s tests -p 'test_atto_lru_workflow_contract.py' -v
+          python3 -m unittest discover -s tests -p 'test_atto_lru_junit_gate.py' -v
+          python3 -m unittest discover -s tests -p 'test_atto_lru_ctest_path.py' -v
+          python3 -m unittest discover -s tests -p 'test_atto_lru_ctest_admission.py' -v
+          grep -Fx 'ATTO_LLVM_LRU_SOURCE_ONLY=PASS cases=4 mutations_rejected=7 native_compiler_guest=NOT_EXECUTED' /tmp/atto-lru-source-only.log
+
+      - name: Build actual oreslang-llvmc from exact HEAD
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build/atto-lru -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build/atto-lru --parallel 2 --target oreslang-llvmc
+          test -x build/atto-lru/oreslang-llvmc
+          # Fingerprints are captured before execution and rechecked afterward.
+          # They are provenance observations, not external trusted signing.
+          sha256sum build/atto-lru/oreslang-llvmc "$(command -v clang)" \
+            > build/atto-lru/compiler-toolchain.sha256
+          cat build/atto-lru/compiler-toolchain.sha256
+
+      - name: Require complete CTest inventory without duplicates
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build/atto-lru -N > build/atto-lru/lru-ctest-inventory.txt
+          cat build/atto-lru/lru-ctest-inventory.txt
+          ctest --test-dir build/atto-lru --show-only=json-v1 > build/atto-lru/lru-ctest-json.json
+          python3 tests/atto_lru_ctest_admission.py \
+            build/atto-lru/lru-ctest-json.json --root "$PWD" --build "$PWD/build/atto-lru"
+          for test_name in atto_lru_hash_quotient atto_lru_probe_wrap \
+              atto_lru_slot_recycle atto_lru_recency_touch \
+              atto_lru_micro_source_inventory; do
+            count="$(grep -Ec "Test +#[0-9]+: ${test_name}$" build/atto-lru/lru-ctest-inventory.txt || true)"
+            [[ "$count" == 1 ]] || {
+              echo "Missing or duplicate native CTest: $test_name count=$count" >&2
+              exit 1
+            }
+          done
+
+      - name: Execute four real LLVM IR Clang guests and source guard
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -euo pipefail
+          ctest --test-dir build/atto-lru --output-on-failure -V --timeout 120 \
+            --output-junit lru-ctest.xml \
+            -R '^atto_lru_(hash_quotient|probe_wrap|slot_recycle|recency_touch|micro_source_inventory)$' \
+            | tee build/atto-lru/lru-native-execution.log
+          python3 tests/atto_lru_junit_gate.py build/atto-lru/lru-ctest.xml
+
+      - name: Reverify source and toolchain after native execution
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet --exit-code
+          git diff --cached --quiet --exit-code
+          python3 tests/atto_lru_llvm_source.py
+          sha256sum -c build/atto-lru/compiler-toolchain.sha256
+          printf 'ATTO_LLVM_LRU_FINAL_TREE=%s\n' "$(git rev-parse 'HEAD^{tree}')"
+          echo "ATTO_LLVM_LRU_TOOLCHAIN_STABLE=PASS"
+
+      - name: Preserve source-local observations
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: atto-llvm-lru-m0-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build/atto-lru/lru-ctest-inventory.txt
+            build/atto-lru/lru-ctest-json.json
+            build/atto-lru/lru-ctest.xml
+            build/atto-lru/lru-native-execution.log
+            build/atto-lru/compiler-toolchain.sha256
+          if-no-files-found: warn
+          retention-days: 14
