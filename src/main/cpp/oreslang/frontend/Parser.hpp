@@ -113,6 +113,25 @@ struct ActorFieldWrite {
     std::size_t offset = 0;
 };
 
+// Restricted statements inside one sealed actor-state loan. They are
+// deliberately separate from ordinary Function statements: only lexical
+// state writes and bounded scalar-comparison conditionals are representable here.
+// Calls, suspension, locals, ownership operations and state-capability escape
+// remain impossible in this AST.
+struct ActorStateStatement {
+    enum class Kind { Write, Conditional };
+    enum class Compare { Eq, Ne, Lt, Le, Gt, Ge };
+    Kind kind = Kind::Write;
+    Compare compare = Compare::Eq;
+    std::string field;
+    std::unique_ptr<Expression> expression;
+    std::unique_ptr<Expression> condition_lhs;
+    std::unique_ptr<Expression> condition_rhs;
+    std::vector<ActorStateStatement> then_statements;
+    std::vector<ActorStateStatement> else_statements;
+    std::size_t offset = 0;
+};
+
 // Canonical sealed actor-state loan. State storage is not an ordinary actor
 // field namespace: the binder exists only while this synchronous callback is
 // being checked/lowered, and no reference/capability may escape it.
@@ -120,7 +139,7 @@ struct ActorStateLoan {
     enum class Mode { Read, Write };
     Mode mode = Mode::Read;
     std::string binder;
-    std::vector<ActorFieldWrite> writes;
+    std::vector<ActorStateStatement> statements;
     std::unique_ptr<Expression> result;
     std::size_t offset = 0;
 };

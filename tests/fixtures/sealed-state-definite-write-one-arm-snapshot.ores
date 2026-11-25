@@ -1,0 +1,14 @@
+define actor BranchSnapshotAuthority as
+  state {
+    result: int = 7;
+  }
+  pub fnc on_message(int flag): int with state.read, state.write {
+    return self.handle_state(critical |s| -> {
+      if (flag == 1) {
+        s.result = 1;
+      } else {
+      } fi
+      return s.result;
+    });
+  }
+end

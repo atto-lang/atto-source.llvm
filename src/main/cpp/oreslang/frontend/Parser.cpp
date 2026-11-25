@@ -116,8 +116,11 @@ public:
             }
             return {Kind::Integer, source_.substr(start, at_ - start), start};
         }
-        // Contiguous '==' is one token, matching the Java/Graal lexer.
-        if (source_.substr(at_, 2) == "==") {
+        // Contiguous scalar comparison operators are one token, matching
+        // the Java/Graal surface syntax used by state admission guards.
+        const auto comparison = source_.substr(at_, 2);
+        if (comparison == "==" || comparison == "!=" ||
+                comparison == "<=" || comparison == ">=") {
             at_ += 2;
             return {Kind::Symbol, source_.substr(start, 2), start};
         }
@@ -324,8 +327,8 @@ private:
             while (token_.text != "}") {
                 if (token_.kind == Kind::End)
                     fail("unterminated native actor state schema");
-                if (actor.fields.size() == 16)
-                    fail("native actor state field limit exceeded (16)");
+                if (actor.fields.size() == 32)
+                    fail("native actor state field limit exceeded (32)");
                 LocalBinding field;
                 field.offset = token_.offset;
                 field.field_mutable = true; // mutation still requires a write loan
@@ -485,21 +488,72 @@ private:
             require(">");
 
             if (accept("{")) {
-                while (token_.text != "return") {
-                    if (token_.kind == Kind::End || token_.text == "}")
-                        fail("state callback requires return");
-                    ActorFieldWrite write;
-                    write.offset = token_.offset;
-                    const std::string receiver = identifier();
-                    if (receiver != loan->binder)
-                        fail("actor state mutation requires the lexical state callback binding");
-                    require(".");
-                    write.field = identifier();
-                    require("=");
-                    write.expression = expression();
-                    require(";");
-                    loan->writes.push_back(std::move(write));
-                }
+                std::size_t state_branch_count = 0;
+                std::function<std::vector<ActorStateStatement>(std::size_t)> parse_state_arm;
+                parse_state_arm = [&](std::size_t depth) {
+                    if (depth > 32)
+                        fail("native actor state conditional nesting limit exceeded (32)");
+                    std::vector<ActorStateStatement> statements;
+                    while (token_.text != "return" && token_.text != "}") {
+                        if (token_.kind == Kind::End)
+                            fail("state callback requires return");
+                        if (token_.text == "if") {
+                            if (++state_branch_count > 32)
+                                fail("native actor state conditional CFG limit exceeded (32)");
+                            ActorStateStatement conditional;
+                            conditional.kind = ActorStateStatement::Kind::Conditional;
+                            conditional.offset = token_.offset;
+                            require("if");
+                            require("(");
+                            conditional.condition_lhs = expression();
+                            if (accept("eq") || accept("==")) {
+                                conditional.compare = ActorStateStatement::Compare::Eq;
+                            } else if (accept("!=")) {
+                                conditional.compare = ActorStateStatement::Compare::Ne;
+                            } else if (accept("<=")) {
+                                conditional.compare = ActorStateStatement::Compare::Le;
+                            } else if (accept(">=")) {
+                                conditional.compare = ActorStateStatement::Compare::Ge;
+                            } else if (accept("<")) {
+                                conditional.compare = ActorStateStatement::Compare::Lt;
+                            } else if (accept(">")) {
+                                conditional.compare = ActorStateStatement::Compare::Gt;
+                            } else {
+                                fail("actor state conditional requires eq, ==, !=, <, <=, > or >=");
+                            }
+                            conditional.condition_rhs = expression();
+                            require(")");
+                            require("{");
+                            conditional.then_statements = parse_state_arm(depth + 1);
+                            if (token_.text == "return")
+                                fail("state conditional arms cannot return; use the terminal callback return");
+                            require("}");
+                            require("else");
+                            require("{");
+                            conditional.else_statements = parse_state_arm(depth + 1);
+                            if (token_.text == "return")
+                                fail("state conditional arms cannot return; use the terminal callback return");
+                            require("}");
+                            require("fi");
+                            statements.push_back(std::move(conditional));
+                            continue;
+                        }
+                        ActorStateStatement write;
+                        write.kind = ActorStateStatement::Kind::Write;
+                        write.offset = token_.offset;
+                        const std::string receiver = identifier();
+                        if (receiver != loan->binder)
+                            fail("actor state mutation requires the lexical state callback binding");
+                        require(".");
+                        write.field = identifier();
+                        require("=");
+                        write.expression = expression();
+                        require(";");
+                        statements.push_back(std::move(write));
+                    }
+                    return statements;
+                };
+                loan->statements = parse_state_arm(0);
                 require("return");
                 loan->result = expression();
                 require(";");
@@ -1925,7 +1979,18 @@ private:
                     if (!method.declared_effects.has(FunctionEffect::StateRead))
                         throw std::runtime_error(
                             "actor state read loan requires state.read effect");
-                    if (!loan.writes.empty())
+                    std::function<bool(const std::vector<ActorStateStatement>&)> has_state_write;
+                    has_state_write = [&](const std::vector<ActorStateStatement>& statements) {
+                        for (const auto& statement : statements) {
+                            if (statement.kind == ActorStateStatement::Kind::Write)
+                                return true;
+                            if (has_state_write(statement.then_statements) ||
+                                    has_state_write(statement.else_statements))
+                                return true;
+                        }
+                        return false;
+                    };
+                    if (has_state_write(loan.statements))
                         throw std::runtime_error(
                             "read-only actor state loan cannot mutate state");
                 } else if (!method.declared_effects.has(FunctionEffect::StateWrite)) {
@@ -1974,14 +2039,31 @@ private:
                     }
                 };
 
-                for (const auto& write : loan.writes) {
-                    if (!fields.count(write.field))
-                        throw std::runtime_error(
-                            "cannot assign unknown actor state field '" + write.field + "'");
-                    if (!write.expression)
-                        throw std::runtime_error("actor state write requires expression");
-                    validate_state_expression(*write.expression);
-                }
+                std::function<void(const std::vector<ActorStateStatement>&)> validate_state_statements;
+                validate_state_statements =
+                    [&](const std::vector<ActorStateStatement>& statements) {
+                        for (const auto& statement : statements) {
+                            if (statement.kind == ActorStateStatement::Kind::Write) {
+                                if (!fields.count(statement.field))
+                                    throw std::runtime_error(
+                                        "cannot assign unknown actor state field '" +
+                                        statement.field + "'");
+                                if (!statement.expression)
+                                    throw std::runtime_error(
+                                        "actor state write requires expression");
+                                validate_state_expression(*statement.expression);
+                                continue;
+                            }
+                            if (!statement.condition_lhs || !statement.condition_rhs)
+                                throw std::runtime_error(
+                                    "actor state conditional requires comparison operands");
+                            validate_state_expression(*statement.condition_lhs);
+                            validate_state_expression(*statement.condition_rhs);
+                            validate_state_statements(statement.then_statements);
+                            validate_state_statements(statement.else_statements);
+                        }
+                    };
+                validate_state_statements(loan.statements);
                 validate_state_expression(*loan.result);
                 if (reads_state &&
                         !method.declared_effects.has(FunctionEffect::StateRead))
