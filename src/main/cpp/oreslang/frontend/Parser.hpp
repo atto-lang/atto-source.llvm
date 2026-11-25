@@ -27,8 +27,10 @@ struct NativeSumType {
     std::string name;
     ScalarType value_type = ScalarType::I64;
     ScalarType error_type = ScalarType::I64;
-    // Result<_, Error>: the error slot holds a sanitized trap message and is
-    // minted only by `trap` (spec ch. 7); source cannot construct or read it.
+    // Result<_, Error>: the legacy descriptor's String discriminator is
+    // a nominal marker, not an exposed String payload. Hosted arithmetic
+    // stores a stable Error ID in the opaque error slot; source cannot mint
+    // or read it until the general typed Error representation is admitted.
     bool trap_error = false;
 };
 
@@ -88,8 +90,9 @@ struct Expression {
     bool pipeline_stage = false;
 };
 
-// Phase-one native trap supports only total integer-expression structure.
-// Arithmetic overflow remains a terminal panic. This predicate deliberately
+// Native trap supports a closed integer-expression structure. Hosted
+// arithmetic has a local Err edge; restricted profiles remain terminal.
+// This predicate deliberately
 // rejects calls, variables, dereferences, nested sums, host/actor effects,
 // suspension and all non-integer values until effect and cleanup IR is proven.
 inline bool native_trap_pure_integer(const Expression& e, std::size_t depth = 0) {
