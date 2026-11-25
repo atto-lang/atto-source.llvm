@@ -9,6 +9,7 @@
 #include <thread>
 #include <type_traits>
 #include <iostream>
+#include <new>
 #include <string_view>
 using oreslang::runtime::SharedDomainArena;
 void require(bool cond) { if (!cond) throw std::runtime_error("shared domain test failed"); }
@@ -31,6 +32,10 @@ template<typename F> void reject(F&& f) {
 }
 int main() {
     static_assert(!std::is_move_constructible_v<SharedDomainArena::Lease>);
+    static_assert(!std::is_copy_constructible_v<SharedDomainArena::Control>);
+    static_assert(!std::is_move_constructible_v<SharedDomainArena::Control>);
+    static_assert(!std::is_copy_constructible_v<SharedDomainArena::LifetimePin>);
+    static_assert(std::is_move_constructible_v<SharedDomainArena::LifetimePin>);
     static_assert(!std::is_aggregate_v<SharedDomainArena::Grant>);
     static_assert(!std::is_default_constructible_v<SharedDomainArena::Grant>);
     static_assert(!std::is_constructible_v<SharedDomainArena::Grant,
@@ -38,6 +43,24 @@ int main() {
     static_assert(!std::is_aggregate_v<SharedDomainArena::Handle>);
     static_assert(!std::is_constructible_v<SharedDomainArena::Handle,
         std::uint64_t, std::uint64_t, std::size_t>);
+
+    // A stale CONTROL capability must not regain authority if allocator/stack
+    // reuse places a later arena at the exact same address.
+    {
+        alignas(SharedDomainArena) std::byte storage[sizeof(SharedDomainArena)];
+        auto* first = ::new (static_cast<void*>(storage)) SharedDomainArena();
+        auto staleControl = first->take_control();
+        require(first->try_retire(staleControl));
+        first->~SharedDomainArena();
+
+        auto* second = ::new (static_cast<void*>(storage)) SharedDomainArena();
+        auto currentControl = second->take_control();
+        reject([&] { (void)second->grant(staleControl, 999, 1, true, false); });
+        auto currentGrant = second->grant(currentControl, 999, 1, true, false);
+        require(second->try_revoke(currentControl, currentGrant));
+        require(second->try_retire(currentControl));
+        second->~SharedDomainArena();
+    }
     // Domain IDs must remain unique across concurrent arena construction.
     // This exercises the real header allocator, not a synthetic copy.
     {
@@ -50,9 +73,10 @@ int main() {
                 while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
                 for (std::size_t i = 0; i < PerThread; ++i) {
                     SharedDomainArena domain;
-                    auto grant = domain.grant(1000 + t, 1, true, false);
+                    auto control = domain.take_control();
+                    auto grant = domain.grant(control, 1000 + t, 1, true, false);
                     issued[t][i] = grant.domain_id();
-                    require(domain.try_retire());
+                    require(domain.try_retire(control));
                 }
             });
         }
@@ -68,8 +92,10 @@ int main() {
         require(std::adjacent_find(values.begin(), values.end()) == values.end());
     }
     SharedDomainArena a;
-    auto writerGrant=a.grant(101, 1, true, true);
-    auto readerGrant=a.grant(102, 1, true, false);
+    auto control = a.take_control();
+    reject([&] { (void)a.take_control(); });
+    auto writerGrant=a.grant(control, 101, 1, true, true);
+    auto readerGrant=a.grant(control, 102, 1, true, false);
     // A default invalid handle can exist for delayed assignment, but raw live
     // authority coordinates cannot be constructed outside the arena/lease.
     SharedDomainArena::Handle invalidHandle{};
@@ -79,12 +105,14 @@ int main() {
         reject([&] { writer.read(invalidHandle, &probe, sizeof(probe)); });
     }
     auto other=SharedDomainArena{};
-    auto foreignGrant=other.grant(104, 1, true,false);
+    auto otherControl=other.take_control();
+    auto foreignGrant=other.grant(otherControl, 104, 1, true,false);
     reject([&] { (void)a.read(104, 1, foreignGrant); });
     reject([&] { (void)a.write(102, 1, writerGrant); }); // wrong actor, valid grant
     reject([&] { (void)a.read(101, 2, writerGrant); }); // same actor ID after restart is NOT authority
     reject([&] { (void)a.write(101, 2, writerGrant); }); // incarnation fences writers too
-    reject([&] { (void)a.grant(101, 0, true, true); }); // no ambiguous incarnation
+    reject([&] { (void)a.grant(control, 101, 0, true, true); }); // no ambiguous incarnation
+    reject([&] { (void)a.grant(otherControl, 106, 1, true, false); }); // wrong domain CONTROL
     reject([&] { (void)a.read(0, 1, writerGrant); }); // supervisor sentinel cannot bypass actor lease
     SharedDomainArena::Handle h{};
     {
@@ -148,10 +176,10 @@ int main() {
             release.wait();
         });
         ready.wait();
-        require(!a.try_revoke(readerGrant));  // CONTROL must not block on a reader
+        require(!a.try_revoke(control, readerGrant));  // CONTROL must not block on a reader
         // CONTROL membership admission also must not park behind a lease.
         bool grantBusy = false;
-        try { (void)a.grant(105, 1, true, false); }
+        try { (void)a.grant(control, 105, 1, true, false); }
         catch (const std::logic_error& e) {
             grantBusy = std::string_view(e.what()) == "shared region busy";
         }
@@ -159,9 +187,9 @@ int main() {
         leaseRelease.set_value();
         reader.join();
     }
-    require(a.try_revoke(readerGrant));
-    auto newReader = a.grant(105, 1, true, false);
-    require(a.try_revoke(newReader));
+    require(a.try_revoke(control, readerGrant));
+    auto newReader = a.grant(control, 105, 1, true, false);
+    require(a.try_revoke(control, newReader));
     reject([&] { (void)a.read(102, 1, readerGrant); });
     // Retirement is nonblocking and does not free underneath an active lease.
     {
@@ -178,21 +206,22 @@ int main() {
             catch (const std::logic_error&) { revokedReadDenied.store(true); }
         });
         ready.wait();
-        require(!a.try_retire());
+        require(!a.try_retire(control));
         leaseRelease.set_value();
         reader.join();
         require(revokedReadDenied.load());
     }
-    require(a.try_retire());
-    require(a.try_retire());
+    require(a.try_retire(control));
+    require(a.try_retire(control));
     reject([&] { (void)a.read(101, 1, writerGrant); });
-    reject([&] { (void)a.grant(3, 1, true,true); });
-    require(other.try_retire());
+    reject([&] { (void)a.grant(control, 3, 1, true,true); });
+    require(other.try_retire(otherControl));
     // Reader/writer contention and a 4,096-generation ABA regression. This
     // exercises real OS threads and checks every observed value is fully read.
     SharedDomainArena concurrent;
-    auto wg = concurrent.grant(201, 1, true, true);
-    auto rg = concurrent.grant(202, 1, true, false);
+    auto concurrentControl = concurrent.take_control();
+    auto wg = concurrent.grant(concurrentControl, 201, 1, true, true);
+    auto rg = concurrent.grant(concurrentControl, 202, 1, true, false);
     SharedDomainArena::Handle ch{};
     {
         auto writer = concurrent.write(201, 1, wg);
@@ -252,8 +281,31 @@ int main() {
     writerThread.join();
     for (auto& reader : readers) reader.join();
     require(correct.load());
-    require(concurrent.try_revoke(rg));
+    require(concurrent.try_revoke(concurrentControl, rg));
     reject([&] { (void)concurrent.read(202, 1, rg); });
-    require(concurrent.try_retire());
-        std::cout << "shared domain arena tests passed\n";
+    require(concurrent.try_retire(concurrentControl));
+
+    // Lifetime-only pins keep physical storage alive across continuation/FFI/I/O
+    // completion without granting any read/write or slot authority.
+    {
+        SharedDomainArena pinned;
+        auto pinnedControl = pinned.take_control();
+        auto pinnedGrant = pinned.grant(pinnedControl, 301, 7, true, false);
+        auto pin = pinned.pin(301, 7, pinnedGrant);
+        require(pin.live());
+        require(!pinned.try_retire(pinnedControl));
+        reject([&] { (void)pinned.read(301, 7, pinnedGrant); });
+        std::thread completion([p = std::move(pin)]() mutable {
+            require(p.live());
+            p.release();
+            require(!p.live());
+            p.release();
+        });
+        completion.join();
+        require(pinned.try_retire(pinnedControl));
+        require(pinned.try_retire(pinnedControl));
+        reject([&] { (void)pinned.pin(301, 7, pinnedGrant); });
+    }
+
+    std::cout << "shared domain arena tests passed\n";
 }

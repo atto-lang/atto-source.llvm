@@ -1507,6 +1507,21 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-shared-domain-arena-test)
     set_tests_properties(native_shared_domain_arena_leases PROPERTIES TIMEOUT 25)
 
+    # Scheduler-derived shared-domain authority: FIFO logical admission,
+    # dedicated capability wakes, exact current-turn identity, and lifetime pins.
+    add_executable(oreslang-native-shared-domain-scheduler-bridge-test
+        tests/native_shared_domain_scheduler_bridge_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-shared-domain-scheduler-bridge-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-shared-domain-scheduler-bridge-test PRIVATE cxx_std_17)
+    target_link_libraries(oreslang-native-shared-domain-scheduler-bridge-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-shared-domain-scheduler-bridge-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_shared_domain_scheduler_authority
+        COMMAND oreslang-native-shared-domain-scheduler-bridge-test)
+    set_tests_properties(native_shared_domain_scheduler_authority PROPERTIES TIMEOUT 30)
+
     # Persist actor-native data across message turns and carrier migration.
     # Retirement denies new admissions; physical free waits for active loans.
     find_package(Threads REQUIRED)
