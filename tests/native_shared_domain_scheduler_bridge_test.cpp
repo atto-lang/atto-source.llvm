@@ -8,10 +8,20 @@
 #include <optional>
 #include <stdexcept>
 #include <thread>
+#include <type_traits>
+#include <utility>
 
 using oreslang::runtime::SharedDomainArena;
 using oreslang::runtime::SharedDomainReadWriteGate;
 using oreslang::runtime::SharedDomainSchedulerBridge;
+
+template <class T, class = void>
+struct has_public_domain_id : std::false_type {};
+template <class T>
+struct has_public_domain_id<T,
+    std::void_t<decltype(std::declval<const T&>().domain_id())>> : std::true_type {};
+static_assert(!has_public_domain_id<SharedDomainSchedulerBridge::Permit>::value,
+    "shared-domain permit must not expose numeric domain coordinates");
 
 static void require_at(bool value, int line) {
     if (!value)
@@ -68,6 +78,7 @@ struct Context {
     std::atomic<bool> reader_resumed{false};
     std::atomic<bool> wrong_permit_denied{false};
     std::atomic<bool> fake_wake_denied{false};
+    std::atomic<bool> replayed_wake_denied{false};
     std::atomic<bool> completion_started{false};
     std::atomic<bool> release_completion{false};
     std::atomic<bool> completion_released{false};
@@ -166,13 +177,18 @@ static void on_capability(
     auto& ctx = *static_cast<Context*>(raw);
     require(actor == 1);
     require(ctx.reader_request.has_value());
-    require(wake.scope == ctx.reader_request->token.scope());
-    require(wake.ticket == ctx.reader_request->token.sequence());
-    auto access = ctx.bridge->resume(
-        *ctx.reader, wake, SharedDomainSchedulerBridge::Mode::Read);
-    std::uint64_t value = 0;
-    access.read(ctx.handle, &value, sizeof(value));
-    ctx.observed.store(value, std::memory_order_release);
+    {
+        auto access = ctx.bridge->resume(
+            *ctx.reader, wake, SharedDomainSchedulerBridge::Mode::Read);
+        std::uint64_t value = 0;
+        access.read(ctx.handle, &value, sizeof(value));
+        ctx.observed.store(value, std::memory_order_release);
+    }
+    reject([&] {
+        (void)ctx.bridge->resume(
+            *ctx.reader, wake, SharedDomainSchedulerBridge::Mode::Read);
+    });
+    ctx.replayed_wake_denied.store(true, std::memory_order_release);
     ctx.reader_resumed.store(true, std::memory_order_release);
 }
 
@@ -244,6 +260,7 @@ int main() {
     wait_for(ctx.reader_resumed, "reader resume");
     require(ctx.wrong_permit_denied.load(std::memory_order_acquire));
     require(ctx.fake_wake_denied.load(std::memory_order_acquire));
+    require(ctx.replayed_wake_denied.load(std::memory_order_acquire));
     require(ctx.observed.load(std::memory_order_acquire)
         == 0x1122334455667788ULL);
     require(ores_native_actor_scheduler_capability_wakes_completed(scheduler) == 1);
