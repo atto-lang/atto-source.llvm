@@ -1,0 +1,3 @@
+pub fnc durable_sync(int fd): int using io {
+  return rt file_sync_blocking(fd);
+}

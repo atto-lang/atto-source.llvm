@@ -1,0 +1,3 @@
+pub fnc durable_write(int fd): int using io, block {
+  return rt file_write_i64_blocking(fd, 0);
+}
