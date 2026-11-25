@@ -7959,3 +7959,24 @@ if(BUILD_TESTING AND UNIX)
     set_tests_properties(native_join_real_task_continuation_one_worker_host_only
         PROPERTIES TIMEOUT 30)
 endif()
+
+# Native join carrier refusal: never run a blocking pthread join on an actor/Task carrier.
+# This is a host-only safety gate; guest join still requires continuations.
+if(BUILD_TESTING AND UNIX)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-join-carrier-guard-test
+        tests/native_thread_join_carrier_guard_v1_test.c
+        src/main/cpp/oreslang/runtime/NativeThreadV1.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-join-carrier-guard-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-native-join-carrier-guard-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS OFF)
+    target_compile_options(oreslang-native-join-carrier-guard-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-native-join-carrier-guard-test PRIVATE Threads::Threads)
+    add_test(NAME native_thread_join_carrier_guard_host_only
+        COMMAND oreslang-native-join-carrier-guard-test)
+    set_tests_properties(native_thread_join_carrier_guard_host_only
+        PROPERTIES TIMEOUT 20)
+endif()

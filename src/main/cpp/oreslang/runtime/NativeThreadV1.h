@@ -26,7 +26,8 @@ typedef enum ores_thread_status_v1 {
     ORES_THREAD_UNEXPECTED_EXIT_V1 = 8,
     ORES_THREAD_SCOPE_FULL_V1 = 9,
     ORES_THREAD_SCOPE_CLOSED_V1 = 10,
-    ORES_THREAD_SCOPE_BUSY_V1 = 11
+    ORES_THREAD_SCOPE_BUSY_V1 = 11,
+    ORES_THREAD_CARRIER_WOULD_BLOCK_V1 = 12
 } ores_thread_status_v1;
 
 /* On successful spawn, owned_arg moves to the thread and drop_arg runs ONCE
