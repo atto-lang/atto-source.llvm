@@ -1,0 +1,15 @@
+pub fnc main(): int {
+    val Result<int, Error> overflow = trap! (9223372036854775807 + 1);
+    val Result<int, Error> zero = trap! (7 / 0);
+    if overflow.unwrap_err() is type ArithmeticOverflowError then
+        if zero.unwrap_err() is type DivisionByZeroError then
+            if zero.unwrap_err() is type Error then
+                if overflow.unwrap_err() is type DivisionByZeroError then
+                    return 1;
+                fi
+                return 42;
+            fi
+        fi
+    fi
+    return 0;
+}
