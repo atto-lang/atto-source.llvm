@@ -1,3 +1,4 @@
+#include <limits>
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/backend/PointerIntCodegen.hpp"
 #include "oreslang/backend/NativeFlatClasses.hpp"
@@ -176,13 +177,28 @@ llvm::Value* lower_trapped_i64(const Expression& e, llvm::IRBuilder<>& builder,
         return llvm::ConstantInt::getSigned(i64, e.integer);
     const bool negate = e.kind == K::Negate;
     const bool remainder = e.kind == K::Remainder || e.kind == K::Modulo;
-    if (!negate && !remainder && e.kind != K::Add && e.kind != K::Subtract && e.kind != K::Multiply)
+    const bool division = e.kind == K::Divide;
+    if (!negate && !remainder && !division && e.kind != K::Add && e.kind != K::Subtract && e.kind != K::Multiply)
         throw std::runtime_error("unproved arithmetic operand in native trap");
     if (!e.left || (!negate && !e.right))
         throw std::runtime_error("incomplete native trap arithmetic");
     auto* lhs = negate ? llvm::ConstantInt::get(i64, 0)
                        : lower_trapped_i64(*e.left, builder, i64, failure, zero_divisor);
     auto* rhs = lower_trapped_i64(negate ? *e.left : *e.right, builder, i64, failure, zero_divisor);
+    if (division) {
+        auto* function = builder.GetInsertBlock()->getParent();
+        auto* nonzero = llvm::BasicBlock::Create(builder.getContext(), "trap.div.nonzero", function);
+        auto* proceed = llvm::BasicBlock::Create(builder.getContext(), "trap.div.ok", function);
+        builder.CreateCondBr(builder.CreateICmpEQ(rhs, llvm::ConstantInt::get(i64, 0)),
+            zero_divisor, nonzero);
+        builder.SetInsertPoint(nonzero);
+        auto* overflow = builder.CreateAnd(
+            builder.CreateICmpEQ(lhs, llvm::ConstantInt::getSigned(i64, std::numeric_limits<std::int64_t>::min())),
+            builder.CreateICmpEQ(rhs, llvm::ConstantInt::getSigned(i64, -1)));
+        builder.CreateCondBr(overflow, failure, proceed);
+        builder.SetInsertPoint(proceed);
+        return builder.CreateSDiv(lhs, rhs, "trap.div");
+    }
     if (remainder) {
         auto* proceed = llvm::BasicBlock::Create(builder.getContext(), "trap.rem.ok",
             builder.GetInsertBlock()->getParent());
@@ -678,6 +694,26 @@ llvm::Value* lower(const Expression& expr,
             if (expr.kind == Expression::Kind::ShiftRight)
                 return builder.CreateAShr(left, distance, "shift.signed.right");
             return builder.CreateLShr(left, distance, "shift.unsigned.right");
+        }
+        case Expression::Kind::Divide: {
+            if (!expr.left || !expr.right)
+                throw std::runtime_error("native integer division requires two operands");
+            auto* lhs = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            auto* rhs = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            auto* parent = builder.GetInsertBlock()->getParent();
+            auto* module = parent->getParent();
+            auto* failed = llvm::BasicBlock::Create(builder.getContext(), "div.trap", parent);
+            auto* proceed = llvm::BasicBlock::Create(builder.getContext(), "div.ok", parent);
+            auto* zero = builder.CreateICmpEQ(rhs, llvm::ConstantInt::get(i64, 0));
+            auto* overflow = builder.CreateAnd(
+                builder.CreateICmpEQ(lhs, llvm::ConstantInt::getSigned(i64, std::numeric_limits<std::int64_t>::min())),
+                builder.CreateICmpEQ(rhs, llvm::ConstantInt::getSigned(i64, -1)));
+            builder.CreateCondBr(builder.CreateOr(zero, overflow), failed, proceed);
+            builder.SetInsertPoint(failed);
+            builder.CreateCall(native_trap(*module));
+            builder.CreateUnreachable();
+            builder.SetInsertPoint(proceed);
+            return builder.CreateSDiv(lhs, rhs, "div");
         }
         case Expression::Kind::Remainder:
         case Expression::Kind::Modulo: {
