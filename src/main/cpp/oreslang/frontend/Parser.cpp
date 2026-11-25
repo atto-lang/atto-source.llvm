@@ -34,7 +34,7 @@ struct Token {
 bool exceptional_control(std::string_view word) {
     return word == "throw" || word == "raise" || word == "panic" ||
            word == "recover" || word == "defer" || word == "try" ||
-           word == "catch" || word == "finally" || word == "trap";
+           word == "catch" || word == "finally" || word == "trap" || word == "trap!";
 }
 
 bool digit(char ch) { return ch >= '0' && ch <= '9'; }
@@ -224,6 +224,13 @@ public:
                         (source_[end] != '-' && !identifier_part(source_[end]))) {
                     at_ = end;
                 }
+            }
+            // Canonical trap! is one contextual token; preserve != and !eq.
+            if (first == "trap" && at_ < source_.size() && source_[at_] == '!'
+                    && source_.substr(at_, 2) != "!="
+                    && !(source_.substr(at_, 3) == "!eq"
+                         && (at_ + 3 == source_.size() || !identifier_part(source_[at_ + 3])))) {
+                ++at_;
             }
             return {Kind::Identifier, source_.substr(start, at_ - start), start};
         }
@@ -3421,7 +3428,7 @@ private:
             fail("native pointer syntax forbids unary '&' address-of and "
                  "unary '*' dereference; use checked Pointer<T> methods");
         }
-        if (token_.text == "trap") {
+        if (token_.text == "trap" || token_.text == "trap!") {
             // Resolver admits only values with already-checked, nonthrowing
             // lowering. Native throw/catch/recover still require typed effects.
             const auto offset = token_.offset;
