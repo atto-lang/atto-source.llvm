@@ -449,20 +449,20 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target, boo
             llvm::FunctionType::get(voidTy, {native_ptr}, false));
     }
 
-    // Only generated source actors resolve this native scheduler/heap ABI.
+    // Only generated source actors resolve this native scheduler/packed-state ABI.
     // No actor imports appear in ordinary scalar/class compilation.
     llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
     llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
     if (!source.actors.empty() && !wasm32_target) {
         auto* voidTy = llvm::Type::getVoidTy(context);
-        fieldInit = module.getOrInsertFunction("ores_actor_i64_heap_field_init",
+        fieldInit = module.getOrInsertFunction("ores_actor_packed_state_field_init",
             llvm::FunctionType::get(voidTy, {native_ptr, i64, i64, i64, i64}, false));
-        fieldInitMutable = module.getOrInsertFunction("ores_actor_i64_heap_field_init_mutable",
+        fieldInitMutable = module.getOrInsertFunction("ores_actor_packed_state_field_init_mutable",
             llvm::FunctionType::get(voidTy, {native_ptr, i64, i64, i64, i64}, false));
-        fieldRead = module.getOrInsertFunction("ores_actor_i64_heap_field_read",
+        fieldRead = module.getOrInsertFunction("ores_actor_packed_state_field_read",
             llvm::FunctionType::get(i64, {native_ptr, i64, i64, i64}, false));
-        fieldWrite = module.getOrInsertFunction("ores_actor_i64_heap_field_write",
+        fieldWrite = module.getOrInsertFunction("ores_actor_packed_state_field_write",
             llvm::FunctionType::get(voidTy, {native_ptr, i64, i64, i64, i64}, false));
         sourceSpawn = module.getOrInsertFunction("oreslang_source_actor_spawn",
             llvm::FunctionType::get(native_ptr, {native_ptr, native_ptr, i64}, false));

@@ -76,6 +76,8 @@ def main():
             assert guest.stdout.startswith("; ModuleID"), name
             assert "oreslang_source_actor_spawn" in guest.stdout, name
             assert "oreslang_source_actor_stop" in guest.stdout, name
+            assert "ores_actor_packed_state_field_" in guest.stdout, name
+            assert "ores_actor_i64_heap_field_" not in guest.stdout, name
             if name not in {
                 "source-actor-spawn-stop.ores",
                 "source-actor-method-keyword.ores",
@@ -95,7 +97,8 @@ def main():
                      if args.sanitize else ["-O1"])
             command = [
                 args.clang, *flags, "-x", "ir", str(ll),
-                "-x", "c", str(runtime / "ActorOwnedI64Heap.c"),
+                "-x", "c", str(runtime / "ActorArena.c"),
+                str(runtime / "ActorPackedState.c"),
                 str(runtime / "NativeActorScheduler.c"),
                 str(runtime / "NativeOresVM.c"),
                 str(runtime / "SourceActorBootstrap.c"),
