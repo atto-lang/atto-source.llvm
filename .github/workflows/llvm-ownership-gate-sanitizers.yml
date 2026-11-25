@@ -8,10 +8,14 @@ on:
       - 'src/main/cpp/oreslang/frontend/Parser.cpp'
       - 'tests/llvm_emission_ownership_gate_test.cpp'
       - 'src/main/cpp/oreslang/runtime/ActorOwnedGraphHeap.hpp'
+      - 'src/main/cpp/oreslang/runtime/ActorGraphSweepPlan.hpp'
       - 'src/main/cpp/oreslang/runtime/ActorHeapRetirementProof.hpp'
       - 'tests/actor_owned_graph_heap_test.cpp'
+      - 'tests/actor_graph_sweep_plan_test.cpp'
       - 'CMakeLists.txt'
       - '.github/workflows/llvm-ownership-gate-sanitizers.yml'
+  push:
+    branches: [hardening/ownership-cfg-suspension-fences-20261017]
   workflow_dispatch:
 
 permissions:
@@ -34,6 +38,17 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           test -z "$(git status --porcelain)"
           git rev-parse 'HEAD^{tree}'
+      - name: Execute bounded cycle-sweep planner under sanitizers (host component)
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -O1 -g -Wall -Wextra -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -I src/main/cpp tests/actor_graph_sweep_plan_test.cpp \
+            -o "$RUNNER_TEMP/actor-graph-sweep-plan-test"
+          "$RUNNER_TEMP/actor-graph-sweep-plan-test"
       - name: Install LLVM toolchain
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang llvm-dev
       - name: Configure sanitized ownership gate
@@ -47,15 +62,13 @@ jobs:
             -DCMAKE_C_FLAGS='-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined' \
             -DCMAKE_CXX_FLAGS='-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined' \
             -DCMAKE_EXE_LINKER_FLAGS='-fsanitize=address,undefined'
-      - name: Build direct-AST ownership gate
+      - name: Build direct-AST ownership gate and graph heap
         run: cmake --build build-sanitized --target oreslang-llvm-emission-ownership-gate-test oreslang-actor-graph-heap-test --parallel 2
-      - name: Run direct-AST ownership gate under ASan and UBSan
+      - name: Run direct-AST ownership and graph heap tests under ASan and UBSan
         env:
           ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:strict_string_checks=1
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
         run: |
           ctest --test-dir build-sanitized \
-            -R '^(native_llvm_emission_checks_ownership_and_frame_layout|native_actor_owned_cyclic_graph_heap) \
-            --output-on-failure --timeout 120
- \
+            -R '^(native_llvm_emission_checks_ownership_and_frame_layout|native_actor_owned_cyclic_graph_heap)$' \
             --output-on-failure --timeout 120
