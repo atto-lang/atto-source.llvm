@@ -2343,6 +2343,42 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}")
     set_tests_properties(native_telemetry_using_scope_aot_guest PROPERTIES TIMEOUT 150)
 
+    if(LLVM_VERSION_MAJOR GREATER_EQUAL 19 AND TARGET LLVMOrcJIT AND
+       TARGET LLVM${LLVM_NATIVE_ARCH}CodeGen AND NOT CMAKE_CROSSCOMPILING AND
+       EXISTS "${ORE_SOURCE_I64_CLANG}")
+        # Keep ORC in the hybrid test host. The AOT guest comes from the
+        # same compiler output and needs no ORC symbols to link.
+        find_package(Threads REQUIRED)
+        llvm_map_components_to_libnames(ORE_TELEMETRY_ORC_LIBS orcjit irreader native)
+        set(telemetry_hybrid_source "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/telemetry-hybrid.atto")
+        set(telemetry_hybrid_ir "${CMAKE_CURRENT_BINARY_DIR}/telemetry-hybrid.ll")
+        set(telemetry_hybrid_object "${CMAKE_CURRENT_BINARY_DIR}/telemetry-hybrid.o")
+        add_custom_command(
+            OUTPUT "${telemetry_hybrid_ir}" "${telemetry_hybrid_object}"
+            COMMAND bash -c "\"\$1\" \"\$2\" > \"\$3.tmp\" && mv \"\$3.tmp\" \"\$3\""
+                telemetry-hybrid "$<TARGET_FILE:oreslang-llvmc>" "${telemetry_hybrid_source}"
+                "${telemetry_hybrid_ir}"
+            COMMAND "${ORE_SOURCE_I64_CLANG}" -O2 -Wno-override-module -x ir -c
+                "${telemetry_hybrid_ir}" -o "${telemetry_hybrid_object}"
+            DEPENDS oreslang-llvmc "${telemetry_hybrid_source}"
+            VERBATIM)
+        set_source_files_properties("${telemetry_hybrid_object}"
+            PROPERTIES GENERATED TRUE EXTERNAL_OBJECT TRUE)
+        add_executable(oreslang-native-telemetry-hybrid-orc-test
+            tests/native_telemetry_hybrid_orc.cpp
+            src/main/cpp/oreslang/runtime/NativeTelemetrySpan.c
+            "${telemetry_hybrid_object}")
+        target_include_directories(oreslang-native-telemetry-hybrid-orc-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_include_directories(oreslang-native-telemetry-hybrid-orc-test SYSTEM PRIVATE
+            "${LLVM_INCLUDE_DIRS}")
+        target_link_libraries(oreslang-native-telemetry-hybrid-orc-test PRIVATE
+            ${ORE_TELEMETRY_ORC_LIBS} Threads::Threads)
+        add_test(NAME native_telemetry_hybrid_orc_guest
+            COMMAND oreslang-native-telemetry-hybrid-orc-test "${telemetry_hybrid_ir}")
+        set_tests_properties(native_telemetry_hybrid_orc_guest PROPERTIES TIMEOUT 30)
+    endif()
+
     add_test(NAME native_source_i64_fullwidth_execution
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_source_i64_executable.py"

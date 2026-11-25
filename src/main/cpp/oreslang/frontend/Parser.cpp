@@ -4900,12 +4900,16 @@ private:
             scope.offset = token_.offset;
             require("using"); require("telemetry"); require(".");
             require("span"); require("(");
-            if (token_.kind != Kind::String)
-                fail("native using telemetry.span requires one literal operation name");
-            scope.telemetry_operation = string_literal(token_.text);
+            // Macro arguments are expanded by the ordinary expression parser
+            // before admission. Only a literal may reach the tracing ABI.
+            if (token_.kind != Kind::String && !macro_invocation_ahead())
+                fail("native using telemetry.span requires one compile-time string literal operation name");
+            auto operation = expression();
+            if (operation->kind != Expression::Kind::String)
+                fail("native using telemetry.span requires one compile-time string literal operation name");
+            scope.telemetry_operation = std::move(operation->name);
             if (!telemetry::valid_native_span_literal(scope.telemetry_operation))
                 fail("native telemetry span name requires 1..256 UTF-8 bytes without control characters");
-            advance();
             require(")"); require("as");
             scope.receiver = identifier();
             if (scope.receiver == "_" || active_trace_aliases.count(scope.receiver)
