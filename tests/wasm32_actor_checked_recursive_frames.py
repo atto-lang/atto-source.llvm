@@ -47,6 +47,9 @@ assert re.search(r"store volatile i32 1,", ir), (
     "optimizer may eliminate terminal status before trapping")
 assert "load volatile i32" in ir, "typed terminal status export must read volatile"
 assert "@descend(" not in ir, "recursive native engine call was emitted"
+assert not re.search(r"\balloca\b", ir), "trampoline must not allocate transient native stack locals"
+assert re.search(r"atto\.trampoline\.current = phi i64", ir)
+assert re.search(r"atto\.trampoline\.answer = phi i64", ir)
 assert "declare" not in "\n".join(
     line for line in ir.splitlines()
     if "descend" in line), "unlowered recursive helper reached wasm32 IR"
