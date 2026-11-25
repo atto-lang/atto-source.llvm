@@ -206,7 +206,7 @@ test('40 second compiled guest matrix JUnit cannot be suppressed',()=>{
 });
 test('41 second independent manifest mutation inventory mandatory',()=>{
   denied(workflow.replace(
-    "          grep -Eq 'Test +#[0-9]+: native_ownership_source_cfg_manifest_18_mutations$' /tmp/atto-source-cfg-fixture-inventory.txt",
+    "          grep -Eq 'Test +#[0-9]+: native_ownership_source_cfg_manifest_29_mutations$' /tmp/atto-source-cfg-fixture-inventory.txt",
     ()=>"          grep -Eq 'Test +#[0-9]+: native_ownership_source_cfg_manifest_INERT$' /tmp/atto-source-cfg-fixture-inventory.txt"),'MISSING_SOURCE_CFG_REAL_GUEST_EVIDENCE');
 });
 test('42 source CFG matrix branch must trigger exact-head CI',()=>{
@@ -226,13 +226,52 @@ test('44 second matrix guest execution receipt cannot be forged',()=>{
 });
 test('45 source CFG manifest mutation JUnit receipt cannot be removed',()=>{
   denied(workflow.replace(
-    '--output-junit /tmp/atto-source-cfg-mut-18.xml',
+    '--output-junit /tmp/atto-source-cfg-mut-29.xml',
     '--output-junit /tmp/forged-mut.xml'),
     'MISSING_SOURCE_CFG_REAL_GUEST_EVIDENCE');
 });
-test('46 source CFG manifest mutation must prove eighteen executed tests',()=>{
+test('46 source CFG manifest mutation must prove twenty-eight executed tests',()=>{
   denied(workflow.replace(
-    "grep -Eq 'Ran 18 tests' /tmp/atto-source-cfg-mut-18.log",
-    "grep -Eq 'Ran 0 tests' /tmp/atto-source-cfg-mut-18.log"),
+    "grep -Eq 'Ran 29 tests' /tmp/atto-source-cfg-mut-29.log",
+    "grep -Eq 'Ran 0 tests' /tmp/atto-source-cfg-mut-29.log"),
     'MISSING_SOURCE_CFG_REAL_GUEST_EVIDENCE');
+});
+test('47 loss of the exact new manifest path trigger is denied',()=>{
+  denied(workflow.replace(
+    "      - 'tests/contracts/atto_ownership_source_cfg_50.json'",
+    "      - 'some-other-fixtures.json'"),'MISSING_EXACT_HEAD_TRIGGER');
+});
+test('48 loss of the actual compiler matrix runner trigger is denied',()=>{
+  denied(workflow.replace(
+    "      - 'tests/ownership_source_cfg_compiler_matrix.py'",
+    "      - 'inert-cfg-runner.py'"),'MISSING_EXACT_HEAD_TRIGGER');
+});
+test('49 loss of 28-mutation host test source trigger is denied',()=>{
+  denied(workflow.replace(
+    "      - 'tests/test_ownership_source_cfg_compiler_matrix.py'",
+    "      - 'inert-cfg-mutations.py'"),'MISSING_EXACT_HEAD_TRIGGER');
+});
+test('50 source-mutation result cannot be replaced by a zero-test receipt',()=>{
+  denied(workflow.replace(
+    "grep -Eq 'Ran 29 tests' /tmp/atto-source-cfg-mut-29.log",
+    "grep -Eq 'Ran 0 tests' /tmp/atto-source-cfg-mut-29.log"),
+    'MISSING_SOURCE_CFG_REAL_GUEST_EVIDENCE');
+});
+test('51 independently executed Node source-oracle run is mandatory',()=>{
+  denied(workflow.replace(
+    'node --test --test-reporter=tap tests/ownership_source_cfg_node_oracles_50.test.mjs | tee /tmp/atto-source-cfg-node-50.tap',
+    'node --check tests/ownership_source_cfg_node_oracles_50.test.mjs'),
+    'MISSING_INDEPENDENT_NODE_HOST_ORACLES');
+});
+test('52 node source oracle fifty-pass receipt cannot be forged',()=>{
+  denied(workflow.replace(
+    "grep -Eq '^# pass 50$' /tmp/atto-source-cfg-node-50.tap",
+    ()=>"grep -Eq '^# pass 0$' /tmp/atto-source-cfg-node-50.tap"),
+    'MISSING_INDEPENDENT_NODE_HOST_ORACLES');
+});
+test('53 source oracle file must retain exact-head PR path trigger',()=>{
+  denied(workflow.replace(
+    "      - 'tests/ownership_source_cfg_node_oracles_50.test.mjs'",
+    "      - 'inert-source-oracle.mjs'"),
+    'MISSING_EXACT_HEAD_TRIGGER');
 });

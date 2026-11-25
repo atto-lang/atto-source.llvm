@@ -99,14 +99,58 @@ def load_cases(manifest: pathlib.Path = MANIFEST) -> list[dict]:
                 "let mut " in code and
                 "rt take p.left" in code,
                 "source does not exercise compiler-owned partial field move")
+        # Correlate the compiler input's class and branch truth with the
+        # expected process exit. A valid-looking but wrong exit integer is
+        # not a meaningful independent guest oracle.
+        index = int(name.rsplit("-", 1)[1]) - 1
+        require(0 <= index < 10, "fixture sequence out of bounds")
+        base = 20 + index
+        declaration = re.search(
+            r"define\s+class\s+Restore([0-9]+)\s+as\s+"
+            r"pub\s+let\s+int\s+left\s*=\s*([0-9]+);\s+"
+            r"pub\s+let\s+int\s+right\s*=\s*7;\s+end\b",
+            code,
+        )
+        require(declaration is not None and
+                int(declaration.group(1)) == index and
+                int(declaration.group(2)) == base and
+                f"new Restore{index}()" in code,
+                "class owner/default field oracle cannot be reconstructed")
+        branch_category = category in {
+            "restored-both-branches", "unrestored-one-branch"
+        }
+        predicate = re.findall(
+            r"\bif\s*\(\s*([0-9]+)\s+eq\s+([0-9]+)\s*\)",
+            code,
+        )
+        if branch_category:
+            require(len(predicate) == 1,
+                    "missing or duplicated branch predicate")
+            left, right = (int(value) for value in predicate[0])
+            require(left == base and
+                    right == base + (1 if index >= 5 else 0),
+                    "branch suite must contain five true and five false paths")
+        else:
+            require(not predicate and "if (" not in code,
+                    "non-branch category contains an unverified branch")
         assignments = re.findall(r"\bp\.left\s*=\s*saved", code)
         if category == "restored-direct":
             require(len(assignments) == 1 and "return p.left + 1" in code and
                     "if (" not in code,
                     "direct restoration source shape missing")
         elif category == "restored-both-branches":
+            # The branch-exit oracle assumes the false path performs
+            # saved+1. Count-only matching would accept saved+2 and could
+            # silently leave a wrong, yet in-range, exit expectation.
+            expected_arms = re.search(
+                r"\bif\s*\([^)]*\)\s*\{\s*p\.left\s*=\s*saved\s*;\s*"
+                r"\}\s*else\s*\{\s*p\.left\s*=\s*saved\s*\+\s*1\s*;\s*"
+                r"\}\s*fi\b",
+                code,
+            )
             require(len(assignments) == 2 and
-                    "else {" in code and "return p.left;" in code,
+                    expected_arms is not None and
+                    "return p.left;" in code,
                     "both-predecessor restoration shape missing")
         elif category == "restored-sibling":
             require(len(assignments) == 1 and
@@ -125,10 +169,16 @@ def load_cases(manifest: pathlib.Path = MANIFEST) -> list[dict]:
                     case["expected_diagnostic"] == diag,
                     "negative semantic ownership oracle invalid")
         else:
+            expected_exit = (
+                base + 1 if category == "restored-direct" else
+                base + 7 if category == "restored-sibling" else
+                base + (1 if index >= 5 else 0)
+            )
             require(set(case) == required | {"expected_guest_exit"} and
                     type(case["expected_guest_exit"]) is int and
-                    1 <= case["expected_guest_exit"] <= 255,
-                    "positive real executable exit oracle invalid")
+                    case["expected_guest_exit"] == expected_exit and
+                    1 <= expected_exit <= 255,
+                    "positive exit oracle does not match the executed branch")
     require(set(categories) == set(CATEGORIES) and
             all(count == 10 for count in categories.values()),
             "matrix must have exactly ten distinct sources per category")

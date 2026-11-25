@@ -168,8 +168,8 @@
     {
       "id": "restored-both-branches-06",
       "category": "restored-both-branches",
-      "expected_guest_exit": 25,
-      "source": "define class Restore5 as\n  pub let int left = 25;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore5 p = new Restore5();\n  const saved: int = rt take p.left;\n  if (25 eq 25) { p.left = saved; } else { p.left = saved + 1; } fi\n  return p.left;\n}\n"
+      "expected_guest_exit": 26,
+      "source": "define class Restore5 as\n  pub let int left = 25;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore5 p = new Restore5();\n  const saved: int = rt take p.left;\n  if (25 eq 26) { p.left = saved; } else { p.left = saved + 1; } fi\n  return p.left;\n}\n"
     },
     {
       "id": "restored-sibling-06",
@@ -181,7 +181,7 @@
       "id": "unrestored-one-branch-06",
       "category": "unrestored-one-branch",
       "expected_diagnostic": "conditional CFG predecessor ownership mismatch",
-      "source": "define class Restore5 as\n  pub let int left = 25;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore5 p = new Restore5();\n  const saved: int = rt take p.left;\n  if (25 eq 25) { p.left = saved; } else { } fi\n  return p.left;\n}\n"
+      "source": "define class Restore5 as\n  pub let int left = 25;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore5 p = new Restore5();\n  const saved: int = rt take p.left;\n  if (25 eq 26) { p.left = saved; } else { } fi\n  return p.left;\n}\n"
     },
     {
       "id": "unrestored-read-06",
@@ -198,8 +198,8 @@
     {
       "id": "restored-both-branches-07",
       "category": "restored-both-branches",
-      "expected_guest_exit": 26,
-      "source": "define class Restore6 as\n  pub let int left = 26;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore6 p = new Restore6();\n  const saved: int = rt take p.left;\n  if (26 eq 26) { p.left = saved; } else { p.left = saved + 1; } fi\n  return p.left;\n}\n"
+      "expected_guest_exit": 27,
+      "source": "define class Restore6 as\n  pub let int left = 26;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore6 p = new Restore6();\n  const saved: int = rt take p.left;\n  if (26 eq 27) { p.left = saved; } else { p.left = saved + 1; } fi\n  return p.left;\n}\n"
     },
     {
       "id": "restored-sibling-07",
@@ -211,7 +211,7 @@
       "id": "unrestored-one-branch-07",
       "category": "unrestored-one-branch",
       "expected_diagnostic": "conditional CFG predecessor ownership mismatch",
-      "source": "define class Restore6 as\n  pub let int left = 26;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore6 p = new Restore6();\n  const saved: int = rt take p.left;\n  if (26 eq 26) { p.left = saved; } else { } fi\n  return p.left;\n}\n"
+      "source": "define class Restore6 as\n  pub let int left = 26;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore6 p = new Restore6();\n  const saved: int = rt take p.left;\n  if (26 eq 27) { p.left = saved; } else { } fi\n  return p.left;\n}\n"
     },
     {
       "id": "unrestored-read-07",
@@ -228,8 +228,8 @@
     {
       "id": "restored-both-branches-08",
       "category": "restored-both-branches",
-      "expected_guest_exit": 27,
-      "source": "define class Restore7 as\n  pub let int left = 27;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore7 p = new Restore7();\n  const saved: int = rt take p.left;\n  if (27 eq 27) { p.left = saved; } else { p.left = saved + 1; } fi\n  return p.left;\n}\n"
+      "expected_guest_exit": 28,
+      "source": "define class Restore7 as\n  pub let int left = 27;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore7 p = new Restore7();\n  const saved: int = rt take p.left;\n  if (27 eq 28) { p.left = saved; } else { p.left = saved + 1; } fi\n  return p.left;\n}\n"
     },
     {
       "id": "restored-sibling-08",
@@ -241,7 +241,7 @@
       "id": "unrestored-one-branch-08",
       "category": "unrestored-one-branch",
       "expected_diagnostic": "conditional CFG predecessor ownership mismatch",
-      "source": "define class Restore7 as\n  pub let int left = 27;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore7 p = new Restore7();\n  const saved: int = rt take p.left;\n  if (27 eq 27) { p.left = saved; } else { } fi\n  return p.left;\n}\n"
+      "source": "define class Restore7 as\n  pub let int left = 27;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore7 p = new Restore7();\n  const saved: int = rt take p.left;\n  if (27 eq 28) { p.left = saved; } else { } fi\n  return p.left;\n}\n"
     },
     {
       "id": "unrestored-read-08",
@@ -258,8 +258,8 @@
     {
       "id": "restored-both-branches-09",
       "category": "restored-both-branches",
-      "expected_guest_exit": 28,
-      "source": "define class Restore8 as\n  pub let int left = 28;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore8 p = new Restore8();\n  const saved: int = rt take p.left;\n  if (28 eq 28) { p.left = saved; } else { p.left = saved + 1; } fi\n  return p.left;\n}\n"
+      "expected_guest_exit": 29,
+      "source": "define class Restore8 as\n  pub let int left = 28;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore8 p = new Restore8();\n  const saved: int = rt take p.left;\n  if (28 eq 29) { p.left = saved; } else { p.left = saved + 1; } fi\n  return p.left;\n}\n"
     },
     {
       "id": "restored-sibling-09",
@@ -271,7 +271,7 @@
       "id": "unrestored-one-branch-09",
       "category": "unrestored-one-branch",
       "expected_diagnostic": "conditional CFG predecessor ownership mismatch",
-      "source": "define class Restore8 as\n  pub let int left = 28;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore8 p = new Restore8();\n  const saved: int = rt take p.left;\n  if (28 eq 28) { p.left = saved; } else { } fi\n  return p.left;\n}\n"
+      "source": "define class Restore8 as\n  pub let int left = 28;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore8 p = new Restore8();\n  const saved: int = rt take p.left;\n  if (28 eq 29) { p.left = saved; } else { } fi\n  return p.left;\n}\n"
     },
     {
       "id": "unrestored-read-09",
@@ -288,8 +288,8 @@
     {
       "id": "restored-both-branches-10",
       "category": "restored-both-branches",
-      "expected_guest_exit": 29,
-      "source": "define class Restore9 as\n  pub let int left = 29;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore9 p = new Restore9();\n  const saved: int = rt take p.left;\n  if (29 eq 29) { p.left = saved; } else { p.left = saved + 1; } fi\n  return p.left;\n}\n"
+      "expected_guest_exit": 30,
+      "source": "define class Restore9 as\n  pub let int left = 29;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore9 p = new Restore9();\n  const saved: int = rt take p.left;\n  if (29 eq 30) { p.left = saved; } else { p.left = saved + 1; } fi\n  return p.left;\n}\n"
     },
     {
       "id": "restored-sibling-10",
@@ -301,7 +301,7 @@
       "id": "unrestored-one-branch-10",
       "category": "unrestored-one-branch",
       "expected_diagnostic": "conditional CFG predecessor ownership mismatch",
-      "source": "define class Restore9 as\n  pub let int left = 29;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore9 p = new Restore9();\n  const saved: int = rt take p.left;\n  if (29 eq 29) { p.left = saved; } else { } fi\n  return p.left;\n}\n"
+      "source": "define class Restore9 as\n  pub let int left = 29;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore9 p = new Restore9();\n  const saved: int = rt take p.left;\n  if (29 eq 30) { p.left = saved; } else { } fi\n  return p.left;\n}\n"
     },
     {
       "id": "unrestored-read-10",
