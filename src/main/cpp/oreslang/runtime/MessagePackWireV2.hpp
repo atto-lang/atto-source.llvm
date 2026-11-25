@@ -203,16 +203,40 @@ public:
     }
 };
 
+// Explicit stricter decode limits for a trusted endpoint. Legacy callers keep
+// existing wire limits. Expanded bytes are conservative logical allocation
+// charges, not a measurement of allocator RSS or tenant mailbox credits.
+struct DecodeLimits {
+    std::size_t wire = kMaxBytes;
+    std::size_t expanded = 8 * 1024 * 1024;
+    std::size_t elements = kMaxElements;
+    std::size_t work = 4 * kMaxBytes;
+    std::size_t depth = kMaxDepth;
+};
 class Reader {
+    const DecodeLimits limits_;
+    std::size_t expanded_ = 0, elements_ = 0, work_ = 0;
+    void charge(std::size_t& used, std::size_t amount, std::size_t cap) {
+        require(amount <= cap - used, "decode resource budget");
+        used += amount;
+    }
 public:
     const std::vector<unsigned char>& input;
     std::size_t at = 0;
     std::size_t nodes = 0;
-    explicit Reader(const std::vector<unsigned char>& bytes) : input(bytes) {
-        require(input.size() <= kMaxBytes, "oversized wire message");
+    explicit Reader(const std::vector<unsigned char>& bytes,
+                    DecodeLimits limits = {}) : limits_(limits), input(bytes) {
+        require(limits_.wire > 0 && limits_.wire <= kMaxBytes &&
+                limits_.expanded > 0 && limits_.expanded <= 8 * 1024 * 1024 &&
+                limits_.elements > 0 && limits_.elements <= kMaxElements &&
+                limits_.work > 0 && limits_.work <= 4 * kMaxBytes &&
+                limits_.depth > 0 && limits_.depth <= kMaxDepth,
+                "invalid decode limits");
+        require(input.size() <= limits_.wire, "oversized wire message");
     }
     unsigned char take() {
         require(at < input.size(), "truncated MessagePack");
+        charge(work_, 1, limits_.work);
         return input[at++];
     }
     std::uint64_t uint(int width) {
@@ -277,6 +301,8 @@ public:
         else if (b == 0xdb) { n=uint(4); require(n > 65535, "noncanonical str32"); }
         else throw std::invalid_argument("expected string");
         require(n <= kMaxBytes && n <= input.size() - at, "truncated/oversized string");
+        charge(expanded_, static_cast<std::size_t>(n), limits_.expanded);
+        charge(work_, static_cast<std::size_t>(n), limits_.work);
         std::string result(reinterpret_cast<const char*>(input.data()+at),
                            static_cast<std::size_t>(n));
         utf8(result);
@@ -287,12 +313,14 @@ public:
         require(take() == 0xc4 && take() == 32, "expected bin8(32) digest");
         require(input.size() - at >= 32, "truncated schema hash");
         std::array<unsigned char,32> d{};
+        charge(work_, 32, limits_.work);
         std::memcpy(d.data(),input.data()+at,32);
         at += 32;
         return d;
     }
     Value value(const Shape& shape, std::size_t depth) {
-        require(depth <= kMaxDepth && ++nodes <= kMaxNodes, "wire depth/node quota");
+        require(depth <= limits_.depth && ++nodes <= kMaxNodes, "wire depth/node quota");
+        charge(work_, 1, limits_.work);
         switch (shape.kind) {
             case Shape::Kind::Bool: {
                 unsigned char b=take();
@@ -315,6 +343,10 @@ public:
         require(!fixed(shape.kind) || count == shape.members.size(), "fixed array arity mismatch");
         require(count <= input.size() - at && count <= kMaxNodes - nodes,
                 "array length exceeds remaining bytes/nodes");
+        charge(elements_, count, limits_.elements);
+        require(count <= (limits_.expanded - expanded_) / sizeof(Value),
+                "decode sequence allocation budget");
+        charge(expanded_, count * sizeof(Value), limits_.expanded);
         Value::Items values;
         values.reserve(count);
         for (std::size_t i = 0; i < count; ++i)
@@ -337,10 +369,13 @@ inline std::vector<unsigned char> encode(const std::string& id, const Shape& sha
     return w.out;
 }
 inline Value decode(const std::string& id, const Shape& shape,
-                    const std::vector<unsigned char>& bytes) {
+                    const std::vector<unsigned char>& bytes,
+                    DecodeLimits limits = {}) {
     schemaId(id);
+    require(bytes.size() <= kMaxBytes && bytes.size() <= limits.wire,
+            "oversized wire message");
     auto expected = shapeDigest(shape);
-    Reader r(bytes);
+    Reader r(bytes, limits);
     require(r.array() == 4, "incorrect envelope arity");
     require(r.integer() == kWireVersion, "unsupported MessagePack wire version");
     require(r.string() == id, "wrong schema ID");
