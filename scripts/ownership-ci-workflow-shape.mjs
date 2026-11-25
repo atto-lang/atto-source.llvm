@@ -8,7 +8,7 @@ const STEPS = [
   'Execute seventeen source-owned place, identity and NLL integrity CTests',
   'Prove twenty scoped compiler CTest cases are registered',
   'Require compiler diagnostics and Clang-linked native guest',
-  'Execute 50 real compiler fixtures and fail-closed matrix mutations',
+  'Execute 100 real compiler fixtures in two matrices and fail-closed mutations',
   'Reverify checkout head and clean tracked source'
 ];
 const NAMES = [
@@ -40,6 +40,13 @@ export function inspectOwnershipWorkflowShape(source) {
      !once(source,"\n      - 'audit/llvm-source-physical-fieldwrite-link-*'") ||
      !once(source,"\n      - 'audit/llvm-restore-witness-to-store-*'") ||
      !once(source,"\n      - 'audit/llvm-source-restoration-cfg-dom-v1-*'") ||
+     !once(source,"\n      - 'audit/llvm-source-cfg-50-guests-and-regressions-*'") ||
+     !once(source,"\n      - 'audit/llvm-cfg-guest-oracle-hardening-*'") ||
+     !once(source,"\n      - 'audit/llvm-node22-source-cfg-oracle-receipts-*'") ||
+     !once(source,"\n      - 'tests/ownership_source_cfg_node_oracles_50.test.mjs'") ||
+     !once(source,"\n      - 'tests/contracts/atto_ownership_source_cfg_50.json'") ||
+     !once(source,"\n      - 'tests/ownership_source_cfg_compiler_matrix.py'") ||
+     !once(source,"\n      - 'tests/test_ownership_source_cfg_compiler_matrix.py'") ||
      !once(source,"\n      - 'tests/native_source_field_cfg_96_test.cpp'") ||
      !once(source,"\n      - 'src/main/cpp/oreslang/types/OwnershipSourceFieldFlow.hpp'") ||
      !once(source,"\n      - 'tests/native_reinitialize_store_witness_48_test.cpp'") ||
@@ -92,6 +99,26 @@ export function inspectOwnershipWorkflowShape(source) {
      !source.includes('atto_ownership_place_mir_real_compiler_50') ||
      !source.includes('--output-junit /tmp/atto-real-compiler-50.xml'))
     return fail('MISSING_REAL_COMPILER_MATRIX_RECEIPT');
+  // A second, actually runnable Node source-only suite is independent of
+  // the static shape checker and the two separate compiler/Clang matrices.
+  if(!once(source,
+       'node --test --test-reporter=tap tests/ownership_source_cfg_node_oracles_50.test.mjs | tee /tmp/atto-source-cfg-node-50.tap') ||
+     !once(source,"grep -Eq '^# tests 50$' /tmp/atto-source-cfg-node-50.tap") ||
+     !once(source,"grep -Eq '^# pass 50$' /tmp/atto-source-cfg-node-50.tap") ||
+     !once(source,"grep -Eq '^# fail 0$' /tmp/atto-source-cfg-node-50.tap"))
+    return fail('MISSING_INDEPENDENT_NODE_HOST_ORACLES');
+  if(!once(source,'--output-junit /tmp/atto-source-cfg-mut-29.xml') ||
+     !once(source,"grep -Eq 'Ran 29 tests' /tmp/atto-source-cfg-mut-29.log") ||
+     !once(source,"observed != ['native_ownership_source_cfg_manifest_29_mutations']") ||
+     !once(source,'ATTO_SOURCE_CFG_REAL_COMPILER_FIXTURES=50/50_EXECUTED') ||
+     !once(source,'ATTO_LLVM_SOURCE_CFG_GUEST=50/50_REAL_COMPILER_EXECUTED') ||
+     !once(source,'--output-junit /tmp/atto-source-cfg-50.xml') ||
+     !once(source,"          grep -Eq 'Test +#[0-9]+: native_ownership_source_cfg_manifest_29_mutations$' /tmp/atto-source-cfg-fixture-inventory.txt") ||
+     !source.includes('atto_ownership_source_cfg_real_compiler_50') ||
+     !source.includes("observed != ['atto_ownership_source_cfg_real_compiler_50']") ||
+     !source.includes("int(root.get('skipped', '1'))") ||
+     !source.includes("int(root.get('failures', '1'))"))
+    return fail('MISSING_SOURCE_CFG_REAL_GUEST_EVIDENCE');
   if(!source.includes('test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"') ||
      !source.includes('git diff --cached --quiet --exit-code'))
     return fail('MISSING_EXACT_HEAD_CHECK');

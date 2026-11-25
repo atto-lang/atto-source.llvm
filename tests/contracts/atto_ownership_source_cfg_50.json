@@ -1,0 +1,313 @@
+{
+  "schema_version": 1,
+  "classification": "CANDIDATE_REAL_SOURCE_CFG_COMPILER_INPUTS_NOT_EXECUTED",
+  "requirements": {
+    "real_compiler_binary": true,
+    "semantic_diagnostic_on_negative": true,
+    "clang_link_and_guest_exit_on_positive": true,
+    "exact_50_distinct_source_programs": true,
+    "path_sensitive_source_restoration_contract": true
+  },
+  "cases": [
+    {
+      "id": "restored-direct-01",
+      "category": "restored-direct",
+      "expected_guest_exit": 21,
+      "source": "define class Restore0 as\n  pub let int left = 20;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore0 p = new Restore0();\n  const saved: int = rt take p.left;\n  p.left = saved;\n  return p.left + 1;\n}\n"
+    },
+    {
+      "id": "restored-both-branches-01",
+      "category": "restored-both-branches",
+      "expected_guest_exit": 20,
+      "source": "define class Restore0 as\n  pub let int left = 20;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore0 p = new Restore0();\n  const saved: int = rt take p.left;\n  if (20 eq 20) { p.left = saved; } else { p.left = saved + 1; } fi\n  return p.left;\n}\n"
+    },
+    {
+      "id": "restored-sibling-01",
+      "category": "restored-sibling",
+      "expected_guest_exit": 27,
+      "source": "define class Restore0 as\n  pub let int left = 20;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore0 p = new Restore0();\n  const saved: int = rt take p.left;\n  p.left = saved;\n  return p.left + p.right;\n}\n"
+    },
+    {
+      "id": "unrestored-one-branch-01",
+      "category": "unrestored-one-branch",
+      "expected_diagnostic": "conditional CFG predecessor ownership mismatch",
+      "source": "define class Restore0 as\n  pub let int left = 20;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore0 p = new Restore0();\n  const saved: int = rt take p.left;\n  if (20 eq 20) { p.left = saved; } else { } fi\n  return p.left;\n}\n"
+    },
+    {
+      "id": "unrestored-read-01",
+      "category": "unrestored-read",
+      "expected_diagnostic": "ownership violation: use-after-move class field",
+      "source": "define class Restore0 as\n  pub let int left = 20;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore0 p = new Restore0();\n  const saved: int = rt take p.left;\n  return p.left + saved;\n}\n"
+    },
+    {
+      "id": "restored-direct-02",
+      "category": "restored-direct",
+      "expected_guest_exit": 22,
+      "source": "define class Restore1 as\n  pub let int left = 21;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore1 p = new Restore1();\n  const saved: int = rt take p.left;\n  p.left = saved;\n  return p.left + 1;\n}\n"
+    },
+    {
+      "id": "restored-both-branches-02",
+      "category": "restored-both-branches",
+      "expected_guest_exit": 21,
+      "source": "define class Restore1 as\n  pub let int left = 21;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore1 p = new Restore1();\n  const saved: int = rt take p.left;\n  if (21 eq 21) { p.left = saved; } else { p.left = saved + 1; } fi\n  return p.left;\n}\n"
+    },
+    {
+      "id": "restored-sibling-02",
+      "category": "restored-sibling",
+      "expected_guest_exit": 28,
+      "source": "define class Restore1 as\n  pub let int left = 21;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore1 p = new Restore1();\n  const saved: int = rt take p.left;\n  p.left = saved;\n  return p.left + p.right;\n}\n"
+    },
+    {
+      "id": "unrestored-one-branch-02",
+      "category": "unrestored-one-branch",
+      "expected_diagnostic": "conditional CFG predecessor ownership mismatch",
+      "source": "define class Restore1 as\n  pub let int left = 21;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore1 p = new Restore1();\n  const saved: int = rt take p.left;\n  if (21 eq 21) { p.left = saved; } else { } fi\n  return p.left;\n}\n"
+    },
+    {
+      "id": "unrestored-read-02",
+      "category": "unrestored-read",
+      "expected_diagnostic": "ownership violation: use-after-move class field",
+      "source": "define class Restore1 as\n  pub let int left = 21;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore1 p = new Restore1();\n  const saved: int = rt take p.left;\n  return p.left + saved;\n}\n"
+    },
+    {
+      "id": "restored-direct-03",
+      "category": "restored-direct",
+      "expected_guest_exit": 23,
+      "source": "define class Restore2 as\n  pub let int left = 22;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore2 p = new Restore2();\n  const saved: int = rt take p.left;\n  p.left = saved;\n  return p.left + 1;\n}\n"
+    },
+    {
+      "id": "restored-both-branches-03",
+      "category": "restored-both-branches",
+      "expected_guest_exit": 22,
+      "source": "define class Restore2 as\n  pub let int left = 22;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore2 p = new Restore2();\n  const saved: int = rt take p.left;\n  if (22 eq 22) { p.left = saved; } else { p.left = saved + 1; } fi\n  return p.left;\n}\n"
+    },
+    {
+      "id": "restored-sibling-03",
+      "category": "restored-sibling",
+      "expected_guest_exit": 29,
+      "source": "define class Restore2 as\n  pub let int left = 22;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore2 p = new Restore2();\n  const saved: int = rt take p.left;\n  p.left = saved;\n  return p.left + p.right;\n}\n"
+    },
+    {
+      "id": "unrestored-one-branch-03",
+      "category": "unrestored-one-branch",
+      "expected_diagnostic": "conditional CFG predecessor ownership mismatch",
+      "source": "define class Restore2 as\n  pub let int left = 22;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore2 p = new Restore2();\n  const saved: int = rt take p.left;\n  if (22 eq 22) { p.left = saved; } else { } fi\n  return p.left;\n}\n"
+    },
+    {
+      "id": "unrestored-read-03",
+      "category": "unrestored-read",
+      "expected_diagnostic": "ownership violation: use-after-move class field",
+      "source": "define class Restore2 as\n  pub let int left = 22;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore2 p = new Restore2();\n  const saved: int = rt take p.left;\n  return p.left + saved;\n}\n"
+    },
+    {
+      "id": "restored-direct-04",
+      "category": "restored-direct",
+      "expected_guest_exit": 24,
+      "source": "define class Restore3 as\n  pub let int left = 23;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore3 p = new Restore3();\n  const saved: int = rt take p.left;\n  p.left = saved;\n  return p.left + 1;\n}\n"
+    },
+    {
+      "id": "restored-both-branches-04",
+      "category": "restored-both-branches",
+      "expected_guest_exit": 23,
+      "source": "define class Restore3 as\n  pub let int left = 23;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore3 p = new Restore3();\n  const saved: int = rt take p.left;\n  if (23 eq 23) { p.left = saved; } else { p.left = saved + 1; } fi\n  return p.left;\n}\n"
+    },
+    {
+      "id": "restored-sibling-04",
+      "category": "restored-sibling",
+      "expected_guest_exit": 30,
+      "source": "define class Restore3 as\n  pub let int left = 23;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore3 p = new Restore3();\n  const saved: int = rt take p.left;\n  p.left = saved;\n  return p.left + p.right;\n}\n"
+    },
+    {
+      "id": "unrestored-one-branch-04",
+      "category": "unrestored-one-branch",
+      "expected_diagnostic": "conditional CFG predecessor ownership mismatch",
+      "source": "define class Restore3 as\n  pub let int left = 23;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore3 p = new Restore3();\n  const saved: int = rt take p.left;\n  if (23 eq 23) { p.left = saved; } else { } fi\n  return p.left;\n}\n"
+    },
+    {
+      "id": "unrestored-read-04",
+      "category": "unrestored-read",
+      "expected_diagnostic": "ownership violation: use-after-move class field",
+      "source": "define class Restore3 as\n  pub let int left = 23;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore3 p = new Restore3();\n  const saved: int = rt take p.left;\n  return p.left + saved;\n}\n"
+    },
+    {
+      "id": "restored-direct-05",
+      "category": "restored-direct",
+      "expected_guest_exit": 25,
+      "source": "define class Restore4 as\n  pub let int left = 24;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore4 p = new Restore4();\n  const saved: int = rt take p.left;\n  p.left = saved;\n  return p.left + 1;\n}\n"
+    },
+    {
+      "id": "restored-both-branches-05",
+      "category": "restored-both-branches",
+      "expected_guest_exit": 24,
+      "source": "define class Restore4 as\n  pub let int left = 24;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore4 p = new Restore4();\n  const saved: int = rt take p.left;\n  if (24 eq 24) { p.left = saved; } else { p.left = saved + 1; } fi\n  return p.left;\n}\n"
+    },
+    {
+      "id": "restored-sibling-05",
+      "category": "restored-sibling",
+      "expected_guest_exit": 31,
+      "source": "define class Restore4 as\n  pub let int left = 24;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore4 p = new Restore4();\n  const saved: int = rt take p.left;\n  p.left = saved;\n  return p.left + p.right;\n}\n"
+    },
+    {
+      "id": "unrestored-one-branch-05",
+      "category": "unrestored-one-branch",
+      "expected_diagnostic": "conditional CFG predecessor ownership mismatch",
+      "source": "define class Restore4 as\n  pub let int left = 24;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore4 p = new Restore4();\n  const saved: int = rt take p.left;\n  if (24 eq 24) { p.left = saved; } else { } fi\n  return p.left;\n}\n"
+    },
+    {
+      "id": "unrestored-read-05",
+      "category": "unrestored-read",
+      "expected_diagnostic": "ownership violation: use-after-move class field",
+      "source": "define class Restore4 as\n  pub let int left = 24;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore4 p = new Restore4();\n  const saved: int = rt take p.left;\n  return p.left + saved;\n}\n"
+    },
+    {
+      "id": "restored-direct-06",
+      "category": "restored-direct",
+      "expected_guest_exit": 26,
+      "source": "define class Restore5 as\n  pub let int left = 25;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore5 p = new Restore5();\n  const saved: int = rt take p.left;\n  p.left = saved;\n  return p.left + 1;\n}\n"
+    },
+    {
+      "id": "restored-both-branches-06",
+      "category": "restored-both-branches",
+      "expected_guest_exit": 26,
+      "source": "define class Restore5 as\n  pub let int left = 25;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore5 p = new Restore5();\n  const saved: int = rt take p.left;\n  if (25 eq 26) { p.left = saved; } else { p.left = saved + 1; } fi\n  return p.left;\n}\n"
+    },
+    {
+      "id": "restored-sibling-06",
+      "category": "restored-sibling",
+      "expected_guest_exit": 32,
+      "source": "define class Restore5 as\n  pub let int left = 25;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore5 p = new Restore5();\n  const saved: int = rt take p.left;\n  p.left = saved;\n  return p.left + p.right;\n}\n"
+    },
+    {
+      "id": "unrestored-one-branch-06",
+      "category": "unrestored-one-branch",
+      "expected_diagnostic": "conditional CFG predecessor ownership mismatch",
+      "source": "define class Restore5 as\n  pub let int left = 25;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore5 p = new Restore5();\n  const saved: int = rt take p.left;\n  if (25 eq 26) { p.left = saved; } else { } fi\n  return p.left;\n}\n"
+    },
+    {
+      "id": "unrestored-read-06",
+      "category": "unrestored-read",
+      "expected_diagnostic": "ownership violation: use-after-move class field",
+      "source": "define class Restore5 as\n  pub let int left = 25;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore5 p = new Restore5();\n  const saved: int = rt take p.left;\n  return p.left + saved;\n}\n"
+    },
+    {
+      "id": "restored-direct-07",
+      "category": "restored-direct",
+      "expected_guest_exit": 27,
+      "source": "define class Restore6 as\n  pub let int left = 26;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore6 p = new Restore6();\n  const saved: int = rt take p.left;\n  p.left = saved;\n  return p.left + 1;\n}\n"
+    },
+    {
+      "id": "restored-both-branches-07",
+      "category": "restored-both-branches",
+      "expected_guest_exit": 27,
+      "source": "define class Restore6 as\n  pub let int left = 26;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore6 p = new Restore6();\n  const saved: int = rt take p.left;\n  if (26 eq 27) { p.left = saved; } else { p.left = saved + 1; } fi\n  return p.left;\n}\n"
+    },
+    {
+      "id": "restored-sibling-07",
+      "category": "restored-sibling",
+      "expected_guest_exit": 33,
+      "source": "define class Restore6 as\n  pub let int left = 26;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore6 p = new Restore6();\n  const saved: int = rt take p.left;\n  p.left = saved;\n  return p.left + p.right;\n}\n"
+    },
+    {
+      "id": "unrestored-one-branch-07",
+      "category": "unrestored-one-branch",
+      "expected_diagnostic": "conditional CFG predecessor ownership mismatch",
+      "source": "define class Restore6 as\n  pub let int left = 26;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore6 p = new Restore6();\n  const saved: int = rt take p.left;\n  if (26 eq 27) { p.left = saved; } else { } fi\n  return p.left;\n}\n"
+    },
+    {
+      "id": "unrestored-read-07",
+      "category": "unrestored-read",
+      "expected_diagnostic": "ownership violation: use-after-move class field",
+      "source": "define class Restore6 as\n  pub let int left = 26;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore6 p = new Restore6();\n  const saved: int = rt take p.left;\n  return p.left + saved;\n}\n"
+    },
+    {
+      "id": "restored-direct-08",
+      "category": "restored-direct",
+      "expected_guest_exit": 28,
+      "source": "define class Restore7 as\n  pub let int left = 27;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore7 p = new Restore7();\n  const saved: int = rt take p.left;\n  p.left = saved;\n  return p.left + 1;\n}\n"
+    },
+    {
+      "id": "restored-both-branches-08",
+      "category": "restored-both-branches",
+      "expected_guest_exit": 28,
+      "source": "define class Restore7 as\n  pub let int left = 27;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore7 p = new Restore7();\n  const saved: int = rt take p.left;\n  if (27 eq 28) { p.left = saved; } else { p.left = saved + 1; } fi\n  return p.left;\n}\n"
+    },
+    {
+      "id": "restored-sibling-08",
+      "category": "restored-sibling",
+      "expected_guest_exit": 34,
+      "source": "define class Restore7 as\n  pub let int left = 27;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore7 p = new Restore7();\n  const saved: int = rt take p.left;\n  p.left = saved;\n  return p.left + p.right;\n}\n"
+    },
+    {
+      "id": "unrestored-one-branch-08",
+      "category": "unrestored-one-branch",
+      "expected_diagnostic": "conditional CFG predecessor ownership mismatch",
+      "source": "define class Restore7 as\n  pub let int left = 27;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore7 p = new Restore7();\n  const saved: int = rt take p.left;\n  if (27 eq 28) { p.left = saved; } else { } fi\n  return p.left;\n}\n"
+    },
+    {
+      "id": "unrestored-read-08",
+      "category": "unrestored-read",
+      "expected_diagnostic": "ownership violation: use-after-move class field",
+      "source": "define class Restore7 as\n  pub let int left = 27;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore7 p = new Restore7();\n  const saved: int = rt take p.left;\n  return p.left + saved;\n}\n"
+    },
+    {
+      "id": "restored-direct-09",
+      "category": "restored-direct",
+      "expected_guest_exit": 29,
+      "source": "define class Restore8 as\n  pub let int left = 28;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore8 p = new Restore8();\n  const saved: int = rt take p.left;\n  p.left = saved;\n  return p.left + 1;\n}\n"
+    },
+    {
+      "id": "restored-both-branches-09",
+      "category": "restored-both-branches",
+      "expected_guest_exit": 29,
+      "source": "define class Restore8 as\n  pub let int left = 28;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore8 p = new Restore8();\n  const saved: int = rt take p.left;\n  if (28 eq 29) { p.left = saved; } else { p.left = saved + 1; } fi\n  return p.left;\n}\n"
+    },
+    {
+      "id": "restored-sibling-09",
+      "category": "restored-sibling",
+      "expected_guest_exit": 35,
+      "source": "define class Restore8 as\n  pub let int left = 28;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore8 p = new Restore8();\n  const saved: int = rt take p.left;\n  p.left = saved;\n  return p.left + p.right;\n}\n"
+    },
+    {
+      "id": "unrestored-one-branch-09",
+      "category": "unrestored-one-branch",
+      "expected_diagnostic": "conditional CFG predecessor ownership mismatch",
+      "source": "define class Restore8 as\n  pub let int left = 28;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore8 p = new Restore8();\n  const saved: int = rt take p.left;\n  if (28 eq 29) { p.left = saved; } else { } fi\n  return p.left;\n}\n"
+    },
+    {
+      "id": "unrestored-read-09",
+      "category": "unrestored-read",
+      "expected_diagnostic": "ownership violation: use-after-move class field",
+      "source": "define class Restore8 as\n  pub let int left = 28;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore8 p = new Restore8();\n  const saved: int = rt take p.left;\n  return p.left + saved;\n}\n"
+    },
+    {
+      "id": "restored-direct-10",
+      "category": "restored-direct",
+      "expected_guest_exit": 30,
+      "source": "define class Restore9 as\n  pub let int left = 29;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore9 p = new Restore9();\n  const saved: int = rt take p.left;\n  p.left = saved;\n  return p.left + 1;\n}\n"
+    },
+    {
+      "id": "restored-both-branches-10",
+      "category": "restored-both-branches",
+      "expected_guest_exit": 30,
+      "source": "define class Restore9 as\n  pub let int left = 29;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore9 p = new Restore9();\n  const saved: int = rt take p.left;\n  if (29 eq 30) { p.left = saved; } else { p.left = saved + 1; } fi\n  return p.left;\n}\n"
+    },
+    {
+      "id": "restored-sibling-10",
+      "category": "restored-sibling",
+      "expected_guest_exit": 36,
+      "source": "define class Restore9 as\n  pub let int left = 29;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore9 p = new Restore9();\n  const saved: int = rt take p.left;\n  p.left = saved;\n  return p.left + p.right;\n}\n"
+    },
+    {
+      "id": "unrestored-one-branch-10",
+      "category": "unrestored-one-branch",
+      "expected_diagnostic": "conditional CFG predecessor ownership mismatch",
+      "source": "define class Restore9 as\n  pub let int left = 29;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore9 p = new Restore9();\n  const saved: int = rt take p.left;\n  if (29 eq 30) { p.left = saved; } else { } fi\n  return p.left;\n}\n"
+    },
+    {
+      "id": "unrestored-read-10",
+      "category": "unrestored-read",
+      "expected_diagnostic": "ownership violation: use-after-move class field",
+      "source": "define class Restore9 as\n  pub let int left = 29;\n  pub let int right = 7;\nend\npub fnc main(): int {\n  let mut Restore9 p = new Restore9();\n  const saved: int = rt take p.left;\n  return p.left + saved;\n}\n"
+    }
+  ]
+}
