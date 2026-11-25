@@ -1843,7 +1843,7 @@ if(BUILD_TESTING)
 
     # Hosted trap arithmetic recovers as Err; untrapped overflow still
     # signals in the independent native_trap_int_guest_aot_o0_o2 control.
-    foreach(case IN ITEMS add sub mul neg nested_overflow)
+    foreach(case IN ITEMS add sub mul neg nested_overflow rem_zero mod_zero rem_signed mod_signed rem_min mod_min)
         add_test(NAME native_trap_arithmetic_${case}_O0_O2
             COMMAND "${CMAKE_COMMAND}"
                 "-DORES_TRAP_LLVM_CLI=$<TARGET_FILE:oreslang-llvmc>"
