@@ -1,0 +1,164 @@
+name: AttoLang inverted native guest exact-head evidence
+
+on:
+  pull_request:
+    branches:
+      - main
+      - parity/inverted-production-main-i64-20261104
+    paths:
+      - '.github/workflows/dop-inverted-native-exact-head.yml'
+      - 'scripts/dop_inverted_ctest_receipt.py'
+      - 'tests/test_dop_inverted_ctest_receipt.py'
+      - 'CMakeLists.txt'
+      - 'src/main/cpp/oreslang/frontend/**'
+      - 'src/main/cpp/oreslang/types/Inverted*'
+      - 'src/main/cpp/oreslang/main.cpp'
+      - 'tests/native_inverted*'
+      - 'tests/fixtures/inverted-i64/**'
+      - 'contracts/dop-inverted-v1/**'
+      - 'scripts/audit_no_gc_ir.rs'
+  push:
+    branches:
+      - parity/inverted-production-main-i64-20261104
+    paths:
+      - '.github/workflows/dop-inverted-native-exact-head.yml'
+      - 'scripts/dop_inverted_ctest_receipt.py'
+      - 'tests/test_dop_inverted_ctest_receipt.py'
+      - 'CMakeLists.txt'
+      - 'src/main/cpp/oreslang/types/Inverted*'
+      - 'tests/native_inverted*'
+      - 'contracts/dop-inverted-v1/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: atto-dop-inverted-native-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  restricted-native-guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      SOURCE_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+    steps:
+      - name: Reject forked or untrusted source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$SOURCE_REPOSITORY" = "$GITHUB_REPOSITORY"
+          test "${#EXPECTED_HEAD}" -eq 40
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+
+      - name: Check out immutable PR source rather than synthetic merge ref
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify exact git source, tree and no checkout contamination
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          echo "ATTO_DOP_SOURCE_HEAD=$EXPECTED_HEAD"
+          echo "ATTO_DOP_SOURCE_TREE=$(git rev-parse HEAD^{tree})"
+
+      - name: Run fail-closed CTest evidence parser negative tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests \
+            -p test_dop_inverted_ctest_receipt.py -v
+
+      - name: Install compiler, Clang, Rust and CTest dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            build-essential cmake clang llvm-dev python3 rustc cargo
+          command -v clang
+          command -v rustc
+          command -v cargo
+
+      - name: Configure production LLVM compiler with guest tests enabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+
+      - name: Build compiler, verified MIR, parser and source-built no-GC auditor
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build build --parallel 2 --target \
+            oreslang-llvmc \
+            oreslang-inverted-production-mir-test \
+            oreslang-native-inverted-struct-ast-test \
+            oreslang-no-gc-ir-audit-build \
+            oreslang-no-gc-ir-audit-tests-build
+          test -x build/oreslang-llvmc
+          test -x build/oreslang-no-gc-ir-audit
+          test -x build/oreslang-inverted-production-mir-test
+          test -x build/oreslang-native-inverted-struct-ast-test
+
+      - name: Refuse missing or unexpected CTest inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          regex='^(native_inverted_production_source_to_native|native_inverted_struct_schema_ast|inverted_production_source_mir_cpp17|native_no_gc_ir_audit_unit)$'
+          ctest --test-dir build -N -R "$regex" > build/dop-inverted-test-inventory.txt
+          cat build/dop-inverted-test-inventory.txt
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          expected = {
+              'native_inverted_production_source_to_native',
+              'native_inverted_struct_schema_ast',
+              'inverted_production_source_mir_cpp17',
+              'native_no_gc_ir_audit_unit',
+          }
+          found = re.findall(r'Test\s+#\d+:\s+(\S+)',
+                             Path('build/dop-inverted-test-inventory.txt').read_text())
+          if len(found) != 4 or set(found) != expected:
+              raise SystemExit(f'FAIL: wrong native DOP test inventory: {found}')
+          PY
+
+      - name: Execute real AttoLang compiler, native guest and negative cases
+        shell: bash
+        run: |
+          set -euo pipefail
+          regex='^(native_inverted_production_source_to_native|native_inverted_struct_schema_ast|inverted_production_source_mir_cpp17|native_no_gc_ir_audit_unit)$'
+          ctest --test-dir build --output-on-failure --timeout 180 \
+            --output-junit "$GITHUB_WORKSPACE/build/dop-inverted-ctest.xml" \
+            -R "$regex"
+
+      - name: Validate executed CTest and seal exact-source evidence receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/dop_inverted_ctest_receipt.py \
+            --repo-root . --build build \
+            --ctest-xml build/dop-inverted-ctest.xml \
+            --expected-head "$EXPECTED_HEAD" \
+            --expected-repository "$GITHUB_REPOSITORY" \
+            --output build/dop-inverted-native-receipt.json
+          cat build/dop-inverted-native-receipt.json
+
+      - name: Upload local evidence for independent run/job API verification
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: atto-dop-inverted-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            build/dop-inverted-test-inventory.txt
+            build/dop-inverted-ctest.xml
+            build/dop-inverted-native-receipt.json
