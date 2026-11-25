@@ -1,6 +1,6 @@
 // Applying trap twice does not yield Result<Result<int,Error>,Error>.
 pub fnc main(): int {
     val Result<int,Error> original = trap 42;
-    val Result<int,Error> again = trap original;
+    val Result<int,Error> again = trap! original;
     return again.unwrap();
 }
