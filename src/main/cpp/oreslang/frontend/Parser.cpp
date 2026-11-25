@@ -4754,14 +4754,14 @@ private:
             std::string structural_field;
 
             while (token_.text != "end") {
-                if (arms.size() >= 32)
+                if (arms.size() + (has_fallback ? 1u : 0u) >= 32)
                     fail("native procedural dispatch arm limit exceeded (32)");
 
                 if (is_match) {
-                    // Canonical AttoLang fallback has its own keyword.
-                    // Keep 'on _' source-compatible, but never accept
-                    // 'on default' or any pattern after a default.
-                    if (accept("default")) {
+                    // All three spellings designate one fallback, evaluated after concrete arms.
+                    const bool bare_default = accept("default");
+                    if (!bare_default) require("on");
+                    if (bare_default || accept("default") || accept("_")) {
                         if (has_fallback)
                             fail("native do match can contain only one default arm");
                         if (token_.text == "when" || token_.text == "as")
@@ -4769,17 +4769,10 @@ private:
                         require("->"); require("{");
                         fallback = branch_arm(false, false); require("}");
                         has_fallback = true;
-                        if (token_.text == "default")
-                            fail("native do match can contain only one default arm");
-                        if (token_.text != "end")
-                            fail("native do match default arm must be last");
                         continue;
                     }
-                    require("on");
                     if (token_.text == "structural" || token_.text == "struct")
                         fail("native structural match expression requires verified shape-pattern lowering");
-                    if (accept("default"))
-                        fail("native do match fallback must use 'default ->' without 'on'");
                     if (token_.text == "structural") {
                         auto field_test = checked_native_structural_field_test(*subject);
                         if (!structural_field.empty() &&
@@ -4803,16 +4796,6 @@ private:
                     }
                     if (token_.text == "~")
                         fail("native structural field pattern requires checked typed aggregate lowering");
-                    if (accept("_")) {
-                        if (has_fallback)
-                            fail("native do match can contain only one wildcard arm");
-                        require("->"); require("{");
-                        fallback = branch_arm(false, false); require("}");
-                        has_fallback = true;
-                        if (token_.text != "end")
-                            fail("native do match wildcard arm must be last");
-                        continue;
-                    }
                     auto constant = expression();
                     const std::string key = native_dispatch_constant_key(*constant);
                     if (key.empty())
@@ -6119,26 +6102,22 @@ private:
         std::string structural_field;
 
         while (token_.text != "end") {
-            if (arms.size() >= 32)
+            if (arms.size() + (fallback ? 1u : 0u) >= 32)
                 fail("native value match arm limit exceeded (32)");
-            if (accept("default")) {
+            // All three spellings designate one fallback, evaluated after concrete arms.
+            const bool bare_default = accept("default");
+            if (!bare_default) require("on");
+            if (bare_default || accept("default") || accept("_")) {
                 if (fallback)
                     fail("native value match can contain only one default arm");
                 if (token_.text == "when" || token_.text == "as")
                     fail("native value match default arm cannot have a guard or binding");
                 require("->");
                 fallback = dispatch_value_arm("native value match");
-                if (token_.text == "default")
-                    fail("native value match can contain only one default arm");
-                if (token_.text != "end")
-                    fail("native value match default arm must be last");
                 continue;
             }
-            require("on");
             if (token_.text == "structural" || token_.text == "struct")
                 fail("native structural match expression requires verified shape-pattern lowering");
-            if (accept("default"))
-                fail("native value match fallback must use 'default ->' without 'on'");
             if (token_.text == "structural") {
                 auto field_test = checked_native_structural_field_test(*subject);
                 if (!structural_field.empty() && structural_field != field_test.field) {
@@ -6162,15 +6141,6 @@ private:
             }
             if (token_.text == "~")
                 fail("native structural field pattern requires checked typed aggregate lowering");
-            if (accept("_")) {
-                if (fallback)
-                    fail("native value match can contain only one wildcard arm");
-                require("->");
-                fallback = dispatch_value_arm("native value match");
-                if (token_.text != "end")
-                    fail("native value match wildcard arm must be last");
-                continue;
-            }
             auto constant = expression();
             const std::string key = native_dispatch_constant_key(*constant);
             if (key.empty())
