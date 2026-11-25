@@ -189,15 +189,18 @@ llvm::Value* lower_trapped_i64(const Expression& e, llvm::IRBuilder<>& builder,
         auto* function = builder.GetInsertBlock()->getParent();
         auto* nonzero = llvm::BasicBlock::Create(builder.getContext(), "trap.div.nonzero", function);
         auto* proceed = llvm::BasicBlock::Create(builder.getContext(), "trap.div.ok", function);
-        builder.CreateCondBr(builder.CreateICmpEQ(rhs, llvm::ConstantInt::get(i64, 0)),
-            zero_divisor, nonzero);
+        auto* zero = builder.CreateICmpEQ(rhs, llvm::ConstantInt::get(i64, 0));
+        builder.CreateCondBr(zero, zero_divisor, nonzero);
         builder.SetInsertPoint(nonzero);
         auto* overflow = builder.CreateAnd(
             builder.CreateICmpEQ(lhs, llvm::ConstantInt::getSigned(i64, std::numeric_limits<std::int64_t>::min())),
             builder.CreateICmpEQ(rhs, llvm::ConstantInt::getSigned(i64, -1)));
         builder.CreateCondBr(overflow, failure, proceed);
         builder.SetInsertPoint(proceed);
-        return builder.CreateSDiv(lhs, rhs, "trap.div");
+        // Also keep constant-folded unreachable paths free of poison.
+        auto* safe = builder.CreateSelect(builder.CreateOr(zero, overflow),
+            llvm::ConstantInt::get(i64, 1), rhs);
+        return builder.CreateSDiv(lhs, safe, "trap.div");
     }
     if (remainder) {
         auto* proceed = llvm::BasicBlock::Create(builder.getContext(), "trap.rem.ok",
@@ -713,7 +716,9 @@ llvm::Value* lower(const Expression& expr,
             builder.CreateCall(native_trap(*module));
             builder.CreateUnreachable();
             builder.SetInsertPoint(proceed);
-            return builder.CreateSDiv(lhs, rhs, "div");
+            auto* safe = builder.CreateSelect(builder.CreateOr(zero, overflow),
+                llvm::ConstantInt::get(i64, 1), rhs);
+            return builder.CreateSDiv(lhs, safe, "div");
         }
         case Expression::Kind::Remainder:
         case Expression::Kind::Modulo: {
