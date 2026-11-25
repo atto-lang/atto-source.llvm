@@ -378,7 +378,7 @@ inline void resolve_native_sums(Program& program) {
         Hint left, right;
         if (e.left) left = expression(*e.left, env, {});
         if (e.right) right = expression(*e.right, env, {});
-        if ((e.kind == E::Add || e.kind == E::Subtract || e.kind == E::Multiply ||
+        if ((e.kind == E::Add || e.kind == E::Subtract || e.kind == E::Multiply || e.kind == E::Divide ||
                 e.kind == E::Negate) && (!left.sum.empty() || !right.sum.empty()))
             throw std::runtime_error("native tagged Option/Result is not an integer arithmetic operand");
         for (auto& arg : e.arguments) expression(*arg, env, {});
