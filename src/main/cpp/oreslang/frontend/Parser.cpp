@@ -1116,6 +1116,33 @@ public:
                 pointer_int_aot::Parser(std::move(tokens)).parse());
             return program;
         }
+        // Initial bounded AOT slice: private file-header descriptors only.
+        // A deliberately disjoint kind_ prefix prevents capturing existing
+        // contextual declaration heads before shared symbol admission exists.
+        // These descriptors never become a runtime object or a new IR kind.
+        std::unordered_set<std::string> local_class_kinds;
+        while (token_.text == "define" && peek_next().text == "keyword") {
+            advance(); // define
+            require("keyword");
+            std::string name = identifier();
+            if (name.size() <= 5 || name.size() > 128 || name.compare(0, 5, "kind_") != 0)
+                fail("NATIVE_KIND_NAME_UNSUPPORTED: initial native descriptor requires kind_ prefix");
+            if (local_class_kinds.size() >= 128)
+                fail("NATIVE_KIND_BUDGET: at most 128 local descriptors");
+            if (!local_class_kinds.insert(name).second)
+                fail("NATIVE_KIND_DUPLICATE: duplicate local descriptor");
+            require("as");
+            if (!accept("class"))
+                fail("NATIVE_KIND_BASE_UNSUPPORTED: ordinary class only");
+            if (token_.text != "end")
+                fail("NATIVE_KIND_CONTRACT_UNSUPPORTED: typed interface/contract elaboration not yet lowered");
+            require("end");
+        }
+        if (!local_class_kinds.empty() &&
+                (token_.text == "namespace" || token_.text == "use" ||
+                 token_.text == "import" || token_.text == "export"))
+            fail("NATIVE_KIND_SCOPE_UNSUPPORTED: descriptors are file-local without imports or exports");
+
         // A namespace is a file-header declaration, not an import or module
         // wrapper. Parse it before any import/export; never let the imported
         // dependency graph silently turn a late header into a valid header.
@@ -1382,12 +1409,22 @@ public:
             if ((token_.text == "http" && peek_next().text == "actor") ||
                 (token_.text == "serial" && peek_next().text == "http"))
                 fail("HTTP_ACTOR_BACKEND_UNSUPPORTED: native HTTP actor requires bounded request/message admission and physical shutdown lowering");
+            if (local_class_kinds.count(std::string(token_.text))) {
+                advance();
+                auto cls = class_declaration();
+                cls.exported = exported;
+                remember_class_scalar_fields(cls);
+                program.classes.push_back(std::move(cls));
+                break;
+            }
             if (exported && token_.text != "class") fail("native public module wrapper is not supported in the i64 subset");
             if (accept("serial")) {
                 require("actor");
                 fail("native serial actor requires shared HTTP/message lane lowering");
             }
             if (accept("module")) {
+                if (!local_class_kinds.empty())
+                    fail("NATIVE_KIND_SCOPE_UNSUPPORTED: custom declaration descriptors do not enter modules");
                 if (!defined_type_aliases_.empty() || !forwards_.empty())
                     fail("native module wrapper cannot import file-root forward aliases");
                 program.module = identifier();
@@ -1568,6 +1605,16 @@ public:
                 if ((token_.text == "http" && peek_next().text == "actor") ||
                     (token_.text == "serial" && peek_next().text == "http"))
                     fail("HTTP_ACTOR_BACKEND_UNSUPPORTED: native HTTP actor requires bounded request/message admission and physical shutdown lowering");
+                if (local_class_kinds.count(std::string(token_.text))) {
+                    if (wrapped_module)
+                        fail("NATIVE_KIND_SCOPE_UNSUPPORTED: custom declaration descriptors do not enter modules");
+                    advance();
+                    auto cls = class_declaration();
+                    cls.exported = public_class;
+                    remember_class_scalar_fields(cls);
+                    program.classes.push_back(std::move(cls));
+                    continue;
+                }
                 if (public_class && token_.text != "class") fail("native pub define currently supports only class declarations");
                 if (accept("serial")) {
                     require("actor");
