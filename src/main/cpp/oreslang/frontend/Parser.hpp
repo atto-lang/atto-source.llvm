@@ -104,6 +104,8 @@ inline bool native_trap_pure_integer(const Expression& e, std::size_t depth = 0)
         case Expression::Kind::Add:
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
+        case Expression::Kind::Remainder:
+        case Expression::Kind::Modulo:
             return e.left && e.right &&
                 native_trap_pure_integer(*e.left, depth + 1) &&
                 native_trap_pure_integer(*e.right, depth + 1);
