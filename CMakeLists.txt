@@ -29,6 +29,17 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # CPU-only MoE planning parity proof. NOT an Oreslang guest or GPU kernel.
+    add_executable(oreslang-native-neural-moe-plan-test
+        tests/neural_moe_routing_plan_test.cpp)
+    target_include_directories(oreslang-native-neural-moe-plan-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-neural-moe-plan-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_neural_moe_host_plan_parity
+        COMMAND oreslang-native-neural-moe-plan-test)
+    set_tests_properties(native_neural_moe_host_plan_parity PROPERTIES TIMEOUT 20)
+
     # HOST-ONLY closed Result<void,ArrayError> nominal/tag and exhaustive
     # pattern proof. This is not guest source Result/match lowering.
     add_executable(oreslang-native-array-result-contract-test
@@ -703,6 +714,8 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_actor unsupported-actor.ores --diagnostic "actor requires at least one scalar field")
     # New unary/stream/network actor declarations may not be silently lowered
     # to the old fixed-int on_message native actor subset.
+    oreslang_contract_test(native_actor_middleware_next_val_fails_closed source-actor-middleware-next-val-unsupported.ores
+        --diagnostic "native @ActorMiddleware requires typed actor-turn middleware")
     oreslang_contract_test(native_actor_middleware_fails_closed source-actor-middleware-unsupported.ores
         --diagnostic "native @ActorMiddleware requires typed actor-turn middleware")
     oreslang_contract_test(native_supervisor_middleware_fails_closed source-supervisor-middleware-unsupported.ores
