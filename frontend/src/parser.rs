@@ -1897,18 +1897,11 @@ impl Parser {
                 ))
             }
             Tok::Ident(s) if s == "await" => return Err(unsupported(pos, "'await'")),
-            Tok::Ident(s) if s == "trap!" => {
-                // Canonical trap! is a typed Result<T,E> boundary. Existing
-                // legacy trap returns Option<T> on ordinary throw; routing
-                // canonical source through it would silently erase Error
-                // identity and violate the language's Result contract.
+            Tok::Ident(s) if s == "trap!" || s == "trap" => {
+                // Both spellings have one Result contract. Do not enter the
+                // legacy Option AST until typed Result lowering is implemented.
                 return Err(Diagnostic::new(pos, "E_TRAP_BANG_RESULT_UNVERIFIED",
-                    "trap! requires checked Result<T,Error> and guest unwind; legacy trap Option<T> is not equivalent"));
-            }
-            Tok::Ident(s) if s == "trap" => {
-                self.advance();
-                let inner = self.parse_unary()?;
-                return Ok(Expr { kind: ExprKind::Trap(Box::new(inner)), pos });
+                    "trap/trap! require checked Result<T,Error> and guest unwind"));
             }
             _ => return self.parse_postfix(),
         };
@@ -2245,9 +2238,11 @@ mod canonical_trap_bang_result_guard_tests {
     }
 
     #[test]
-    fn bare_trap_retains_separate_legacy_option_lowering() {
-        let tokens = lex("trap 7").expect("legacy lexical spelling");
-        let expression = Parser::new(tokens).parse_unary().expect("legacy unary trap");
-        assert!(matches!(expression.kind, ExprKind::Trap(_)));
+    fn bare_trap_uses_same_result_admission_gate() {
+        for source in ["trap 7", "trap Some(7)", "trap parse_id(\"42\")"] {
+            let tokens = lex(source).expect("bare trap lexical spelling");
+            let err = Parser::new(tokens).parse_unary().expect_err("Result trap must fail closed");
+            assert_eq!(err.code, "E_TRAP_BANG_RESULT_UNVERIFIED", "{err}");
+        }
     }
 }
