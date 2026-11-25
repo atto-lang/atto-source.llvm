@@ -234,7 +234,7 @@ inline void resolve_native_sums(Program& program) {
             const NativeSumType type = native_sum(program, selected);
             const bool option = type.kind == NativeSumType::Kind::Option;
             if (e.trap_origin && (option || !type.trap_error || type.value_type != ScalarType::I64))
-                throw std::runtime_error("native trap only lowers Result<int, Error> with noncatching checked arithmetic");
+                throw std::runtime_error("native trap only lowers the closed Result<int, Error> arithmetic slice");
             if (type.trap_error && !e.trap_origin)
                 throw std::runtime_error("native Result<_, Error> values are minted only by trap; Ok/Err cannot construct them");
             if ((option && e.name != "Some" && e.name != "None") || (!option && e.name != "Ok" && e.name != "Err"))
