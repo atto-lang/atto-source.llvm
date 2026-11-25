@@ -9,6 +9,36 @@ static void check(bool success, const char* description) {
     if (!success) throw std::runtime_error(description);
 }
 int main() {
+    // Exercise the real C actor heap, not just the metadata constructor.
+    // Cancellation/failure are terminal outcomes, not physical quiescence.
+    for (const auto outcome : {AsyncIoTerminal::success,
+                              AsyncIoTerminal::cancelled,
+                              AsyncIoTerminal::failure}) {
+        auto* heap = ores_actor_i64_heap_open(91, 3, 1);
+        const auto turn = ores_actor_i64_heap_enter(heap, 91, 3);
+        const AsyncIoTicket token{91, 17, 5}; // operation generation != incarnation
+        PinnedContinuationGate gate(token, heap, turn);
+        check(gate.lifetime_pinned(), "real heap lease was not admitted");
+        check(gate.acquire(token, PinnedContinuationGate::Loan::shared), "real heap metadata loan");
+        ores_actor_i64_heap_leave(heap, turn);
+        ores_actor_i64_heap_retire(heap);
+        check(ores_actor_i64_heap_try_destroy(heap) == 0, "pending callback did not pin retired heap");
+        check(gate.settle(token, outcome), "real heap settlement failed");
+        check(!gate.try_retire(token) && !gate.retired() && gate.lifetime_pinned(),
+              "settlement alone released real heap");
+        check(ores_actor_i64_heap_try_destroy(heap) == 0, "settlement enabled premature heap destroy");
+        check(gate.broker_acknowledge(token) && gate.try_claim_resume(token), "real heap resume admission");
+        check(!gate.try_retire(token), "unfinished cleanup released real heap");
+        check(gate.finish_resume(token) && !gate.try_retire(token), "live loan released real heap");
+        check(ores_actor_i64_heap_try_destroy(heap) == 0, "live loan allowed physical destroy");
+        check(gate.release(token, PinnedContinuationGate::Loan::shared), "real heap loan release");
+        check(gate.try_retire(token) && gate.retired() && !gate.lifetime_pinned(),
+              "quiescent frame did not release real heap lease");
+        check(ores_actor_i64_heap_try_destroy(heap) == 1, "quiescent heap did not physically retire");
+        // The successful destroy invalidates heap. Repeated gate retirement
+        // must not dereference that pointer or release the consumed lease.
+        check(!gate.try_retire(token), "real heap lease released twice");
+    }
     for (std::uint64_t i = 1; i <= 1200; ++i) {
         AsyncIoTicket token{21, i + 40, i};
         PinnedContinuationGate gate(token);
