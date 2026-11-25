@@ -169,18 +169,41 @@ llvm::Value* checked_signed_arithmetic(llvm::IRBuilder<>& builder,
 // later operands are evaluated only on success. Ordinary untrapped lowering
 // still uses the existing terminal checked_signed_arithmetic path.
 llvm::Value* lower_trapped_i64(const Expression& e, llvm::IRBuilder<>& builder,
-                              llvm::Type* i64, llvm::BasicBlock* failure) {
+                              llvm::Type* i64, llvm::BasicBlock* failure,
+                              llvm::BasicBlock* zero_divisor) {
     using K = Expression::Kind;
     if (e.kind == K::Integer)
         return llvm::ConstantInt::getSigned(i64, e.integer);
     const bool negate = e.kind == K::Negate;
-    if (!negate && e.kind != K::Add && e.kind != K::Subtract && e.kind != K::Multiply)
+    const bool remainder = e.kind == K::Remainder || e.kind == K::Modulo;
+    if (!negate && !remainder && e.kind != K::Add && e.kind != K::Subtract && e.kind != K::Multiply)
         throw std::runtime_error("unproved arithmetic operand in native trap");
     if (!e.left || (!negate && !e.right))
         throw std::runtime_error("incomplete native trap arithmetic");
     auto* lhs = negate ? llvm::ConstantInt::get(i64, 0)
-                       : lower_trapped_i64(*e.left, builder, i64, failure);
-    auto* rhs = lower_trapped_i64(negate ? *e.left : *e.right, builder, i64, failure);
+                       : lower_trapped_i64(*e.left, builder, i64, failure, zero_divisor);
+    auto* rhs = lower_trapped_i64(negate ? *e.left : *e.right, builder, i64, failure, zero_divisor);
+    if (remainder) {
+        auto* proceed = llvm::BasicBlock::Create(builder.getContext(), "trap.rem.ok",
+            builder.GetInsertBlock()->getParent());
+        builder.CreateCondBr(builder.CreateICmpEQ(rhs, llvm::ConstantInt::get(i64, 0)),
+            zero_divisor, proceed);
+        builder.SetInsertPoint(proceed);
+        // MIN % -1 is zero, not LLVM poison. Replace -1 with 1 before srem.
+        auto* safe = builder.CreateSelect(
+            builder.CreateICmpEQ(rhs, llvm::ConstantInt::getSigned(i64, -1)),
+            llvm::ConstantInt::get(i64, 1), rhs);
+        auto* rem = builder.CreateSRem(lhs, safe, "trap.rem");
+        if (e.kind == K::Remainder) return rem;
+        // Euclidean modulo is nonnegative even for a negative/MIN divisor.
+        // Neither wrapping intermediate is marked nsw/nuw.
+        auto* adjusted = builder.CreateSelect(
+            builder.CreateICmpSGT(rhs, llvm::ConstantInt::get(i64, 0)),
+            builder.CreateAdd(rem, rhs), builder.CreateSub(rem, rhs));
+        return builder.CreateSelect(
+            builder.CreateICmpSLT(rem, llvm::ConstantInt::get(i64, 0)),
+            adjusted, rem, "trap.mod");
+    }
     const auto op = negate || e.kind == K::Subtract ? llvm::Intrinsic::ssub_with_overflow
         : e.kind == K::Multiply ? llvm::Intrinsic::smul_with_overflow
         : llvm::Intrinsic::sadd_with_overflow;
@@ -227,26 +250,34 @@ llvm::Value* lower(const Expression& expr,
             if (expr.trap_origin && moves->hosted_trap_arithmetic &&
                     expr.arguments.front()->kind != Expression::Kind::Integer) {
                 constexpr std::uint64_t arithmetic_overflow_id = 65537;
+                constexpr std::uint64_t division_by_zero_id = 65538;
                 auto* function = builder.GetInsertBlock()->getParent();
                 auto* failed = llvm::BasicBlock::Create(builder.getContext(),
                     "trap.arithmetic.err", function);
+                auto* zero_divisor = llvm::BasicBlock::Create(builder.getContext(),
+                    "trap.division.zero.err", function);
                 auto* join = llvm::BasicBlock::Create(builder.getContext(),
                     "trap.arithmetic.result", function);
-                auto* payload = lower_trapped_i64(*expr.arguments.front(), builder, i64, failed);
+                auto* payload = lower_trapped_i64(*expr.arguments.front(), builder, i64, failed, zero_divisor);
                 auto* success = builder.GetInsertBlock();
                 builder.CreateBr(join);
                 builder.SetInsertPoint(failed);
                 builder.CreateBr(join);
+                builder.SetInsertPoint(zero_divisor);
+                builder.CreateBr(join);
                 builder.SetInsertPoint(join);
-                auto* tag = builder.CreatePHI(i64, 2, "trap.result.tag");
-                auto* ok = builder.CreatePHI(i64, 2, "trap.result.ok");
-                auto* error = builder.CreatePHI(i64, 2, "trap.result.error");
+                auto* tag = builder.CreatePHI(i64, 3, "trap.result.tag");
+                auto* ok = builder.CreatePHI(i64, 3, "trap.result.ok");
+                auto* error = builder.CreatePHI(i64, 3, "trap.result.error");
                 tag->addIncoming(llvm::ConstantInt::get(i64, 0), success);
                 tag->addIncoming(llvm::ConstantInt::get(i64, 1), failed);
                 ok->addIncoming(payload, success);
                 ok->addIncoming(llvm::ConstantInt::get(i64, 0), failed);
                 error->addIncoming(llvm::ConstantInt::get(i64, 0), success);
                 error->addIncoming(llvm::ConstantInt::get(i64, arithmetic_overflow_id), failed);
+                tag->addIncoming(llvm::ConstantInt::get(i64, 1), zero_divisor);
+                ok->addIncoming(llvm::ConstantInt::get(i64, 0), zero_divisor);
+                error->addIncoming(llvm::ConstantInt::get(i64, division_by_zero_id), zero_divisor);
                 auto* fields = entry_alloca(builder, i64, llvm::ConstantInt::get(i64, 3), "trap.result.fields");
                 builder.CreateStore(tag, fields);
                 builder.CreateStore(ok, builder.CreateGEP(i64, fields, llvm::ConstantInt::get(i64, 1)));
