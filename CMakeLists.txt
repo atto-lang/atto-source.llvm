@@ -7912,3 +7912,50 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-fixed-buffer-registry-mailbox-test)
     set_tests_properties(native_fixed_buffer_registry_mailbox_host_only PROPERTIES TIMEOUT 30)
 endif()
+
+# One physical carrier and a real pthread join. A pending logical join MUST
+# yield its carrier so other accepted DATA executes before its wake turn.
+# Host-only state-machine integration; not compiler-emitted .atto suspension.
+if(BUILD_TESTING AND UNIX)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-join-real-scheduler-test
+        tests/native_join_actor_scheduler_single_worker_v1_test.cpp
+        src/main/cpp/oreslang/runtime/NativeThreadV1.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-join-real-scheduler-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-join-real-scheduler-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-join-real-scheduler-test PRIVATE
+        "$<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>"
+        "$<$<COMPILE_LANG_AND_ID:C,GNU,Clang,AppleClang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>")
+    target_link_libraries(oreslang-native-join-real-scheduler-test PRIVATE Threads::Threads)
+    add_test(NAME native_join_real_single_worker_scheduler_host_only
+        COMMAND oreslang-native-join-real-scheduler-test)
+    set_tests_properties(native_join_real_single_worker_scheduler_host_only
+        PROPERTIES TIMEOUT 30)
+endif()
+
+# Exact TaskContinuationGate -> continuation READY/CLAIM/FINISH with the
+# actual one-worker native actor scheduler and native pthread completion.
+# Host-only state machine, not compiler-generated guest .atto lowering.
+if(BUILD_TESTING AND UNIX)
+    find_package(Threads REQUIRED)
+    add_executable(oreslang-native-join-real-task-continuation-test
+        tests/native_join_real_task_continuation_scheduler_v1_test.cpp
+        src/main/cpp/oreslang/runtime/NativeThreadV1.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c)
+    target_include_directories(oreslang-native-join-real-task-continuation-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-join-real-task-continuation-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-join-real-task-continuation-test PRIVATE
+        "$<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>"
+        "$<$<COMPILE_LANG_AND_ID:C,GNU,Clang,AppleClang>:-Wall;-Wextra;-Wpedantic;-Werror;-UNDEBUG>")
+    target_link_libraries(oreslang-native-join-real-task-continuation-test PRIVATE Threads::Threads)
+    add_test(NAME native_join_real_task_continuation_one_worker_host_only
+        COMMAND oreslang-native-join-real-task-continuation-test)
+    set_tests_properties(native_join_real_task_continuation_one_worker_host_only
+        PROPERTIES TIMEOUT 30)
+endif()
