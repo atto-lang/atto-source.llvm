@@ -1841,6 +1841,21 @@ if(BUILD_TESTING)
 
 
 
+    # Hosted trap arithmetic recovers as Err; untrapped overflow still
+    # signals in the independent native_trap_int_guest_aot_o0_o2 control.
+    foreach(case IN ITEMS add sub mul neg nested_overflow)
+        add_test(NAME native_trap_arithmetic_${case}_O0_O2
+            COMMAND "${CMAKE_COMMAND}"
+                "-DORES_TRAP_LLVM_CLI=$<TARGET_FILE:oreslang-llvmc>"
+                "-DORES_TRAP_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/trap-arithmetic-${case}.atto"
+                "-DORES_TRAP_AOT_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/scripts/compile-aot.sh"
+                "-DORES_TRAP_AUDITOR=${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit"
+                "-DORES_TRAP_CLANG=clang"
+                "-DORES_TRAP_CASE=arithmetic_${case}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/trap_int_native_aot_execution.cmake")
+        set_tests_properties(native_trap_arithmetic_${case}_O0_O2 PROPERTIES TIMEOUT 300)
+    endforeach()
+
     # Trusted-host capability admission only; NOT source-level/hostile-native parity.
     find_package(Threads REQUIRED)
     add_executable(oreslang-native-tenant-domain-host-test
@@ -7880,7 +7895,7 @@ if(BUILD_TESTING AND ORE_CLANG)
             COMMAND "${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit-tests")
         # True native guest execution, not merely source admission or a host
         # constructor model: compiler IR -> no-GC audit -> Clang O0/O2 -> run.
-        # This remains the restricted nonthrowing Result<int, Error> trap slice.
+        # Hosted closed arithmetic trap plus untrapped terminal overflow control.
         add_test(NAME native_trap_int_guest_aot_o0_o2
             COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-trap-int-aot.sh"
                 "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}"
