@@ -4,6 +4,7 @@
 // It is not an AttoLang guest API; the trusted host owns the context, module
 // and exact-head compiled G1 SAXPY CUfunction for the provider's lifetime.
 #include "oreslang/backend/GpuG1EventProvider.hpp"
+#include "oreslang/backend/GpuG1CudaModuleLoader.hpp"
 #include <cuda.h>
 #include <cstdint>
 #include <limits>
@@ -12,6 +13,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace oreslang::gpu::g1 {
 
@@ -23,9 +25,15 @@ public:
     using Kernel = CUfunction;
     struct Limits { std::uint32_t maximum_threads_per_block; std::uint64_t maximum_grid_x; };
 
-    GpuG1CudaDriver(CUcontext context, CUdevice device, CUfunction vetted_saxpy_entry)
-        : context_(context), device_(device), kernel_(vetted_saxpy_entry) {
-        if (!context_ || !kernel_) fail("GPU-G1-CUDA-DRV-001: missing trusted context/kernel");
+    // A raw caller-supplied CUfunction is NOT an authorization. The sole
+    // constructor requires a verified PTX module token minted by the trusted
+    // exact-head SHA-256 module gate.
+    GpuG1CudaDriver(CUcontext context, CUdevice device,
+                    GpuG1VerifiedCudaModule::KernelToken verified_kernel)
+        : context_(context), device_(device), verified_kernel_(std::move(verified_kernel)),
+          kernel_(verified_kernel_.kernel()) {
+        if (!context_ || !kernel_ || verified_kernel_.owning_loader().context() != context_)
+            fail("GPU-G1-CUDA-DRV-001: verified kernel/context mismatch");
         ContextGuard guard(context_);
         int max_threads=0, max_grid=0;
         checked(cuDeviceGetAttribute(&max_threads, CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK,
@@ -156,6 +164,7 @@ private:
     }
     CUcontext context_;
     CUdevice device_;
+    GpuG1VerifiedCudaModule::KernelToken verified_kernel_;
     Kernel kernel_;
     Limits limits_{};
     mutable std::mutex mutex_;
