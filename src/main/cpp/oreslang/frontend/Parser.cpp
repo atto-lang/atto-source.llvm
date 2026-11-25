@@ -43,7 +43,7 @@ struct Token {
 bool exceptional_control(std::string_view word) {
     return word == "throw" || word == "raise" || word == "panic" ||
            word == "recover" || word == "defer" || word == "try" ||
-           word == "catch" || word == "finally" || word == "trap";
+           word == "catch" || word == "finally" || word == "trap" || word == "trap!";
 }
 
 bool digit(char ch) { return ch >= '0' && ch <= '9'; }
@@ -315,6 +315,14 @@ public:
                         (source_[end] != '-' && !identifier_part(source_[end]))) {
                     at_ = end;
                 }
+            }
+            // Treat contiguous trap! as the same checked Result operator as trap.
+            // Do not consume the inequality operators != or !eq.
+            if (first == "trap" && at_ < source_.size() && source_[at_] == '!'
+                    && source_.substr(at_, 2) != "!="
+                    && !(source_.substr(at_, 3) == "!eq"
+                         && (at_ + 3 == source_.size() || !identifier_part(source_[at_ + 3])))) {
+                ++at_;
             }
             return {Kind::Identifier, source_.substr(start, at_ - start), start};
         }
@@ -5916,7 +5924,7 @@ private:
             ~DepthGuard() { --depth; }
         } depth_guard{expression_depth_};
 
-        if (token_.text == "trap") {
+        if (token_.text == "trap" || token_.text == "trap!") {
             const auto offset = token_.offset;
             advance();
             auto payload = unary(); // prefix precedence, evaluated once
