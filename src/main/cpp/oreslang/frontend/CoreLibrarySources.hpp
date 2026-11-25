@@ -78,8 +78,8 @@ inline bool compiler_library_dependency_allowed(
 }
 
 inline const CoreLibrarySource* find_compiler_library_source(std::string_view raw) noexcept {
-    // Keep aliases identity-stable: the optional .ores suffix selects the same
-    // compiler-owned unit and can never create a duplicate module instance.
+    // Keep aliases identity-stable: canonical .atto and legacy .ores paths
+    // select the same compiler-owned unit, never duplicate module instances.
     static constexpr std::string_view kNumericSource =
 R"ORES_CORE(// Compiler-owned ores.core source.
 // This module has no OS, Java, filesystem, network, process, actor-scheduler,
@@ -120,7 +120,7 @@ end
         CompilerLibraryTier::Core,
         "ores.core/numeric",
         "numeric",
-        "@ores.core/numeric.ores",
+        "@ores.core/numeric.atto",
         kNumericSource,
         0u
     };
@@ -145,7 +145,7 @@ end
         CompilerLibraryTier::Alloc,
         "alloc/int_buffer",
         "int_buffer",
-        "@alloc/int_buffer.ores",
+        "@alloc/int_buffer.atto",
         kIntBufferSource,
         core_provider_bit(CoreProviderRequirement::Allocator)
     };
@@ -169,16 +169,19 @@ end
         CompilerLibraryTier::Alloc,
         "alloc/int_buffer_bundle",
         "int_buffer_bundle",
-        "@alloc/int_buffer_bundle.ores",
+        "@alloc/int_buffer_bundle.atto",
         kIntBufferBundleSource,
         core_provider_bit(CoreProviderRequirement::Allocator)
     };
 
-    if (raw == "ores.core/numeric" || raw == "ores.core/numeric.ores")
+    if (raw == "ores.core/numeric" || raw == "ores.core/numeric.atto" ||
+            raw == "ores.core/numeric.ores")
         return &kNumeric;
-    if (raw == "alloc/int_buffer" || raw == "alloc/int_buffer.ores")
+    if (raw == "alloc/int_buffer" || raw == "alloc/int_buffer.atto" ||
+            raw == "alloc/int_buffer.ores")
         return &kIntBuffer;
     if (raw == "alloc/int_buffer_bundle" ||
+            raw == "alloc/int_buffer_bundle.atto" ||
             raw == "alloc/int_buffer_bundle.ores")
         return &kIntBufferBundle;
     return nullptr;

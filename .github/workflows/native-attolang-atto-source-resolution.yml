@@ -1,0 +1,57 @@
+name: AttoLang .atto source resolution (host reference)
+
+on:
+  pull_request:
+    paths:
+      - "src/main/cpp/oreslang/frontend/AttoSourcePath.hpp"
+      - "src/main/cpp/oreslang/frontend/ProjectRootImport.hpp"
+      - "src/main/cpp/oreslang/frontend/ModuleLoader.cpp"
+      - "src/main/cpp/oreslang/frontend/CoreLibrarySources.hpp"
+      - "tests/native_attolang_source_path_test.cpp"
+      - "tests/native_attolang_project_root_import_test.cpp"
+      - "tests/native_module_imports.py"
+      - "tests/native_thread_source_admission_m0.cmake"
+      - ".github/workflows/native-attolang-atto-source-resolution.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-attolang-source-resolution:
+    name: "host-only import-path security - ${{ matrix.compiler }}"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [g++, clang++]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Compile and execute exact-checkout AttoLang source resolution tests
+        shell: bash
+        env:
+          CXX: ${{ matrix.compiler }}
+        run: |
+          set -euo pipefail
+          echo "head_sha=$(git rev-parse HEAD)"
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          for case in native_attolang_source_path_test native_attolang_project_root_import_test; do
+            "$CXX" -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+              -Isrc/main/cpp "tests/${case}.cpp" -o "$work/${case}"
+            "$work/${case}"
+          done
+          echo "ATTO_SOURCE_RESOLUTION_HOST_ONLY_PASS"
+      - name: Validate native .atto compiler fixture matrix syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B - <<'PY'
+          import ast
+          from pathlib import Path
+          ast.parse(Path("tests/native_module_imports.py").read_text())
+          print("ATTO_COMPILER_MATRIX_SYNTAX_PASS (not guest execution)")
+          PY

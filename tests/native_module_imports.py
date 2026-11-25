@@ -122,13 +122,53 @@ def main():
         'main.ores': 'import module Math from "./math"; pub fnc main():int{return Math.identity<int>(42);}',
         'math.ores': 'define module Math as pub fnc identity<T>(T x):T{return x;} end',
     }, 42))
+    # Canonical AttoLang .atto programs go through the ACTUAL compiler,
+    # LLVM IR linker, native executable, and source-deleted runtime checks.
+    # Legacy .ores cases above remain compatibility gates, not defaults.
+    positives.extend([
+        ('atto-relative', {
+            'main.atto': 'import module Math from "./math"; pub fnc main():int{return Math.add(40);}',
+            'math.atto': 'define module Math as pub fnc add(int n):int{return n+2;} end',
+        }, 42),
+        ('atto-explicit', {
+            'main.atto': 'import module Math as M from "./math.atto"; pub fnc main():int{return M.add(40);}',
+            'math.atto': 'define module Math as pub fnc add(int n):int{return n+2;} end',
+        }, 42),
+        ('atto-project-root', {
+            'main.atto': 'import module Lib from "+/lib"; pub fnc main():int{return Lib.answer();}',
+            '.atto.pkg.toml': 'schema_version = "1"\n',
+            'lib.atto': 'define module Lib as pub fnc answer():int{return 42;} end',
+        }, 42),
+        ('atto-core-import', {
+            'main.atto': 'import module numeric from "ores.core/numeric.atto"; pub fnc main():int{return numeric.max_int(40,42);}',
+        }, 42),
+        ('atto-core-legacy-same-unit', {
+            'main.atto': 'import module numeric as Modern from "ores.core/numeric.atto"; import module numeric as Legacy from "ores.core/numeric.ores"; pub fnc main():int{return Modern.max_int(20,22)+Legacy.min_int(20,21);}',
+        }, 42),
+        ('atto-legacy-explicit', {
+            'main.atto': 'import module Math from "./math.ores"; pub fnc main():int{return Math.add(40);}',
+            'math.ores': 'define module Math as pub fnc add(int n):int{return n+2;} end',
+        }, 42),
+        ('atto-legacy-project-root', {
+            'main.atto': 'import module Lib from "+/lib"; pub fnc main():int{return Lib.answer();}',
+            '.ores.pkg.toml': 'schema_version = "1"\n',
+            'lib.ores': 'define module Lib as pub fnc answer():int{return 42;} end',
+        }, 42),
+        ('atto-diamond-module-identity', {
+            'main.atto': 'import module A from "./a"; import module B from "./b.atto"; pub fnc main():int{return A.answer()+B.answer();}',
+            'a.atto': 'import module Base from "./base"; define module A as pub fnc answer():int{return Base.value();} end',
+            'b.atto': 'import module Base from "./base.atto"; define module B as pub fnc answer():int{return Base.value();} end',
+            'base.atto': 'define module Base as pub fnc value():int{return 21;} end',
+        }, 42),
+    ])
     passed = compared = 0
     with tempfile.TemporaryDirectory(prefix='ores-native-imports-') as temporary:
         root = Path(temporary)
         for name, files, expected in positives:
             directory = root/name; directory.mkdir()
             for path, source in files.items(): (directory/path).write_text(source)
-            result = run([a.compiler, str(directory/'main.ores')])
+            source_entry = directory / ('main.atto' if 'main.atto' in files else 'main.ores')
+            result = run([a.compiler, str(source_entry)])
             if result.returncode: raise AssertionError((name, result.stderr))
             if name == 'private-helper' and 'define internal i64 @__ores_module_1.delta(' not in result.stdout:
                 raise AssertionError('private imported helper leaked as an external ABI symbol')
@@ -140,8 +180,8 @@ def main():
             executed = run([str(directory/'guest')], env={'PATH':'/nonexistent'})
             if executed.returncode != expected: raise AssertionError((name, executed.returncode, executed.stderr))
             for path in files: (directory/(path+'.hidden')).rename(directory/path)
-            if a.java_command and name not in ('named-arguments-native-only', 'qualified-generic-native-only'):
-                reference = run([*a.java_command, str(directory/'main.ores')])
+            if a.java_command and not name.startswith('atto-') and name not in ('named-arguments-native-only', 'qualified-generic-native-only'):
+                reference = run([*a.java_command, str(source_entry)])
                 if reference.returncode != expected: raise AssertionError(('Java differential', name, reference.returncode, reference.stderr))
                 compared += 1
             passed += 1
@@ -152,6 +192,54 @@ def main():
             result = run([a.compiler, str(directory/'main.ores')])
             if not result.returncode or result.stdout or diagnostic not in result.stderr:
                 raise AssertionError((name, diagnostic, result.returncode, result.stdout[:150], result.stderr))
+            passed += 1
+        # Fail closed for competing source/manifest identities; neither
+        # condition may produce an LLVM module header or native artifact.
+        atto_negatives = [
+            ('atto-ambiguous-relative', {
+                'main.atto': 'import module Lib from "./lib"; pub fnc main():int{return Lib.answer();}',
+                'lib.atto': library, 'lib.ores': library,
+            }, 'ambiguous AttoLang module import'),
+            ('atto-ambiguous-manifest', {
+                'main.atto': 'import module Lib from "+/lib"; pub fnc main():int{return Lib.answer();}',
+                '.atto.pkg.toml': 'schema_version = "1"\n',
+                '.ores.pkg.toml': 'schema_version = "1"\n',
+                'lib.atto': library,
+            }, 'ambiguous AttoLang package root'),
+            ('atto-invalid-suffix', {
+                'main.atto': 'import module Lib from "./lib.txt"; pub fnc main():int{return Lib.answer();}',
+                'lib.atto': library,
+            }, 'require .atto source files'),
+        ]
+        for name, files, diagnostic in atto_negatives:
+            directory = root/name; directory.mkdir()
+            for file_path, source in files.items():
+                (directory/file_path).write_text(source)
+            before = set(directory.iterdir())
+            result = run([a.compiler, str(directory/'main.atto')])
+            if not result.returncode or result.stdout or diagnostic not in result.stderr:
+                raise AssertionError((name, diagnostic, result.returncode,
+                                      result.stdout[:150], result.stderr))
+            if set(directory.iterdir()) != before:
+                raise AssertionError((name, 'unexpected native output artifact'))
+            passed += 1
+        # A dangling modern symlink must never silently downgrade an
+        # extensionless import to the legacy source of the same basename.
+        if hasattr(os, 'symlink'):
+            directory = root/'atto-dangling-modern-symlink'; directory.mkdir()
+            (directory/'main.atto').write_text(
+                'import module Lib from "./lib"; pub fnc main():int{return Lib.answer();}')
+            (directory/'lib.ores').write_text(library)
+            (directory/'lib.atto').symlink_to(directory/'missing.atto')
+            before = set(directory.iterdir())
+            result = run([a.compiler, str(directory/'main.atto')])
+            if (not result.returncode or result.stdout or
+                    'ambiguous AttoLang module import' not in result.stderr):
+                raise AssertionError(('atto-dangling-modern-symlink',
+                                      result.returncode, result.stdout, result.stderr))
+            if set(directory.iterdir()) != before:
+                raise AssertionError(('atto-dangling-modern-symlink',
+                                      'unexpected native output artifact'))
             passed += 1
         directory=root/'project-root-duplicate-schema'; directory.mkdir()
         (directory/'main.ores').write_text('import module Lib from "+/lib"; pub fnc main():int{return 0;}')
