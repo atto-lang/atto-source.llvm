@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 #include "oreslang/types/PointerIntHIR.hpp"
 #include "oreslang/types/FunctionEffects.hpp"
@@ -18,7 +19,7 @@ namespace oreslang {
 // Deliberately restricted native scalar expression AST. The source type system
 // distinguishes int and bool even though the initial same-module ABI canonicalizes
 // both into i64 slots/results; bool values are always normalized to 0 or 1.
-enum class ScalarType { I64, Bool, String };
+enum class ScalarType { I64, Bool, String, F64 };
 
 // Sum payloads are values, never untyped integer handles or class pointers.
 struct NativeSumType {
@@ -44,9 +45,9 @@ struct GenericParameter {
 
 struct Expression {
     enum class Kind {
-        Integer, Boolean, String, Console, Variable,
+        Integer, Floating, Boolean, String, Console, Variable,
         Negate, Abs, LogicalNot,
-        Add, Subtract, Multiply, Remainder, Modulo, BitXor,
+        Add, Subtract, Multiply, Divide, Remainder, Modulo, BitXor,
         Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
         LogicalAnd, LogicalOr, LogicalXor,
         Conditional, Cast,
@@ -56,6 +57,7 @@ struct Expression {
     Kind kind;
     std::size_t offset = 0;
     std::int64_t integer = 0;
+    double floating = 0.0; // typed source f64, never an i64 carrier
     bool boolean = false;
     // Minted ONLY by the parser for a compiler-owned Box<int>.get() call.
     // The raw Box owner is non-Copy and must never lower as an i64 value.
@@ -430,6 +432,13 @@ struct Function {
     FunctionEffects declared_effects{};
     bool has_declared_effects = false;
     std::string return_sum;
+
+    bool has_f64_signature() const {
+        if (return_type == ScalarType::F64) return true;
+        for (const auto& parameter : parameters)
+            if (parameter.scalar_type == ScalarType::F64) return true;
+        return false;
+    }
 };
 
 /** Frozen scheduler tier, distinct from ActorGroup-wide parallelism. */
@@ -589,17 +598,16 @@ struct InvertedSourceMain {
     std::vector<InvertedSourceOperation> operations;
 };
 
+using ModelScalar = std::variant<std::int64_t, double>;
+
 struct ModelParameter {
     std::string name;
-    bool has_default = false;
-    std::int64_t default_value = 0;
+    ScalarType type = ScalarType::I64;
+    std::optional<ModelScalar> default_value;
 };
 
 struct ModelStaticArg {
-    enum class Kind { Integer, Parameter };
-    Kind kind = Kind::Integer;
-    std::int64_t integer = 0;
-    std::string parameter;
+    std::variant<ModelScalar, std::string> value;
 };
 
 struct ModelOperation {
@@ -622,7 +630,7 @@ struct ModelRunReceipt {
     std::string model_name;
     std::string blueprint_graph_digest;
     std::string configured_graph_digest;
-    std::vector<std::int64_t> configuration;
+    std::vector<ModelScalar> configuration;
 };
 
 struct Program {

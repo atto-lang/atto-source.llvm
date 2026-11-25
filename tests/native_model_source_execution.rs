@@ -193,6 +193,24 @@ fn verify(compiler: &Path, clang: &Path, corpus: &Path) -> Result<(), String> {
                  define model x as Identity() AddDelta(2) end\n\
                  pub fnc main(): int { return x().run(40); }\n".into(),
     });
+    cases.push(Case {
+        id: "typed-float-model".into(),
+        llvm_mode: "execute".into(),
+        diagnostic: None,
+        llvm_diagnostic: None,
+        expected_exit: Some(42),
+        source: "fnc Scale(float factor, float value): float { return factor * value; }\n\
+                 fnc Add(float offset, float value): float { return value + offset; }\n\
+                 fnc Halve(float value): float { return value / 2.0; }\n\
+                 define model Measure(factor: float = 1.5) as Scale(factor) Add(1.5) Halve() end\n\
+                 pub fnc main(): int {\n\
+                   val float default_value = Measure().run(55.0);\n\
+                   val float configured = Measure(2.0).run(42.0);\n\
+                   if default_value != 42.0; then return 1; fi\n\
+                   if configured != 42.75; then return 2; fi\n\
+                   return 42;\n\
+                 }\n".into(),
+    });
     for (id, diagnostic, source) in [
         (
             "reject-routine-operation",
@@ -216,6 +234,35 @@ fn verify(compiler: &Path, clang: &Path, corpus: &Path) -> Result<(), String> {
              define model Adjust as Identity() end\n\
              pub fnc main(): int { return Adjust().run(unrecognized: 42); }\n",
         ),
+        (
+            "reject-mixed-model-edge",
+            "MODEL_PORT_TYPE_MISMATCH",
+            "fnc Scalar(float input): float { return input; }\n\
+             fnc Integral(int input): int { return input; }\n\
+             define model Bad as Scalar() Integral() end\n\
+             pub fnc main(): int { return 42; }\n",
+        ),
+        (
+            "reject-int-float-model-config",
+            "MODEL_CONFIG_TYPE_MISMATCH",
+            "fnc Scale(float factor, float value): float { return factor * value; }\n\
+             define model Measure(factor: float = 1.5) as Scale(factor) end\n\
+             pub fnc main(): int { val float result = Measure(2).run(42.0); return 42; }\n",
+        ),
+        (
+            "reject-int-static-float-model-op",
+            "MODEL_CONFIG_TYPE_MISMATCH",
+            "fnc Scale(float factor, float value): float { return factor * value; }\n\
+             define model Measure as Scale(2) end\n\
+             pub fnc main(): int { return 42; }\n",
+        ),
+        (
+            "reject-int-float-model-default",
+            "MODEL_CONFIG_TYPE_MISMATCH",
+            "fnc Scale(float factor, float value): float { return factor * value; }\n\
+             define model Measure(factor: float = 2) as Scale(factor) end\n\
+             pub fnc main(): int { return 42; }\n",
+        ),
     ] {
         cases.push(Case {
             id: id.into(),
@@ -228,7 +275,7 @@ fn verify(compiler: &Path, clang: &Path, corpus: &Path) -> Result<(), String> {
     }
     let scratch = Scratch::new()?;
     for case in &cases {
-        let extension = if case.id == "zero-formal-model-shorthand" { "atto" } else { "ores" };
+        let extension = if matches!(case.id.as_str(), "zero-formal-model-shorthand" | "typed-float-model") { "atto" } else { "ores" };
         let src = scratch.0.join(format!("{}.{extension}", case.id));
         OpenOptions::new().write(true).create_new(true).open(&src)
             .and_then(|mut file| file.write_all(case.source.as_bytes()))

@@ -1,0 +1,169 @@
+name: LLVM f64 scalar M1 native guest (NOT full numerics parity)
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/llvm-f64-numerics-m1.yml"
+      - "CMakeLists.txt"
+      - "src/main/cpp/oreslang/frontend/**"
+      - "src/main/cpp/oreslang/types/**"
+      - "src/main/cpp/oreslang/backend/**"
+      - "tests/native_f64_lexical_gate.sh"
+      - "tests/native_f64_gate_security_selftest.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: llvm-f64-m1-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Source-free admission diagnostic; an empty steps/null failure on this
+  # job means no source/compiler evidence can be inferred from downstream CI.
+  runner-admission-canary:
+    name: Source-free runner admission only
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    permissions: {}
+    steps:
+      - name: Prove a GitHub-hosted runner executed a real step
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test -n "$EXPECTED_HEAD"
+          printf 'SOURCE_FREE_RUNNER_ADMITTED_HEAD=%s\n' "$EXPECTED_HEAD"
+          echo "SOURCE_FREE_CANARY_ONLY_NOT_COMPILER_OR_GUEST"
+  compiler-backed-f64:
+    name: Native LLVM f64 source-to-IR-to-executable
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact source commit without persisted token
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Require immutable exact-head source identity
+        shell: bash
+        env:
+          REQUIRED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test -n "$REQUIRED_HEAD"
+          test "$(git rev-parse HEAD)" = "$REQUIRED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          printf 'SOURCE_COMMIT=%s\n' "$(git rev-parse HEAD)"
+          printf 'SOURCE_TREE=%s\n' "$(git rev-parse 'HEAD^{tree}')"
+          sha256sum tests/native_f64_lexical_gate.sh CMakeLists.txt
+
+      - name: Validate native f64 Bash test harness syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n tests/native_f64_lexical_gate.sh
+          bash -n tests/native_f64_gate_security_selftest.sh
+          bash tests/native_f64_gate_security_selftest.sh tests/native_f64_lexical_gate.sh
+          echo "HOST_ONLY_MUTATION_MATRIX_PASS=6 — no compiler or guest executed"
+          test "$(grep -c '^positive ' tests/native_f64_lexical_gate.sh)" -eq 28
+          test "$(grep -c '^negative ' tests/native_f64_lexical_gate.sh)" -eq 17
+          echo "F64_SOURCE_CASES=28 POSITIVE; 17 NEGATIVE; TWO OPTIMIZATION EXECUTIONS EACH"
+
+      - name: Install Ubuntu LLVM/Clang 18 packages (major version only; digests recorded later)
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            clang-18 llvm-18-dev cmake ninja-build python3 cargo rustc \
+            pkg-config libssl-dev
+          /usr/bin/clang-18 --version
+          /usr/bin/llvm-config-18 --version
+          /usr/bin/cargo --version || cargo --version
+
+      - name: Configure real LLVM compiler and CTest
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build/f64-m1 -G Ninja \
+            -DLLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm \
+            -DCMAKE_C_COMPILER=/usr/bin/clang-18 \
+            -DCMAKE_CXX_COMPILER=/usr/bin/clang++-18 \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_FLAGS_DEBUG="-O0 -g0" \
+            -DCMAKE_CXX_FLAGS_DEBUG="-O0 -g0" \
+            -DBUILD_TESTING=ON
+
+      - name: Compile actual C++ LLVM frontend, type checker, ownership and codegen
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build build/f64-m1 --target oreslang-llvmc --parallel 2
+          test -x build/f64-m1/oreslang-llvmc
+          sha256sum build/f64-m1/oreslang-llvmc /usr/bin/clang-18
+
+      - name: Execute 28 positive and 17 negative AttoLang native compiler guests
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build/f64-m1 --no-tests=error -N -R '^native_f64_scalar_e2e
+          echo "NATIVE_F64_EXECUTED_CANDIDATE_ONLY — full 16-case num.atto parity NOT_EXECUTED"
+
+      - name: Record post-test source identity and deny source mutation
+        if: always()
+        shell: bash
+        env:
+          REQUIRED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$REQUIRED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          printf 'SOURCE_COMMIT_POST=%s\n' "$(git rev-parse HEAD)"
+          printf 'SOURCE_TREE_POST=%s\n' "$(git rev-parse 'HEAD^{tree}')"
+          if test -x build/f64-m1/oreslang-llvmc; then
+            sha256sum build/f64-m1/oreslang-llvmc
+          fi
+
+          ctest --test-dir build/f64-m1 --no-tests=error \
+            --output-on-failure -V --timeout 240 \
+            -R '^native_f64_scalar_e2e
+          echo "NATIVE_F64_EXECUTED_CANDIDATE_ONLY — full 16-case num.atto parity NOT_EXECUTED"
+
+      - name: Record post-test source identity and deny source mutation
+        if: always()
+        shell: bash
+        env:
+          REQUIRED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$REQUIRED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          printf 'SOURCE_COMMIT_POST=%s\n' "$(git rev-parse HEAD)"
+          printf 'SOURCE_TREE_POST=%s\n' "$(git rev-parse 'HEAD^{tree}')"
+          if test -x build/f64-m1/oreslang-llvmc; then
+            sha256sum build/f64-m1/oreslang-llvmc
+          fi
+
+          echo "NATIVE_F64_EXECUTED_CANDIDATE_ONLY — full 16-case num.atto parity NOT_EXECUTED"
+
+      - name: Record post-test source identity and deny source mutation
+        if: always()
+        shell: bash
+        env:
+          REQUIRED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$REQUIRED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          printf 'SOURCE_COMMIT_POST=%s\n' "$(git rev-parse HEAD)"
+          printf 'SOURCE_TREE_POST=%s\n' "$(git rev-parse 'HEAD^{tree}')"
+          if test -x build/f64-m1/oreslang-llvmc; then
+            sha256sum build/f64-m1/oreslang-llvmc
+          fi

@@ -3311,6 +3311,40 @@ if(BUILD_TESTING)
         endif()
     endif()
 
+    # Canonical Oreslang stdio.stdout.println native guest contract used
+    # by ORIE. Source -> IR -> native runtime link -> piped process execution.
+    # Negative cases reject before IR; no host fallback is permitted.
+    find_program(ORE_ORIE_STDOUT_BASH bash)
+    # Six host-only negative mutation tests for the f64 source->IR->guest harness.
+    # These use fake compilers to prove forged IR and results fail closed;
+    # NEVER count them as native guest or numerical parity evidence.
+    if(ORE_ORIE_STDOUT_BASH)
+        add_test(NAME native_f64_harness_adversarial_host_only
+            COMMAND "${ORE_ORIE_STDOUT_BASH}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_f64_gate_security_selftest.sh"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_f64_lexical_gate.sh")
+        set_tests_properties(native_f64_harness_adversarial_host_only PROPERTIES TIMEOUT 45)
+    endif()
+    if(ORE_ORIE_STDOUT_BASH AND ORE_RT_AOT_CLANG)
+        add_test(NAME native_orie_stdout_alias
+            COMMAND "${ORE_ORIE_STDOUT_BASH}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_orie_stdout_alias.sh"
+                "$<TARGET_FILE:oreslang-llvmc>"
+                "${ORE_RT_AOT_CLANG}"
+                "${CMAKE_CURRENT_SOURCE_DIR}")
+        set_tests_properties(native_orie_stdout_alias PROPERTIES TIMEOUT 180)
+        # Native LLVM f64 scalar guests, exact per-case exits at Clang O0/O2:
+        # 28 positive source programs -> 56 actual native executions, plus
+        # 17 negative compiler cases requiring precise diagnostics/zero IR.
+        # Not full List<float>/Result or the 16-case num.atto library suite.
+        add_test(NAME native_f64_scalar_e2e
+            COMMAND "${ORE_ORIE_STDOUT_BASH}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_f64_lexical_gate.sh"
+                "$<TARGET_FILE:oreslang-llvmc>"
+                "${ORE_RT_AOT_CLANG}")
+        set_tests_properties(native_f64_scalar_e2e PROPERTIES TIMEOUT 240)
+    endif()
+
     # Pure host resolver security test for canonical +/ project-root imports.
     # This does not claim pkg:/bare-path resolution or full TOML semantics.
     add_executable(oreslang-native-project-root-import-test
