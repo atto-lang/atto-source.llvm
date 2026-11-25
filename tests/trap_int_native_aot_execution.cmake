@@ -16,8 +16,20 @@ endif()
 if(NOT DEFINED ORES_TRAP_CASE)
     set(ORES_TRAP_CASE "scalar")
 endif()
-if(NOT ORES_TRAP_CASE MATCHES "^(scalar|ok|err|nested)$")
+if(NOT ORES_TRAP_CASE MATCHES "^(scalar|ok|err|nested|arithmetic_add|arithmetic_sub|arithmetic_mul|arithmetic_neg|arithmetic_nested_overflow)$")
     message(FATAL_ERROR "unknown native trap test case")
+endif()
+# Check the actual compiler output for the stable nominal arithmetic ID.
+# Guest exit checks independently establish the taken Err path at O0/O2.
+if(ORES_TRAP_CASE MATCHES "^arithmetic_")
+    execute_process(COMMAND "${ORES_TRAP_LLVM_CLI}" "${ORES_TRAP_SOURCE}"
+        RESULT_VARIABLE ir_status OUTPUT_VARIABLE arithmetic_ir ERROR_VARIABLE ir_error
+        TIMEOUT 30)
+    if(NOT "${ir_status}" STREQUAL "0" OR
+            NOT arithmetic_ir MATCHES "trap.arithmetic.err" OR
+            NOT arithmetic_ir MATCHES "65537")
+        message(FATAL_ERROR "missing real native arithmetic error edge/ID: ${ir_error}")
+    endif()
 endif()
 set(work "${CMAKE_CURRENT_BINARY_DIR}/native_trap_int_aot_exec_${ORES_TRAP_CASE}")
 file(REMOVE_RECURSE "${work}")
