@@ -3,6 +3,7 @@
 // Pure value-schema analysis; all guest allocation and row/loan lowering remain
 // fail-closed until wired into the production owner-lifetime verifier.
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/types/InvertedPhysicalSoA.hpp"
 
 #include <array>
 #include <cstddef>
@@ -71,13 +72,23 @@ public:
             if (columns_[i].name == name) return i;
         throw std::invalid_argument("unknown inverted field");
     }
+    // One-level inverted column storage has distinct physical offsets from
+    // a hypothetical packed AoS record. Charge inter-column alignment as
+    // well as cell widths; all returned geometry is owned, bounded and
+    // checked before the MIR allocation is admitted.
+    abi::PhysicalSoA physical_soa(std::size_t capacity) const {
+        std::vector<abi::ScalarLane> lanes;
+        lanes.reserve(columns_.size());
+        for (const auto& column : columns_)
+            lanes.push_back(abi::ScalarLane{column.element_bytes,
+                                           column.element_bytes});
+        auto plan = abi::PhysicalSoA::make(lanes, capacity);
+        if (plan.packed_record_bytes() != packed_row_bytes_)
+            throw std::logic_error("inverted nominal/physical layout width mismatch");
+        return plan;
+    }
     std::size_t capacity_bytes(std::size_t capacity) const {
-        if (capacity == 0)
-            throw std::invalid_argument("inverted capacity must be positive");
-        if (packed_row_bytes_ != 0 &&
-                capacity > (16 * 1024 * 1024) / packed_row_bytes_)
-            throw std::overflow_error("inverted store exceeds 16 MiB admitted layout budget");
-        return capacity * packed_row_bytes_;
+        return physical_soa(capacity).bytes();
     }
 };
 
