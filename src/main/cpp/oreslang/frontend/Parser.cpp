@@ -1122,8 +1122,9 @@ public:
         // list, not a change to the general identifier grammar.
         // These descriptors never become a runtime object or a new IR kind.
         std::unordered_set<std::string> local_class_kinds;
-        while (token_.text == "define" && peek_next().text == "keyword") {
-            advance(); // define
+        std::unordered_map<std::string, std::size_t> provisional_kinds;
+        auto parse_kind_descriptor = [&]() {
+            const auto origin = token_.offset;
             require("keyword");
             static const std::unordered_set<std::string> reserved_kinds = {
                 "Actor", "ActorGroup", "ActorGroupJoinCapability", "ActorMaxThreads", "ActorRef", "Array",
@@ -1171,16 +1172,55 @@ public:
                     reserved_kinds.count(std::string(token_.text)) || token_.text.size() > 128)
                 fail("NATIVE_KIND_NAME_UNSUPPORTED: reserved declaration kind or invalid identifier");
             std::string name = identifier();
-            if (local_class_kinds.size() >= 128)
-                fail("NATIVE_KIND_BUDGET: at most 128 local descriptors");
-            if (!local_class_kinds.insert(name).second)
-                fail("NATIVE_KIND_DUPLICATE: duplicate local descriptor");
+            auto provisional = provisional_kinds.find(name);
+            if (provisional != provisional_kinds.end() && provisional->second == origin) {
+                provisional_kinds.erase(provisional);
+            } else {
+                if (local_class_kinds.size() >= 128)
+                    fail("NATIVE_KIND_BUDGET: at most 128 local descriptors");
+                if (!local_class_kinds.insert(name).second)
+                    fail("NATIVE_KIND_DUPLICATE: duplicate local descriptor");
+            }
             require("as");
             if (!accept("class"))
                 fail("NATIVE_KIND_BASE_UNSUPPORTED: ordinary class only");
             if (token_.text != "end")
                 fail("NATIVE_KIND_CONTRACT_UNSUPPORTED: typed interface/contract elaboration not yet lowered");
             require("end");
+        };
+        // The copied scanner can find a candidate, but cannot grant scope.
+        // Only the actual root declaration parser confirms its byte origin.
+        auto is_local_kind = [&]() {
+            if (token_.kind != Kind::Identifier) return false;
+            std::string name(token_.text);
+            if (local_class_kinds.count(name)) return true;
+            if (reserved(token_.text) || name.size() > 128) return false;
+            Lexer scan = lexer_;
+            Token next = scan.next();
+            if (next.kind != Kind::Identifier || scan.next().text != "as") return false;
+            Token previous = next;
+            for (Token candidate = scan.next(); candidate.kind != Kind::End; candidate = scan.next()) {
+                if (previous.kind == Kind::Identifier && previous.text == "define" &&
+                        candidate.kind == Kind::Identifier && candidate.text == "keyword") {
+                    Lexer look = scan;
+                    Token declared = look.next();
+                    if (declared.kind == Kind::Identifier && declared.text == name &&
+                            look.next().text == "as" && look.next().text == "class" &&
+                            look.next().text == "end") {
+                        if (local_class_kinds.size() >= 128)
+                            fail("NATIVE_KIND_BUDGET: at most 128 local descriptors");
+                        local_class_kinds.insert(name);
+                        provisional_kinds.emplace(name, candidate.offset);
+                        return true;
+                    }
+                }
+                previous = candidate;
+            }
+            return false;
+        };
+        while (token_.text == "define" && peek_next().text == "keyword") {
+            advance();
+            parse_kind_descriptor();
         }
         if (!local_class_kinds.empty() &&
                 (token_.text == "namespace" || token_.text == "use" ||
@@ -1453,7 +1493,12 @@ public:
             if ((token_.text == "http" && peek_next().text == "actor") ||
                 (token_.text == "serial" && peek_next().text == "http"))
                 fail("HTTP_ACTOR_BACKEND_UNSUPPORTED: native HTTP actor requires bounded request/message admission and physical shutdown lowering");
-            if (local_class_kinds.count(std::string(token_.text))) {
+            if (token_.text == "keyword") {
+                if (exported) fail("NATIVE_KIND_SCOPE_UNSUPPORTED: public descriptors require verified linker");
+                parse_kind_descriptor();
+                continue;
+            }
+            if (is_local_kind()) {
                 advance();
                 auto cls = class_declaration();
                 cls.exported = exported;
@@ -1649,7 +1694,13 @@ public:
                 if ((token_.text == "http" && peek_next().text == "actor") ||
                     (token_.text == "serial" && peek_next().text == "http"))
                     fail("HTTP_ACTOR_BACKEND_UNSUPPORTED: native HTTP actor requires bounded request/message admission and physical shutdown lowering");
-                if (local_class_kinds.count(std::string(token_.text))) {
+                if (token_.text == "keyword") {
+                    if (wrapped_module || public_class)
+                        fail("NATIVE_KIND_SCOPE_UNSUPPORTED: descriptor requires private file root");
+                    parse_kind_descriptor();
+                    continue;
+                }
+                if (is_local_kind()) {
                     if (wrapped_module)
                         fail("NATIVE_KIND_SCOPE_UNSUPPORTED: custom declaration descriptors do not enter modules");
                     advance();
@@ -1707,6 +1758,10 @@ public:
             if (!checked_scalar_main)
                 fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: only standalone checked literal-arithmetic i64 main is native-lowered; multi-file actor namespaces remain gated");
         }
+        if (!provisional_kinds.empty())
+            fail("NATIVE_KIND_FORWARD_NOT_ROOT: provisional descriptor was not confirmed at file root");
+        if (!local_class_kinds.empty() && (!program.namespace_name.empty() || wrapped_module))
+            fail("NATIVE_KIND_SCOPE_UNSUPPORTED: descriptor requires unwrapped file root");
         compile_type_constraint_descriptors(program);
         lower_extension_calls(program);
         resolve_alias_uses(program);
