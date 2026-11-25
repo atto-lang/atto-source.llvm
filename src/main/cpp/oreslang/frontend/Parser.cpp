@@ -5928,11 +5928,14 @@ private:
             const auto offset = token_.offset;
             advance();
             auto payload = unary(); // prefix precedence, evaluated once
-            // Only closed, synchronous i64 expressions are admitted. No
-            // source-level ordinary throw is possible in this grammar;
-            // future effects require real exception/cleanup lowering.
-            if (!native_trap_pure_integer(*payload))
-                fail("native trap operand unsupported: only pure integer literals and checked arithmetic are lowered");
+            // Admit existing Result references and nested traps for nominal
+            // resolution, without admitting calls, allocations or effects.
+            // The resolver erases the redundant trap only for checked Result
+            // values; scalar variables and owned compound payloads stay closed.
+            if (!native_trap_pure_integer(*payload) &&
+                    payload->kind != Expression::Kind::Variable &&
+                    !(payload->kind == Expression::Kind::SumConstruct && payload->trap_origin))
+                fail("native trap operand unsupported: only pure integer literals and checked arithmetic are lowered, or existing Result values");
             auto result = make_expression(Expression::Kind::SumConstruct, offset);
             result->name = "Ok"; // trap yields Result<int, Error> (spec ch. 7)
             result->trap_origin = true;
