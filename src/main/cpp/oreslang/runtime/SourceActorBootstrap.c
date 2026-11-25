@@ -18,8 +18,10 @@ typedef struct {
     OresNativeActorRef ref;
     OresSourceActorInit constructor;
     OresSourceActorMessage on_message;
+    OresSourceActorCapabilityResume on_capability;
     atomic_int initialized;
     atomic_uint_fast64_t processed;
+    atomic_uint_fast64_t capability_resumes;
     atomic_int_fast64_t last_result;
 } SourceActor;
 
@@ -68,10 +70,33 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
     atomic_store_explicit(&instance->last_result, result, memory_order_relaxed);
     atomic_fetch_add_explicit(&instance->processed, 1, memory_order_release);
 }
-void* oreslang_source_actor_spawn(OresSourceActorInit constructor,
-                                  OresSourceActorMessage on_message,
-                                  uint64_t fields) {
-    ensure(constructor != NULL && fields >= 1 && fields <= 4096);
+static void resume_capability(
+        void* raw, size_t slot, OresNativeActorCapabilityWake wake) {
+    ensure(raw == &group);
+    SourceActor* instance = lookup(slot);
+    ensure(instance->on_capability != NULL);
+    ensure(atomic_load_explicit(&instance->initialized, memory_order_acquire) == 1);
+    ensure(group.vm != NULL);
+    ensure(ores_native_vm_is_current_capability_wake(
+        group.vm, ORES_NATIVE_VM_MAIN, wake));
+    OresNativeActorRef current = {0, 0, 0};
+    ensure(ores_native_vm_current_actor_ref(
+        group.vm, ORES_NATIVE_VM_MAIN, &current));
+    ensure(current.scheduler_domain == instance->ref.scheduler_domain
+        && current.actor_slot == instance->ref.actor_slot
+        && current.generation == instance->ref.generation);
+    OresActorTurn turn = ores_actor_i64_heap_enter(instance->heap, instance->id, 1);
+    instance->on_capability(
+        instance, instance->heap, turn.domain, turn.epoch, wake);
+    ores_actor_i64_heap_leave(instance->heap, turn);
+    atomic_fetch_add_explicit(
+        &instance->capability_resumes, 1, memory_order_release);
+}
+static void* spawn_source_actor(
+        OresSourceActorInit constructor, OresSourceActorMessage on_message,
+        OresSourceActorCapabilityResume on_capability, uint64_t fields) {
+    ensure(constructor != NULL && on_message != NULL
+        && fields >= 1 && fields <= 4096);
     group_lock();
     if (!group.vm) {
         ensure(group.live == 0 && group.next_slot == 0 && group.peak == 0);
@@ -89,6 +114,7 @@ void* oreslang_source_actor_spawn(OresSourceActorInit constructor,
                 i == ORES_NATIVE_VM_MAIN ? SOURCE_GROUP_CARRIERS : 1;
             cfg.domains[i].on_message = deliver;
             cfg.domains[i].on_control = initialize;
+            cfg.domains[i].on_capability_wake = resume_capability;
             cfg.domains[i].context = &group;
         }
         group.vm = ores_native_vm_open(&cfg);
@@ -110,6 +136,7 @@ void* oreslang_source_actor_spawn(OresSourceActorInit constructor,
     ensure(instance->id != 0 && instance->id != UINT64_MAX);
     instance->constructor = constructor;
     instance->on_message = on_message;
+    instance->on_capability = on_capability;
     instance->heap = ores_actor_i64_heap_open(instance->id, 1, fields);
     group.actors[slot] = instance;
     instance->ref = ores_native_vm_spawn(group.vm, ORES_NATIVE_VM_MAIN, slot);
@@ -122,6 +149,26 @@ void* oreslang_source_actor_spawn(OresSourceActorInit constructor,
         group.vm, ORES_NATIVE_VM_MAIN, instance->ref, 0));
     group_unlock();
     return instance;
+}
+void* oreslang_source_actor_spawn(
+        OresSourceActorInit constructor, OresSourceActorMessage on_message,
+        uint64_t fields) {
+    return spawn_source_actor(constructor, on_message, NULL, fields);
+}
+void* oreslang_source_actor_spawn_resumable(
+        OresSourceActorInit constructor, OresSourceActorMessage on_message,
+        OresSourceActorCapabilityResume on_capability, uint64_t fields) {
+    ensure(on_capability != NULL);
+    return spawn_source_actor(constructor, on_message, on_capability, fields);
+}
+int oreslang_source_actor_publish_capability_wake(
+        void* opaque, OresNativeActorCapabilityWake wake) {
+    SourceActor* instance = (SourceActor*)opaque;
+    if (!instance || instance->magic != SOURCE_ACTOR_MAGIC
+            || !instance->on_capability || !group.vm)
+        return 0;
+    return ores_native_vm_publish_capability_wake(
+        group.vm, ORES_NATIVE_VM_MAIN, instance->ref, wake);
 }
 void oreslang_source_actor_send(void* opaque, int64_t payload) {
     SourceActor* instance = (SourceActor*)opaque;

@@ -8,11 +8,14 @@
 typedef struct {
     atomic_int messages;
     atomic_int control;
+    atomic_int capability;
     atomic_int parallel_messages;
     atomic_int attempted_close;
     atomic_int blocked_entered;
     atomic_int unblock;
     OresNativeVM* vm;
+    enum OresNativeVMDomain domain;
+    OresNativeActorRef expected_ref;
 } State;
 static void require(int ok) { if (!ok) abort(); }
 static void deliver(void* opaque, size_t actor, uint64_t value) {
@@ -41,6 +44,26 @@ static void control(void* opaque, size_t actor, uint64_t value) {
     if (actor != 0 || value != 7) abort();
     atomic_fetch_add(&state->control, 1);
 }
+static void capability(void* opaque, size_t actor, OresNativeActorCapabilityWake wake) {
+    State* state = (State*)opaque;
+    if (actor != 0 || !state->vm) abort();
+    if (wake.scope != 11 || wake.ticket != 12 ||
+            wake.status != ORES_NATIVE_CAPABILITY_READY) abort();
+    OresNativeActorRef current = {0, 0, 0};
+    OresNativeActorIdentity identity = {0, 0};
+    require(ores_native_vm_current_actor_ref(state->vm, state->domain, &current));
+    require(current.scheduler_domain == state->expected_ref.scheduler_domain
+        && current.actor_slot == state->expected_ref.actor_slot
+        && current.generation == state->expected_ref.generation);
+    require(ores_native_vm_current_actor_identity(state->vm, state->domain, &identity));
+    require(identity.principal != 0 && identity.incarnation == current.generation);
+    require(ores_native_vm_is_current_capability_wake(state->vm, state->domain, wake));
+    OresNativeActorCapabilityWake forged = wake;
+    forged.ticket++;
+    require(!ores_native_vm_is_current_capability_wake(
+        state->vm, state->domain, forged));
+    atomic_fetch_add(&state->capability, 1);
+}
 int main(void) {
     OresNativeVMConfig cfg = {0};
     State state[ORES_NATIVE_VM_DOMAIN_COUNT] = {0};
@@ -49,12 +72,15 @@ int main(void) {
         cfg.domains[i].mailbox_capacity = 4;
         cfg.domains[i].on_message = deliver;
         cfg.domains[i].on_control = control;
+        cfg.domains[i].on_capability_wake = capability;
         cfg.domains[i].context = &state[i];
+        state[i].domain = (enum OresNativeVMDomain)i;
     }
     cfg.domains[ORES_NATIVE_VM_SHARED].carrier_workers = 2;
     cfg.domains[ORES_NATIVE_VM_MAIN].actor_slots = 2;
     OresNativeVM* vm = ores_native_vm_open(&cfg);
     require(vm != NULL);
+    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i) state[i].vm = vm;
     OresNativeActorRef refs[ORES_NATIVE_VM_DOMAIN_COUNT];
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i) {
         enum OresNativeVMDomain kind = (enum OresNativeVMDomain)i;
@@ -66,8 +92,17 @@ int main(void) {
         refs[i] = ores_native_vm_spawn(vm, kind, 0);
         require(ores_native_vm_started_carriers(vm, kind) == 0);
         require(refs[i].scheduler_domain != 0);
+        state[i].expected_ref = refs[i];
+        OresNativeActorRef outside = refs[i];
+        OresNativeActorIdentity outside_identity = {9, 9};
+        require(!ores_native_vm_current_actor_ref(vm, kind, &outside));
+        require(outside.scheduler_domain == 0 && outside.actor_slot == 0 && outside.generation == 0);
+        require(!ores_native_vm_current_actor_identity(vm, kind, &outside_identity));
+        require(outside_identity.principal == 0 && outside_identity.incarnation == 0);
         require(ores_native_vm_try_send(vm, kind, refs[i], 42) == ORES_NATIVE_SEND_ACCEPTED);
         require(ores_native_vm_publish_control(vm, kind, refs[i], 7));
+        OresNativeActorCapabilityWake wake = {11, 12, ORES_NATIVE_CAPABILITY_READY};
+        require(ores_native_vm_publish_capability_wake(vm, kind, refs[i], wake));
     }
     /* Every distinct domain pair must reject the other's ActorRef, even
      * when the numeric actor slot and generation are identical. Check all
@@ -79,6 +114,10 @@ int main(void) {
             require(ores_native_vm_try_send(vm, kind, refs[source], 42)
                 == ORES_NATIVE_SEND_INVALID_REF);
             require(!ores_native_vm_publish_control(vm, kind, refs[source], 7));
+            OresNativeActorCapabilityWake foreign_wake = {
+                11, 12, ORES_NATIVE_CAPABILITY_READY};
+            require(!ores_native_vm_publish_capability_wake(
+                vm, kind, refs[source], foreign_wake));
             require(!ores_native_vm_stop(vm, kind, refs[source]));
         }
     }
@@ -91,7 +130,18 @@ int main(void) {
         require(ores_native_vm_try_send(vm, kind, refs[0], 42)
             == ORES_NATIVE_SEND_INVALID_REF);
         require(!ores_native_vm_publish_control(vm, kind, refs[0], 7));
+        OresNativeActorCapabilityWake bad_wake = {
+            11, 12, ORES_NATIVE_CAPABILITY_READY};
+        require(!ores_native_vm_publish_capability_wake(vm, kind, refs[0], bad_wake));
+        require(ores_native_vm_capability_wakes_completed(vm, kind) == 0);
         require(!ores_native_vm_stop(vm, kind, refs[0]));
+    }
+    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i) {
+        for (int tries = 0; tries < 1000000
+             && atomic_load(&state[i].capability) != 1; ++tries) sched_yield();
+        require(atomic_load(&state[i].capability) == 1);
+        require(ores_native_vm_capability_wakes_completed(
+            vm, (enum OresNativeVMDomain)i) == 1);
     }
     OresNativeActorRef other_main = ores_native_vm_spawn(vm, ORES_NATIVE_VM_MAIN, 1);
     require(other_main.scheduler_domain == refs[ORES_NATIVE_VM_MAIN].scheduler_domain);
@@ -153,6 +203,10 @@ int main(void) {
         require(ores_native_vm_try_send(vm, kind, refs[i], 42)
             == ORES_NATIVE_SEND_TERMINATED);
         require(!ores_native_vm_publish_control(vm, kind, refs[i], 7));
+        OresNativeActorCapabilityWake retired_wake = {
+            21, 22, ORES_NATIVE_CAPABILITY_READY};
+        require(!ores_native_vm_publish_capability_wake(
+            vm, kind, refs[i], retired_wake));
         require(ores_native_vm_spawn(vm, kind, 0).scheduler_domain == 0);
     }
     /* Retire is idempotent; no new admissions after retirement. */
@@ -168,6 +222,7 @@ int main(void) {
         require(atomic_load(&state[i].parallel_messages) ==
             (i == ORES_NATIVE_VM_MAIN ? 1 : 0));
         require(atomic_load(&state[i].control) == 1);
+        require(atomic_load(&state[i].capability) == 1);
     }
     /* Failure while opening a later domain must reclaim every earlier
      * metadata-only scheduler without allocating any carrier threads. */

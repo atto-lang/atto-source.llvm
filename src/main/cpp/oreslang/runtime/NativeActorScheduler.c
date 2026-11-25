@@ -631,6 +631,23 @@ int ores_native_actor_scheduler_resolve_actor_identity(
     unlock(s);
     return ok;
 }
+int ores_native_actor_scheduler_current_actor_ref(
+        OresNativeActorScheduler* s, OresNativeActorRef* out) {
+    if (!s || !out || executing != s || !executing_claim.carrier
+            || !executing_actor.scheduler_domain
+            || executing_actor.scheduler_domain != s->domain
+            || executing_actor.actor_slot >= s->actor_count) {
+        if (out) *out = (OresNativeActorRef){0, 0, 0};
+        return 0;
+    }
+    if (!ores_execution_owns(
+            &s->actors[executing_actor.actor_slot].authority, executing_claim)) {
+        *out = (OresNativeActorRef){0, 0, 0};
+        return 0;
+    }
+    *out = executing_actor;
+    return 1;
+}
 int ores_native_actor_scheduler_current_actor_identity(
         OresNativeActorScheduler* s, OresNativeActorIdentity* out) {
     if (!s || !out || executing != s || !executing_claim.carrier

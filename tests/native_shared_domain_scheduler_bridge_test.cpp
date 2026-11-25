@@ -8,14 +8,27 @@
 #include <optional>
 #include <stdexcept>
 #include <thread>
+#include <type_traits>
+#include <utility>
 
 using oreslang::runtime::SharedDomainArena;
 using oreslang::runtime::SharedDomainReadWriteGate;
 using oreslang::runtime::SharedDomainSchedulerBridge;
 
-static void require(bool value) {
-    if (!value) throw std::runtime_error("shared-domain scheduler bridge test failed");
+template <class T, class = void>
+struct has_public_domain_id : std::false_type {};
+template <class T>
+struct has_public_domain_id<T,
+    std::void_t<decltype(std::declval<const T&>().domain_id())>> : std::true_type {};
+static_assert(!has_public_domain_id<SharedDomainSchedulerBridge::Permit>::value,
+    "shared-domain permit must not expose numeric domain coordinates");
+
+static void require_at(bool value, int line) {
+    if (!value)
+        throw std::runtime_error(
+            "shared-domain scheduler bridge test failed at line " + std::to_string(line));
 }
+#define require(value) require_at((value), __LINE__)
 template <class F>
 static void reject(F&& fn) {
     bool denied = false;
@@ -53,6 +66,8 @@ static void gate_fairness_regression() {
 
 struct Context {
     SharedDomainSchedulerBridge* bridge = nullptr;
+    SharedDomainSchedulerBridge* creation_bridge = nullptr;
+    SharedDomainArena::Control* creation_control = nullptr;
     OresNativeActorScheduler* scheduler = nullptr;
     std::optional<SharedDomainSchedulerBridge::Permit> writer;
     std::optional<SharedDomainSchedulerBridge::Permit> reader;
@@ -63,9 +78,12 @@ struct Context {
     std::atomic<bool> reader_resumed{false};
     std::atomic<bool> wrong_permit_denied{false};
     std::atomic<bool> fake_wake_denied{false};
+    std::atomic<bool> replayed_wake_denied{false};
     std::atomic<bool> completion_started{false};
     std::atomic<bool> release_completion{false};
     std::atomic<bool> completion_released{false};
+    std::atomic<bool> current_ref_resolved{false};
+    std::atomic<bool> current_member_granted{false};
     std::atomic<std::uint64_t> observed{0};
     std::thread completion;
 };
@@ -122,6 +140,35 @@ static void on_message(void* raw, std::size_t actor, std::uint64_t payload) {
             });
         return;
     }
+    if (actor == 0 && payload == 3) {
+        require(ctx.creation_bridge != nullptr);
+        require(ctx.creation_control != nullptr);
+        OresNativeActorRef current{0, 0, 0};
+        require(ores_native_actor_scheduler_current_actor_ref(
+            ctx.scheduler, &current));
+        require(current.scheduler_domain != 0);
+        require(current.actor_slot == actor);
+        require(current.generation != 0);
+        ctx.current_ref_resolved.store(true, std::memory_order_release);
+
+        auto permit = ctx.creation_bridge->grant_current_member(
+            *ctx.creation_control, true, true);
+        const auto request = ctx.creation_bridge->request(
+            permit, SharedDomainSchedulerBridge::Mode::Write);
+        require(request.acquired());
+        {
+            auto access = ctx.creation_bridge->enter(permit, request);
+            const auto handle = access.allocate(sizeof(std::uint64_t));
+            const std::uint64_t expected = 0xA5A55A5AF0F00F0FULL;
+            access.write(handle, &expected, sizeof(expected));
+            std::uint64_t observed = 0;
+            access.read(handle, &observed, sizeof(observed));
+            require(observed == expected);
+            access.drop(handle);
+        }
+        ctx.current_member_granted.store(true, std::memory_order_release);
+        return;
+    }
     throw std::runtime_error("unexpected scheduler DATA callback");
 }
 
@@ -130,13 +177,18 @@ static void on_capability(
     auto& ctx = *static_cast<Context*>(raw);
     require(actor == 1);
     require(ctx.reader_request.has_value());
-    require(wake.scope == ctx.reader_request->token.scope());
-    require(wake.ticket == ctx.reader_request->token.sequence());
-    auto access = ctx.bridge->resume(
-        *ctx.reader, wake, SharedDomainSchedulerBridge::Mode::Read);
-    std::uint64_t value = 0;
-    access.read(ctx.handle, &value, sizeof(value));
-    ctx.observed.store(value, std::memory_order_release);
+    {
+        auto access = ctx.bridge->resume(
+            *ctx.reader, wake, SharedDomainSchedulerBridge::Mode::Read);
+        std::uint64_t value = 0;
+        access.read(ctx.handle, &value, sizeof(value));
+        ctx.observed.store(value, std::memory_order_release);
+    }
+    reject([&] {
+        (void)ctx.bridge->resume(
+            *ctx.reader, wake, SharedDomainSchedulerBridge::Mode::Read);
+    });
+    ctx.replayed_wake_denied.store(true, std::memory_order_release);
     ctx.reader_resumed.store(true, std::memory_order_release);
 }
 
@@ -176,11 +228,26 @@ int main() {
     require(!ores_native_actor_scheduler_current_actor_identity(
         scheduler, &outside));
     require(outside.principal == 0 && outside.incarnation == 0);
+    OresNativeActorRef outside_ref{123, 456, 789};
+    require(!ores_native_actor_scheduler_current_actor_ref(
+        scheduler, &outside_ref));
+    require(outside_ref.scheduler_domain == 0 &&
+            outside_ref.actor_slot == 0 && outside_ref.generation == 0);
 
     SharedDomainSchedulerBridge bridge(arena, scheduler);
     ctx.bridge = &bridge;
     ctx.writer = bridge.grant_member(control, writer_ref, true, true);
     ctx.reader = bridge.grant_member(control, reader_ref, true, false);
+
+    SharedDomainArena creation_arena;
+    auto creation_control = creation_arena.take_control();
+    SharedDomainSchedulerBridge creation_bridge(creation_arena, scheduler);
+    ctx.creation_bridge = &creation_bridge;
+    ctx.creation_control = &creation_control;
+    reject([&] {
+        (void)creation_bridge.grant_current_member(
+            creation_control, true, true);
+    });
 
     reject([&] {
         (void)bridge.request(*ctx.writer, SharedDomainSchedulerBridge::Mode::Write);
@@ -193,6 +260,7 @@ int main() {
     wait_for(ctx.reader_resumed, "reader resume");
     require(ctx.wrong_permit_denied.load(std::memory_order_acquire));
     require(ctx.fake_wake_denied.load(std::memory_order_acquire));
+    require(ctx.replayed_wake_denied.load(std::memory_order_acquire));
     require(ctx.observed.load(std::memory_order_acquire)
         == 0x1122334455667788ULL);
     require(ores_native_actor_scheduler_capability_wakes_completed(scheduler) == 1);
@@ -211,6 +279,12 @@ int main() {
     ctx.completion.join();
     require(arena.try_retire(control));
     require(arena.try_retire(control));
+
+    require(ores_native_actor_scheduler_send(scheduler, writer_ref, 3));
+    wait_for(ctx.current_ref_resolved, "current ActorRef resolution");
+    wait_for(ctx.current_member_granted, "current actor membership grant");
+    require(creation_arena.try_retire(creation_control));
+    require(creation_arena.try_retire(creation_control));
 
     ores_native_actor_scheduler_retire(scheduler);
     require(ores_native_actor_scheduler_drain(scheduler));

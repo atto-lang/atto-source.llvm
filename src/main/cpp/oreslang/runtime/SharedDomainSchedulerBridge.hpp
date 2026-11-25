@@ -40,15 +40,20 @@ public:
     public:
         Permit(const Permit&) = default;
         Permit& operator=(const Permit&) = default;
-        std::uint64_t domain_id() const noexcept { return grant_.domain_id(); }
     };
 
-    struct Request final {
-        Gate::Token token;
-        Mode mode;
-        Gate::Admission admission;
-        explicit operator bool() const noexcept { return static_cast<bool>(token); }
-        bool acquired() const noexcept { return admission == Gate::Admission::Acquired; }
+    class Request final {
+        friend class SharedDomainSchedulerBridge;
+        Gate::Token token_;
+        Mode mode_;
+        Gate::Admission admission_;
+        Request(Gate::Token token, Mode mode, Gate::Admission admission)
+            : token_(token), mode_(mode), admission_(admission) {}
+    public:
+        explicit operator bool() const noexcept { return static_cast<bool>(token_); }
+        bool acquired() const noexcept {
+            return admission_ == Gate::Admission::Acquired;
+        }
     };
 
 private:
@@ -163,6 +168,22 @@ public:
     }
 
     /*
+     * CONTROL/runtime creation path for source rt proxy: establish membership
+     * from the actual scheduler claim, never from a guest-supplied ActorRef.
+     * The resolved ref remains a trusted bridge detail and is immediately
+     * converted to the same non-recycling scheduler identity as grant_member.
+     */
+    [[nodiscard]] Permit grant_current_member(
+            Arena::Control& control, bool allow_read, bool allow_write) {
+        OresNativeActorRef current{0, 0, 0};
+        if (!ores_native_actor_scheduler_current_actor_ref(
+                scheduler_, &current))
+            throw std::logic_error(
+                "shared-domain current-member grant requires scheduler actor turn");
+        return grant_member(control, current, allow_read, allow_write);
+    }
+
+    /*
      * Request is always made by the scheduler's actual current actor turn.
      * It never blocks. Acquired tickets may enter immediately; queued tickets
      * must suspend and resume only from the exact capability-wake envelope.
@@ -171,13 +192,13 @@ public:
         const auto current = require_current_identity();
         require_permit_owner(permit, current);
         const auto request = gate_.request(current, mode);
-        return {request.token, mode, request.admission};
+        return Request(request.token, mode, request.admission);
     }
 
     [[nodiscard]] Access enter(const Permit& permit, const Request& request) {
         if (!request.acquired())
             throw std::logic_error("queued shared-domain request requires scheduler wake");
-        return claim_and_enter(permit, request.token, request.mode);
+        return claim_and_enter(permit, request.token_, request.mode_);
     }
 
     [[nodiscard]] Access resume(
@@ -199,7 +220,7 @@ public:
         if (request.acquired())
             throw std::logic_error("active shared-domain access must unwind lexically");
         auto ready = gate_.cancel_pending(
-            request.token, permit.identity_);
+            request.token_, permit.identity_);
         enqueue_ready(ready);
         (void)pump_wakes();
     }
