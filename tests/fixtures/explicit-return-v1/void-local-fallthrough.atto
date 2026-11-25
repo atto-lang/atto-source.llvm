@@ -1,0 +1,7 @@
+fnc trace(): void {
+  val int k = 42;
+}
+pub fnc main(): int {
+  trace();
+  return 0;
+}

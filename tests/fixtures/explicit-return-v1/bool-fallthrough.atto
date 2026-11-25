@@ -1,0 +1,5 @@
+fnc value(): bool {
+}
+pub fnc main(): int {
+  return 0;
+}

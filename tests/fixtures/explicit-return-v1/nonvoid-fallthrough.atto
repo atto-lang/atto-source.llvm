@@ -1,0 +1,6 @@
+fnc value(): int {
+  val int x = 2;
+}
+pub fnc main(): int {
+  return 0;
+}

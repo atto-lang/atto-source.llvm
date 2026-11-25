@@ -3084,18 +3084,18 @@ private:
                 }
                 continue;
             }
-            // Instance void methods may have empty bodies or fall through,
-            // just as in the Java reference frontend. The native entrypoint
-            // also retains its existing implicit-success fallthrough. Non-void
-            // functions continue to require an explicit final return.
-            if (token_.text == "}" && value.returns_void &&
-                    ((!owner.empty()) || (value.name == "main" && value.parameters.empty()))) {
+            // All void functions and methods may fall through; this is
+            // independent of export status, function name, and arity.
+            // A non-void return obligation is never discharged by a local,
+            // expression or nested lambda. Keep source and lowerer aligned.
+            if (token_.text == "}" && value.returns_void) {
                 require("}");
                 return value;
             }
             if (token_.kind == Kind::End || token_.text == "}") {
-                if (return_guards_started) fail("expected 'return'");
-                fail("missing final return");
+                if (return_guards_started)
+                    fail("RETURN_EXPLICIT_REQUIRED: expected final return");
+                fail("RETURN_EXPLICIT_REQUIRED: missing final return");
             }
             // The initial native finally slice admits only guarded returns
             // and a terminal return in the protected region. No potentially
@@ -3390,17 +3390,30 @@ private:
             require(";");
             value.statements.push_back(std::move(statement));
         }
-        require("return");
-        if (!value.returns_void) {
-            value.result = expression();
-            if (value.scalar_while &&
-                    (value.result->kind != Expression::Kind::Variable ||
-                     value.result->name != value.scalar_while->counter))
-                fail("experimental scalar loop must return the counter");
-            if (terminal_try_finally && !nonthrowing_protected_read(*value.result))
-                fail("native protected try return requires nonthrowing scalar/field read");
+        // An ordinary non-void function/method must explicitly return a
+        // value. Only a void body may fall through to its closing brace.
+        // Braceless expression lambdas have a different AST/result contract;
+        // this statement-bodied function parser must never infer a value.
+        const bool terminal_return = accept("return");
+        if (!terminal_return && !value.returns_void)
+            fail("RETURN_EXPLICIT_REQUIRED: non-void function requires explicit return");
+        if (terminal_return) {
+            if (!value.returns_void) {
+                if (token_.text == ";" || token_.text == "}")
+                    fail("RETURN_VALUE_REQUIRED: non-void return requires a value");
+                value.result = expression();
+                if (value.scalar_while &&
+                        (value.result->kind != Expression::Kind::Variable ||
+                         value.result->name != value.scalar_while->counter))
+                    fail("experimental scalar loop must return the counter");
+                if (terminal_try_finally && !nonthrowing_protected_read(*value.result))
+                    fail("native protected try return requires nonthrowing scalar/field read");
+            } else if (token_.text != ";" && token_.text != "}") {
+                fail("RETURN_VOID_VALUE: void function cannot return a value");
+            }
+            if (!accept(";") && token_.text != "}")
+                fail("expected ';' or closing return brace");
         }
-        if (!accept(";") && token_.text != "}") fail("expected ';' or closing return brace");
         if (terminal_try_finally) {
             require("}");
             // Java/Graal syntax requires catch. This native subset has no
