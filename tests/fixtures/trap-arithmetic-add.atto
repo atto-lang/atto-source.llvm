@@ -1,0 +1,5 @@
+// Hosted checked arithmetic: a real Err, never terminal overflow or Ok.
+pub fnc main(): int {
+  val Result<int, Error> wrapped = trap! (9223372036854775807 + 1);
+  return wrapped.is_err() ? wrapped.unwrap_or(42) : 0;
+}
