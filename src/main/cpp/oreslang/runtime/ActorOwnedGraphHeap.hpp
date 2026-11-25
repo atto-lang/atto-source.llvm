@@ -333,6 +333,92 @@ public:
         return false;
     }
 
+    /**
+     * Host substrate only: copy a graph of trusted, pointer-free POD byte
+     * payloads and its separate adjacency relation. Raw bytes do NOT establish
+     * a guest DeepCopyable witness. Owned objects/drop glue are refused.
+     *
+     * Keep the actor mutation guard throughout discovery, reservation and
+     * commit. No live slot or counter is modified until complete validation
+     * and cancellation checks succeed. The final nonthrowing commit publishes
+     * all reserved nodes as one guarded operation; no staging handles escape.
+     * Scratch allocation failure also leaves the heap unchanged.
+     *
+     * Work is bounded by one capacity scan and reachable edge occurrences.
+     * Repeated incoming links and cycles map to exactly one destination slot.
+     */
+    std::optional<Handle> clone_trusted_pod_graph(
+            ActorHeapIdentity actor, Handle root,
+            std::size_t max_nodes, std::size_t max_edges,
+            const std::atomic<bool>& cancelled) {
+        auto mutation = require_mutation_access(actor);
+        (void)require_node(root);
+        if (!max_nodes || max_nodes > NodeCapacity)
+            throw std::invalid_argument("invalid actor graph clone node budget");
+
+        struct Scratch {
+            // Map source slot to discovery index + 1 (zero = unseen).
+            std::array<std::size_t, NodeCapacity> indices{};
+            std::array<std::uint32_t, NodeCapacity> source{};
+            std::array<std::uint32_t, NodeCapacity> destination{};
+        };
+        if (cancelled.load(std::memory_order_acquire)) return std::nullopt;
+        auto scratch = std::make_unique<Scratch>();
+        std::size_t count = 1;
+        std::size_t edges = 0;
+        scratch->source[0] = root.slot;
+        scratch->indices[root.slot] = 1;
+        for (std::size_t pos = 0; pos < count; ++pos) {
+            if (cancelled.load(std::memory_order_acquire)) return std::nullopt;
+            const Slot& from = slots_[scratch->source[pos]];
+            if (from.drop)
+                throw std::logic_error("owned object requires verified copy glue");
+            if (from.link_count > max_edges - edges) return std::nullopt;
+            edges += from.link_count;
+            for (std::size_t i = 0; i < from.link_count; ++i) {
+                const Handle edge = from.links[i];
+                (void)require_node(edge);
+                if (scratch->indices[edge.slot] != 0) continue;
+                if (count == max_nodes) return std::nullopt;
+                scratch->source[count] = edge.slot;
+                scratch->indices[edge.slot] = ++count;
+            }
+        }
+
+        std::size_t reserved = 0;
+        for (std::size_t i = 0; i < NodeCapacity && reserved < count; ++i) {
+            if (cancelled.load(std::memory_order_acquire)) return std::nullopt;
+            const Slot& slot = slots_[i];
+            if (!slot.live && slot.generation != std::numeric_limits<std::uint64_t>::max())
+                scratch->destination[reserved++] = static_cast<std::uint32_t>(i);
+        }
+        if (reserved != count || cancelled.load(std::memory_order_acquire))
+            return std::nullopt;
+
+        // Commit point: cancellation after this check loses to successful
+        // publication. No fallible callbacks, allocations or validation follow.
+        // A reader/retirement cannot observe an intermediate slot state.
+        for (std::size_t pos = 0; pos < count; ++pos) {
+            const Slot& from = slots_[scratch->source[pos]];
+            Slot& to = slots_[scratch->destination[pos]];
+            to.payload = from.payload;
+            to.length = from.length;
+            to.drop = nullptr;
+            to.links.fill(Handle{0, 0, 0});
+            to.link_count = from.link_count;
+            for (std::size_t i = 0; i < from.link_count; ++i) {
+                const auto mapped = scratch->destination[
+                    scratch->indices[from.links[i].slot] - 1];
+                to.links[i] = Handle{heap_id_, mapped, slots_[mapped].generation};
+            }
+            to.live = true;
+        }
+        active_nodes_ += count;
+        active_edges_ += edges;
+        const auto id = scratch->destination[0];
+        return Handle{heap_id_, id, slots_[id].generation};
+    }
+
     // Invalidating a node also purges incoming non-owning edges, to avoid
     // dangling links consuming a bounded edge budget across slot reuse.
     void remove(ActorHeapIdentity actor, Handle id) {
