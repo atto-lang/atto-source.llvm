@@ -1,0 +1,4 @@
+pub fnc main(): int {
+  val Result<int, Error> wrapped = trap! (6 + 24 / 2 * 3);
+  return wrapped.is_ok() ? wrapped.unwrap_or(0) : 0;
+}
