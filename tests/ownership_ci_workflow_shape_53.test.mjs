@@ -257,3 +257,21 @@ test('50 source-mutation result cannot be replaced by a zero-test receipt',()=>{
     "grep -Eq 'Ran 0 tests' /tmp/atto-source-cfg-mut-29.log"),
     'MISSING_SOURCE_CFG_REAL_GUEST_EVIDENCE');
 });
+test('51 independently executed Node source-oracle run is mandatory',()=>{
+  denied(workflow.replace(
+    'node --test --test-reporter=tap tests/ownership_source_cfg_node_oracles_50.test.mjs | tee /tmp/atto-source-cfg-node-50.tap',
+    'node --check tests/ownership_source_cfg_node_oracles_50.test.mjs'),
+    'MISSING_INDEPENDENT_NODE_HOST_ORACLES');
+});
+test('52 node source oracle fifty-pass receipt cannot be forged',()=>{
+  denied(workflow.replace(
+    "grep -Eq '^# pass 50$' /tmp/atto-source-cfg-node-50.tap",
+    ()=>"grep -Eq '^# pass 0$' /tmp/atto-source-cfg-node-50.tap"),
+    'MISSING_INDEPENDENT_NODE_HOST_ORACLES');
+});
+test('53 source oracle file must retain exact-head PR path trigger',()=>{
+  denied(workflow.replace(
+    "      - 'tests/ownership_source_cfg_node_oracles_50.test.mjs'",
+    "      - 'inert-source-oracle.mjs'"),
+    'MISSING_EXACT_HEAD_TRIGGER');
+});
