@@ -17,13 +17,15 @@ pub fnc main(): int {
 }
 ATTO
 { printf 'define keyword entity as class end\n'; sed 's/^define class Customer/define entity Customer/' ordinary.atto; } > custom.atto
-for case in ordinary custom; do
+{ sed 's/^define class Customer/define entity Customer/' ordinary.atto; printf '\ndefine keyword entity as class end\n'; } > forward.atto
+for case in ordinary custom forward; do
   "$compiler" "$case.atto" > "$case.ll"
   test -s "$case.ll"
 done
 cmp ordinary.ll custom.ll
+cmp ordinary.ll forward.ll
 for opt in 0 2; do
-  for case in ordinary custom; do
+  for case in ordinary custom forward; do
     binary="$scratch/deploy/$case-O$opt"
     "$clang" "-O$opt" -x ir "$case.ll" -o "$binary"
     file "$binary" | grep -E 'ELF|Mach-O'
@@ -38,6 +40,7 @@ for opt in 0 2; do
     echo "EXTENSIBLE_NATIVE_GUEST_PASS case=$case opt=O$opt exit=42"
   done
   cmp "$scratch/deploy/ordinary-O$opt" "$scratch/deploy/custom-O$opt"
+  cmp "$scratch/deploy/ordinary-O$opt" "$scratch/deploy/forward-O$opt"
   echo "EXTENSIBLE_IDENTICAL_IR_AND_BINARY opt=O$opt"
 done
 reject() {
@@ -66,4 +69,8 @@ for kind in http serial macro state service Map; do
   printf 'define keyword %s as class end\n' "$kind" > "reserved-$kind.atto"
   reject "reserved-$kind" NATIVE_KIND_NAME_UNSUPPORTED
 done
-echo 'EXTENSIBLE_LLVM_STANDALONE_NATIVE_GATE_PASS positives=4 negatives=12'
+printf 'define entity Customer as end\ndefine module M as define keyword entity as class end end\n' > nested-forward.atto
+reject nested-forward "oreslang-llvmc:"
+printf 'define entity Customer as end\ndefine keyword entity as class end\ndefine keyword entity as class end\n' > duplicate-forward.atto
+reject duplicate-forward NATIVE_KIND_DUPLICATE
+echo 'EXTENSIBLE_LLVM_STANDALONE_NATIVE_GATE_PASS positives=6 negatives=14'
