@@ -1843,7 +1843,7 @@ if(BUILD_TESTING)
 
     # Hosted trap arithmetic recovers as Err; untrapped overflow still
     # signals in the independent native_trap_int_guest_aot_o0_o2 control.
-    foreach(case IN ITEMS add sub mul neg nested_overflow rem_zero mod_zero rem_signed mod_signed rem_min mod_min)
+    foreach(case IN ITEMS add sub mul neg nested_overflow rem_zero mod_zero rem_signed mod_signed rem_min mod_min div_zero div_overflow div_signed div_precedence)
         add_test(NAME native_trap_arithmetic_${case}_O0_O2
             COMMAND "${CMAKE_COMMAND}"
                 "-DORES_TRAP_LLVM_CLI=$<TARGET_FILE:oreslang-llvmc>"
@@ -4037,12 +4037,15 @@ if(BUILD_TESTING)
         dispatch-invalid-nb-switch.ores
         --diagnostic "native nb match/switch is invalid: nb applies to channel/select operations, not dispatch arms")
 
-    # Java '/' produces a float even for int/int. Until native float lowering
-    # exists, reject '/' and '%' before IR rather than silently emitting i64.
-    oreslang_contract_test(native_float_division_unavailable numeric-division-float-reject.ores
-        --diagnostic "native floating division unsupported")
-    oreslang_contract_test(native_float_division_precedence_unavailable numeric-division-precedence-reject.ores
-        --diagnostic "native floating division unsupported")
+    # Java's current int/int contract truncates toward zero; float remains gated.
+    oreslang_contract_test(native_integer_division_ir numeric-division-float-reject.ores
+        --ir "sdiv i64")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_integer_division_runtime numeric-division-float-reject.ores
+            --run 4 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_integer_division_precedence_runtime numeric-division-precedence-reject.ores
+            --run 13 --clang "${ORE_CLANG}")
+    endif()
     oreslang_contract_test(native_decimal_suffix_unavailable numeric-decimal-suffix-reject.ores
         --diagnostic "native floating-point/decimal literal unsupported")
     oreslang_contract_test(native_float_exponent_unavailable numeric-floating-exponent-reject.ores
