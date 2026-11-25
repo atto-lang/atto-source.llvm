@@ -3812,12 +3812,24 @@ if(BUILD_TESTING)
         dispatch-do-match-default-run.ores --ir "return.snapshot.slot")
     oreslang_contract_test(native_do_match_default_only_ir
         dispatch-do-match-default-only-run.ores --ir "return.snapshot.slot")
-    oreslang_contract_test(native_value_match_default_must_be_last
-        dispatch-value-match-default-not-last-reject.ores
-        --diagnostic "native value match default arm must be last")
-    oreslang_contract_test(native_do_match_default_must_be_last
-        dispatch-do-match-default-not-last-reject.ores
-        --diagnostic "native do match default arm must be last")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_value_match_wildcard_first_runtime
+            dispatch-value-match-wildcard-first-run.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_do_match_wildcard_first_runtime
+            dispatch-do-match-wildcard-first-run.ores --run 42 --clang "${ORE_CLANG}")
+    endif()
+    oreslang_contract_test(native_value_match_default_first_ir
+        dispatch-value-match-default-not-last-reject.ores --ir "ternary.merge")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_value_match_default_first_runtime
+            dispatch-value-match-default-not-last-reject.ores --run 0 --clang "${ORE_CLANG}")
+    endif()
+    oreslang_contract_test(native_do_match_default_first_ir
+        dispatch-do-match-default-not-last-reject.ores --ir "return.snapshot.slot")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_do_match_default_first_runtime
+            dispatch-do-match-default-not-last-reject.ores --run 0 --clang "${ORE_CLANG}")
+    endif()
     oreslang_contract_test(native_tilde_map_requires_typed_native_lowering
         tilde-map-literal-native-reject.ores
         --diagnostic "native tilde map/record literal unsupported")
@@ -3826,10 +3838,10 @@ if(BUILD_TESTING)
         --diagnostic "native tilde map/record literal unsupported")
     oreslang_contract_test(native_match_fallback_hardening_1
         dispatch-value-match-wildcard-then-default-reject.ores
-        --diagnostic "native value match wildcard arm must be last")
+        --diagnostic "native value match can contain only one default arm")
     oreslang_contract_test(native_match_fallback_hardening_2
         dispatch-do-match-wildcard-then-default-reject.ores
-        --diagnostic "native do match wildcard arm must be last")
+        --diagnostic "native do match can contain only one default arm")
     oreslang_contract_test(native_match_fallback_hardening_3
         dispatch-value-match-duplicate-case-reject.ores
         --diagnostic "duplicate native value match pattern")
@@ -3888,7 +3900,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_tilde_ambiguous_empty_failclosed
         tilde-ambiguous-empty-native-reject.ores
         --diagnostic "native tilde map/record literal unsupported")
-    # Strict fallback admission: no duplicate, guarded or 'on default' forms.
+    # One fallback across aliases; duplicate or guarded fallbacks remain invalid.
     oreslang_contract_test(native_value_match_default_fallback_ir
         dispatch-value-match-default-fallback-run.ores --ir "ternary.merge")
     oreslang_contract_test(native_do_match_default_fallback_ir
@@ -3899,12 +3911,18 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_do_match_duplicate_default_reject
         dispatch-do-match-default-duplicate-reject.ores
         --diagnostic "native do match can contain only one default arm")
-    oreslang_contract_test(native_value_match_on_default_reject
-        dispatch-value-match-on-default-reject.ores
-        --diagnostic "native value match fallback must use 'default ->' without 'on'")
-    oreslang_contract_test(native_do_match_on_default_reject
-        dispatch-do-match-on-default-reject.ores
-        --diagnostic "native do match fallback must use 'default ->' without 'on'")
+    oreslang_contract_test(native_value_match_on_default_ir
+        dispatch-value-match-on-default-reject.ores --ir "ret i64 42")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_value_match_on_default_runtime
+            dispatch-value-match-on-default-reject.ores --run 42 --clang "${ORE_CLANG}")
+    endif()
+    oreslang_contract_test(native_do_match_on_default_ir
+        dispatch-do-match-on-default-reject.ores --ir "return.snapshot.slot")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_do_match_on_default_runtime
+            dispatch-do-match-on-default-reject.ores --run 42 --clang "${ORE_CLANG}")
+    endif()
     oreslang_contract_test(native_value_match_guarded_default_reject
         dispatch-value-match-default-guard-reject.ores
         --diagnostic "native value match default arm cannot have a guard or binding")
