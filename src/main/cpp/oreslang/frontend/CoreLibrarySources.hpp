@@ -95,41 +95,8 @@ inline const CoreLibrarySource* find_compiler_library_source(std::string_view ra
     // Keep aliases identity-stable: the optional .ores suffix selects the same
     // compiler-owned unit and can never create a duplicate module instance.
     static constexpr std::string_view kNumericSource =
-R"ORES_CORE(// Compiler-owned ores.core source.
-// This module has no OS, Java, filesystem, network, process, actor-scheduler,
-// or ambient project dependency.
-
-define module numeric as
-
-  pub fnc min_int(int left, int right): int {
-    if left < right; do
-      return left;
-    fi
-    return right;
-  }
-
-  pub fnc max_int(int left, int right): int {
-    if left > right; do
-      return left;
-    fi
-    return right;
-  }
-
-  pub fnc clamp_int(int value, int lower, int upper): int {
-    if lower > upper; do
-      return lower;
-    fi
-    if value < lower; do
-      return lower;
-    fi
-    if value > upper; do
-      return upper;
-    fi
-    return value;
-  }
-
-end
-)ORES_CORE";
+#include "oreslang/frontend/GeneratedNumericAtto.inc"
+    ;
     static constexpr CoreLibrarySource kNumeric{
         CompilerLibraryTier::Core,
         "ores.core/numeric",
@@ -510,7 +477,8 @@ end
         raw == "ores.std/testing/scalar.atto" ||
         raw == "ores.std/testing/scalar.ores")
         return &kScalarTesting;
-    if (raw == "ores.core/numeric" || raw == "ores.core/numeric.ores")
+    if (raw == "ores.core/numeric" || raw == "ores.core/numeric.atto" ||
+        raw == "ores.core/numeric.ores")
         return &kNumeric;
     if (raw == "alloc/int_buffer" || raw == "alloc/int_buffer.ores")
         return &kIntBuffer;

@@ -1,0 +1,2 @@
+import module numeric from "ores.core/numeric.java";
+pub fnc main(): int { return 0; }
