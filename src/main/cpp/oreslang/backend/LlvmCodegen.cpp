@@ -179,12 +179,15 @@ llvm::Value* lower(const Expression& expr,
             // Independent backend gate: a trap-origin Ok may only wrap the
             // statically total integer subset. Never accidentally catch host,
             // ordinary guest, panic or cancellation errors by fabricating Some.
-            if (expr.trap_origin && (expr.name != "Ok" ||
-                    expr.arguments.size() != 1 ||
-                    !native_trap_pure_integer(*expr.arguments.front()) ||
-                    expr.sum_type != "Result<int,Error>"))
-                throw std::runtime_error("unproved native trap AST reached LLVM codegen");
             const auto& type = native_sum(*moves->sum_program, expr.sum_type);
+            if ((type.trap_error && !expr.trap_origin) ||
+                    (expr.trap_origin && (!type.trap_error ||
+                    type.kind != NativeSumType::Kind::Result ||
+                    type.value_type != ScalarType::I64 || expr.name != "Ok" ||
+                    expr.arguments.size() != 1 || !expr.arguments.front() ||
+                    !native_trap_pure_integer(*expr.arguments.front()) ||
+                    expr.sum_type != "Result<int,Error>")))
+                throw std::runtime_error("unproved native trap AST reached LLVM codegen");
             const bool option = type.kind == NativeSumType::Kind::Option;
             const std::size_t count = option ? 2 : 3;
             const bool error = expr.name == "Err";
