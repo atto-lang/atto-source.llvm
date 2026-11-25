@@ -95,13 +95,13 @@ if(BUILD_TESTING)
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/contract.py"
       --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ATTO_TRAP_CLANG}" --target host
       --fixture "${ATTO_TRAP_FIXTURES}/04-nested-trap.atto"
-      --fixture-git-blob 0e4605f1d8939a9dfb542805cfd3b17ec782ddc2 --run 42 --opt-level 0
+      --fixture-git-blob 70673768786188df3f223a5f050d354d7084ddce --run 42 --opt-level 0
       --native-runtime "${ATTO_RECORD_RUNTIME}")
   add_test(NAME atto_trap_04_nested_trap_O2
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/contract.py"
       --compiler "$<TARGET_FILE:oreslang-llvmc>" --clang "${ATTO_TRAP_CLANG}" --target host
       --fixture "${ATTO_TRAP_FIXTURES}/04-nested-trap.atto"
-      --fixture-git-blob 0e4605f1d8939a9dfb542805cfd3b17ec782ddc2 --run 42 --opt-level 2
+      --fixture-git-blob 70673768786188df3f223a5f050d354d7084ddce --run 42 --opt-level 2
       --native-runtime "${ATTO_RECORD_RUNTIME}")
   add_test(NAME atto_trap_05_bool_success_O0
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/contract.py"
