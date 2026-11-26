@@ -1,0 +1,39 @@
+name: LLVM native durable Counter guest
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/backend/DurableCounterV1Guest.hpp'
+      - 'src/main/cpp/oreslang/backend/DurableScalarV1Guest.hpp'
+      - 'tests/durable_scalar_llvm_native.cpp'
+      - 'src/main/cpp/oreslang/main.cpp'
+      - 'tests/durable_counter_llvm_native.mjs'
+      - '.github/workflows/durable-counter-llvm-native.yml'
+permissions:
+  contents: read
+jobs:
+  native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Verify exact source and build actual compiler
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          test -z "$(git status --porcelain)"
+          git rev-parse HEAD^{tree}
+          sudo apt-get update -qq
+          sudo apt-get install -y clang llvm-dev cmake ninja-build
+          cmake -G Ninja -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DLLVM_DIR="$(llvm-config --cmakedir)"
+          cmake --build build --target oreslang-llvmc --parallel 2
+          ATTO_LLVM_COMPILER="$PWD/build/oreslang-llvmc" node tests/durable_counter_llvm_native.mjs
+          printf '%s\n' 'define durable actor Ledger as state balance: int = -9223372036854775808; state open: bool = true; state last: int = 9223372036854775807; end' > "$RUNNER_TEMP/ledger.atto"
+          build/oreslang-llvmc --durable-scalar-codec-v1 "$RUNNER_TEMP/ledger.atto" > "$RUNNER_TEMP/ledger.ll"
+          clang -Wno-override-module -fsanitize=address,undefined -c "$RUNNER_TEMP/ledger.ll" -o "$RUNNER_TEMP/ledger.o"
+          clang++ -std=c++17 -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Werror -UNDEBUG -no-pie tests/durable_scalar_llvm_native.cpp "$RUNNER_TEMP/ledger.o" -o "$RUNNER_TEMP/ledger-test"
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 timeout 60 "$RUNNER_TEMP/ledger-test"

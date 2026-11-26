@@ -643,7 +643,8 @@ Program parse_verified_protocol_actor_library(std::string_view source, int langu
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int = false,
                                  bool experimental_rt_scalar_loop = false,
                                  bool experimental_pointer_int_aot = false,
-                                 int language_version = 0);
+                                 int language_version = 0,
+                                 bool relative_import_unit = false);
 // HOST-ONLY preparatory AST: caller must supply already authenticated frozen
 // source bytes, and only the verified package graph may consume the result.
 // Unlike parse_program(), this must never authorize IR or guest execution.

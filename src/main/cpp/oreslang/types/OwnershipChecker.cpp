@@ -320,6 +320,7 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
         case Expression::Kind::DeepCopy:
         case Expression::Kind::Share:
         case Expression::Kind::Cast: // Cast is checked static identity, but operand may move.
+        case Expression::Kind::Abs:
         case Expression::Kind::Negate:
         case Expression::Kind::CheckedI32:
         case Expression::Kind::CheckRefinement:
@@ -460,6 +461,7 @@ void check_pure_guard(const Expression& expr, Locals& locals, const Functions& f
         case Expression::Kind::Field:
             check_value(expr, locals, functions);
             return;
+        case Expression::Kind::Abs:
         case Expression::Kind::Negate:
         case Expression::Kind::LogicalNot:
         case Expression::Kind::Cast:

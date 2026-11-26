@@ -157,6 +157,10 @@ void validate_native_scalar_types(const Program& program) {
                     fail(e.offset, "invalid internal refinement bounds");
                 require(expression(*e.left, locals), scalar(false), e.offset, "checked refinement requires int");
                 return scalar(false);
+            case E::Abs:
+                if (!e.left) fail(e.offset, "abs requires an operand");
+                require(expression(*e.left, locals), scalar(false), e.offset, "abs requires int");
+                return scalar(false);
             case E::Negate:
                 require(expression(*e.left, locals), scalar(false), e.offset, "unary - requires int");
                 return scalar(false);

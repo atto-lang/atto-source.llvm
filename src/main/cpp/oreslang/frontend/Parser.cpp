@@ -1086,7 +1086,8 @@ public:
                     bool experimental_rt_scalar_loop,
                     bool verified_namespace_metadata_only = false,
                     std::size_t unsafe_base_offset = 0,
-                    bool experimental_pointer_int_aot = false, int language_version = 0)
+                    bool experimental_pointer_int_aot = false, int language_version = 0,
+                    bool relative_import_unit = false)
         : source_(source),
           lexer_(source, unsafe_base_offset, experimental_pointer_int_aot),
           token_(lexer_.next()),
@@ -1095,7 +1096,8 @@ public:
           experimental_rt_scalar_loop_(experimental_rt_scalar_loop),
           language_version_(language_version),
           verified_namespace_metadata_only_(verified_namespace_metadata_only),
-          experimental_pointer_int_aot_(experimental_pointer_int_aot) {
+          experimental_pointer_int_aot_(experimental_pointer_int_aot),
+          relative_import_unit_(relative_import_unit) {
         if (language_version_ < 0 || language_version_ > 2)
             throw std::runtime_error("E_LANGUAGE_VERSION: expected 1 or 2");
         if (!experimental_pointer_int_aot_) reject_unlowered_with_update();
@@ -1260,7 +1262,9 @@ public:
         if (token_.text == "use" && peek_next().text == "namespace")
             advance();
         if (accept("namespace")) {
-            program.namespace_name = identifier();
+            // The canonical core/types name is contextual in this header only.
+            if (token_.kind == Kind::Identifier && accept("types")) program.namespace_name = "types";
+            else program.namespace_name = identifier();
             require(";");
         }
         while (token_.text == "import" || token_.text == "export") {
@@ -1794,7 +1798,21 @@ public:
             // No imports, namespace cross-file linking, actors, closures or
             // source FFI can acquire identity/dispatch authority here.
             const bool checked_scalar_main = namespace_checked_scalar_main(program);
-            if (!checked_scalar_main)
+            // Only the existing explicit relative-file function linker may
+            // consume this contextual core/types source identity. The
+            // standalone parser and final resolver retain their existing gates.
+            const bool linked_types = relative_import_unit_ &&
+                program.namespace_name == "types" &&
+                program.module.empty() && program.imports.empty() &&
+                program.namespace_imports.empty() && program.exports.empty() &&
+                program.classes.empty() && program.actors.empty() &&
+                program.sum_types.empty() && program.contracts.empty() &&
+                program.conforms.empty() && program.type_only_declarations.empty() &&
+                program.type_constraint_descriptors.empty() &&
+                program.inverted_structs.empty() && !program.inverted_main &&
+                !program.pointer_int_plan && program.cooperative_loops.empty() &&
+                program.generators.empty() && !program.functions.empty();
+            if (!checked_scalar_main && !linked_types)
                 fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: only standalone checked literal-arithmetic i64 main is native-lowered; multi-file actor namespaces remain gated");
         }
         if (!provisional_kinds.empty())
@@ -10725,6 +10743,7 @@ private:
     // Restricted host-only AST pass, never set by the ordinary CLI parser.
     bool verified_namespace_metadata_only_ = false;
     bool experimental_pointer_int_aot_ = false;
+    bool relative_import_unit_ = false;
     // Type-only declarations retain source alias identity until checked
     // catalog validation and extension-call rewriting complete.
     std::unordered_map<std::string, std::string> scalar_alias_targets_;
@@ -10947,11 +10966,12 @@ Program parse_verified_namespace_source_unresolved(
 
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int,
                       bool experimental_rt_scalar_loop, bool experimental_pointer_int_aot,
-                      int language_version) {
+                      int language_version, bool relative_import_unit) {
     reject_unlowered_mutex_constructor(source, experimental_pointer_int_aot);
     Program program = Parser(source, experimental_owned_int,
                              experimental_rt_scalar_loop, false, 0,
-                             experimental_pointer_int_aot, language_version).parse();
+                             experimental_pointer_int_aot, language_version,
+                             relative_import_unit).parse();
     if (experimental_rt_scalar_loop &&
             (program.functions.size() != 1 || !program.functions.front().scalar_while ||
              !program.classes.empty() || !program.actors.empty() ||
