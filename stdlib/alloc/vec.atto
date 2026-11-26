@@ -5,18 +5,19 @@ define module vec as
 
   // Sum of start, start+1, ..., start+count-1 (count <= 8) stored in an
   // owned buffer first. Native loops cannot yet touch owners, so the buffer
-  // is filled with straight-line code and bounded by `count`.
+  // is filled with straight-line code. Clamp first and never evaluate an
+  // arithmetic expression for an element outside the requested range.
   pub fnc sum_range(int start, int count): int {
-    let mut Array<int> values = new Array<int>();
-    values.add(start);
-    values.add(start + 1);
-    values.add(start + 2);
-    values.add(start + 3);
-    values.add(start + 4);
-    values.add(start + 5);
-    values.add(start + 6);
-    values.add(start + 7);
     val int c = count < 0 ? 0 : (count > 8 ? 8 : count);
+    let mut Array<int> values = new Array<int>();
+    values.add(c > 0 ? start : 0);
+    values.add(c > 1 ? start + 1 : 0);
+    values.add(c > 2 ? start + 2 : 0);
+    values.add(c > 3 ? start + 3 : 0);
+    values.add(c > 4 ? start + 4 : 0);
+    values.add(c > 5 ? start + 5 : 0);
+    values.add(c > 6 ? start + 6 : 0);
+    values.add(c > 7 ? start + 7 : 0);
     return (c > 0 ? values.get(0) : 0) + (c > 1 ? values.get(1) : 0) +
       (c > 2 ? values.get(2) : 0) + (c > 3 ? values.get(3) : 0) +
       (c > 4 ? values.get(4) : 0) + (c > 5 ? values.get(5) : 0) +
