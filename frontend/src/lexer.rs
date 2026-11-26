@@ -52,6 +52,7 @@ pub enum Tok {
     PipePipe,
     Amp,
     AmpAmp,
+    Caret,
     At,
     Eof,
 }
@@ -308,7 +309,11 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
             ('>', _) => (Tok::Gt, 1),
             ('*', _) => (Tok::Star, 1),
             ('/', _) => (Tok::Slash, 1),
-            ('%', _) | ('^', _) => {
+            ('^', Some('^')) => {
+                return Err(Diagnostic::new(pos, "E_UNSUPPORTED", "typed XOR is not implemented in this frontend"));
+            }
+            ('^', _) => (Tok::Caret, 1),
+            ('%', _) => {
                 return Err(Diagnostic::new(
                     pos,
                     "E_UNSUPPORTED",

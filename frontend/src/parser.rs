@@ -1142,8 +1142,26 @@ impl Parser {
         }
     }
 
+    fn parse_return_stmt(&mut self, pos: Pos) -> R<Stmt> {
+        self.advance();
+        let at_end = matches!(self.peek(), Tok::Semi | Tok::RBrace)
+            || matches!(self.word_at(0), Some("fi" | "end" | "done" | "elif" | "elseif" | "else"));
+        let explicit_void = self.is_word("void");
+        if explicit_void { self.advance(); }
+        let value = if at_end || explicit_void { None } else { Some(self.parse_expr()?) };
+        if self.in_generator && value.is_some() {
+            return Err(Diagnostic::new(pos, "E_RETURN",
+                "generators may terminate with 'return;' but cannot return a value"));
+        }
+        self.terminator()?;
+        Ok(Stmt::Return(value, pos))
+    }
+
     fn parse_stmt(&mut self) -> R<Stmt> {
         let pos = self.pos();
+        if *self.peek() == Tok::Caret {
+            return self.parse_return_stmt(pos);
+        }
         if *self.peek() == Tok::At {
             return Err(unsupported(pos, "annotations"));
         }
@@ -1201,18 +1219,7 @@ impl Parser {
                 self.terminator()?;
                 Ok(Stmt::Yield(value, pos))
             }
-            Some("return") => {
-                self.advance();
-                let at_end = matches!(self.peek(), Tok::Semi | Tok::RBrace)
-                    || matches!(self.word_at(0), Some("fi" | "end" | "done" | "elif" | "elseif" | "else"));
-                let value = if at_end { None } else { Some(self.parse_expr()?) };
-                if self.in_generator && value.is_some() {
-                    return Err(Diagnostic::new(pos, "E_RETURN",
-                        "generators may terminate with 'return;' but cannot return a value"));
-                }
-                self.terminator()?;
-                Ok(Stmt::Return(value, pos))
-            }
+            Some("return") => self.parse_return_stmt(pos),
             Some("throw") => {
                 self.advance();
                 // Only the typed Error constructor is admitted by the
@@ -2346,6 +2353,7 @@ fn describe(t: &Tok) -> String {
                 Tok::PipePipe => "||",
                 Tok::Amp => "&",
                 Tok::AmpAmp => "&&",
+                Tok::Caret => "^",
                 Tok::At => "@",
                 _ => "?",
             };

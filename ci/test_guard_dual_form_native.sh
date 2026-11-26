@@ -103,6 +103,15 @@ pub fnc main(): int {
   return 42;
 }
 ATTO
+run_ok brace-caret-return 7 <<'ATTO'
+pub fnc main(): int { guard false { ^ 7; } return 42; }
+ATTO
+run_reject infix-single-caret "" <<'ATTO'
+pub fnc main(): int { return 1 ^ 2; }
+ATTO
+run_reject nonvoid-caret-void "" <<'ATTO'
+pub fnc main(): int { guard false { ^ void; } return 42; }
+ATTO
 run_reject nonbool-lazy-and E_TYPE <<'ATTO'
 pub fnc main(): int { guard false && 42 { return 7; } return 42; }
 ATTO
@@ -136,6 +145,6 @@ ATTO
 run_reject keyword-missing-end "" <<'ATTO'
 pub fnc main(): int { guard true else return 7; fi return 42; }
 ATTO
-test "$accepted" -eq 11
-test "$rejected" -eq 11
+test "$accepted" -eq 12
+test "$rejected" -eq 13
 echo "GUARD_DUAL_FORM_NATIVE_AOT accepted=$accepted rejected=$rejected real_compiler=yes compiled_guest=yes"
