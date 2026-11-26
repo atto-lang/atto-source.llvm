@@ -164,8 +164,6 @@ void validate_native_scalar_types(const Program& program) {
             case E::Negate:
                 require(expression(*e.left, locals), scalar(false), e.offset, "unary - requires int");
                 return scalar(false);
-            case E::Abs:
-                break;
             case E::LogicalNot:
                 require(expression(*e.left, locals), scalar(true), e.offset, "! requires bool");
                 return scalar(true);
