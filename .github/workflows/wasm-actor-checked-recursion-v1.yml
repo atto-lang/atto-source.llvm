@@ -1,0 +1,132 @@
+name: LLVM checked Wasm actor recursion v1
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/main.cpp'
+      - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
+      - 'src/main/cpp/oreslang/backend/LlvmCodegen.hpp'
+      - 'src/main/cpp/oreslang/backend/WasmActorBoundedTrampoline.hpp'
+      - 'tests/wasm32_actor_checked_recursive_frames.py'
+      - 'tests/fixtures/wasm32-actor-bounded-recursion-v1.atto'
+      - 'CMakeLists.txt'
+      - '.github/workflows/wasm-actor-checked-recursion-v1.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-compiled-actor-recursion:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact PR head without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Verify immutable source HEAD, tree and recursive actor blob
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          test "$(git hash-object tests/fixtures/wasm32-actor-bounded-recursion-v1.atto)" = "947781cddf09d8e3e08c51cff2b7d8960e2d4750"
+          echo "CHECKED_ACTOR_SOURCE_HEAD=$EXPECTED_HEAD"
+          echo "CHECKED_ACTOR_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+
+      - name: Prepare real Node 22/Clang/LLVM compiler build
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Install actual LLVM wasm32 compilation tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang llvm-dev python3
+          node --version
+          clang --version | head -1
+
+      - name: Build exact-source native compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --target oreslang-llvmc --parallel 2
+          test -x build/oreslang-llvmc
+          sha256sum build/oreslang-llvmc
+
+      - name: Execute exact compiled .atto recursive actors at O0 and Oz
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -I tests/wasm32_actor_checked_recursive_frames.py \
+            --compiler "$PWD/build/oreslang-llvmc" \
+            --clang clang --node node \
+            --fixture "$PWD/tests/fixtures/wasm32-actor-bounded-recursion-v1.atto" \
+            2>&1 | tee "$RUNNER_TEMP/wasm-actor-recursion-v1.log"
+          test "$(grep -c '"kind": "actual-source-wasm32-checked-actor-recursion-v1"' "$RUNNER_TEMP/wasm-actor-recursion-v1.log")" = "2"
+          grep -F "PASS restricted compiler-managed recursive actor frames and fail-closed negatives (O0/Oz)" "$RUNNER_TEMP/wasm-actor-recursion-v1.log"
+
+      - name: Verify compiled guest evidence and fail-closed scope
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          python3 -I - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          temp=pathlib.Path(os.environ["RUNNER_TEMP"])
+          lines=(temp/"wasm-actor-recursion-v1.log").read_text().splitlines()
+          cases=[json.loads(line) for line in lines
+                 if line.startswith("{") and '"kind": "actual-source-wasm32-checked-actor-recursion-v1"' in line]
+          if len(cases)!=2 or sorted(x["opt"] for x in cases)!=["-O0","-Oz"]:
+              raise SystemExit("missing/duplicate native Wasm O0/Oz guest receipts")
+          sha=lambda path:hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
+          for case in cases:
+              if case["compiler_sha256"]!=sha("build/oreslang-llvmc"):
+                  raise SystemExit("compiler binary provenance mismatch")
+              if case["fixture_blob"]!="947781cddf09d8e3e08c51cff2b7d8960e2d4750":
+                  raise SystemExit("canonical actor source drift")
+              if case["first_rejected_frame"]!=65 or case["max_actor_guest_frames"]!=64:
+                  raise SystemExit("invalid actor frame bounds")
+              if case["host_engine_stack_recursive_calls"]!=0:
+                  raise SystemExit("unbounded native call recursion cannot certify guest frames")
+              if case["actor_a_status"]!="STACK_BUDGET_EXHAUSTED":
+                  raise SystemExit("typed actor terminal status not proved")
+              if case["same_worker_actor_fault_isolation"]!="NOT_TESTED_BY_THIS_DIRECT_INSTANCE_GATE":
+                  raise SystemExit("spurious pooled supervisor proof")
+          head=subprocess.check_output(("git","rev-parse","HEAD"),text=True).strip()
+          tree=subprocess.check_output(("git","rev-parse","HEAD^{tree}"),text=True).strip()
+          if head!=os.environ["EXPECTED_HEAD"]:raise SystemExit("source head changed")
+          evidence={
+              "schema":"attolang.wasm.actor_recursion_compiler_v1",
+              "head_sha":head,"tree_sha":tree,
+              "run_id":int(os.environ["GITHUB_RUN_ID"]),
+              "run_attempt":int(os.environ["GITHUB_RUN_ATTEMPT"]),
+              "compiler_sha256":sha("build/oreslang-llvmc"),
+              "compiled_recursive_actor_guest_executed":True,
+              "same_worker_pool_isolation_executed":False,
+              "supervisor_restart_executed":False,
+              "java_llvm_wasm_full_parity_verified":False,
+              "cases":cases
+          }
+          (temp/"wasm-actor-recursion-v1-receipt.json").write_text(
+              json.dumps(evidence,sort_keys=True,indent=2)+"\n")
+          PY
+
+      - name: Retain exact-head compiled guest receipts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: wasm-checked-recursion-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/wasm-actor-recursion-v1.log
+            ${{ runner.temp }}/wasm-actor-recursion-v1-receipt.json
+          if-no-files-found: error
+          retention-days: 7

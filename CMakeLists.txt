@@ -944,6 +944,17 @@ if(BUILD_TESTING)
                 --fixtures "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
         set_tests_properties(wasm32_compiler_owned_actor_guest_frame_scalar
             PROPERTIES TIMEOUT 240)
+        # Opt-in, compiler-checked actor recursion: 64 per-instance guest
+        # frames, 65th denied, typed terminal i32, no native recursion.
+        add_test(NAME wasm32_compiler_actor_checked_trampoline_v1
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/wasm32_actor_checked_recursive_frames.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --node "${ORE_NODE}"
+                --fixture "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/wasm32-actor-bounded-recursion-v1.atto")
+        set_tests_properties(wasm32_compiler_actor_checked_trampoline_v1
+            PROPERTIES TIMEOUT 240)
     endif()
     # First real compiler-emitted AOT while continuation. The host owns the
     # frame and schedules finite reductions; actor/mailbox integration is not
@@ -4257,6 +4268,12 @@ if(BUILD_TESTING AND ORE_CLANG)
             DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/audit_no_gc_ir.rs"
             VERBATIM)
         add_custom_target(oreslang-no-gc-ir-audit-build ALL DEPENDS "${ORE_NO_GC_IR_AUDIT}")
+        # Focused builds must produce the same audit tool as full builds.
+        if(TARGET oreslang-native-class-string-parity-build)
+            add_dependencies(oreslang-native-class-string-parity-build oreslang-no-gc-ir-audit-build)
+            set_tests_properties(native_class_string_parity_release native_class_string_parity_sanitizer
+                PROPERTIES ENVIRONMENT "ORES_NO_GC_IR_AUDIT=${ORE_NO_GC_IR_AUDIT}")
+        endif()
         add_custom_command(
             OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit-tests"
             COMMAND "${ORE_NO_GC_RUSTC}" --edition=2021 -D warnings --test

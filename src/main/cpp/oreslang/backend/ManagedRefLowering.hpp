@@ -1,5 +1,7 @@
 #pragma once
 
+#include "oreslang/backend/LlvmCompat.hpp"
+
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
@@ -51,7 +53,7 @@ inline llvm::Value* emit_checked_actor_ref32_address(
     auto* i1 = llvm::Type::getInt1Ty(context);
     auto* i32 = llvm::Type::getInt32Ty(context);
     auto* i64 = llvm::Type::getInt64Ty(context);
-    auto* ptr = llvm::Type::getInt8Ty(context)->getPointerTo();
+    auto* ptr = native_pointer_type(context, llvm::Type::getInt8Ty(context));
     if (!access.field_address->getType()->isPointerTy() ||
         !access.actor_arena_base->getType()->isPointerTy() ||
         !access.original_proof->getType()->isPointerTy() ||
@@ -91,7 +93,7 @@ inline llvm::Value* emit_checked_actor_ref32_address(
     // Physical guest storage is *always* i32. Do not load a machine pointer
     // or reinterpret the i32 field as a C ABI pointer.
     auto* field_ptr = builder.CreatePointerCast(access.field_address,
-        i32->getPointerTo(), "ref32.field.i32.ptr");
+        native_pointer_type(context, i32), "ref32.field.i32.ptr");
     auto* encoded = builder.CreateLoad(i32, field_ptr, "ref32.encoded");
     auto* not_null = builder.CreateICmpNE(
         encoded, llvm::ConstantInt::get(i32, 0), "ref32.nonnull");
@@ -144,7 +146,7 @@ inline llvm::Value* emit_checked_actor_ref32_address(
     builder.CreateCondBr(admitted, safe_block, trap_block);
 
     builder.SetInsertPoint(trap_block);
-    builder.CreateCall(llvm::Intrinsic::getDeclaration(&module, llvm::Intrinsic::trap));
+    builder.CreateCall(native_trap(module));
     builder.CreateUnreachable();
 
     builder.SetInsertPoint(safe_block);
@@ -153,7 +155,7 @@ inline llvm::Value* emit_checked_actor_ref32_address(
     auto* bytes_ptr = builder.CreatePointerCast(access.actor_arena_base, ptr);
     auto* raw = builder.CreateGEP(llvm::Type::getInt8Ty(context),
                                   bytes_ptr, offset, "ref32.native.address");
-    return builder.CreatePointerCast(raw, object_type->getPointerTo(),
+    return builder.CreatePointerCast(raw, native_pointer_type(context, object_type),
                                      "ref32.checked.address");
 }
 

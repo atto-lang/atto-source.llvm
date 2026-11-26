@@ -29,7 +29,7 @@ static void produce_checked_llvm(llvm::Module& module) {
     auto* i1 = llvm::Type::getInt1Ty(ctx);
     auto* i32 = llvm::Type::getInt32Ty(ctx);
     auto* i64 = llvm::Type::getInt64Ty(ctx);
-    auto* ptr = llvm::Type::getInt8Ty(ctx)->getPointerTo();
+    auto* ptr = oreslang::native_pointer_type(ctx, llvm::Type::getInt8Ty(ctx));
     // Object payload is a native 64-bit scalar plus a physical i32 edge.
     // C++ test ABI mirrors this exact, non-packed native representation.
     auto* object_ty = llvm::StructType::create(ctx, {i64, i32}, "ActorNode");
@@ -57,7 +57,7 @@ static void produce_checked_llvm(llvm::Module& module) {
         auto* base = &*arg++;
         auto* span = &*arg++;
         auto* original = &*arg++;
-        auto* typed = b.CreatePointerCast(object, object_ty->getPointerTo());
+        auto* typed = b.CreatePointerCast(object, oreslang::native_pointer_type(ctx, object_ty));
         auto* field = b.CreateStructGEP(object_ty, typed, 1, "actor.link.i32");
         ActorRef32Access access{field, base, span, original, auth};
         b.CreateRet(emit_checked_actor_ref32_load(module, b, access, i64, 8));
@@ -75,7 +75,7 @@ static void produce_checked_llvm(llvm::Module& module) {
         auto* span = &*arg++;
         auto* original = &*arg++;
         auto* incoming = &*arg++;
-        auto* typed = b.CreatePointerCast(object, object_ty->getPointerTo());
+        auto* typed = b.CreatePointerCast(object, oreslang::native_pointer_type(ctx, object_ty));
         auto* field = b.CreateStructGEP(object_ty, typed, 1, "actor.link.i32");
         ActorRef32Access access{field, base, span, original, auth};
         emit_checked_actor_ref32_store(module, b, access, incoming, 8);
@@ -123,7 +123,7 @@ int main(int argc, char** argv) {
             wasm.setDataLayout("e-p:32:32-i64:64-n32:64");
             auto* fn = llvm::Function::Create(
                 llvm::FunctionType::get(llvm::Type::getVoidTy(ctx),
-                    {llvm::Type::getInt8Ty(ctx)->getPointerTo(),
+                    {oreslang::native_pointer_type(ctx, llvm::Type::getInt8Ty(ctx)),
                      llvm::Type::getInt64Ty(ctx)}, false),
                 llvm::Function::ExternalLinkage, "probe", wasm);
             llvm::IRBuilder<> b(llvm::BasicBlock::Create(ctx, "entry", fn));
@@ -149,7 +149,7 @@ int main(int argc, char** argv) {
         {
             llvm::Module negative("ref32-invalid-admission", ctx);
             negative.setDataLayout("e-p:64:64-i64:64-n8:16:32:64");
-            auto* pty = llvm::Type::getInt8Ty(ctx)->getPointerTo();
+            auto* pty = oreslang::native_pointer_type(ctx, llvm::Type::getInt8Ty(ctx));
             auto* span_ty = llvm::Type::getInt64Ty(ctx);
             auto* fail_fn = llvm::Function::Create(
                 llvm::FunctionType::get(llvm::Type::getVoidTy(ctx),

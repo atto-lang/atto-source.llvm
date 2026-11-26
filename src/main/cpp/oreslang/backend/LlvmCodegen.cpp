@@ -1,4 +1,5 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
+#include "oreslang/backend/WasmActorBoundedTrampoline.hpp"
 #include "oreslang/backend/NativeFlatClasses.hpp"
 #include "oreslang/types/NativeSumTypes.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
@@ -130,7 +131,7 @@ llvm::Value* checked_signed_arithmetic(llvm::IRBuilder<>& builder,
     // trap is the current failure ABI; typed actor errors remain separate.
     auto* module = builder.GetInsertBlock()->getModule();
     auto* parent = builder.GetInsertBlock()->getParent();
-    auto* intrinsic = llvm::Intrinsic::getDeclaration(module, operation, {left->getType()});
+    auto* intrinsic = native_intrinsic(*module, operation, {left->getType()});
     auto* pair = builder.CreateCall(intrinsic, {left, right}, name + ".checked");
     auto* value = builder.CreateExtractValue(pair, {0}, name + ".value");
     auto* overflow = builder.CreateExtractValue(pair, {1}, name + ".overflow");
@@ -138,7 +139,7 @@ llvm::Value* checked_signed_arithmetic(llvm::IRBuilder<>& builder,
     auto* proceed = llvm::BasicBlock::Create(builder.getContext(), name + ".ok", parent);
     builder.CreateCondBr(overflow, failed, proceed);
     builder.SetInsertPoint(failed);
-    builder.CreateCall(llvm::Intrinsic::getDeclaration(module, llvm::Intrinsic::trap));
+    builder.CreateCall(native_trap(*module));
     builder.CreateUnreachable();
     builder.SetInsertPoint(proceed);
     return value;
@@ -196,7 +197,7 @@ llvm::Value* lower(const Expression& expr,
                     // Literal message (enforced by the sum resolver) to stderr, then the
                     // same abort path as unwrap. Java appends ": <payload>"; this slice does not.
                     const std::string message = expr.arguments[0]->name + "\n";
-                    auto* text = builder.CreateGlobalStringPtr(message, "expect.message");
+                    auto* text = builder.CreateGlobalString(message, "expect.message");
                     auto write = function->getParent()->getOrInsertFunction("write", llvm::FunctionType::get(
                         i64, {builder.getInt32Ty(), builder.getPtrTy(), i64}, false));
                     builder.CreateCall(write, {builder.getInt32(2), text, llvm::ConstantInt::get(i64, message.size())});
@@ -255,7 +256,7 @@ llvm::Value* lower(const Expression& expr,
         }
         case Expression::Kind::String: {
             auto* module = builder.GetInsertBlock()->getModule();
-            auto* bytes = builder.CreateGlobalStringPtr(expr.name, "string.literal");
+            auto* bytes = builder.CreateGlobalString(expr.name, "string.literal");
             auto runtime = module->getOrInsertFunction("ores_string_literal",
                 llvm::FunctionType::get(i64, {bytes->getType(), i64}, false));
             return builder.CreateCall(runtime, {bytes, llvm::ConstantInt::get(i64, expr.name.size())}, "string.handle");
@@ -471,7 +472,7 @@ llvm::Value* lower(const Expression& expr,
             // Native target currently uses a trap for typed runtime errors.
             // This is fail-closed rather than Java's exception-class parity.
             builder.CreateCall(
-                llvm::Intrinsic::getDeclaration(module, llvm::Intrinsic::trap));
+                native_trap(*module));
             builder.CreateUnreachable();
             builder.SetInsertPoint(valid);
             if (expr.kind == Expression::Kind::ShiftLeft)
@@ -700,7 +701,14 @@ llvm::Value* lower(const Expression& expr,
 
 std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                                   bool cortex_m_target,
-                                  bool bounded_allocator_provider) {
+                                  bool bounded_allocator_provider,
+                                  bool experimental_wasm_actor_recursion_v1) {
+    if (experimental_wasm_actor_recursion_v1) {
+        if (!wasm32_target || cortex_m_target || bounded_allocator_provider)
+            throw std::runtime_error(
+                "checked recursive actor trampoline requires bare wasm32 target");
+        return wasm_actor_checked_v1::emit(source);
+    }
     for (const auto& fn : source.functions) if (fn.name == "abort") throw std::runtime_error("reserved native panic runtime symbol collision");
     for (const auto& fn : source.functions)
         if (fn.name.rfind("ores_record_", 0) == 0)
@@ -3070,8 +3078,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             value, llvm::ConstantInt::get(i64, UINT32_MAX));
         b.CreateCondBr(in_range, accepted, rejected);
         b.SetInsertPoint(rejected);
-        b.CreateCall(llvm::Intrinsic::getDeclaration(
-            &module, llvm::Intrinsic::trap));
+        b.CreateCall(native_trap(module));
         b.CreateUnreachable();
         b.SetInsertPoint(accepted);
         b.CreateRet(b.CreateTrunc(value, i32));

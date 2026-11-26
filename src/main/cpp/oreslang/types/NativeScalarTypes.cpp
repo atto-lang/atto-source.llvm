@@ -156,6 +156,10 @@ void validate_native_scalar_types(const Program& program) {
                 if (left.kind != Kind::Int && left.kind != Kind::String) fail(e.offset, "addition requires int or string");
                 return left;
             }
+            case E::ShiftLeft: case E::ShiftRight: case E::ShiftUnsignedRight:
+                require(expression(*e.left, locals), scalar(false), e.offset, "shift requires int operand");
+                require(expression(*e.right, locals), scalar(false), e.offset, "shift requires int distance");
+                return scalar(false);
             case E::Subtract: case E::Multiply: case E::Remainder:
                 require(expression(*e.left, locals), scalar(false), e.offset, "arithmetic requires int");
                 require(expression(*e.right, locals), scalar(false), e.offset, "arithmetic requires int");

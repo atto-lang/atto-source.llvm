@@ -3423,7 +3423,7 @@ private:
     std::unique_ptr<Expression> logical_xor() {
         auto left = logical_and();
         if (token_.text == "^" || token_.text == "^^")
-            fail("removed scalar operator '" + token_.text +
+            fail("removed scalar operator '" + std::string(token_.text) +
                  "'; use an explicit named operation supported by the target profile");
         return left;
     }
