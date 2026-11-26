@@ -68,6 +68,7 @@ impl LockedRoot {
         Ok(Self{directory})
     }
 }
+pub(crate) mod authority;
 pub struct ArtifactStore { root:LockedRoot }
 impl ArtifactStore {
     pub fn open(path:&Path)->io::Result<Self>{
@@ -297,6 +298,58 @@ mod tests {
             let(bytes,hit)=fixture_build(&store,A,false,|_|panic!("child must not compile")).unwrap();
             assert!(hit);execute_native(path,&bytes,42);
             println!("PERSISTENT_NATIVE_CHILD|cache-hit-no-compile|guest=42");
+        }
+    }
+
+    #[test]
+    fn protected_authority_native_guest(){
+        use crate::{compiler_cache_ledger as ledger,sha256::sha256};
+        let t=Temp::new();let cache=t.0.join("cache");let host=t.0.join("authority");
+        for dir in [&cache,&host]{fs::DirBuilder::new().mode(0o700).create(dir).unwrap();}
+        let store=ArtifactStore::open(&cache).unwrap();
+        let authority=authority::Authority::open(&host).unwrap();
+        authority.distinct_from(&store).unwrap();
+        assert!(authority::Authority::open(&cache).unwrap().distinct_from(&store).is_err());
+        let old_record=ledger::record("tenant/a",1,SECRET).unwrap();
+        let old=sha256(&old_record);let new=sha256(&ledger::record("tenant/a",2,[7;32]).unwrap());
+        authority.provision("tenant/a",1,SECRET,&old).unwrap();
+        let key=fixture_key(A);
+        let cold=compile_fixture(A).unwrap();
+        let lease=authority.lease("tenant/a",&old,SECRET).unwrap();
+        store.publish(&key,&receipt::seal(&key,&cold,&lease.secret()).unwrap(),&lease.secret()).unwrap();
+        assert_eq!(store.load(&key,&lease.secret()).unwrap().unwrap(),cold);
+        execute_native(&t.0,&cold,42);
+        let status=Command::new(std::env::current_exe().unwrap())
+            .args(["--exact","compiler_artifact_store::tests::protected_authority_child","--nocapture"])
+            .env("ATTO_NATIVE_AUTHORITY_CHILD",&t.0).status().unwrap();
+        assert!(status.success());
+        assert_eq!(authority.rotate("tenant/a",&old,SECRET,2,[7;32],&new).unwrap_err().kind(),io::ErrorKind::WouldBlock);
+        drop(lease);
+        assert!(authority.rotate("tenant/a",&old,SECRET,1,[7;32],&new).is_err());
+        assert!(authority.rotate("tenant/a",&old,SECRET,2,[7;32],&[0;32]).is_err());
+        assert_eq!(fs::read(host.join("active")).unwrap(),old_record);
+        authority.rotate("tenant/a",&old,SECRET,2,[7;32],&new).unwrap();
+        assert!(authority.lease("tenant/a",&old,SECRET).is_err());
+        assert!(authority.lease("tenant/b",&new,[7;32]).is_err());
+        let next=authority.lease("tenant/a",&new,[7;32]).unwrap();
+        assert!(store.load(&key,&next.secret()).is_err());
+        drop(next);
+        // A restored old record is not current authority.
+        fs::write(host.join("active"),old_record).unwrap();
+        assert!(authority.lease("tenant/a",&new,[7;32]).is_err());
+        println!("NATIVE_CACHE_AUTHORITY|guest=42|lease-fences-rotation|revoked-receipt-denied|stale-record-denied");
+    }
+    #[test]
+    fn protected_authority_child(){
+        if let Some(root)=std::env::var_os("ATTO_NATIVE_AUTHORITY_CHILD"){
+            use crate::{compiler_cache_ledger as ledger,sha256::sha256};
+            let root=Path::new(&root);let store=ArtifactStore::open(&root.join("cache")).unwrap();
+            let authority=authority::Authority::open(&root.join("authority")).unwrap();
+            let pin=sha256(&ledger::record("tenant/a",1,SECRET).unwrap());
+            let lease=authority.lease("tenant/a",&pin,SECRET).unwrap();
+            let bytes=store.load(&fixture_key(A),&lease.secret()).unwrap().unwrap();
+            execute_native(root,&bytes,42);
+            println!("NATIVE_CACHE_AUTHORITY_CHILD|protected-hit-no-compile|guest=42");
         }
     }
 }

@@ -7,6 +7,9 @@ on:
       - 'src/compiler_cache_key.rs'
       - 'src/compiler_artifact_receipt.rs'
       - 'src/compiler_artifact_store.rs'
+      - 'src/compiler_artifact_store/authority.rs'
+      - 'src/compiler_cache_key_policy.rs'
+      - 'src/compiler_cache_ledger.rs'
       - '.github/workflows/incremental-session-candidate.yml'
   workflow_dispatch:
 permissions: {contents: read}
@@ -26,3 +29,5 @@ jobs:
           cargo test --offline --locked --bin atto-llvm compiler_cache_key::tests:: -- --nocapture
           cargo test --offline --locked --bin atto-llvm compiler_artifact_receipt::tests:: -- --nocapture
           cargo test --offline --locked --bin atto-llvm compiler_artifact_store::tests:: -- --nocapture
+          cargo test --offline --locked --bin atto-llvm compiler_cache_key_policy::tests:: -- --nocapture
+          cargo test --offline --locked --bin atto-llvm compiler_cache_ledger::tests:: -- --nocapture
