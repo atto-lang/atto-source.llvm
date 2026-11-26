@@ -628,10 +628,10 @@ pub fn compile_ir(source: &str) -> Result<String, String> {
 }
 
 fn compile_ir_with_profile(source: &str, profile: LibraryProfile) -> Result<String, String> {
-    compile_ir_entry(source,profile,false)
+    compile_ir_entry(source,profile,None)
 }
 
-fn compile_ir_entry(source: &str, profile: LibraryProfile, provider_entry: bool) -> Result<String, String> {
+fn compile_ir_entry(source: &str, profile: LibraryProfile, provider_entry: Option<(&str,usize)>) -> Result<String, String> {
     if source.len() > atto_compiler::SOURCE_CAP {
         return Err("E_SOURCE_LIMIT: native Atto input exceeds 64 KiB".into());
     }
@@ -789,11 +789,17 @@ fn compile_ir_entry(source: &str, profile: LibraryProfile, provider_entry: bool)
         }
         out.push_str("recv_invalid:\n  call void @llvm.trap()\n  unreachable\n}\n");
     }
-    if provider_entry {
+    if let Some((symbol,arity))=provider_entry {
         if profile != LibraryProfile::FreestandingCore || native_actor_mode {
             return Err("E_NAMESPACE_PROFILE: provider entry requires freestanding scalar profile".into());
         }
-        let _=writeln!(out,"define i64 @atto_namespace_provider() {{\nentry:\n  %answer = call i64 @atto_func_{}()\n  ret i64 %answer\n}}\n",typed.main);
+        let (idx,provider)=typed.funcs.iter().enumerate().find(|(_,f)|f.name==symbol)
+            .ok_or("E_NAMESPACE_SYMBOL: checked provider missing")?;
+        if provider.ret!=Type::Int||provider.params.len()!=arity||provider.params.iter().any(|t|*t!=Type::Int){
+            return Err("E_NAMESPACE_ARITY: checked provider ABI mismatch".into());
+        }
+        let args=(0..arity).map(|i|format!("i64 %p{i}")).collect::<Vec<_>>().join(", ");
+        let _=writeln!(out,"define i64 @atto_namespace_provider({args}) {{\nentry:\n  %answer = call i64 @atto_func_{idx}({args})\n  ret i64 %answer\n}}\n");
         return Ok(out);
     }
     let finish = if native_actor_mode { "  call void @atto_actor_finish()\n" }
@@ -911,13 +917,16 @@ fn validate_native_artifact(path: &std::path::Path) -> Result<(), String> {
 
 fn cli() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if let [mode,namespace,symbol]=args.as_slice(){
-        if mode=="--emit-namespace-provider-ir"{
+    if args.first().is_some_and(|mode|mode=="--emit-namespace-provider-ir"){
+        if args.len()!=3&&args.len()!=4{return Err("E_NAMESPACE_PROFILE: provider arguments".into());}
+        let namespace=&args[1];let symbol=&args[2];
+        let arity=match args.get(3).map(String::as_str){None|Some("0")=>0,Some("1")=>1,Some("2")=>2,Some("3")=>3,Some("4")=>4,_=>return Err("E_NAMESPACE_ARITY: invalid expected arity".into())};
+        {
             let mut bytes=Vec::new();
             std::io::stdin().lock().take(4097).read_to_end(&mut bytes).map_err(|e|e.to_string())?;
             if bytes.len()>4096{return Err("E_NAMESPACE_PROFILE: source budget".into());}
             let source=std::str::from_utf8(&bytes).map_err(|_|"invalid UTF-8")?;
-            let ir=namespace_provider::compile(source,namespace,symbol)?;
+            let ir=namespace_provider::compile_arity(source,namespace,symbol,arity)?;
             return std::io::stdout().lock().write_all(ir.as_bytes()).map_err(|e|e.to_string());
         }
     }
