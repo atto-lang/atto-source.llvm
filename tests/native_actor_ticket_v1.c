@@ -58,6 +58,24 @@ static int wait_for(int32_t ref, uint64_t ticket,
     }
     return 0;
 }
+/* Attack a real mailbox while its worker is paused and DATA is full.
+ * All attempts must fail before capacity or ticket state changes. */
+struct tenant_attack {
+    int32_t ref;
+    uint64_t ticket;
+    atto_host_receipt_route_v1 foreign;
+};
+static void *foreign_attempts(void *arg) {
+    struct tenant_attack *a = arg;
+    for (unsigned i = 0; i < 64; ++i) {
+        uint64_t denied = 999;
+        atto_host_ticket_state_v1 ignored;
+        assert(atto_host_actor_send_ticket(a->ref, 99, &a->foreign, &denied) == -1 && denied == 0);
+        assert(atto_host_actor_ticket_snapshot(a->ref, a->ticket, &a->foreign, &ignored) == -1);
+        assert(atto_host_actor_ticket_release(a->ref, a->ticket, &a->foreign) == -1);
+    }
+    return NULL;
+}
 int main(void) {
     assert(atto_host_actor_spawn_scoped(0, 0) == 0);
     int32_t slow = atto_host_actor_spawn_scoped(0, 11);
@@ -123,6 +141,17 @@ int main(void) {
     assert(atto_host_actor_send_ticket(slow, 77, &extra, &denied) == -2 &&
            denied == 0);
     assert(atto_actor_send(slow, 77) == -2);
+    struct tenant_attack attack = {slow, tb, b};
+    attack.foreign.tenant = 22;
+    pthread_t attackers[4];
+    for (unsigned i = 0; i < 4; ++i)
+        assert(pthread_create(&attackers[i], NULL, foreign_attempts, &attack) == 0);
+    for (unsigned i = 0; i < 4; ++i)
+        assert(pthread_join(attackers[i], NULL) == 0);
+    assert(state(slow, tb, &b) == ATTO_TICKET_ADMITTED);
+    denied = 999;
+    assert(atto_host_actor_send_ticket(slow, 77, &extra, &denied) == -2 && denied == 0);
+    puts("ATTO_LLVM_FOREIGN_FULL_MAILBOX_256=PASS");
     pthread_mutex_lock(&pause_lock);
     slow_release = 1;
     pthread_cond_broadcast(&pause_cv);
