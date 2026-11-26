@@ -59,18 +59,15 @@ int main() {
     {
         Program program = oreslang::parse_program(R"(
             fnc precedence(): bool {
-                return true or true ^^ true and false;
+                return true or false and false;
             }
         )");
         const auto& result = *program.functions.front().result;
         require(result.kind == Expression::Kind::LogicalOr,
                 "or must have lowest logical precedence");
         require(result.right &&
-                result.right->kind == Expression::Kind::LogicalXor,
-                "xor must bind more tightly than or");
-        require(result.right->right &&
-                result.right->right->kind == Expression::Kind::LogicalAnd,
-                "and must bind more tightly than xor");
+                result.right->kind == Expression::Kind::LogicalAnd,
+                "and must bind more tightly than or");
     }
 
     {
@@ -130,6 +127,13 @@ int main() {
                 call.argument_names[1] == "a",
                 "named bool call source order lost");
     }
+
+    rejected("fnc bad(): bool { return true ^^ false; }",
+             "E_INTEGER_XOR_UNSUPPORTED");
+    rejected("fnc bad(): int { return 11 ^^ 4; }",
+             "E_INTEGER_XOR_UNSUPPORTED");
+    rejected("fnc bad(): bool { return true && (true ^^ false); }",
+             "E_INTEGER_XOR_UNSUPPORTED");
 
     rejected(R"(
         fnc And(bool value): bool {

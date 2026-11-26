@@ -6,7 +6,7 @@ extern "C" bool oreslang_bool_and_word() asm("BoolProbe.and_word");
 extern "C" bool oreslang_bool_and_symbol() asm("BoolProbe.and_symbol");
 extern "C" bool oreslang_bool_or_word() asm("BoolProbe.or_word");
 extern "C" bool oreslang_bool_or_symbol() asm("BoolProbe.or_symbol");
-extern "C" bool oreslang_bool_xor_symbol() asm("BoolProbe.xor_symbol");
+extern "C" bool oreslang_bool_xor_named_literal() asm("BoolProbe.xor_named_literal");
 extern "C" bool oreslang_bool_nested() asm("BoolProbe.nested");
 extern "C" bool oreslang_bool_and_args(bool, bool) asm("BoolProbe.and_args");
 extern "C" bool oreslang_bool_or_args(bool, bool) asm("BoolProbe.or_args");
@@ -39,7 +39,7 @@ int main() {
     if (!oreslang_bool_yes() || oreslang_bool_no() ||
             oreslang_bool_and_word() || !oreslang_bool_and_symbol() ||
             !oreslang_bool_or_word() || oreslang_bool_or_symbol() ||
-            !oreslang_bool_xor_symbol() || !oreslang_bool_nested() ||
+            !oreslang_bool_xor_named_literal() || !oreslang_bool_nested() ||
             !oreslang_bool_and_args(true, true) ||
             oreslang_bool_and_args(true, false) ||
             !oreslang_bool_or_args(false, true) ||

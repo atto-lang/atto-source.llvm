@@ -35,7 +35,7 @@ def main():
     required_zero = (
         "BoolProbe.yes", "BoolProbe.no", "BoolProbe.and_word",
         "BoolProbe.and_symbol", "BoolProbe.or_word", "BoolProbe.or_symbol",
-        "BoolProbe.xor_symbol", "BoolProbe.nested",
+        "BoolProbe.xor_named_literal", "BoolProbe.nested",
         "BoolProbe.precedence_probe",
     )
     for symbol in required_zero:
@@ -99,6 +99,18 @@ def main():
                 raise AssertionError(f"unexpected non-BoolProbe call: {line}")
 
     with tempfile.TemporaryDirectory(prefix="oreslang-bool-aot-") as d:
+        for index, invalid in enumerate((
+            "fnc bad(): bool { return true ^^ false; }",
+            "fnc bad(): int { return 11 ^^ 4; }",
+            "fnc bad(): bool { return true && (true ^^ false); }",
+        )):
+            rejected = Path(d) / f"rejected-{index}.atto"
+            rejected.write_text(invalid + "\n", encoding="utf-8")
+            failure = subprocess.run([a.compiler, str(rejected)], capture_output=True,
+                                     text=True, timeout=30, check=False)
+            if (failure.returncode == 0 or failure.stdout.strip()
+                    or "E_INTEGER_XOR_UNSUPPORTED" not in failure.stderr):
+                raise AssertionError("obsolete ^^ reached native IR or wrong diagnostic")
         ir = Path(d) / "guest.ll"
         ir.write_text(emitted, encoding="utf-8")
         env = os.environ.copy()

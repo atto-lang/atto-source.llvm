@@ -20,11 +20,11 @@ define module BoolProbe as
     pub fnc or_symbol(): bool {
         return false || false;
     }
-    pub fnc xor_symbol(): bool {
-        return true ^^ false;
+    pub fnc xor_named_literal(): bool {
+        return Xor(true, false);
     }
     pub fnc nested(): bool {
-        return false or true and (true ^^ false);
+        return false or true and Xor(true, false);
     }
 
     pub fnc and_args(bool a, bool b): bool {
@@ -34,7 +34,7 @@ define module BoolProbe as
         return a || b;
     }
     pub fnc xor_args(bool a, bool b): bool {
-        return a ^^ b;
+        return Xor(a, b);
     }
 
     pub fnc builtin_and(bool a, bool b, bool c): bool {
@@ -76,7 +76,7 @@ define module BoolProbe as
         return Or(a, b, c, d, e, f, g, h);
     }
     pub fnc precedence_probe(): bool {
-        return true or true ^^ true and false;
+        return true or false and false;
     }
     pub fnc left_bool(bool value): bool {
         return value;

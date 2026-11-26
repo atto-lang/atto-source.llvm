@@ -1146,13 +1146,11 @@ private:
 
     std::unique_ptr<Expression> logical_xor() {
         auto left = logical_and();
-        while (token_.text == "^^") {
-            const auto offset = token_.offset;
-            advance();
-            auto expr = make_expression(Expression::Kind::LogicalXor, offset);
-            expr->left = std::move(left);
-            expr->right = logical_and();
-            left = std::move(expr);
+        // Canonical ^^ is signed-i64 XOR, not Boolean XOR. This older
+        // stacked Boolean compiler has no verified integer-XOR lowering.
+        // Never publish the old i1 operator under the current spelling.
+        if (token_.text == "^^") {
+            fail("E_INTEGER_XOR_UNSUPPORTED: ^^ requires native signed-i64 lowering; use Xor for bool");
         }
         return left;
     }
