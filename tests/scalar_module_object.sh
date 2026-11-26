@@ -56,6 +56,29 @@ for opt in 0 2; do
   printf 'define module cart as pub fnc value(): int { return 1 + ; } end\n' >"$work/bad.atto"
   if bash "$driver" "$work/bad.atto" "$d/new-cart.o" cart value; then exit 1; fi
   sha256sum -c "$d/prior.sha"
+  # Protected source aliases and special output nodes must fail without
+  # altering either the original input or last admitted provider.
+  sha256sum "$work/cart.atto" >"$d/source.sha"
+  ln "$work/cart.atto" "$d/source-alias.o"
+  if bash "$driver" "$work/cart.atto" "$d/source-alias.o" cart value; then exit 1; fi
+  sha256sum -c "$d/source.sha"
+  test "$d/source-alias.o" -ef "$work/cart.atto"
+  mkdir "$d/directory.o"
+  if bash "$driver" "$work/cart.atto" "$d/directory.o" cart value; then exit 1; fi
+  test -d "$d/directory.o"
+  mkfifo "$d/fifo.o"
+  if bash "$driver" "$work/cart.atto" "$d/fifo.o" cart value; then exit 1; fi
+  test -p "$d/fifo.o"
+  sha256sum -c "$d/prior.sha"
+  # Relink with no provider source present. This is still a C consumer,
+  # not source-language namespace admission.
+  mv "$work/cart.atto" "$work/cart.hidden"
+  mv "$work/tax.atto" "$work/tax.hidden"
+  "$clang" "$d/new-cart.o" "$d/tax.o" "$d/consumer.o" -o "$d/source-free"
+  rc=0; "$d/source-free" || rc=$?; test "$rc" = 43
+  mv "$work/cart.hidden" "$work/cart.atto"
+  mv "$work/tax.hidden" "$work/tax.atto"
+  sha256sum -c "$d/reuse.sha"
   sed -i 's/return 41/return 40/' "$work/cart.atto"
-  printf 'REAL_ATTO_MODULE_OBJECTS|O%s|native=42/43/42/43|unchanged=2|negative=4|host_consumer=YES\n' "$opt"
+  printf 'REAL_ATTO_MODULE_OBJECTS|O%s|native=42/43/42/43|unchanged=2|negative=7|source_free_relink=YES|host_consumer=YES\n' "$opt"
 done
