@@ -126,7 +126,14 @@ int main(int argc, char** argv) {
         {"2 |> match 2 over { on 2 -> 42, default -> 0, }", false},
         {"2 |> match over { default -> 0, on 2 -> 42, }", false},
         {"2 |> match over { on 2 -> 42, default -> 0, end", false},
-        {"increment(1) |> match over { on 2 -> 42, default -> 0, }", false}
+        {"increment(1) |> match over { on 2 -> 42, default -> 0, }", false},
+        {"42 |> match over { on 42 -> 100; is int -> -20; }", true},
+        {"7 |> match over { on 42 -> 100; on is int -> -20; }", true},
+        {"true |> match over { is bool -> 42; }", true},
+        {"7 |> match over { is bool -> 42; }", false},
+        {"7 |> match over { is int -> 42; on _ -> 0; }", false},
+        {"7 |> match over { 7 -> 42; on _ -> 0; }", false},
+        {"7 |> match over { _ -> 42; }", false}
     };
     for (const auto& c : pipelines) {
         bool accepted = false;
