@@ -843,14 +843,15 @@ llvm::Value* lower(const Expression& expr,
 
 } // namespace
 
-std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
+static std::string emit_verified_llvm_ir_impl(const Program& source, bool wasm32_target,
                                   bool cortex_m_target,
                                   bool bounded_allocator_provider,
                                   const std::string& isolate_entry,
                                   bool actor_region_v1,
                                   const std::vector<CheckedSourceRoutineV1>& checked_routines,
                                   const std::vector<CheckedLogSiteV1>& checked_sites,
-                                  bool tenant_vm_guest) {
+                                  bool tenant_vm_guest,
+                                  const std::unordered_set<std::string>& interface_declarations) {
     for (const auto& fn : source.functions)
         for (const auto& binding : fn.locals)
             if (binding.native_box_i64 &&
@@ -1780,7 +1781,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         // C ABI symbol stays an external declaration. It must be satisfied
         // by the already-approved statically linked object, never by source
         // code, an inferred symbol alias, or a generated empty function body.
-        if (fn.foreign_import) continue;
+        if (fn.foreign_import || interface_declarations.count(fn.name)) continue;
         llvm::Function* function = declarations.at(native_function_slot(fn.name, fn.parameters.size()));
         llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", function);
         llvm::IRBuilder<> builder(entry);
@@ -4149,6 +4150,156 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     module.print(output, nullptr);
     output.flush();
     return result;
+}
+
+
+std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
+                                  bool cortex_m_target, bool bounded_allocator_provider,
+                                  const std::string& isolate_entry, bool actor_region_v1,
+                                  const std::vector<CheckedSourceRoutineV1>& checked_routines,
+                                  const std::vector<CheckedLogSiteV1>& checked_sites,
+                                  bool tenant_vm_guest) {
+    return emit_verified_llvm_ir_impl(source, wasm32_target, cortex_m_target,
+        bounded_allocator_provider, isolate_entry, actor_region_v1,
+        checked_routines, checked_sites, tenant_vm_guest, {});
+}
+
+std::string emit_verified_scalar_namespace_consumer(
+        std::string_view admitted_consumer_source,
+        const std::vector<VerifiedScalarNamespaceBinding>& bindings) {
+    // The host has already authenticated consumer bytes and interface pins.
+    // The AST is admitted afresh; no provider implementation is loaded.
+    if (admitted_consumer_source.size()>65536 || bindings.empty() || bindings.size()>32)
+        throw std::runtime_error("restricted interface consumer inventory limit");
+    auto program=parse_verified_namespace_source_unresolved(admitted_consumer_source);
+    if (program.namespace_imports.size()!=bindings.size() ||
+            !program.imports.empty() || !program.exports.empty() ||
+            !program.module.empty() || !program.namespace_name.empty() ||
+            !program.classes.empty() || !program.actors.empty() ||
+            !program.sum_types.empty() || !program.contracts.empty() ||
+            !program.conforms.empty() || !program.type_only_declarations.empty() ||
+            !program.type_constraint_descriptors.empty() ||
+            !program.generators.empty() || !program.cooperative_loops.empty() ||
+            program.pointer_int_plan || !program.inverted_structs.empty() ||
+            program.inverted_main || program.functions.size()!=1)
+        throw std::runtime_error("restricted interface consumer requires standalone scalar main");
+    auto& main=program.functions.front();
+    if (main.name!="main" || !main.exported || main.foreign_import ||
+            main.returns_void || main.return_type!=ScalarType::I64 ||
+            !main.parameters.empty() || !main.generic_parameters.empty() ||
+            !main.locals.empty() || !main.statements.empty() ||
+            !main.early_returns.empty() || main.scalar_while ||
+            !main.source_tasks.empty() || !main.future_pipelines.empty() ||
+            !main.actor_spawns.empty() || !main.actor_actions.empty() ||
+            !main.actor_sends.empty() || !main.actor_stops.empty() ||
+            !main.actor_field_writes.empty() || main.caught_throw_value ||
+            !main.caught_throw_defers.empty() || main.has_declared_effects ||
+            main.async_source_i64 || !main.c_export_u32_symbol.empty() ||
+            !main.return_class.empty() || !main.return_sum.empty() || !main.result)
+        throw std::runtime_error("restricted interface consumer requires pure i64 main expression");
+    std::unordered_map<std::string,const VerifiedScalarNamespaceBinding*> aliases;
+    std::unordered_set<std::string> used_aliases, symbols;
+    std::unordered_set<const VerifiedScalarNamespaceBinding*> selected_bindings;
+    std::map<std::string,std::string> symbol_owners;
+    for (const auto& imp : program.namespace_imports) {
+        const VerifiedScalarNamespaceBinding* selected=nullptr;
+        for (const auto& b:bindings)
+            if (b.interface.alias()==imp.package_selector) {
+                if (selected) throw std::runtime_error("ambiguous interface selector");
+                selected=&b;
+            }
+        if (!selected || !selected_bindings.insert(selected).second ||
+                !aliases.emplace(imp.local_name,selected).second)
+            throw std::runtime_error("unbound interface selector");
+    }
+    std::vector<Function> witnesses;
+    auto bind_expression=[&](const auto& self,Expression& e,std::size_t depth)->void {
+        if(depth>64)throw std::runtime_error("restricted interface expression depth");
+        using K=Expression::Kind;
+        if(e.kind==K::Integer)return;
+        if(e.kind==K::Negate && e.left){self(self,*e.left,depth+1);return;}
+        if((e.kind==K::Add||e.kind==K::Subtract||e.kind==K::Multiply)&&e.left&&e.right){
+            self(self,*e.left,depth+1);self(self,*e.right,depth+1);return;
+        }
+        if(e.kind!=K::Call||!e.arguments.empty()||e.type_arguments_present||e.pipeline_stage)
+            throw std::runtime_error("unsupported interface consumer expression");
+        const auto dot=e.name.find('.');
+        if(dot==std::string::npos)throw std::runtime_error("unqualified interface call");
+        const auto alias=e.name.substr(0,dot);
+        const auto found=aliases.find(alias);
+        if(found==aliases.end())throw std::runtime_error("unknown interface alias");
+        const auto& binding=*found->second;
+        const auto imp=std::find_if(program.namespace_imports.begin(),program.namespace_imports.end(),
+            [&](const auto& i){return i.local_name==alias;});
+        const auto symbol=package_interface::stable_scalar_link_symbol(
+            binding.interface,binding.slot,imp->namespace_name,binding.module,e.name.substr(dot+1));
+        const auto owner=symbol_owners.emplace(symbol,alias);
+        if(!owner.second && owner.first->second!=alias)
+            throw std::runtime_error("duplicate logical interface slot");
+        used_aliases.insert(alias);
+        e.name=symbol;
+        if(symbols.insert(symbol).second){
+            // Signature witness for existing type and ownership passes only.
+            // Its sentinel body never reaches LLVM code generation.
+            Function signature;
+            signature.name=symbol;signature.exported=true;
+            signature.result=std::make_unique<Expression>();
+            signature.result->kind=K::Integer;
+            signature.result->integer=0;
+            witnesses.push_back(std::move(signature));
+        }
+    };
+    bind_expression(bind_expression,*main.result,0);
+    if(used_aliases.size()!=aliases.size())
+        throw std::runtime_error("unused interface binding");
+    program.namespace_imports.clear();
+    for(auto& witness:witnesses)program.functions.push_back(std::move(witness));
+    resolve_and_validate_program(program);
+    return emit_verified_llvm_ir_impl(program,false,false,false,{},false,{},{},false,symbols);
+}
+
+
+std::string emit_verified_scalar_namespace_provider(
+        std::string_view admitted_provider_source,
+        std::string_view expected_source_sha256,
+        const VerifiedScalarNamespaceBinding& binding,
+        std::string_view namespace_name,
+        std::string_view function_name) {
+    // Both pins are selected by the trusted host, not by provider source.
+    if (admitted_provider_source.size()>65536 ||
+        !package_interface::detail::sha_hex(std::string(expected_source_sha256)) ||
+        package_interface::sha256(std::vector<std::uint8_t>(
+            admitted_provider_source.begin(),admitted_provider_source.end()))!=expected_source_sha256)
+        throw std::runtime_error("verified provider source digest mismatch");
+    const auto symbol=package_interface::stable_scalar_link_symbol(
+        binding.interface,binding.slot,namespace_name,binding.module,function_name);
+    auto p=parse_unresolved_program(admitted_provider_source);
+    if(p.module!=binding.module || !p.namespace_name.empty() ||
+        !p.namespace_imports.empty() || !p.imports.empty() || !p.exports.empty() ||
+        !p.classes.empty() || !p.actors.empty() || !p.sum_types.empty() ||
+        !p.contracts.empty() || !p.conforms.empty() || !p.type_only_declarations.empty() ||
+        !p.type_constraint_descriptors.empty() || !p.generators.empty() ||
+        !p.cooperative_loops.empty() || p.pointer_int_plan || !p.inverted_structs.empty() ||
+        p.inverted_main || p.functions.size()!=1)
+        throw std::runtime_error("restricted provider module inventory mismatch");
+    auto& fn=p.functions.front();
+    if(fn.name!=function_name || fn.name=="main" || !fn.exported ||
+        fn.foreign_import || fn.returns_void || fn.return_type!=ScalarType::I64 ||
+        !fn.parameters.empty() || !fn.generic_parameters.empty() || !fn.locals.empty() ||
+        !fn.statements.empty() || !fn.early_returns.empty() || fn.scalar_while ||
+        !fn.source_tasks.empty() || !fn.future_pipelines.empty() ||
+        !fn.actor_spawns.empty() || !fn.actor_actions.empty() || !fn.actor_sends.empty() ||
+        !fn.actor_stops.empty() || !fn.actor_field_writes.empty() || fn.caught_throw_value ||
+        !fn.caught_throw_defers.empty() || fn.has_declared_effects || fn.async_source_i64 ||
+        !fn.c_export_u32_symbol.empty() || !fn.return_class.empty() ||
+        !fn.return_sum.empty() || !fn.result || !native_trap_pure_integer(*fn.result))
+        throw std::runtime_error("restricted provider must define one public pure i64 function");
+    // Admit the source declaration before translating its compiler-owned
+    // physical name. The same checked scalar ABI is used on both sides.
+    resolve_and_validate_program(p);
+    p.module.clear();
+    p.functions.front().name=symbol;
+    return emit_verified_llvm_ir(p);
 }
 
 } // namespace oreslang
