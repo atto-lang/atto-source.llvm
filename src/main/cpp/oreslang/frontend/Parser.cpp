@@ -6673,20 +6673,24 @@ private:
         require("(");
         if (token_.kind != Kind::String)
             fail("E_PAIR_KEY_TYPE: Pair first argument must be string");
-        // Validate the literal through the production decoder. This slice
-        // accepts no dynamic key, effects, allocations or owned Pair escape.
+        // The discarded static string is validated and has no guest
+        // effects. The second operand must survive as a checked expression,
+        // evaluated once by normal native lowering, not by the parser.
         (void)string_literal(token_.text);
         advance();
         require(",");
-        const auto second = signed_integer_literal();
+        auto second = expression();
         require(")");
         if (!accept("."))
             fail("E_PAIR_ESCAPE_UNSUPPORTED: native owned Pair ABI is not implemented");
         if (token_.text != "second")
-            fail("E_PAIR_PROJECTION_UNSUPPORTED: only pure i64 second projection is admitted");
+            fail("E_PAIR_PROJECTION_UNSUPPORTED: only i64 second projection is admitted");
         require("second");
-        auto expr = make_expression(Expression::Kind::Integer, offset);
-        expr->integer = second;
+        // Existing identity-only scalar cast validates the actual type and
+        // denies nominal/aggregate handles; no numeric coercion is added.
+        auto expr = make_expression(Expression::Kind::Cast, offset);
+        expr->cast_target = ScalarType::I64;
+        expr->left = std::move(second);
         return expr;
     }
 
