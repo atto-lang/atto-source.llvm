@@ -40,6 +40,40 @@ pub fn compile(source: &str) -> Result<Vec<u8>, Diagnostic> {
         return Err(Diagnostic::new(pos, "E_UNSUPPORTED_CONTINUOUS_PIPE",
             "typed pipe/rpipe DATA graph is planned but no guest transport or PipeHandle exists"));
     }
+    // Attached nominal struct syntax has its own target AST. Never route it
+    // through identity-bearing class or structural shape lowering. Locate
+    // top-level declaration headers using lexer tokens, not source text.
+    let mut depth = 0usize;
+    let mut pending_struct = None;
+    for (i, token) in toks.iter().enumerate() {
+        if depth == 0 && matches!(toks.get(i..i.saturating_add(5)),
+            Some([lexer::Token { tok: lexer::Tok::Ident(a), .. },
+                  lexer::Token { tok: lexer::Tok::Ident(_), .. },
+                  lexer::Token { tok: lexer::Tok::Assign, .. },
+                  lexer::Token { tok: lexer::Tok::Ident(b), .. },
+                  lexer::Token { tok: lexer::Tok::LBrace, .. }])
+                if a == "type" && b == "struct") {
+            pending_struct = Some(i);
+        }
+        match &token.tok {
+            lexer::Tok::LBrace => depth += 1,
+            lexer::Tok::RBrace => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    if let Some(start) = pending_struct.take() {
+                        if matches!(toks.get(i+1).map(|t| &t.tok),
+                            Some(lexer::Tok::Ident(w)) if w == "with") {
+                            let parsed = parser::Parser::new(toks[start..].to_vec())
+                                .parse_struct_with_target()?;
+                            return Err(Diagnostic::new(parsed.pos, "E_UNSUPPORTED",
+                                "attached struct parsed; checked value ABI and initialization proof required before emission"));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
     // Detect target declarations at any file-scope position, not only at
     // source byte zero. Ignore comments/strings (the lexer already tokenizes
     // them) and ignore nested brace bodies so a string or local expression
