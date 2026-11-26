@@ -69,23 +69,29 @@ fn field_name(tokens: &[Token], at: usize, binder: &str) -> Option<String> {
 fn lower_callback(tokens: &[Token], open: usize, end: usize,
     params: &[String]) -> Result<(Vec<Token>, usize), String> {
     let close = enclosing_paren(tokens, open, end)?;
-    let k = open + 1;
-    if !is_word(tokens, k, "critical")
-        || !matches!(tokens.get(k+1).map(|x| &x.tok), Some(Tok::Minus))
-        || !(is_word(tokens, k+2, "read") || is_word(tokens, k+2, "write"))
-        || !matches!(tokens.get(k+3).map(|x| &x.tok), Some(Tok::Pipe))
-        || !matches!(tokens.get(k+5).map(|x| &x.tok), Some(Tok::Pipe))
-        || !matches!(tokens.get(k+6).map(|x| &x.tok), Some(Tok::Arrow)) {
+    let (write, k) = target_syntax::state_callback_mode(tokens, open).map_err(|e| e.to_string())?;
+    if !matches!(tokens.get(k).map(|x| &x.tok), Some(Tok::Pipe))
+        || !matches!(tokens.get(k+2).map(|x| &x.tok), Some(Tok::Pipe))
+        || !matches!(tokens.get(k+3).map(|x| &x.tok), Some(Tok::Arrow)) {
         return Err(error("E_SEALED", "critical callback requires critical-read/write |s| -> body"));
     }
-    let binder = match tokens.get(k+4).map(|x| &x.tok) {
-        Some(Tok::Ident(name)) if name != "self" => name.as_str(),
+    let binder = match tokens.get(k+1).map(|x| &x.tok) {
+        Some(Tok::Ident(name)) if name != "self" && name != "_"
+            && !target_syntax::is_state_intrinsic(name) && !params.contains(name) => name.as_str(),
         _ => return Err(error("E_SEALED", "invalid critical callback binder")),
     };
-    let start = k+7;
+    let mut start = k+4;
     let pos = tokens[open].pos;
-    if is_word(tokens, k+2, "read") {
-        if close != start + 3 {
+    if !write {
+        let mut projection_end = close;
+        if matches!(tokens.get(start).map(|x| &x.tok), Some(Tok::LBrace))
+            && is_word(tokens, start+1, "return")
+            && matches!(tokens.get(close-1).map(|x| &x.tok), Some(Tok::RBrace))
+            && matches!(tokens.get(close-2).map(|x| &x.tok), Some(Tok::Semi)) {
+            start += 2;
+            projection_end -= 2;
+        }
+        if projection_end != start + 3 {
             return Err(error("E_UNSUPPORTED_CRITICAL",
                 "only one scalar field read is currently native-lowered"));
         }
@@ -148,11 +154,15 @@ fn lower_method_body(tokens: &[Token], body_start: usize, body_end: usize,
     let mut out = Vec::new();
     let mut i = body_start;
     while i < body_end {
-        if is_word(tokens,i,"self")
+        let intrinsic_at = |j: usize| matches!(tokens.get(j).map(|x| &x.tok),
+            Some(Tok::Ident(name)) if target_syntax::is_state_intrinsic(name));
+        let open = if is_word(tokens,i,"self")
             && matches!(tokens.get(i+1).map(|x| &x.tok), Some(Tok::Dot))
-            && is_word(tokens,i+2,"handle_state") {
-            let open=i+3;
-            let write = is_word(tokens,open+3,"write");
+            && intrinsic_at(i+2) { Some(i+3) }
+            else if intrinsic_at(i) && (i == body_start || !matches!(tokens[i-1].tok, Tok::Dot)) { Some(i+1) }
+            else { None };
+        if let Some(open) = open {
+            let (write, _) = target_syntax::state_callback_mode(tokens, open).map_err(|e| e.to_string())?;
             if write && i > body_start
                 && !matches!(tokens[i-1].tok,Tok::LBrace|Tok::Semi|Tok::RBrace) {
                 return Err(error("E_UNSUPPORTED_CRITICAL",
