@@ -1,0 +1,15 @@
+// First compiled native I/O suspension: stdin fd 0 is a literal capability boundary.
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+pub fnc main(): int {
+  const worker: ActorRef<Worker> = spawn Worker();
+  await readable(0);
+  worker.send(1);
+  stop worker;
+  return 43;
+}

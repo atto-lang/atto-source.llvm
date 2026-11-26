@@ -1,4 +1,5 @@
 #include "oreslang/runtime/NativeOresVMNio.h"
+#include "oreslang/runtime/NativeOresVMActorNio.hpp"
 
 #include <array>
 #include <cstdint>
@@ -698,3 +699,61 @@ extern "C" void ores_native_vm_nio_drain_signal(
     if (gate.owns_lock() && backend->raw)
         ores_native_nio_drain_completion_signal(backend->raw, reactor);
 }
+
+namespace oreslang::runtime {
+// Keep the exact existing VM backend lease across each host operation. An
+// accepted watch owns a persistent callback permit in the backend ledger
+// until its terminal completion is explicitly acknowledged.
+bool vm_nio_actor_try_watch(OresNativeVM* vm,
+        NativeTransportCallbackGate& owner, int fd, std::uint32_t events,
+        OresNativeNioWatch* output) noexcept {
+    if (!vm || !output) return false;
+    NioBackendLease lease(vm);
+    auto* backend = lease.get();
+    if (!backend) return false;
+    // Same non-parking gate and FD reservation fence as the host path.
+    TryGate gate(backend->gate);
+    if (!gate.owns_lock() || !backend->raw || backend->fd_reserved_locked(fd))
+        return false;
+    return nio_actor_try_watch(backend->raw, owner, fd, events, output);
+}
+bool vm_nio_actor_try_cancel(OresNativeVM* vm,
+                             OresNativeNioWatch watch) noexcept {
+    if (!vm) return false;
+    NioBackendLease lease(vm);
+    auto* backend = lease.get();
+    if (!backend) return false;
+    TryGate gate(backend->gate);
+    if (!gate.owns_lock() || !backend->raw) return false;
+    return nio_actor_try_cancel(backend->raw, watch);
+}
+bool vm_nio_actor_stop(OresNativeVM* vm) noexcept {
+    if (!vm) return false;
+    NioBackendLease lease(vm);
+    auto* backend = lease.get();
+    if (!backend) return false;
+    TryGate gate(backend->gate);
+    if (!gate.owns_lock() || !backend->raw) return false;
+    return nio_actor_stop(backend->raw);
+}
+bool vm_nio_actor_try_pop(OresNativeVM* vm,
+                          ActorNioCompletion* output) noexcept {
+    if (!vm || !output) return false;
+    NioBackendLease lease(vm);
+    auto* backend = lease.get();
+    if (!backend) return false;
+    TryGate gate(backend->gate);
+    if (!gate.owns_lock() || !backend->raw) return false;
+    return nio_actor_try_pop(backend->raw, output);
+}
+bool vm_nio_actor_acknowledge(OresNativeVM* vm,
+                              const ActorNioCompletion& completion) noexcept {
+    if (!vm) return false;
+    NioBackendLease lease(vm);
+    auto* backend = lease.get();
+    if (!backend) return false;
+    TryGate gate(backend->gate);
+    if (!gate.owns_lock() || !backend->raw) return false;
+    return nio_actor_acknowledge(backend->raw, completion);
+}
+} // namespace oreslang::runtime

@@ -12,20 +12,20 @@
 #include <utility>
 
 static std::atomic<std::size_t> allocations{0};
-void* operator new(std::size_t n) {
+__attribute__((noinline)) void* operator new(std::size_t n) {
     allocations.fetch_add(1, std::memory_order_relaxed);
     if (auto* p = std::malloc(n ? n : 1)) return p;
     throw std::bad_alloc();
 }
-void* operator new[](std::size_t n) {
+__attribute__((noinline)) void* operator new[](std::size_t n) {
     allocations.fetch_add(1, std::memory_order_relaxed);
     if (auto* p = std::malloc(n ? n : 1)) return p;
     throw std::bad_alloc();
 }
-void operator delete(void* p) noexcept { std::free(p); }
-void operator delete[](void* p) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t) noexcept { std::free(p); }
-void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
+__attribute__((noinline)) void operator delete(void* p) noexcept { std::free(p); }
+__attribute__((noinline)) void operator delete[](void* p) noexcept { std::free(p); }
+__attribute__((noinline)) void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+__attribute__((noinline)) void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 
 using Table = oreslang::runtime::RequestSlotTable<2, 128>;
 int main() {

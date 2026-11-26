@@ -303,12 +303,49 @@ int main(void) {
     check(ores_native_continuation_store_try_claim_ready_resume(
         continuations, pending, &record));
     check(record.state == ORES_CONTINUATION_CLAIMED);
+    /* A physical execution cannot lose its final owning pin while CLAIMED. */
+    check(!ores_native_continuation_store_release(continuations, pending));
+    check(ores_native_continuation_store_get(continuations, pending, &record));
+    check(record.state == ORES_CONTINUATION_CLAIMED);
     check(!ores_native_continuation_store_cancel(continuations, pending));
     check(!ores_native_continuation_store_try_claim_ready_resume(
         continuations, pending, NULL));
     check(ores_native_continuation_store_finish_resume(continuations, pending));
     check(!ores_native_continuation_store_finish_resume(continuations, pending));
     check(ores_native_continuation_store_release(continuations, pending));
+
+    /*
+     * A nested child release may reach a CLAIMED parent with only its final
+     * execution pin remaining. Child cleanup succeeds, but the parent must
+     * stay CLAIMED until its actual physical owner completes and releases.
+     */
+    OresNativeContinuationHandle claimed_parent =
+        publish(continuations, execution);
+    check(ores_native_continuation_store_notify_ready(
+        continuations, claimed_parent));
+    check(ores_native_continuation_store_try_claim_ready_resume(
+        continuations, claimed_parent, &record));
+    OresNativeContinuationHandle nested = {0, 0};
+    check(ores_native_continuation_store_publish(
+        continuations, execution, claimed_parent,
+        ORES_CONTINUATION_BOUNDARY_AWAIT, 9, 101, &nested));
+    check(ores_native_continuation_store_release(
+        continuations, claimed_parent)); /* drop original parent owner pin */
+    check(ores_native_continuation_store_release(
+        continuations, nested)); /* cascade reaches protected parent */
+    check(!ores_native_continuation_store_get(
+        continuations, nested, &record));
+    check(ores_native_continuation_store_get(
+        continuations, claimed_parent, &record));
+    check(record.state == ORES_CONTINUATION_CLAIMED);
+    check(!ores_native_continuation_store_release(
+        continuations, claimed_parent));
+    check(ores_native_continuation_store_finish_resume(
+        continuations, claimed_parent));
+    check(ores_native_continuation_store_release(
+        continuations, claimed_parent));
+    check(!ores_native_continuation_store_get(
+        continuations, claimed_parent, &record));
 
     /* Cancellation before Future readiness is irrevocable. */
     OresNativeContinuationHandle cancelled = publish(continuations, execution);
@@ -466,7 +503,32 @@ int main(void) {
     check(!ores_native_await_trace_ready_resume_begin(
         executions, continuations, (OresNativeExecutionId){88, 10},
         link, &trace_origin, NULL));
+    /* Forged or recycled physical ownership must never finish a guest turn. */
+    OresNativeSuspensionLink forged_finish = link;
+    ++forged_finish.parent.slot;
+    check(!ores_native_await_trace_resume_finish(
+        continuations, forged_finish));
+    forged_finish = link;
+    ++forged_finish.parent.generation;
+    check(!ores_native_await_trace_resume_finish(
+        continuations, forged_finish));
+    forged_finish = link;
+    ++forged_finish.continuation.generation;
+    check(!ores_native_await_trace_resume_finish(
+        continuations, forged_finish));
+    forged_finish = link;
+    ++forged_finish.execution_id.execution;
+    check(!ores_native_await_trace_resume_finish(
+        continuations, forged_finish));
+    forged_finish = link;
+    ++forged_finish.execution_id.runtime_domain;
+    check(!ores_native_await_trace_resume_finish(
+        continuations, forged_finish));
+    check(ores_native_continuation_store_get(
+        continuations, link.continuation, &record));
+    check(record.state == ORES_CONTINUATION_CLAIMED);
     check(ores_native_await_trace_resume_finish(continuations, link));
+    check(!ores_native_await_trace_resume_finish(continuations, link));
     check(ores_native_execution_context_store_release(executions, resumed));
     check(ores_native_continuation_store_release(
         continuations, link.continuation));

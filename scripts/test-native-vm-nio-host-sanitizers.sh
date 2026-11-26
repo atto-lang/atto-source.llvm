@@ -54,6 +54,34 @@ for toolchain in gcc clang; do
       timeout 60s "$dest/lifecycle"
   done
   printf 'PASS: %s C VM + C++ epoll lifecycle / close races (ASan+UBSan)\n' "$toolchain"
+  # The exact-head main CONTROL startup test shares the actual VM, actor
+  # scheduler and future C objects, not a standalone model.
+  "$cc" -std=c11 -D_GNU_SOURCE "${shared[@]}" -c \
+    tests/native_vm_main_control_loop_test.c -o "$dest/main_control_test.o"
+  "$cc" "${shared[@]}" "$dest/main_control_test.o" \
+    "$dest/NativeOresVM.o" "$dest/NativeActorScheduler.o" \
+    "$dest/NativeActorFuture.o" -o "$dest/main-control"
+  for attempt in {1..10}; do
+    ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+    UBSAN_OPTIONS=halt_on_error=1 \
+      timeout 30s "$dest/main-control"
+  done
+  printf 'PASS: %s VM main CONTROL thread startup and retirement (ASan+UBSan)\n' "$toolchain"
+  # The GNU/Clang linker wrapper fails the first ACTUAL pthread_create call
+  # inside NativeOresVM and then permits a retry of the same cold VM.
+  "$cc" -std=c11 -D_GNU_SOURCE "${shared[@]}" -c \
+    tests/native_vm_main_control_create_failure_test.c \
+    -o "$dest/main_control_failure_test.o"
+  "$cc" "${shared[@]}" -Wl,--wrap=pthread_create \
+    "$dest/main_control_failure_test.o" \
+    "$dest/NativeOresVM.o" "$dest/NativeActorScheduler.o" \
+    "$dest/NativeActorFuture.o" -o "$dest/main-control-failure"
+  for attempt in {1..10}; do
+    ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+    UBSAN_OPTIONS=halt_on_error=1 \
+      timeout 30s "$dest/main-control-failure"
+  done
+  printf 'PASS: %s CONTROL pthread-create failure and retry (ASan+UBSan)\n' "$toolchain"
   # Include the byte-identical standalone epoll and bootstrap-failure
   # fixtures in the source-local native sanitizer gate.
   for fixture in native_epoll_reactor_test native_epoll_reactor_bootstrap_failure_test; do
@@ -69,17 +97,18 @@ done
 # of MEDIUM/HIGH. This is host frontend validation, not parallel actors.
 for toolchain in gcc clang; do
   cxx="$([[ "$toolchain" == gcc ]] && printf 'g++' || printf 'clang++')"
-  "$cxx" -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror -pthread \
-    -fsanitize=address,undefined -fno-omit-frame-pointer \
-    -I"$source_root" \
-    tests/actor_max_threads_source_admission_test.cpp \
-    "$source_root/oreslang/frontend/Parser.cpp" \
-    "$source_root/oreslang/frontend/MethodResolver.cpp" \
-    "$source_root/oreslang/types/NativeScalarTypes.cpp" \
-    "$source_root/oreslang/types/OwnershipChecker.cpp" \
-    -o "$tmp/actor-max-threads-$toolchain"
+  # Use the production CMake target, which supplies LLVM headers as
+  # SYSTEM includes and links the real LLVM Support implementation.
+  build="$tmp/frontend-$toolchain"
+  cmake -S "$repo_root" -B "$build" -DBUILD_TESTING=ON \
+    -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER="$toolchain" \
+    -DCMAKE_CXX_COMPILER="$cxx" \
+    '-DCMAKE_CXX_FLAGS=-O1 -g -pthread -fsanitize=address,undefined -fno-omit-frame-pointer' \
+    '-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined'
+  cmake --build "$build" --target oreslang-native-actor-max-threads-admission-test -j2
   ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
   UBSAN_OPTIONS=halt_on_error=1 \
-    timeout 30s "$tmp/actor-max-threads-$toolchain"
+    ctest --test-dir "$build" -R '^native_actor_max_threads_source_admission$' \
+      --output-on-failure --no-tests=error
   printf 'PASS: %s typed actor-thread frontend admission (ASan+UBSan)\n' "$toolchain"
 done

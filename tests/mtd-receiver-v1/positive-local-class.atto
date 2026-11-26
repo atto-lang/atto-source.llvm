@@ -1,0 +1,19 @@
+// Real LLVM frontend/native-AOT receiver loan: exit 42.
+define class Point as
+  let int x = 40;
+end
+
+pub mtd (Point mut self) move_by(int dx): void {
+  self.x = self.x + dx;
+  return;
+}
+
+pub mtd (Point self) read_x(): int {
+  return self.x;
+}
+
+pub fnc main(): int {
+  let mut Point p = new Point();
+  p.move_by(2);
+  return p.read_x();
+}

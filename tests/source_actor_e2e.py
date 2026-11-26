@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Real Oreslang source -> LLVM -> Clang -> native actor scheduler regression."""
 import argparse
+import fcntl
+import os
 import pathlib
 import re
 import subprocess
+import sys
 import tempfile
 
 # Every safety assertion below is part of the CI gate: never silently remove it.
@@ -12,6 +15,70 @@ if not __debug__:
 
 def run(cmd, **kw):
     return subprocess.run(cmd, capture_output=True, text=True, timeout=90, **kw)
+
+def make_stdin_nonblocking():
+    """Child-only readiness setup: preserve runtime's mandatory O_NONBLOCK contract."""
+    flags = fcntl.fcntl(0, fcntl.F_GETFL)
+    fcntl.fcntl(0, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
+def link_nio_source_actor(args, runtime, source_dirs, ll, exe, flags):
+    """Compile the real mixed C/C++ VM-NIO runtime for the readable source slice."""
+    objects = []
+    objdir = exe.parent / (exe.name + ".objects")
+    objdir.mkdir()
+
+    guest_obj = objdir / "guest.o"
+    compiled = run([
+        args.clang, *flags, "-c", "-x", "ir", str(ll), "-o", str(guest_obj)
+    ])
+    assert compiled.returncode == 0, ("readable guest IR object", compiled.stderr)
+    objects.append(guest_obj)
+
+    c_sources = [
+        "ActorOwnedI64Heap.c",
+        "NativeActorScheduler.c",
+        "NativeOresVM.c",
+        "NativeActorFuture.c",
+        "SourceActorBootstrap.c",
+        "NativeExecutionContextStore.c",
+        "NativeContinuationStore.c",
+        "NativeAwaitTraceBridge.c",
+        "NativeLogicalTrace.c",
+    ]
+    for source in c_sources:
+        src = runtime / source
+        obj = objdir / (source + ".o")
+        compiled = run([
+            args.clang, *flags, "-c", "-x", "c", str(src),
+            "-std=c11", "-pthread", "-I", str(source_dirs),
+            "-DORESLANG_SOURCE_ACTOR_TESTING",
+            "-DORESLANG_SOURCE_ACTOR_NIO",
+            "-o", str(obj),
+        ])
+        assert compiled.returncode == 0, (source, compiled.stderr)
+        objects.append(obj)
+
+    cpp_sources = [
+        "NativeOresVMNio.cpp",
+        "NativeEpollReactorABI.cpp",
+    ]
+    for source in cpp_sources:
+        src = runtime / source
+        obj = objdir / (source + ".o")
+        compiled = run([
+            args.cxx, *flags, "-c", str(src),
+            "-std=c++17", "-pthread", "-I", str(source_dirs),
+            "-o", str(obj),
+        ])
+        assert compiled.returncode == 0, (source, compiled.stderr)
+        objects.append(obj)
+
+    linked = run([
+        args.cxx, *flags, *(str(obj) for obj in objects),
+        "-pthread", "-o", str(exe)
+    ])
+    assert linked.returncode == 0, ("readable mixed runtime link", linked.stderr)
+
 
 def expected_prefix_last(name, actor_index, processed):
     if processed == 0:
@@ -24,6 +91,12 @@ def expected_prefix_last(name, actor_index, processed):
     if name == "source-actor-scoped-owned-i64.ores":
         value = 0
         for n in range(1, processed + 1):
+            value = 2 * (value + n)
+        return value
+    if name == "source-actor-two-owned-heaps.ores":
+        value = 0
+        start = 1 if actor_index == 0 else 5
+        for n in range(start, start + processed):
             value = 2 * (value + n)
         return value
     if name == "source-actor-interleaved-stop.ores":
@@ -51,15 +124,20 @@ def parse_actor_receipt(line):
             "invalid integer actor receipt", field)
         fields[key] = int(value)
     assert set(fields) == expected, ("missing actor receipt fields", fields)
-    assert fields["constructor_on_worker"] == 1 and fields["released"] == 1, (
-        "native actor constructor/release not verified", fields)
+    assert fields["released"] == 1, ("native actor release not verified", fields)
+    assert fields["constructor_on_worker"] in (0, 1), fields
     assert fields["ready"] in (0, 1), ("invalid readiness receipt", fields)
+    # Immediate stop can win before initialization begins. It must never
+    # claim readiness or execute DATA in that canceled startup incarnation.
+    if fields["constructor_on_worker"] == 0:
+        assert fields["ready"] == fields["processed"] == fields["last"] == 0, fields
     return fields
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--compiler", required=True)
     ap.add_argument("--clang", required=True)
+    ap.add_argument("--cxx", required=True)
     ap.add_argument("--root", required=True)
     ap.add_argument("--sanitize", action="store_true")
     args = ap.parse_args()
@@ -87,7 +165,15 @@ def main():
         ("source-actor-send-moved-value.ores", 1, 2, 3),
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
     ]
+    if sys.platform.startswith("linux"):
+        positives.append(("source-actor-await-readable.ores", 1, 1, 1))
     negatives = {
+        "source-actor-pipe-unlowered-reject.ores":
+            "NATIVE_ACTOR_PIPE_UNSUPPORTED: typed actor pipe requires guest port, mailbox and supervisor lowering",
+        "source-actor-transform-pipe-unlowered-reject.ores":
+            "native transform-pipe actor requires typed pipeline role and transport lowering",
+        "source-actor-pipeline-bidirectional.ores":
+            "native user-defined tagged enum requires ADT layout and constructor lowering",
         "source-actor-owned-unknown-initializer-reject.ores":
             "unknown parameter 'not_yet_declared'",
         "source-actor-owned-forward-reference-reject.ores":
@@ -103,25 +189,27 @@ def main():
         "source-actor-typed-ref-nonspawn.ores": "ActorRef<T> requires spawn initializer",
         "source-future-typed-unimplemented.ores": "Future<T> requires native continuation lowering",
         "source-actor-await-unknown.ores": "await get_ready requires a live direct ActorRef receiver",
-        "source-actor-await-get-done.ores": "expected 'get_ready'",
-        "source-actor-await-worker-twice.ores": "native source supports only one await get_ready continuation",
+        "source-actor-await-get-done.ores": "actor effects after await get_done are unsupported",
+        "source-actor-await-worker-twice.ores": "native source supports only one direct ActorRef lifecycle await",
         "source-actor-await-after-stop.ores": "await get_ready must precede post-await actor effects",
         "source-actor-await-non-hasfuture-scalar.ores": "await get_ready requires a live direct ActorRef receiver",
         "source-actor-future-void-unused.ores": "Future<void> readiness token must be awaited exactly once",
         "source-actor-future-void-wrong-name.ores": "native Future<void> await requires its declared readiness token",
-        "source-actor-future-void-double-await.ores": "native source supports only one await get_ready continuation",
+        "source-actor-future-void-double-await.ores": "native source supports only one direct ActorRef lifecycle await",
         "source-actor-future-void-unspawned.ores": "Future<void> requires previously spawned ActorRef.get_ready",
         "source-actor-future-void-shadow.ores": "Future<void> readiness token shadows a live owner",
         "source-actor-future-void-duplicate.ores": "native source supports only one Future<void> readiness token",
         "source-actor-future-void-wrong-producer.ores": "expected 'get_ready'",
         "source-actor-future-void-send.ores": "unknown parameter",
         "source-actor-future-void-await-worker-instead.ores": "native Future<void> await requires its declared readiness token",
-        "source-actor-future-void-await-again.ores": "native source supports only one await get_ready continuation",
+        "source-actor-future-void-await-again.ores": "native source supports only one direct ActorRef lifecycle await",
         "source-actor-spawn-double-stop.ores": "invalid or repeated actor stop",
         "source-actor-send-after-stop.ores": "actor message sent after stop",
         "source-actor-spawn-unknown.ores": "unknown actor type",
         "source-actor-spawn-unavailable-await.ores": "await get_ready requires one source actor without suspended locals",
         "source-actor-await-ready-impure-result.ores": "await get_ready requires side-effect-free scalar return",
+        "source-actor-await-ready-post-call-reject.ores":
+            "await get_ready does not yet lower post-await non-actor statements",
         "source-actor-await-done-missing-stop.ores": "await get_done requires stop before await",
         "source-actor-await-done-effect-after.ores": "actor effects after await get_done are unsupported",
         "source-actor-await-done-impure-result.ores": "await get_done requires side-effect-free scalar return",
@@ -143,6 +231,16 @@ def main():
         # ownership or suspension-aware continuation lowering.
         "source-actor-final-group-field-reject.ores": "native final actor fields require typed field initialization and ownership lowering",
         "source-actor-suspend-method-reject.ores": "native suspends actor method requires continuation lowering",
+        "source-actor-await-readable-nonliteral-fd.ores":
+            "await readable requires an integer literal file descriptor",
+        "source-actor-await-readable-local-crossing.ores":
+            "await readable requires one source actor without suspended locals",
+        "source-actor-await-readable-twice.ores":
+            "native source supports only one trusted-main suspension",
+        "source-actor-await-readable-no-actor.ores":
+            "await readable requires one source actor without suspended locals",
+        "source-actor-await-readable-post-call-reject.ores":
+            "await readable does not yet lower post-await non-actor statements",
     }
     for name, diagnostic in negatives.items():
         flags = ["--experimental-owned-int"] if (
@@ -198,6 +296,12 @@ def main():
                 assert "oreslang_source_actor_await_done" in guest.stdout, name
                 assert "done_continuation" in guest.stdout, name
                 assert "call void @oreslang_source_actor_request_stop" in guest.stdout, name
+            if name == "source-actor-await-readable.ores":
+                assert "oreslang_source_actor_await_readable" in guest.stdout, name
+                assert "readable_continuation" in guest.stdout, name
+                calls = [line for line in guest.stdout.splitlines()
+                         if "call i64 @oreslang_source_actor_await_readable(" in line]
+                assert len(calls) == 1, (name, "expected one guest readable await", calls)
             if name == "source-actor-interleaved-stop.ores":
                 # IR call ordering must reflect lexical source ordering.
                 # Previous lowering grouped every send before every stop.
@@ -209,23 +313,31 @@ def main():
             exe = pathlib.Path(temp, name + ".guest")
             flags = (["-O1", "-g", "-fno-omit-frame-pointer", "-fsanitize=address,undefined"]
                      if args.sanitize else ["-O1"])
-            command = [
-                args.clang, *flags, "-x", "ir", str(ll),
-                "-x", "c", str(runtime / "ActorOwnedI64Heap.c"),
-                str(runtime / "NativeActorScheduler.c"),
-                str(runtime / "NativeOresVM.c"),
-                str(runtime / "NativeActorFuture.c"),
-                str(runtime / "SourceActorBootstrap.c"),
-                str(runtime / "NativeExecutionContextStore.c"),
-                str(runtime / "NativeContinuationStore.c"),
-                str(runtime / "NativeAwaitTraceBridge.c"),
-                str(runtime / "NativeLogicalTrace.c"),
-                "-std=c11", "-pthread", "-I", str(source_dirs),
-                "-DORESLANG_SOURCE_ACTOR_TESTING", "-o", str(exe)
-            ]
-            linked = run(command)
-            assert linked.returncode == 0, (name, linked.stderr)
-            executed = run([str(exe)])
+            if name == "source-actor-await-readable.ores":
+                link_nio_source_actor(
+                    args, runtime, source_dirs, ll, exe, flags)
+                executed = run(
+                    [str(exe)],
+                    input="x",
+                    preexec_fn=make_stdin_nonblocking)
+            else:
+                command = [
+                    args.clang, *flags, "-x", "ir", str(ll),
+                    "-x", "c", str(runtime / "ActorOwnedI64Heap.c"),
+                    str(runtime / "NativeActorScheduler.c"),
+                    str(runtime / "NativeOresVM.c"),
+                    str(runtime / "NativeActorFuture.c"),
+                    str(runtime / "SourceActorBootstrap.c"),
+                    str(runtime / "NativeExecutionContextStore.c"),
+                    str(runtime / "NativeContinuationStore.c"),
+                    str(runtime / "NativeAwaitTraceBridge.c"),
+                    str(runtime / "NativeLogicalTrace.c"),
+                    "-std=c11", "-pthread", "-I", str(source_dirs),
+                    "-DORESLANG_SOURCE_ACTOR_TESTING", "-o", str(exe)
+                ]
+                linked = run(command)
+                assert linked.returncode == 0, (name, linked.stderr)
+                executed = run([str(exe)])
             assert executed.returncode == 43, (name, executed.returncode, executed.stderr)
             vm_lines = [line for line in executed.stderr.splitlines()
                         if "SOURCE_ACTOR_VM_ROUTING_VERIFIED" in line]
@@ -244,6 +356,14 @@ def main():
                                if "SOURCE_AWAIT_DONE_TRACE_PASS" in line]
                 assert len(trace_lines) == 1, (name, trace_lines)
                 assert "terminal_ack=1 execution_id_persisted=1 fresh_resume=1 root_slot=63" in trace_lines[0], trace_lines[0]
+            if name == "source-actor-await-readable.ores":
+                trace_lines = [line for line in executed.stderr.splitlines()
+                               if "SOURCE_AWAIT_READABLE_TRACE_PASS" in line]
+                assert len(trace_lines) == 1, (name, trace_lines)
+                assert "outcome=1 fd=0" in trace_lines[0], trace_lines[0]
+                assert "continuation_slot=" in trace_lines[0], trace_lines[0]
+                assert "wake_generation=" in trace_lines[0], trace_lines[0]
+                assert "root_slot=63" in trace_lines[0], trace_lines[0]
             lines = [line for line in executed.stderr.splitlines()
                      if "SOURCE_ACTOR_SPAWN_STOP_VERIFIED" in line]
             assert len(lines) == actors, (name, lines)
@@ -266,8 +386,9 @@ def main():
                     name, i, processed), (
                     name, i, processed, observed_last)
             if name == "source-actor-two-owned-heaps.ores":
-                assert sorted(receipt["last"] for receipt in receipts) == [
-                    52, 172
+                assert [r["last"] for r in receipts] == [
+                    expected_prefix_last(name, i, r["processed"])
+                    for i, r in enumerate(receipts)
                 ], (name, receipts)
             print("PASS native source actor:", name, "actors", actors, flush=True)
     print("PASS current-source actor lowering and physical heap reclamation")

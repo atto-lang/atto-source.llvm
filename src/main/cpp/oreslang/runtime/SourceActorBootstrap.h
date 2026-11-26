@@ -105,6 +105,22 @@ int64_t oreslang_source_actor_await_done(
     uint64_t source_token);
 
 /*
+ * Linux-native first source I/O suspension slice:
+ *   await readable(<literal-fd>);
+ *
+ * The fd literal never becomes a suspended lexical owner. The runtime binds
+ * the one-shot readiness watch to the process-local source root actor, uses
+ * generation-checked continuation/wake metadata, and invokes continuation only
+ * from that authenticated actor lane. This symbol is implemented only in the
+ * ORESLANG_SOURCE_ACTOR_NIO build used by the compiled readiness gate.
+ */
+int64_t oreslang_source_actor_await_readable(
+    void* actor,
+    int64_t fd,
+    OresSourceActorContinuation continuation,
+    uint64_t source_token);
+
+/*
  * Active only while a compiler-generated source continuation is executing.
  * These hooks let throw/raise/panic rendering attach the live logical ancestry
  * without exposing a native stack pointer or runtime store object.

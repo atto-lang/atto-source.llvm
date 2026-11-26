@@ -75,10 +75,34 @@ int main() {
         require(seen == ((1u << known.size()) - 1u),
                 "effect flags must form the reviewed contiguous bit range");
 
+
         // Exhaust all 2^10 by 2^10 ordered permission pairs, including
         // empty, singleton, composite, and disjoint effect sets. Deliberately
         // run as ordinary executable code: assert() disappears under NDEBUG.
         constexpr std::uint32_t all_effects = (1u << known.size()) - 1u;
+        // Scope-bound actor-state effects: a compatible effect row is necessary
+        // but cannot mint the read/write loan or replace region-lifetime proof.
+        // Exhaust all admitted rows, and reject invalid/forged effect sets.
+        for (std::uint32_t row = 0; row <= all_effects; ++row) {
+            const FunctionEffects effects{row};
+            const auto suspend = static_cast<std::uint32_t>(FunctionEffect::Suspend);
+            const auto block = static_cast<std::uint32_t>(FunctionEffect::Block);
+            const auto ffi = static_cast<std::uint32_t>(FunctionEffect::Ffi);
+            const auto write = static_cast<std::uint32_t>(FunctionEffect::StateWrite);
+            require(effects.admissible_with_state_loan(false) ==
+                    ((row & (suspend | block | ffi)) == 0),
+                    "write loan admission must reject suspend/block/ffi");
+            require(effects.admissible_with_state_loan(true) ==
+                    ((row & (suspend | block | ffi | write)) == 0),
+                    "read loan admission must reject write/suspend/block/ffi");
+        }
+        require(!FunctionEffects::unresolved_call().admissible_with_state_loan(true),
+                "unresolved call must never be treated as safe inside a state read loan");
+        require(!FunctionEffects::unresolved_call().admissible_with_state_loan(false),
+                "unresolved call must never be treated as safe inside a state write loan");
+        require(!FunctionEffects{all_effects | (1u << 31)}.admissible_with_state_loan(false),
+                "matching forged effect bits cannot bypass loan checking");
+
         for (std::uint32_t lhs = 0; lhs <= all_effects; ++lhs) {
             const FunctionEffects a{lhs};
             require(a.permits(a), "every effect set must permit itself");

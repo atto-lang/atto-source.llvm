@@ -90,6 +90,58 @@ authenticate the continuation descriptors/code generations supplied to this
 bridge before a standard-library I/O operation may be admitted from Oreslang
 source.
 
+## First compiled source I/O suspension
+
+The native frontend now admits one deliberately narrow Linux-native source
+operation:
+
+```oreslang
+await readable(<integer-literal-fd>);
+```
+
+This is compiler-owned await syntax, not a user function call and not general
+stdlib I/O. Admission is restricted to exported zero-argument `main` with
+exactly one live source actor, no suspended scalar/class/array locals, one
+suspension site, and a native-int literal descriptor. General `async`,
+`suspends`, Future<T>, channels, select, socket/file wrappers and actor-method
+suspension remain fail-closed.
+
+The compiler emits a pointer-free scalar continuation with no lexical user
+frame. Post-await actor sends/stops are the only effects admitted in this
+first slice. Ordinary calls, field writes, defers or other non-actor statements
+after the await are rejected until general continuation-frame lowering can
+preserve their source order; they must never be silently hoisted before
+readiness.
+
+`SourceActorBootstrap` first persists the existing root-actor
+`OresNativeSuspensionLink`, then passes its continuation slot/generation plus
+the source-offset descriptor generation to
+`ores_native_vm_nio_try_watch_actor_await()`. The source group opts into the
+ABI-separate wake-capable VM and attaches NIO while the VM is still actor-cold;
+throughput reactor threads remain cold until the actual watch is admitted.
+
+On readiness, trusted outer host glue consumes the reactor completion and calls
+`ores_native_vm_nio_dispatch_actor_await()`. The #994 handoff transfers the
+scheduler wake, releases the old one-shot NIO/FD claim, then publishes the wake.
+Only the authenticated source-root actor callback marks the persisted
+continuation READY, claims a fresh execution context, and invokes the compiled
+continuation. Reactor/completion threads never execute guest code.
+
+A direct Linux runtime gate also arms a real nonblocking pipe before a delayed
+writer makes it readable. That independently exercises VM-NIO wake escrow,
+logical trace resumption and actor cleanup without relying on compiler IR.
+
+The native E2E fixture uses nonblocking stdin fd 0 and supplies one byte from
+the harness. It checks compiler IR, real mixed C/C++ runtime linkage, exact
+continuation/wake receipt metadata, actor-lane resume, post-await message
+delivery, physical actor stop/reclamation, and both release and ASan/UBSan
+variants. Negative compiler fixtures reject nonliteral descriptors, suspended
+locals, a second suspension and missing actor ownership.
+
+This is still not a public portable I/O API. The literal-fd form exists to
+prove compiler → continuation → VM-NIO → scheduler → compiled-resume ownership
+end to end before typed nonblocking stream/socket abstractions are admitted.
+
 ## Test
 
 `native_continuation_ready_cancel_resume_race` verifies:
@@ -122,3 +174,35 @@ Native `select` additionally needs a single winner across *all* registered
 channel/timeout/cancel arms and losing-arm detachment; independently claiming
 one continuation per arm is not select correctness. Java/GraalVM ↔ LLVM
 source-execution fixtures and exact-head sanitizer evidence remain mandatory.
+
+
+## CLAIMED physical-pin retention and exact finish identity
+
+The native continuation store must not release the **last** pin of a
+`CLAIMED` continuation while its physical guest execution is active.
+When releasing a nested child cascades into a CLAIMED parent with just
+the protected physical pin remaining, child release succeeds without
+retiring that parent. The parent may release its final pin only after
+`finish_resume()` completes.
+
+`ores_native_await_trace_resume_finish()` also verifies that the passed
+suspension link's parent handle (including generation) and logical
+source ExecutionId match the persisted continuation record before
+transitioning CLAIMED to COMPLETED. A forged or stale link is not a
+completion authority; this bridge remains a runtime-internal API.
+
+The C11 regression `native_continuation_ready_cancel_resume_race`
+now checks an explicit last-pin refusal, a nested child release that
+preserves CLAIMED ancestry, forged parent-generation and ExecutionId
+completion rejection, successful original-link completion, and
+one-shot physical finish. These changes are forward-ported onto current
+LLVM main and do **not** replace the newer wake-commit or actor scheduler
+behavior already on main.
+
+**Evidence boundary:** This forward-port requires newly executed
+normal and ASan/UBSan native tests on its own exact commit. Prior green
+tests from a different branch/commit are not proof of these fixes.
+At authoring time, source-org Actions ran no job steps and
+`docs/security/CI_PRIVATE_SOURCE_MIRRORING.md` authorized no external
+private source destination. Do not substitute a cross-org mirror without
+the repository's protected-main security approvals.

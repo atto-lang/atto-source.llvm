@@ -1,0 +1,11 @@
+define class OresModelMeta as
+  pub let int hidden = 12;
+  pub let int heads = 30;
+end
+fnc read_oresllm(borrow OresModelMeta cfg): int {
+  return cfg.hidden + cfg.heads;
+}
+pub fnc main(): int {
+  let OresModelMeta cfg = new OresModelMeta();
+  return read_oresllm(rt borrow cfg);
+}
