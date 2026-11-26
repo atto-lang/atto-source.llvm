@@ -431,6 +431,16 @@ public:
                 return {Kind::Symbol, source_.substr(start, 2), start};
             }
         }
+        // Multi-character logical and pipeline operators were handled above.
+        // A standalone bar can delimit an inline lambda (including an aggregate
+        // pattern), but this native frontend has no checked callable ABI.
+        // Keep it fail-closed before IR without implying guest support.
+        if (ch == '|') {
+            throw std::runtime_error(
+                "NATIVE_INLINE_LAMBDA_UNSUPPORTED: standalone '|' requires "
+                "checked callable and aggregate pattern lowering at byte " +
+                std::to_string(start));
+        }
         // Injected mutable state changes ownership and runtime lifetime.
         // No native annotation HIR exists yet: reject before '@' can be
         // treated as a generic symbol or discarded during source lowering.
