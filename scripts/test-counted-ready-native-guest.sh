@@ -47,4 +47,25 @@ for case in invalid-count overflow-before-await empty-read would-suspend capacit
   ! grep -E 'AddressSanitizer|runtime error:|LeakSanitizer' "$work/err"
   echo "NEGATIVE_RUNTIME_PASS $case"
 done
+# Canonical raw Future retains concrete scalar/array types and affine ownership.
+prefix='suspends fnc main(): int { const Channel<int> a = Channel.new<int>(1); writech a, 20; '
+body='const Future f = select { default: -> { return 20; } }; const Future batch = select(1) { when readch a: int n -> { return n; } }; const Array[int] values = await batch; const int extra = await select<int> { default: -> { return 2; } }; return (await f) + values[0] + extra; }'
+printf '%s%s\n' "$prefix" "$body" > "$work/raw-future.atto"
+"$compiler" --counted-ready-v1 "$work/raw-future.atto" > "$work/guest.cpp"
+clang++ -std=c++17 -O1 -pthread -I src/main/cpp -S -emit-llvm "$work/guest.cpp" -o "$work/guest.ll"
+clang++ -O1 -pthread "$work/guest.ll" -o "$work/guest"
+test "$("$work/guest")" = 42
+echo GUEST_PASS raw-future
+for body in \
+  'const Future f = 42; return 42; }' \
+  'const Future<int> f = select(1) { when readch a: int n -> { return n; } }; return 42; }' \
+  'const Future f = select { default: -> { return a; } }; return 42; }' \
+  'const Future b = select(1) { when readch a: int n -> { return n; } }; return 42; }' \
+  'const Future b = select(1) { when readch a: int n -> { return n; } }; const int wrong = await b; return wrong; }' \
+  'const Future b = select(1) { when readch a: int n -> { return n; } }; const Array[int] first = await b; const Array[int] second = await b; return first[0]; }'; do
+  printf '%s%s\n' "$prefix" "$body" > "$work/raw-negative.atto"
+  if "$compiler" --counted-ready-v1 "$work/raw-negative.atto" > "$work/denial" 2> "$work/err"; then exit 1; fi
+  test ! -s "$work/denial"
+  grep -F E_COUNTED_READY_PROFILE "$work/err"
+done
 echo LLVM_COUNTED_READY_NATIVE_GUEST_PASS
