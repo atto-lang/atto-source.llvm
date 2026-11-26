@@ -1,13 +1,12 @@
 #include "oreslang/runtime/NativeSelectContinuationFence.hpp"
 
 #include <atomic>
+#ifdef NDEBUG
+#undef NDEBUG  // Regression assertions must execute in release test builds too.
+#endif
 #include <cassert>
 #include <condition_variable>
 #include <mutex>
-
-#ifdef NDEBUG
-#error "Continuation lifecycle tests require enabled assertions"
-#endif
 #include <limits>
 #include <stdexcept>
 #include <thread>
