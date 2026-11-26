@@ -107,7 +107,8 @@ void validate_native_scalar_types(const Program& program) {
         switch (e.kind) {
             case E::AggregateConstruct: {
                 if (!e.aggregate_type ||
-                        e.aggregate_type->kind != types::NativeAggregateShape::Kind::ExactStruct ||
+                        (e.aggregate_type->kind != types::NativeAggregateShape::Kind::ExactStruct &&
+                         e.aggregate_type->kind != types::NativeAggregateShape::Kind::ReadonlyRecord) ||
                         e.argument_names.size() != e.arguments.size())
                     fail(e.offset, "AGGREGATE_CONSTRUCTOR_UNVERIFIED");
                 for (std::size_t i = 0; i < e.arguments.size(); ++i) {
