@@ -5930,6 +5930,7 @@ private:
             // The resolver erases the redundant trap only for checked Result
             // values; scalar variables and owned compound payloads stay closed.
             if (!native_trap_pure_integer(*payload) &&
+                    !native_trap_direct_unwrap_shape(*payload) &&
                     payload->kind != Expression::Kind::Variable &&
                     !(payload->kind == Expression::Kind::SumConstruct && payload->trap_origin))
                 fail("native trap operand unsupported: only pure integer literals and checked arithmetic are lowered, or existing Result values");
