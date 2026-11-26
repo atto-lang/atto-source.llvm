@@ -34,5 +34,19 @@ int main() {
         reject(pre+body,"E_VERIFY_UNPROVEN:");
     reject(main_source("42"),"E_VERIFY_UNSUPPORTED:");
     reject(pre+"type Narrow = i32 where self > 0; "+main_source("42"),"E_VERIFY_UNSUPPORTED:");
+    for(std::string_view source:{"fnc f(int x) -> int { if x != 0 { return 42/x; } return 0; } pub fnc main() -> int { return f(1); }",
+            "fnc f(int x) -> int { if x != 0 && 42/x > 0 { return 1; } return 42; } pub fnc main() -> int { return f(0); }",
+            "fnc f(int x) -> int { if x == 0 || 42/x > 0 { return 42; } return 0; } pub fnc main() -> int { return f(0); }",
+            "fnc f(int x) -> int { if x != 0 && x != -1 { return -9223372036854775808/x; } return 0; } pub fnc main() -> int { return f(2); }",
+            "fnc f(int x) -> int { if !(x == 0) { return 42/x; } else { return 42; } } pub fnc main() -> int { return f(0); }",
+            "fnc f(int x) -> int { if x < 0 || x > 0 { return 42/x; } return 0; } pub fnc main() -> int { return f(-1); }"}) {
+        auto program=parse_verified_strict_i64(pre+std::string(source));
+        if(program.functions.empty())throw std::runtime_error("missing lowered conditional");
+    }
+    for(std::string_view source:{"fnc f(int x) -> int { if 42/x > 0 && x != 0 { return 42; } return 0; } pub fnc main() -> int { return f(1); }",
+            "fnc f(int x) -> int { if x != 0 { return -9223372036854775808/x; } return 0; } pub fnc main() -> int { return f(2); }",
+            "fnc f(int x) -> int { if x != 0 || 42/x > 0 { return 42; } return 0; } pub fnc main() -> int { return f(0); }",
+            "fnc f(int x, int y) -> int { if x != 0 { return 42/y; } return 0; } pub fnc main() -> int { return f(1,1); }",
+            "fnc f(int x) -> int { if x != 0 || x == 0 { return 42/x; } return 0; } pub fnc main() -> int { return f(1); }"})reject(pre+std::string(source),"E_VERIFY_UNPROVEN:");
     std::cout << "PASS strict i64 real parser and validators; no native guest claim\n";
 }
