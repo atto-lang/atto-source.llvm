@@ -1856,6 +1856,16 @@ if(BUILD_TESTING)
         set_tests_properties(native_trap_arithmetic_${case}_O0_O2 PROPERTIES TIMEOUT 300)
     endforeach()
 
+    # Host-only shape proof; separate from real compiled guest below.
+    add_executable(oreslang-native-checked-unwrap-shape-test
+        tests/native_checked_unwrap_shape_test.cpp)
+    target_include_directories(oreslang-native-checked-unwrap-shape-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-checked-unwrap-shape-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_checked_unwrap_shape_host_only
+        COMMAND oreslang-native-checked-unwrap-shape-test)
+
     # Direct closed Option<int> checked unwrap, actual hosted native guest.
     foreach(case IN ITEMS none some)
         add_test(NAME native_trap_option_unwrap_${case}_O0_O2
