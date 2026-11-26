@@ -46,6 +46,17 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Source-shared compiler CFG join implementation: build and execute the
+    # actual production header rather than an independently rewritten model.
+    add_executable(oreslang-native-ownership-join-test
+        tests/native_ownership_join_test.cpp)
+    target_include_directories(oreslang-native-ownership-join-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-ownership-join-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_ownership_affine_join_complete
+        COMMAND oreslang-native-ownership-join-test)
+
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
