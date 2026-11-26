@@ -34,6 +34,16 @@ inline std::string emit_verified_ir(const Plan& plan) {
     auto* i64 = llvm::Type::getInt64Ty(context);
     auto* i32 = llvm::Type::getInt32Ty(context);
     auto* array = llvm::ArrayType::get(i64, plan.count);
+    // Closed readonly helper takes a real stack-region address, not a wrapper.
+    llvm::Function* readonly_helper = nullptr;
+    if (!plan.readonly_helper.empty()) {
+        auto* pointer_type = llvm::PointerType::getUnqual(context);
+        auto* helper_type = llvm::FunctionType::get(i64, {pointer_type}, false);
+        readonly_helper = llvm::Function::Create(helper_type, llvm::GlobalValue::InternalLinkage,
+            "atto.pointer.readonly.helper", module);
+        builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", readonly_helper));
+        builder.CreateRet(builder.CreateLoad(i64, readonly_helper->getArg(0), "borrowed.read"));
+    }
     auto* main_type = llvm::FunctionType::get(i32, false);
     auto* main_fn = llvm::Function::Create(
         main_type, llvm::GlobalValue::ExternalLinkage, "main", module);
@@ -61,6 +71,8 @@ inline std::string emit_verified_ir(const Plan& plan) {
             return scalar_values.at(expr.name);
         case Expr::Kind::Read:
             return builder.CreateLoad(i64, slot(expr.index), "pointer.read_at");
+        case Expr::Kind::ReadonlyCall:
+            return builder.CreateCall(readonly_helper, {slot(0)}, "borrowed.call");
         case Expr::Kind::Length:
             return builder.getInt64(plan.count);
         case Expr::Kind::SizeBytes:
