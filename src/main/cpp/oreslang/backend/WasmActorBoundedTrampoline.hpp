@@ -33,12 +33,19 @@ inline bool integer(const Expression* expr, std::int64_t n) {
 inline bool variable(const Expression* expr, const std::string& name) {
     return expr && expr->kind == Expression::Kind::Variable && expr->name == name;
 }
+// The parser records an empty label for each positional argument. Preserve
+// the closed one-positional-argument profile; reject named and malformed layouts.
+inline bool positional_single(const Expression& expr) {
+    return expr.arguments.size() == 1 &&
+        (expr.argument_names.empty() ||
+         (expr.argument_names.size() == 1 && expr.argument_names.front().empty()));
+}
 inline bool is_recursive_step(const Expression* expr,
                               const std::string& helper,
                               const std::string& parameter) {
     if (!expr || expr->kind != Expression::Kind::Call ||
-        expr->name != helper || expr->arguments.size() != 1 ||
-        expr->type_arguments_present || !expr->argument_names.empty()) return false;
+        expr->name != helper || !positional_single(*expr) ||
+        expr->type_arguments_present) return false;
     const Expression* arg = expr->arguments.front().get();
     return arg && arg->kind == Expression::Kind::Subtract &&
         variable(arg->left.get(), parameter) && integer(arg->right.get(), 1);
@@ -113,9 +120,8 @@ inline void require_source_shape(const Program& source) {
         !handler.future_pipelines.empty() || handler.async_source_i64 ||
         !handler.result || handler.result->kind != Expression::Kind::Call ||
         handler.result->name != helper->name ||
-        handler.result->arguments.size() != 1 ||
+        !positional_single(*handler.result) ||
         handler.result->type_arguments_present ||
-        !handler.result->argument_names.empty() ||
         !variable(handler.result->arguments.front().get(),
                   handler.parameters.front().name)) deny();
 

@@ -158,6 +158,8 @@ with tempfile.TemporaryDirectory(prefix="atto-checked-actor-stack-") as folder:
     original = atto.decode()
     mutations = [
         ("step-two", "descend(depth - 1)", "descend(depth - 2)"),
+        ("named-recursive-argument", "descend(depth - 1)", "descend(depth: depth - 1)"),
+        ("named-handler-argument", "return descend(depth);", "return descend(depth: depth);"),
         ("multiply-unwind", "1 + descend(depth - 1)", "2 + descend(depth - 1)"),
         ("extra-actor-effect", "return descend(depth);",
              "total = total + 1;\n    return descend(depth);"),
