@@ -61,6 +61,10 @@ inline std::string emit_verified_ir(const Plan& plan) {
             return scalar_values.at(expr.name);
         case Expr::Kind::Read:
             return builder.CreateLoad(i64, slot(expr.index), "pointer.read_at");
+        case Expr::Kind::Length:
+            return builder.getInt64(plan.count);
+        case Expr::Kind::SizeBytes:
+            return builder.getInt64(plan.count * 8);
         case Expr::Kind::Neg:
             return builder.CreateNeg(lower(*expr.lhs), "scalar.negate");
         case Expr::Kind::Add:
@@ -77,6 +81,19 @@ inline std::string emit_verified_ir(const Plan& plan) {
         case Step::Kind::Write:
             builder.CreateStore(lower(*step.value), slot(step.index));
             break;
+        case Step::Kind::Fill: {
+            auto* value = lower(*step.value);
+            for (std::size_t i = 0; i < plan.count; ++i)
+                builder.CreateStore(value, slot(i));
+            break;
+        }
+        case Step::Kind::Swap: {
+            auto* first = builder.CreateLoad(i64, slot(step.index), "pointer.swap.first");
+            auto* second = builder.CreateLoad(i64, slot(step.second_index), "pointer.swap.second");
+            builder.CreateStore(second, slot(step.index));
+            builder.CreateStore(first, slot(step.second_index));
+            break;
+        }
         case Step::Kind::Scalar:
             scalar_values.emplace(step.name, lower(*step.value));
             break;

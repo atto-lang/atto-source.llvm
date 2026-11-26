@@ -17,7 +17,7 @@ struct Token {
 };
 
 struct Expr {
-    enum class Kind { Literal, Variable, Read, Neg, Add, Subtract, Multiply };
+    enum class Kind { Literal, Variable, Read, Neg, Add, Subtract, Multiply, Length, SizeBytes };
     Kind kind = Kind::Literal;
     std::int64_t known = 0;
     std::size_t index = 0;
@@ -27,11 +27,12 @@ struct Expr {
 };
 
 struct Step {
-    enum class Kind { Write, Scalar, Close };
+    enum class Kind { Write, Scalar, Close, Fill, Swap };
     Kind kind = Kind::Close;
     std::string name;
     std::size_t index = 0;
     std::unique_ptr<Expr> value;
+    std::size_t second_index = 0; // only Swap may use this field
 };
 
 struct Plan {

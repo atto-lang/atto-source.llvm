@@ -147,6 +147,10 @@ void validate_native_scalar_types(const Program& program) {
                     fail(e.offset, "E_COPY_GRAPH_UNPROVEN: copy!! requires an int or bool value");
                 return operand;
             }
+            case E::Abs:
+                if (!e.left) fail(e.offset, "abs requires an operand");
+                require(expression(*e.left, locals), scalar(false), e.offset, "abs requires int");
+                return scalar(false);
             case E::Negate:
                 require(expression(*e.left, locals), scalar(false), e.offset, "unary - requires int");
                 return scalar(false);
