@@ -753,9 +753,11 @@ int ores_native_vm_close(OresNativeVM* vm) {
         if (pthread_join(vm->main_control_thread, NULL) != 0) abort();
         vm->main_control_started = 0;
     }
-    /* No callback can synchronously join or destroy its own scheduler. */
-    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
-        if (!ores_native_actor_scheduler_drain(vm->schedulers[i])) return 0;
+    /* Do not drain actor schedulers here: an unfinished NIO await owns
+     * resource and wake loans that prevent physical DONE. The retired VM
+     * has already fenced new NIO acquisitions; detach and join the backend
+     * while the scheduler objects are alive so it can abandon those loans.
+     * Only then may scheduler drain wait for physical completion. */
 
     /* External-host close owns the final NIO join. Retirement has already
      * fenced new acquisitions; wait for previously accepted operations and
