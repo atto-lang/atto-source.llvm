@@ -6280,7 +6280,7 @@ private:
         auto arm_value = [&]() {
             auto result = token_.text == "{"
                 ? dispatch_value_arm("native value match") : expression();
-            accept(",");
+            if (!accept(",")) accept(";");
             return result;
         };
 
@@ -6300,7 +6300,7 @@ private:
                 fail("native value match arm limit exceeded (32)");
             // All three spellings designate one fallback, evaluated after concrete arms.
             const bool bare_default = accept("default");
-            if (!bare_default) require("on");
+            if (!bare_default && token_.text != "is") require("on");
             if (!bare_default && token_.text == "default")
                 fail("native value match fallback must use 'default ->' without 'on'");
             const bool wildcard = !bare_default && accept("_");
@@ -6317,6 +6317,22 @@ private:
             if (fallback)
                 fail(wildcard_fallback ? "native value match wildcard arm must be last"
                                        : "native value match default arm must be last");
+            if (accept("is")) {
+                // Only literal subjects have an exact type at this parser stage.
+                // Do not infer a local's type or drop an effectful scrutinee.
+                const bool proven_int = subject->kind == Expression::Kind::Integer;
+                const bool proven_bool = subject->kind == Expression::Kind::Boolean;
+                if (!((proven_int && accept("int")) || (proven_bool && accept("bool"))))
+                    fail("native type match requires a statically proven int or bool literal subject");
+                if (token_.text == "as" || token_.text == "when")
+                    fail("native scalar type match binding/guard requires dedicated pattern lowering");
+                require("->");
+                // The statically proven type exhausts all remaining values.
+                // Prior literal tests retain source priority.
+                wildcard_fallback = true;
+                fallback = arm_value();
+                continue;
+            }
             if (token_.text == "structural" || token_.text == "struct")
                 fail("native structural match expression requires verified shape-pattern lowering");
             if (token_.text == "structural") {
