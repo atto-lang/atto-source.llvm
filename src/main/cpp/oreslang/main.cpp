@@ -548,7 +548,7 @@ int main(int argc, char** argv) {
             return 1;
         }
         try {
-            const std::filesystem::path strict_path(argv[2]);
+            const char* strict_path = argv[2];
             constexpr std::size_t cap = 8u * 1024u * 1024u;
             const auto identity = capture_source_identity(strict_path,cap,"strict source exceeds limit");
             SourceIdentity actual;
