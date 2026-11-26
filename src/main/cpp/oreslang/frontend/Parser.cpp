@@ -5737,26 +5737,11 @@ private:
     }
 
     std::unique_ptr<Expression> logical_or() {
-        auto left = logical_xor();
+        auto left = logical_and();
         while (token_.text == "||") {
             const auto offset = token_.offset;
             advance();
             auto expr = make_expression(Expression::Kind::LogicalOr, offset);
-            expr->left = std::move(left);
-            expr->right = logical_xor();
-            left = std::move(expr);
-        }
-        return left;
-    }
-
-    std::unique_ptr<Expression> logical_xor() {
-        auto left = logical_and();
-        // The lexer emits adjacent ^^ as one token; single ^ remains invalid.
-        // LLVM's existing LogicalXor lowering is eager and bool-only.
-        while (token_.text == "^^") {
-            const auto offset = token_.offset;
-            advance();
-            auto expr = make_expression(Expression::Kind::LogicalXor, offset);
             expr->left = std::move(left);
             expr->right = logical_and();
             left = std::move(expr);
@@ -5764,14 +5749,29 @@ private:
         return left;
     }
 
-    std::unique_ptr<Expression> logical_and() {
+    std::unique_ptr<Expression> integer_xor() {
         auto left = equality();
+        // Adjacent ^^ is signed-i64 XOR. Equality binds more tightly,
+        // as in the current Java grammar; named Xor remains Boolean.
+        while (token_.text == "^^") {
+            const auto offset = token_.offset;
+            advance();
+            auto expr = make_expression(Expression::Kind::BitXor, offset);
+            expr->left = std::move(left);
+            expr->right = equality();
+            left = std::move(expr);
+        }
+        return left;
+    }
+
+    std::unique_ptr<Expression> logical_and() {
+        auto left = integer_xor();
         while (token_.text == "&&") {
             const auto offset = token_.offset;
             advance();
             auto expr = make_expression(Expression::Kind::LogicalAnd, offset);
             expr->left = std::move(left);
-            expr->right = equality();
+            expr->right = integer_xor();
             left = std::move(expr);
         }
         return left;
@@ -6898,7 +6898,7 @@ private:
             require(")");
             return call;
         }
-        // Named integer operations replace the reserved %, ^ and ^^ operators.
+        // Named integer operations remain available; % is not source arithmetic.
         // A user module named Integer keeps its ordinary qualified calls.
         if (token_.kind == Kind::Identifier && token_.text == "Integer" &&
                 peek_next().text == "." && !module_names_.count("Integer")) {

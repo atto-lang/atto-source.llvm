@@ -79,7 +79,7 @@ for opt in 0 2; do
   fi
 done
 # Java LogicalPunctuationOperatorTest.tokensAreAdjacentAndWordsRemainOrdinaryIdentifiers:
-# `val and: bool` locals, adjacent `a^^b`, and operator words inside a comment.
+# `val and: bool` locals, named Boolean Xor and operator words inside a comment.
 annotated_ir="$tmp/val-annotated-identifiers.ll"
 timeout 40s "$compiler" --target=host "$fixtures/val-annotated-identifiers.atto" >"$annotated_ir"
 test -s "$annotated_ir" || { echo "missing annotated identifier IR" >&2; exit 1; }
@@ -163,17 +163,13 @@ for name in xor-eager-trap and-reached-rhs-trap or-reached-rhs-trap; do
   echo "ATTO_LOGICAL_TRAP_RUNTIME_O0_O2_PASS name=$name"
 done
 
-for name in reject-int-and reject-int-or reject-int-xor reject-int-and-dead-rhs reject-int-or-dead-rhs reject-int-xor-left reject-single-caret reject-spaced-caret reject-bare-pipe reject-bare-ampersand; do
+for name in reject-int-and reject-int-or reject-int-xor reject-int-and-dead-rhs reject-int-or-dead-rhs reject-int-xor-left reject-bool-double-caret reject-int-xor-equality-precedence reject-single-caret reject-spaced-caret reject-bare-pipe reject-bare-ampersand; do
   out="$tmp/$name.ll"
   diagnostic="$tmp/$name.stderr"
   status=0
   timeout 40s "$compiler" --target=host "$fixtures/$name.atto" >"$out" 2>"$diagnostic" || status=$?
-  if [[ "$status" -eq 0 ]]; then
-    echo "native compiler accepted invalid boolean punctuation fixture $name" >&2
-    exit 1
-  fi
-  if [[ "$status" -eq 124 || "$status" -eq 125 || "$status" -eq 126 || "$status" -eq 127 ]]; then
-    echo "compiler timed out or was unavailable (not a valid compile-negative): $name, status=$status" >&2
+  if [[ "$status" -ne 1 ]]; then
+    echo "expected compiler source rejection, not success or infrastructure failure: $name, status=$status" >&2
     exit 1
   fi
   if [[ -s "$out" ]]; then
