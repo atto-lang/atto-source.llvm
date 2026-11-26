@@ -23,7 +23,11 @@ int main() {
         const auto actor = std::string("define actor Worker as { let total: int = 0; pub ") +
             effect + " mtd on_message(int n): int { let Task<int> child = task { return 21 * 2; }; return await child; } } "
             "pub fnc main(): int { return 0; }";
-        rejects(actor, "ATTO_TASK_E_ACTOR_LOWERING_PENDING");
+        // Parser admission is intentionally staged; only codegen denies this edge.
+        const auto staged = oreslang::parse_program(actor);
+        if (staged.actors.size() != 1 ||
+                staged.actors[0].on_message.actor_task_await_name != "child")
+            throw std::runtime_error("suspension alias lost staged actor await marker");
         (void)oreslang::parse_program("pub fnc main(): int { return 42; } // " + effect);
     }
     (void)oreslang::parse_program("pub fnc main(): int { val int suspension = 42; return suspension; }");
