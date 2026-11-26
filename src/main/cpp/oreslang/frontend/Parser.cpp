@@ -264,6 +264,13 @@ public:
         }
         const std::size_t start = at_;
         const char ch = source_[at_];
+        // Exact non-letter UTF-8 aliases share the existing suspension
+        // effect and native admission gates. Never rewrite source trivia.
+        if (source_.substr(at_, 3) == "\xE2\xA7\x96" ||
+                source_.substr(at_, 3) == "\xE2\x88\x82") {
+            at_ += 3;
+            return {Kind::Identifier, "suspends", start};
+        }
         if (identifier_start(ch)) {
             ++at_;
             while (at_ < source_.size() && identifier_part(source_[at_])) ++at_;
@@ -274,6 +281,8 @@ public:
             // Existing nb-select recognition is intentionally unchanged
             // until native select lowering supports that grammar.
             const auto first = source_.substr(start, at_ - start);
+            if (first == "susp")
+                return {Kind::Identifier, "suspends", start};
             // Channel<int> has a distinct result/EOF/cancellation/ownership
             // representation. Reject the exact nominal type before any
             // scalar i64 LLVM lowering can reinterpret it as integers or
@@ -492,7 +501,10 @@ public:
         // rejects them before IR exactly like any other unexpected symbol.
         // '^' is the caret return marker. '&' stays an unsupported token:
         // there is no address-of, and the lexer rejects it before parsing.
-        if (std::string_view("(){}[],:;+-*/%=.<>@?!^").find(ch) != std::string_view::npos) {
+        // Single pipe is a token for explicit unsupported actor union diagnostics.
+        // This does not admit union lowering or scalar bitwise OR; longest-match
+        // pipeline and Boolean operators have already been handled above.
+        if (std::string_view("(){}[],:;+-*/%=.<>@?!^|").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
