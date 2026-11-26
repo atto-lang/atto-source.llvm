@@ -53,7 +53,7 @@ struct Expression {
         LogicalAnd, LogicalOr, LogicalXor,
         Conditional, Cast,
         Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, DeepCopy, Take, Share, Borrow, BorrowMut, Field,
-        ShiftLeft, ShiftRight, ShiftUnsignedRight
+        ShiftLeft, ShiftRight, ShiftUnsignedRight, Divide
     };
     Kind kind;
     std::size_t offset = 0;
@@ -104,6 +104,9 @@ inline bool native_trap_pure_integer(const Expression& e, std::size_t depth = 0)
         case Expression::Kind::Add:
         case Expression::Kind::Subtract:
         case Expression::Kind::Multiply:
+        case Expression::Kind::Divide:
+        case Expression::Kind::Remainder:
+        case Expression::Kind::Modulo:
             return e.left && e.right &&
                 native_trap_pure_integer(*e.left, depth + 1) &&
                 native_trap_pure_integer(*e.right, depth + 1);

@@ -1843,7 +1843,7 @@ if(BUILD_TESTING)
 
     # Hosted trap arithmetic recovers as Err; untrapped overflow still
     # signals in the independent native_trap_int_guest_aot_o0_o2 control.
-    foreach(case IN ITEMS add sub mul neg nested_overflow)
+    foreach(case IN ITEMS add sub mul neg nested_overflow rem_zero mod_zero rem_signed mod_signed rem_min mod_min div_zero div_overflow div_signed div_precedence)
         add_test(NAME native_trap_arithmetic_${case}_O0_O2
             COMMAND "${CMAKE_COMMAND}"
                 "-DORES_TRAP_LLVM_CLI=$<TARGET_FILE:oreslang-llvmc>"
@@ -1855,6 +1855,19 @@ if(BUILD_TESTING)
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/trap_int_native_aot_execution.cmake")
         set_tests_properties(native_trap_arithmetic_${case}_O0_O2 PROPERTIES TIMEOUT 300)
     endforeach()
+
+    # Real native nominal Error projection; no guest integer Error handle.
+    add_test(NAME native_numeric_error_type_identity_O0_O2
+        COMMAND "${CMAKE_COMMAND}"
+            "-DORES_TRAP_LLVM_CLI=$<TARGET_FILE:oreslang-llvmc>"
+            "-DORES_TRAP_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/numeric-error-type-identity.atto"
+            "-DORES_TRAP_AOT_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/scripts/compile-aot.sh"
+            "-DORES_TRAP_AUDITOR=${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit"
+            "-DORES_TRAP_CLANG=clang"
+            "-DORES_TRAP_CASE=numeric_error_identity"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/trap_int_native_aot_execution.cmake")
+    set_tests_properties(native_numeric_error_type_identity_O0_O2 PROPERTIES TIMEOUT 300)
+
 
     # Trusted-host capability admission only; NOT source-level/hostile-native parity.
     find_package(Threads REQUIRED)
@@ -4037,12 +4050,15 @@ if(BUILD_TESTING)
         dispatch-invalid-nb-switch.ores
         --diagnostic "native nb match/switch is invalid: nb applies to channel/select operations, not dispatch arms")
 
-    # Java '/' produces a float even for int/int. Until native float lowering
-    # exists, reject '/' and '%' before IR rather than silently emitting i64.
-    oreslang_contract_test(native_float_division_unavailable numeric-division-float-reject.ores
-        --diagnostic "native floating division unsupported")
-    oreslang_contract_test(native_float_division_precedence_unavailable numeric-division-precedence-reject.ores
-        --diagnostic "native floating division unsupported")
+    # Java's current int/int contract truncates toward zero; float remains gated.
+    oreslang_contract_test(native_integer_division_ir numeric-division-float-reject.ores
+        --ir "sdiv i64")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_integer_division_runtime numeric-division-float-reject.ores
+            --run 4 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_integer_division_precedence_runtime numeric-division-precedence-reject.ores
+            --run 13 --clang "${ORE_CLANG}")
+    endif()
     oreslang_contract_test(native_decimal_suffix_unavailable numeric-decimal-suffix-reject.ores
         --diagnostic "native floating-point/decimal literal unsupported")
     oreslang_contract_test(native_float_exponent_unavailable numeric-floating-exponent-reject.ores
@@ -4326,6 +4342,15 @@ if(BUILD_TESTING)
     # `trap e` lowers to Result<int,Error> for pure integer operands. Using
     # it where an int is required must still reject, as on Java: there is no
     # implicit tagged sum flatten/erase into a result, argument or operand.
+    oreslang_contract_test(native_numeric_error_type_wrong_carrier_reject
+        numeric-error-type-wrong-carrier-reject.atto
+        --diagnostic "native numeric Error projection requires nominal Result<int,Error>")
+    oreslang_contract_test(native_numeric_error_type_unknown_reject
+        numeric-error-type-unknown-reject.atto
+        --diagnostic "native is type requires a checked numeric Result.unwrap_err() projection")
+    oreslang_contract_test(native_numeric_error_type_raw_reject
+        numeric-error-type-raw-reject.atto
+        --diagnostic "unsupported native sum method or arity")
     oreslang_contract_test(native_trap_result_idempotent_option_reject
         trap-result-idempotent-option-reject.atto
         --diagnostic "native trap Option payload requires checked nested ownership ABI")

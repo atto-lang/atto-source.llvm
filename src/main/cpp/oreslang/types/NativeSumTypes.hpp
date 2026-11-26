@@ -1,4 +1,5 @@
 #pragma once
+#include "oreslang/types/NativeNumericErrorAbi.hpp"
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/types/FunctorTypeRules.hpp"
@@ -331,6 +332,16 @@ inline void resolve_native_sums(Program& program) {
                 e.sum_type = sum;
                 return {ScalarType::I64, sum};
             }
+            if (types::native_error_projection(e.name)) {
+                if (e.kind != E::SumAccess || !e.arguments.empty() ||
+                        !e.argument_names.empty() || owner.sum != "Result<int,Error>" ||
+                        !types::native_numeric_error_type(types::native_error_projection_type(e.name)) ||
+                        !native_sum(program, owner.sum).trap_error)
+                    throw std::runtime_error("native numeric Error projection requires nominal Result<int,Error>");
+                e.sum_type = owner.sum;
+                e.resolved_type = ScalarType::Bool;
+                return {ScalarType::Bool};
+            }
             if (!owner.sum.empty()) {
                 const NativeSumType type = native_sum(program, owner.sum);
                 const bool option = type.kind == NativeSumType::Kind::Option;
@@ -378,7 +389,7 @@ inline void resolve_native_sums(Program& program) {
         Hint left, right;
         if (e.left) left = expression(*e.left, env, {});
         if (e.right) right = expression(*e.right, env, {});
-        if ((e.kind == E::Add || e.kind == E::Subtract || e.kind == E::Multiply ||
+        if ((e.kind == E::Add || e.kind == E::Subtract || e.kind == E::Multiply || e.kind == E::Divide ||
                 e.kind == E::Negate) && (!left.sum.empty() || !right.sum.empty()))
             throw std::runtime_error("native tagged Option/Result is not an integer arithmetic operand");
         for (auto& arg : e.arguments) expression(*arg, env, {});

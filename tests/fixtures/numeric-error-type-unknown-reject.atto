@@ -1,0 +1,4 @@
+pub fnc main(): int {
+    val Result<int, Error> result = trap! (7 / 0);
+    return (result.unwrap_err() is type UnknownError) ? 42 : 0;
+}
