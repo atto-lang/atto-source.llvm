@@ -4499,6 +4499,15 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_actor_task_await_method_staged_no_ir
         source-actor-task-await-method-staged.atto
         --diagnostic "ATTO_TASK_E_ACTOR_LOWERING_PENDING")
+    oreslang_contract_test(native_actor_task_await_short_staged_no_ir
+        source-actor-task-await-short-staged.atto
+        --diagnostic "ATTO_TASK_E_ACTOR_LOWERING_PENDING")
+    oreslang_contract_test(native_actor_task_await_hourglass_staged_no_ir
+        source-actor-task-await-hourglass-staged.atto
+        --diagnostic "ATTO_TASK_E_ACTOR_LOWERING_PENDING")
+    oreslang_contract_test(native_actor_task_await_partial_staged_no_ir
+        source-actor-task-await-partial-staged.atto
+        --diagnostic "ATTO_TASK_E_ACTOR_LOWERING_PENDING")
     oreslang_contract_test(native_actor_task_await_capture_reject
         source-actor-task-await-capture-reject.atto
         --diagnostic "ATTO_TASK_E_ACTOR_CAPTURE")
