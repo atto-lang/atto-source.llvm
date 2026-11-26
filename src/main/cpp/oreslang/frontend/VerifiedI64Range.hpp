@@ -70,6 +70,26 @@ public:
         throw std::runtime_error("E_REFINEMENT_PREDICATE: expected an interval comparison");
     }
 
+    // Universal safety, never inferred from clipped normal-result bounds.
+    bool proves_arithmetic(std::string_view op, const VerifiedI64Range& right) const {
+        auto fits = [](const llvm::APInt& low, const llvm::APInt& high) {
+            return !low.slt(wide(Min)) && !high.sgt(wide(Max));
+        };
+        auto a=wide(minimum()), b=wide(maximum()), c=wide(right.minimum()), d=wide(right.maximum());
+        if (op == "+") return fits(a+c,b+d);
+        if (op == "-") return fits(a-d,b-c);
+        if (op == "*") {
+            std::array values{a*c,a*d,b*c,b*d};
+            auto ends=std::minmax_element(values.begin(),values.end(),
+                [](const auto& l,const auto& r){return l.slt(r);});
+            return fits(*ends.first,*ends.second);
+        }
+        if (op == "/") return (right.minimum()>0 || right.maximum()<0)
+            && !(minimum()==Min && right.minimum()<=-1 && right.maximum()>=-1);
+        return false;
+    }
+    bool proves_negation() const { return minimum()!=Min; }
+
     VerifiedI64Range add(const VerifiedI64Range& right) const {
         return clip(wide(bounds_.minimum) + wide(right.bounds_.minimum), wide(bounds_.maximum) + wide(right.bounds_.maximum));
     }
