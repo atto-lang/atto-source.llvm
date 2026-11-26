@@ -2902,6 +2902,22 @@ if(BUILD_TESTING)
         set_tests_properties(native_ownership_bang_aliases_parser_and_checker
             PROPERTIES TIMEOUT 30)
 
+        add_executable(oreslang-native-suspension-effect-aliases-test
+            tests/native_suspension_effect_aliases_test.cpp
+            src/main/cpp/oreslang/frontend/Parser.cpp
+            src/main/cpp/oreslang/frontend/MethodResolver.cpp
+            src/main/cpp/oreslang/types/NativeScalarTypes.cpp
+            src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+        target_include_directories(oreslang-native-suspension-effect-aliases-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp" "${LLVM_INCLUDE_DIRS}")
+        target_link_libraries(oreslang-native-suspension-effect-aliases-test PRIVATE
+            OpenSSL::Crypto ${ORE_LLVM_LIBS})
+        target_compile_options(oreslang-native-suspension-effect-aliases-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+        add_test(NAME native_suspension_effect_aliases_parser
+            COMMAND oreslang-native-suspension-effect-aliases-test)
+        set_tests_properties(native_suspension_effect_aliases_parser PROPERTIES TIMEOUT 30)
+
         add_executable(oreslang-messagepack-wire-v2-test
             tests/messagepack_wire_v2_test.cpp)
         target_include_directories(oreslang-messagepack-wire-v2-test PRIVATE
@@ -4482,6 +4498,15 @@ if(BUILD_TESTING)
         --diagnostic "ATTO_TASK_E_ACTOR_LOWERING_PENDING")
     oreslang_contract_test(native_actor_task_await_method_staged_no_ir
         source-actor-task-await-method-staged.atto
+        --diagnostic "ATTO_TASK_E_ACTOR_LOWERING_PENDING")
+    oreslang_contract_test(native_actor_task_await_short_staged_no_ir
+        source-actor-task-await-short-staged.atto
+        --diagnostic "ATTO_TASK_E_ACTOR_LOWERING_PENDING")
+    oreslang_contract_test(native_actor_task_await_hourglass_staged_no_ir
+        source-actor-task-await-hourglass-staged.atto
+        --diagnostic "ATTO_TASK_E_ACTOR_LOWERING_PENDING")
+    oreslang_contract_test(native_actor_task_await_partial_staged_no_ir
+        source-actor-task-await-partial-staged.atto
         --diagnostic "ATTO_TASK_E_ACTOR_LOWERING_PENDING")
     oreslang_contract_test(native_actor_task_await_capture_reject
         source-actor-task-await-capture-reject.atto
