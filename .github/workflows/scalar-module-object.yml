@@ -1,0 +1,43 @@
+name: Real scalar module object provider AOT
+on:
+  pull_request:
+    paths:
+      - 'scripts/compile-scalar-module-object.sh'
+      - 'tests/scalar_module_object.sh'
+      - '.github/workflows/scalar-module-object.yml'
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  module-object:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact source tree
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -eu
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git rev-parse HEAD HEAD^{tree}
+          test -z "$(git status --porcelain)"
+      - name: Build actual compiler and auditor
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-19 llvm-19-dev cmake ninja-build
+          cmake -S . -B "$RUNNER_TEMP/build" -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DLLVM_DIR=/usr/lib/llvm-19/lib/cmake/llvm
+          cmake --build "$RUNNER_TEMP/build" --target oreslang-llvmc --parallel 2
+          rustc --edition=2021 -D warnings scripts/audit_no_gc_ir.rs -o "$RUNNER_TEMP/build/oreslang-no-gc-ir-audit"
+      - name: Execute independent real source module object provider regression
+        run: |
+          set -euo pipefail
+          export ORESLANG_LLVMC="$RUNNER_TEMP/build/oreslang-llvmc" ORES_NO_GC_IR_AUDIT="$RUNNER_TEMP/build/oreslang-no-gc-ir-audit" CLANG=/usr/bin/clang-19
+          bash -n scripts/compile-scalar-module-object.sh tests/scalar_module_object.sh
+          bash tests/scalar_module_object.sh | tee "$RUNNER_TEMP/module-receipts"
+          for level in 0 2; do
+            grep -Fx "REAL_ATTO_MODULE_OBJECTS|O$level|native=42/43/42/43|unchanged=2|negative=4|host_consumer=YES" "$RUNNER_TEMP/module-receipts"
+          done
