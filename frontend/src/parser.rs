@@ -363,6 +363,13 @@ impl Parser {
     }
 
     fn parse_type(&mut self) -> R<Type> {
+        self.parse_type_in_context(false)
+    }
+
+    fn parse_type_in_context(&mut self, return_first_header: bool) -> R<Type> {
+        // Only a declaration prefix may treat a contiguous '<-' as a
+        // return marker instead of the beginning of a generic type.
+        let return_marker = return_first_header && self.return_first_marker_here();
         let pos = self.pos();
         let name = match self.peek() {
             Tok::Ident(s) => s.clone(),
@@ -432,7 +439,11 @@ impl Parser {
             // A class or enum name; the checker resolves it.
             n => Type::Named(self.type_name(n.to_string(), pos)),
         };
-        if matches!(self.peek(), Tok::Lt | Tok::LBracket | Tok::Question | Tok::Pipe) {
+        let is_return_arrow = return_marker && *self.peek() == Tok::Lt
+            && *self.peek_at(1) == Tok::Minus;
+        if !is_return_arrow
+            && matches!(self.peek(), Tok::Lt | Tok::LBracket | Tok::Question | Tok::Pipe)
+        {
             return Err(unsupported(self.pos(), "generic, optional, union and sequence types"));
         }
         Ok(ty)
@@ -1076,7 +1087,7 @@ impl Parser {
             false
         };
         let prefix_type = if return_first {
-            let ty = self.parse_type()?;
+            let ty = self.parse_type_in_context(true)?;
             self.consume_return_first_marker()?;
             Some(ty)
         } else {

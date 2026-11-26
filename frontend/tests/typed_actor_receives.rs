@@ -135,3 +135,15 @@ fn forged_void_payload_effect_does_not_bypass_parser_rejection() {
     program.actors[0].sends = Some(ActorSendEffect::Payload(Type::Void));
     assert_eq!(check::check(&program).unwrap_err().code, "E_ACTOR_SEND_CONTRACT");
 }
+
+#[test]
+fn canonical_bool_actor_negative_fixtures_do_not_emit_wasm() {
+    for (source, expected) in [
+        (include_str!("fixtures/typed-actor-bool-v1/02-receives-handler-mismatch.atto"), "E_ACTOR_RECEIVES"),
+        (include_str!("fixtures/typed-actor-bool-v1/03-sends-void-invalid.atto"), "E_ACTOR_SEND_CONTRACT"),
+        (include_str!("fixtures/typed-actor-bool-v1/04-duplicate-sends-clause.atto"), "E_ACTOR_CONTRACT"),
+    ] {
+        let error = compile(source).expect_err("canonical negative must not emit Wasm");
+        assert_eq!(error.code, expected);
+    }
+}

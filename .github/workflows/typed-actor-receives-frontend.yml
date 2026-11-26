@@ -11,6 +11,7 @@ on:
       - 'frontend/src/lib.rs'
       - 'frontend/src/actor_send_effect_graph.rs'
       - 'frontend/tests/fixtures/actor-bool-never-parity-v1.atto'
+      - 'frontend/tests/fixtures/typed-actor-bool-v1/**'
       - 'frontend/src/bin/attoc.rs'
       - 'frontend/tests/typed_actor_receives.rs'
   push:
@@ -22,6 +23,7 @@ on:
       - 'frontend/src/lib.rs'
       - 'frontend/src/actor_send_effect_graph.rs'
       - 'frontend/tests/fixtures/actor-bool-never-parity-v1.atto'
+      - 'frontend/tests/fixtures/typed-actor-bool-v1/**'
       - 'frontend/src/bin/attoc.rs'
       - 'frontend/tests/typed_actor_receives.rs'
   workflow_dispatch:
