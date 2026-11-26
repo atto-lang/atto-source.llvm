@@ -95,6 +95,20 @@ struct Expression {
 // This predicate deliberately
 // rejects calls, variables, dereferences, nested sums, host/actor effects,
 // suspension and all non-integer values until effect and cleanup IR is proven.
+// Restricted checked unwrap slice: direct named Option<int> receiver only.
+// Before resolution the node is ArrayCall; after resolution it must be
+// SumAccess with the exact closed descriptor. This is NOT general throw ABI.
+inline bool native_trap_direct_unwrap_shape(const Expression& e) {
+    return (e.kind == Expression::Kind::ArrayCall || e.kind == Expression::Kind::SumAccess)
+        && e.name == "unwrap" && e.left && e.left->kind == Expression::Kind::Variable
+        && !e.right && !e.condition && !e.condition_lhs && !e.condition_rhs
+        && !e.when_true && !e.when_false && e.arguments.empty()
+        && e.argument_names.empty() && e.type_arguments.empty() && !e.type_arguments_present;
+}
+inline bool native_trap_checked_option_unwrap(const Expression& e) {
+    return native_trap_direct_unwrap_shape(e) && e.kind == Expression::Kind::SumAccess
+        && e.sum_type == "Option<int>";
+}
 inline bool native_trap_pure_integer(const Expression& e, std::size_t depth = 0) {
     if (depth > 64) return false;
     switch (e.kind) {
