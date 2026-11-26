@@ -102,6 +102,16 @@ int main(int argc, char** argv) {
         CHECK(fresh.failure_code == ORES_SOURCE_ACTOR_FAILURE_FRAME);
         CHECK(fresh.stop_requested);
         CHECK(!oreslang_source_actor_recover_blocking(replacement));
+        CHECK(!oreslang_source_actor_try_send(replacement, 11));
+        /* Prove B progresses AFTER the second terminal fence and exhausted
+         * restart decision, not only before A2 fails. */
+        CHECK(oreslang_source_actor_try_send(b, 42));
+        CHECK(oreslang_source_actor_flush_blocking(b));
+        CHECK(atomic_load(&b_forty_two) == 2);
+        OresSourceActorMessageReceipt sibling = {0};
+        CHECK(oreslang_source_actor_message_receipt(b, &sibling));
+        CHECK(sibling.successful_messages == 2 && sibling.failed_messages == 0);
+        CHECK(sibling.last_success_result == 42 && !sibling.stop_requested);
     }
     oreslang_source_actor_stop(replacement);
     oreslang_source_actor_stop(b);
