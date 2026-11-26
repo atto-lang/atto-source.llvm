@@ -1,0 +1,20 @@
+// std/io: hosted standard-output writers. Requires a hosted target.
+define module io as
+
+  pub fnc write_int(int value): void {
+    stdio.stdout.write(value);
+    return;
+  }
+
+  pub fnc write_str(string text): void {
+    stdio.stdout.write(text);
+    return;
+  }
+
+  pub fnc write_line(string text): void {
+    stdio.stdout.write(text);
+    stdio.stdout.write("\n");
+    return;
+  }
+
+end

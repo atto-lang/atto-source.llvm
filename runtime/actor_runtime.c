@@ -9,6 +9,14 @@
  * No GC, shared guest pointers or callbacks that expose arena addresses.
  * This C module is host/runtime infrastructure, NOT the Atto stdlib.
  */
+/* This runtime executes native actor callbacks inside pthreads sharing one
+ * process. Do not allow a caller to request SIGSEGV confinement and silently
+ * receive only actor-owned heaps/mailboxes. That guarantee requires a worker
+ * process boundary and a separate supervisor/IPC implementation. */
+#if defined(ATTO_REQUIRE_PROCESS_ISOLATED_ACTORS)
+#error "pthread actor runtime cannot contain native SIGSEGV; use a process-isolated actor runtime"
+#endif
+
 #define _POSIX_C_SOURCE 200809L
 #include <inttypes.h>
 #include <pthread.h>
@@ -17,6 +25,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include "actor_ticket_v1.h"
+#include "actor_send_result_v1.h"
 
 #define ATTO_MAX_ACTORS 32u
 #define ATTO_MAILBOX_CAP 128u
@@ -24,6 +34,19 @@
 #define ATTO_STACK_BYTES 262144u
 #define ATTO_STATE_SLOTS 1024u
 #define ATTO_STATE_BYTES (ATTO_STATE_SLOTS * 8u)
+#define ATTO_TICKET_SLOTS 256u
+
+typedef struct Mail {
+    int64_t value;
+    uint64_t receipt;
+} Mail;
+
+typedef struct TicketSlot {
+    uint64_t id;
+    atto_host_receipt_route_v1 route;
+    atto_host_ticket_state_v1 state;
+    int used;
+} TicketSlot;
 
 typedef struct Actor {
     pthread_t thread;
@@ -36,7 +59,9 @@ typedef struct Actor {
     uint32_t queue_head;
     uint32_t queue_len;
     int closing;
-    int64_t messages[ATTO_MAILBOX_CAP];
+    Mail messages[ATTO_MAILBOX_CAP];
+    TicketSlot receipts[ATTO_TICKET_SLOTS];
+    uint64_t next_ticket;
     uint64_t next_seq;
 } Actor;
 
@@ -68,13 +93,35 @@ static void *actor_worker(void *arg) {
             pthread_mutex_unlock(&actor->lock);
             break;
         }
-        int64_t message = actor->messages[actor->queue_head];
+        Mail mail = actor->messages[actor->queue_head];
         actor->queue_head = (actor->queue_head + 1) % ATTO_MAILBOX_CAP;
         actor->queue_len--;
         uint64_t sequence = actor->next_seq++;
+        if (mail.receipt != 0) {
+            for (size_t i = 0; i < ATTO_TICKET_SLOTS; ++i) {
+                TicketSlot *ticket = &actor->receipts[i];
+                if (ticket->used && ticket->id == mail.receipt) {
+                    if (ticket->state != ATTO_TICKET_ADMITTED) hard_abort();
+                    ticket->state = ATTO_TICKET_STARTED;
+                    break;
+                }
+            }
+        }
         pthread_mutex_unlock(&actor->lock);
         if (sequence > INT64_MAX) hard_abort();
-        atto_actor_receive(actor->type_id, message, (int64_t)sequence);
+        atto_actor_receive(actor->type_id, mail.value, (int64_t)sequence);
+        if (mail.receipt != 0) {
+            pthread_mutex_lock(&actor->lock);
+            for (size_t i = 0; i < ATTO_TICKET_SLOTS; ++i) {
+                TicketSlot *ticket = &actor->receipts[i];
+                if (ticket->used && ticket->id == mail.receipt) {
+                    if (ticket->state != ATTO_TICKET_STARTED) hard_abort();
+                    ticket->state = ATTO_TICKET_PROCESSED;
+                    break;
+                }
+            }
+            pthread_mutex_unlock(&actor->lock);
+        }
     }
     active_actor = NULL;
     return NULL;
@@ -156,13 +203,172 @@ int32_t atto_actor_send(int32_t ref, int64_t value) {
         result = -2;
     } else {
         uint32_t index = (actor->queue_head + actor->queue_len) % ATTO_MAILBOX_CAP;
-        actor->messages[index] = value;
+        actor->messages[index] = (Mail){.value = value, .receipt = 0};
         actor->queue_len++;
         pthread_cond_signal(&actor->ready);
     }
     pthread_mutex_unlock(&actor->lock);
     pthread_mutex_unlock(&registry_lock);
     return result;
+}
+
+/* Trusted-host-only receipt bridge. This is not a guest ABI or an
+ * authentication primitive: the caller MUST authenticate tenant/capability,
+ * route, target, incarnation and intended mailbox before calling.
+ * Ticket IDs are private per-actor opaque correlators; the host must keep the
+ * returned ref+route with the ticket, never use a bare ID as a capability.
+ * Mailbox admission + ticket minting share the actor mutex.
+ * Receipt slots stay pinned until released; exhaustion is backpressure,
+ * not silent overwrite. A failed host process requires indeterminate recovery.
+ */
+static int route_valid(const atto_host_receipt_route_v1 *r, uint32_t actor_ref) {
+    return r && r->protocol_major == 1 && r->tenant &&
+        r->caller_incarnation && r->target_actor == (uint64_t)actor_ref &&
+        r->target_incarnation == (actor_ref >> 16) &&
+        r->association_generation &&
+        r->placement_epoch && r->message_id && r->attempt;
+}
+static int route_equal(const atto_host_receipt_route_v1 *a,
+                       const atto_host_receipt_route_v1 *b) {
+    return a->protocol_major == b->protocol_major &&
+        a->tenant == b->tenant && a->caller_incarnation == b->caller_incarnation &&
+        a->target_actor == b->target_actor &&
+        a->target_incarnation == b->target_incarnation &&
+        a->association_generation == b->association_generation &&
+        a->placement_epoch == b->placement_epoch &&
+        a->message_id == b->message_id && a->attempt == b->attempt;
+}
+static TicketSlot *ticket_find(Actor *actor, uint64_t id,
+                               const atto_host_receipt_route_v1 *route) {
+    if (id == 0) return NULL;
+    for (size_t i = 0; i < ATTO_TICKET_SLOTS; ++i) {
+        TicketSlot *t = &actor->receipts[i];
+        if (t->used && t->id == id && route_equal(&t->route, route))
+            return t;
+    }
+    return NULL;
+}
+/* 0 admitted; -1 closed/stale/invalid identity; -2 mailbox/receipt full. */
+int32_t atto_host_actor_send_ticket(int32_t ref, int64_t value,
+                                   const atto_host_receipt_route_v1 *route,
+                                   uint64_t *out_ticket) {
+    if (!out_ticket) return -1;
+    *out_ticket = 0;
+    uint32_t token = (uint32_t)ref;
+    uint32_t slot = token & UINT32_C(0xffff);
+    uint32_t generation = token >> 16;
+    if (slot == 0 || slot > ATTO_MAX_ACTORS || !route_valid(route, token))
+        return -1;
+    pthread_mutex_lock(&registry_lock);
+    Actor *actor = registry[slot - 1];
+    if (finishing || !actor || actor->generation != generation) {
+        pthread_mutex_unlock(&registry_lock);
+        return -1;
+    }
+    pthread_mutex_lock(&actor->lock);
+    int32_t result = -1;
+    if (!actor->closing) {
+        if (actor->queue_len == ATTO_MAILBOX_CAP || actor->next_ticket == UINT64_MAX) {
+            result = -2;
+        } else {
+            TicketSlot *available = NULL;
+            for (size_t i = 0; i < ATTO_TICKET_SLOTS; ++i)
+                if (!actor->receipts[i].used) {
+                    available = &actor->receipts[i];
+                    break;
+                }
+            if (!available) result = -2;
+            else {
+                uint64_t id = ++actor->next_ticket;
+                *available = (TicketSlot){ .id = id, .route = *route,
+                    .state = ATTO_TICKET_ADMITTED, .used = 1 };
+                uint32_t index = (actor->queue_head + actor->queue_len) % ATTO_MAILBOX_CAP;
+                actor->messages[index] = (Mail){ .value = value, .receipt = id };
+                actor->queue_len++;
+                *out_ticket = id;
+                result = 0;
+                pthread_cond_signal(&actor->ready);
+            }
+        }
+    }
+    pthread_mutex_unlock(&actor->lock);
+    pthread_mutex_unlock(&registry_lock);
+    return result;
+}
+/* 0 + state for a scoped live receipt; -1 invalid/stale, including after release.
+ * This cannot be used for durable provider commits or replies.
+ */
+int32_t atto_host_actor_ticket_snapshot(int32_t ref, uint64_t id,
+                                        const atto_host_receipt_route_v1 *route,
+                                        atto_host_ticket_state_v1 *out_state) {
+    if (!route || !out_state) return -1;
+    uint32_t token = (uint32_t)ref, slot = token & UINT32_C(0xffff);
+    uint32_t generation = token >> 16;
+    if (slot == 0 || slot > ATTO_MAX_ACTORS ||
+        !route_valid(route, token)) return -1;
+    pthread_mutex_lock(&registry_lock);
+    Actor *actor = registry[slot - 1];
+    if (finishing || !actor || actor->generation != generation) {
+        pthread_mutex_unlock(&registry_lock);
+        return -1;
+    }
+    pthread_mutex_lock(&actor->lock);
+    TicketSlot *ticket = ticket_find(actor, id, route);
+    int32_t rc = ticket ? 0 : -1;
+    if (ticket) *out_state = ticket->state;
+    pthread_mutex_unlock(&actor->lock);
+    pthread_mutex_unlock(&registry_lock);
+    return rc;
+}
+/* Explicit release avoids a silent receipt-ring overwrite. Only terminal
+ * tickets may be released; the caller retains a copy of its final outcome.
+ */
+int32_t atto_host_actor_ticket_release(int32_t ref, uint64_t id,
+                                       const atto_host_receipt_route_v1 *route) {
+    if (!route) return -1;
+    uint32_t token = (uint32_t)ref, slot = token & UINT32_C(0xffff);
+    uint32_t generation = token >> 16;
+    if (slot == 0 || slot > ATTO_MAX_ACTORS ||
+        !route_valid(route, token)) return -1;
+    pthread_mutex_lock(&registry_lock);
+    Actor *actor = registry[slot - 1];
+    if (finishing || !actor || actor->generation != generation) {
+        pthread_mutex_unlock(&registry_lock);
+        return -1;
+    }
+    pthread_mutex_lock(&actor->lock);
+    TicketSlot *ticket = ticket_find(actor, id, route);
+    int32_t rc = -1;
+    if (ticket && ticket->state == ATTO_TICKET_PROCESSED) {
+        memset(ticket, 0, sizeof(*ticket));
+        rc = 0;
+    }
+    pthread_mutex_unlock(&actor->lock);
+    pthread_mutex_unlock(&registry_lock);
+    return rc;
+}
+
+/* Host-only fixed-width Result<Ack,SendError> *admission* ABI. This wrapper
+ * delegates to the existing linearizable enqueue path and never changes the
+ * legacy source guest ABI. An unknown raw status is a runtime integrity fault.
+ * A rejected scalar remains caller-owned and may be retried unchanged. */
+AttoActorSendResultV1 atto_actor_send_result_v1(int32_t ref, int64_t value) {
+    const int32_t status = atto_actor_send(ref, value);
+    switch (status) {
+        case 0:
+            return (AttoActorSendResultV1){ATTO_SEND_ADMITTED_V1,
+                                           ATTO_SEND_ERROR_NONE_V1};
+        case -1:
+            return (AttoActorSendResultV1){ATTO_SEND_REJECTED_V1,
+                                           ATTO_SEND_ERROR_UNAVAILABLE_V1};
+        case -2:
+            return (AttoActorSendResultV1){ATTO_SEND_REJECTED_V1,
+                                           ATTO_SEND_ERROR_FULL_V1};
+        default:
+            hard_abort();
+            return (AttoActorSendResultV1){ATTO_SEND_REJECTED_V1,
+                                           ATTO_SEND_ERROR_UNAVAILABLE_V1};
+    }
 }
 
 /* Main closes admission after its last send and drains all queued messages.

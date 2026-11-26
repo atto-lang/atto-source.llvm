@@ -1,0 +1,15 @@
+// expect-reject: E_TYPE
+// Until guest-level Result<Ack, SendError> is implemented, this canonical
+// syntax MUST fail closed: the current native frontend types send() as void.
+// This is NOT an executable positive guest parity fixture.
+define actor Receiver as
+    receive(ActorMail<int> mail): void { return; }
+end
+pub fnc main(): int {
+    val worker = spawn Receiver();
+    val result = worker.send(42);
+    match result over
+        on Ok(ack) -> { return 42; }
+        on Err(err) -> { return 1; }
+    end
+}

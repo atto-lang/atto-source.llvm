@@ -1,0 +1,40 @@
+name: Atto perf core/source policy (NOT guest credit)
+on:
+  pull_request:
+    paths:
+      - 'core/perf_policy.atto'
+      - 'stdlib/perf.atto'
+      - 'stdlib/perf_ids.atto'
+      - 'stdlib/alloc/perf_trace_buffer.atto'
+      - 'tests/perf_source_contract.test.mjs'
+      - 'tests/perf_policy_source.test.mjs'
+      - '.github/workflows/perf-hooks-source-contract.yml'
+  push:
+    paths:
+      - 'core/perf_policy.atto'
+      - 'stdlib/perf.atto'
+      - 'stdlib/perf_ids.atto'
+      - 'stdlib/alloc/perf_trace_buffer.atto'
+      - 'tests/perf_source_contract.test.mjs'
+      - 'tests/perf_policy_source.test.mjs'
+      - '.github/workflows/perf-hooks-source-contract.yml'
+permissions:
+  contents: read
+jobs:
+  static-perf-contract:
+    name: atto-static-perf-source-only
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Exact source checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Node 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Source assertions only; do not claim guest execution
+        run: |
+          node --version
+          node --test tests/perf_source_contract.test.mjs tests/perf_policy_source.test.mjs

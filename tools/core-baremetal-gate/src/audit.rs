@@ -101,14 +101,61 @@ pub fn forbidden_reason(symbol: &str) -> Option<&'static str> {
         .map(|(_, reason)| *reason)
 }
 
-/// Names of functions the IR declares but does not define, excluding LLVM
-/// intrinsics. A provider-free `ores.core` module should have none.
+/// Only documented compiler intrinsics are exempt from IR external-import
+/// admission. Blanket llvm.* exemptions permit forged host-dependent names.
+/// The independent compiled-object undefined-symbol audit remains mandatory.
+fn known_llvm_intrinsic(name: &str) -> bool {
+    const EXACT: &[&str] = &[
+        "llvm.trap", "llvm.debugtrap", "llvm.assume",
+        "llvm.donothing", "llvm.sideeffect",
+        "llvm.dbg.declare", "llvm.dbg.value", "llvm.dbg.assign",
+        "llvm.stacksave", "llvm.stackrestore",
+    ];
+    const TYPED: &[&str] = &[
+        "llvm.sadd.with.overflow.", "llvm.ssub.with.overflow.",
+        "llvm.smul.with.overflow.", "llvm.uadd.with.overflow.",
+        "llvm.usub.with.overflow.", "llvm.umul.with.overflow.",
+        "llvm.memcpy.", "llvm.memmove.", "llvm.memset.",
+        "llvm.lifetime.start.", "llvm.lifetime.end.",
+        "llvm.expect.", "llvm.objectsize.",
+        "llvm.invariant.start.", "llvm.invariant.end.",
+        "llvm.bswap.", "llvm.ctpop.", "llvm.ctlz.", "llvm.cttz.",
+        "llvm.fshl.", "llvm.fshr.", "llvm.abs.",
+        "llvm.smax.", "llvm.smin.", "llvm.umax.", "llvm.umin.",
+    ];
+    EXACT.contains(&name) || TYPED.iter().any(|prefix| {
+        if let Some(suffix) = name.strip_prefix(prefix) {
+            // Core v1 uses only scalar integer and opaque-pointer intrinsic
+            // types (i32, i64, p0, etc.). Arbitrary alphanumeric suffixes
+            // could alias a forged llvm.memcpy.host_escape declaration.
+            !suffix.is_empty() && suffix.split('.').all(|piece| {
+                let raw = piece.as_bytes();
+                raw.len() > 1
+                    && (raw[0] == b'i' || raw[0] == b'p')
+                    && raw[1..].iter().all(u8::is_ascii_digit)
+            })
+        } else {
+            false
+        }
+    })
+}
+
+/// Names of functions the IR declares but does not define, excluding known
+/// LLVM intrinsics. Unknown llvm.* names must not bypass Core admission.
 pub fn ir_external_declarations(ir: &str) -> Vec<String> {
     ir.lines()
         .map(str::trim_start)
-        .filter(|line| line.starts_with("declare "))
-        .filter_map(declared_name)
-        .filter(|name| !name.starts_with("llvm."))
+        // LLVM IR admits whitespace after the declaration keyword. Filtering
+        // only literal "declare " silently missed tab-separated declarations.
+        .filter(|line| line.strip_prefix("declare").is_some_and(|tail| {
+            tail.chars().next().is_some_and(char::is_whitespace)
+        }))
+        // A malformed declaration may otherwise disappear from the verifier
+        // with filter_map; fail closed rather than dropping it.
+        .map(|line| declared_name(line).unwrap_or_else(|| {
+            "<unparseable-external-declaration>".to_string()
+        }))
+        .filter(|name| !known_llvm_intrinsic(name))
         .collect()
 }
 
@@ -156,7 +203,34 @@ fn is_external_global_declaration(line: &str) -> bool {
 }
 
 fn declared_name(line: &str) -> Option<String> {
-    let at = line.find('@')?;
+    // Do not trust an `@llvm.trap` embedded in a declaration comment or
+    // string literal: it could hide a malformed external declaration from
+    // the fail-closed scanner. LLVM comments start at unquoted ';'.
+    let mut quoted = false;
+    let mut escaped = false;
+    let mut symbol_at = None;
+    for (index, ch) in line.char_indices() {
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                quoted = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => quoted = true,
+            ';' => break,
+            '@' => {
+                symbol_at = Some(index);
+                break;
+            }
+            _ => {}
+        }
+    }
+    let at = symbol_at?;
     let rest = &line[at + 1..];
     if let Some(quoted) = rest.strip_prefix('"') {
         return quoted.find('"').map(|end| quoted[..end].to_string());
@@ -273,6 +347,138 @@ declare ptr @malloc(i64)
 declare void @"ores_actor_send"(ptr)
 "#;
         assert_eq!(ir_external_declarations(ir), vec!["malloc", "ores_actor_send"]);
+    }
+
+
+    #[test]
+    fn tab_and_multiple_space_ir_declarations_are_not_invisible() {
+        let ir = concat!(
+            "declare\tvoid @malloc(i64)\n",
+            "declare    ptr @pthread_create(ptr)\n",
+            "declare\tvoid @llvm.trap()\n",
+        );
+        assert_eq!(ir_external_declarations(ir),
+            vec!["malloc", "pthread_create"]);
+    }
+
+    #[test]
+    fn unparseable_declaration_cannot_disappear_from_external_audit() {
+        for ir in [
+            "declare void missing_at_sign()\n",
+            "declare #0\n",
+            "declare\tvoid no_symbol_here(ptr)\n",
+        ] {
+            assert_eq!(ir_external_declarations(ir),
+                vec!["<unparseable-external-declaration>"]);
+        }
+    }
+
+    #[test]
+    fn comment_only_llvm_intrinsic_cannot_hide_missing_external_symbol() {
+        let ir = concat!(
+            "declare void no_symbol() ; @llvm.trap()\n",
+            "declare #0 ; @llvm.memcpy.p0.p0.i64()\n",
+        );
+        assert_eq!(ir_external_declarations(ir), vec![
+            "<unparseable-external-declaration>",
+            "<unparseable-external-declaration>"
+        ]);
+    }
+
+    #[test]
+    fn quoted_ir_metadata_with_at_sign_does_not_supersede_callable() {
+        let ir = "declare void \"metadata@llvm.trap\" @malloc(i64)\n";
+        assert_eq!(ir_external_declarations(ir), vec!["malloc"]);
+    }
+
+    #[test]
+    fn semicolon_inside_quoted_external_name_is_not_an_ir_comment() {
+        let ir = "declare void @\"host;@escape\"() ; @llvm.trap\n";
+        assert_eq!(ir_external_declarations(ir), vec!["host;@escape"]);
+    }
+
+    #[test]
+    fn quoted_intrinsic_spoofing_with_tabs_is_still_external() {
+        let ir = "  declare\tvoid @\"llvm.ores_actor_send\"(ptr)\n";
+        assert_eq!(ir_external_declarations(ir), vec!["llvm.ores_actor_send"]);
+    }
+
+    #[test]
+    fn forged_llvm_names_are_never_implicitly_whitelisted() {
+        let ir = concat!(
+            "declare void @llvm.ores_actor_send(ptr)\n",
+            "declare ptr @llvm.allocator()\n",
+            "declare void @llvm.trap()\n",
+            "declare { i64, i1 } @llvm.smul.with.overflow.i64(i64, i64)\n",
+        );
+        assert_eq!(ir_external_declarations(ir),
+            vec!["llvm.ores_actor_send", "llvm.allocator"]);
+    }
+
+    #[test]
+    fn forged_typed_intrinsic_suffix_cannot_hide_as_llvm_builtin() {
+        let ir = concat!(
+            "declare void @llvm.memcpy.host_escape()\n",
+            "declare void @llvm.smul.with.overflow.i64.backdoor()\n",
+            "declare void @llvm.ctpop.i64_payload()\n",
+        );
+        assert_eq!(ir_external_declarations(ir), vec![
+            "llvm.memcpy.host_escape",
+            "llvm.smul.with.overflow.i64.backdoor",
+            "llvm.ctpop.i64_payload",
+        ]);
+    }
+
+    #[test]
+    fn scalar_and_pointer_intrinsic_type_suffixes_are_allowed_only_as_ir_builtins() {
+        let ir = concat!(
+            "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n",
+            "declare i64 @llvm.ctpop.i64(i64)\n",
+            "declare { i64, i1 } @llvm.smul.with.overflow.i64(i64, i64)\n",
+        );
+        assert!(ir_external_declarations(ir).is_empty());
+    }
+
+    #[test]
+    fn typed_intrinsic_prefix_without_suffix_stays_external() {
+        let ir = "declare void @llvm.memcpy.()\n";
+        assert_eq!(ir_external_declarations(ir), vec!["llvm.memcpy."]);
+    }
+
+    #[test]
+    fn unrecognized_debug_intrinsics_stay_external() {
+        let ir = "declare void @llvm.dbg.untrusted()\n";
+        assert_eq!(ir_external_declarations(ir), vec!["llvm.dbg.untrusted"]);
+    }
+
+    #[test]
+    fn quoted_unknown_llvm_import_stays_external() {
+        let ir = "declare void @\"llvm.pthread_create\"(ptr)\n";
+        assert_eq!(ir_external_declarations(ir), vec!["llvm.pthread_create"]);
+    }
+
+    #[test]
+    fn allowlisted_aeabi_helper_requires_exact_name() {
+        assert!(audit_guest_object(&[sym('U', "__aeabi_uldivmod")]).is_empty());
+        for name in ["__aeabi_uldivmod_extra", "__aeabi_surprise_helper",
+            "__aeabi_unwind_cpp_pr0", "malloc", "__tls_get_addr"] {
+            assert_eq!(audit_guest_object(&[sym('U', name)]).len(), 1, "{name}");
+        }
+    }
+
+    #[test]
+    fn mutation_detection_rejects_unknown_backend_helper_not_just_known_host_calls() {
+        let snippet = "declare i64 @atto_backend_injected_helper(i64)\n";
+        assert_eq!(ir_external_declarations(snippet),
+            vec!["atto_backend_injected_helper"]);
+        let object = [sym('U', "atto_backend_injected_helper"),sym('T', "atto_backend_injected_probe")];
+        let denied = audit_guest_object(&object);
+        assert_eq!(denied.len(),1);
+        assert!(denied[0].contains("outside the ores.core freestanding support ABI"));
+        // A new helper that happens to begin with __aeabi_ is not automatically
+        // a supported RTABI helper; support ABI is an exact allowlist.
+        let prefixed = [sym('U', "__aeabi_surprise_helper")];
+        assert_eq!(audit_guest_object(&prefixed).len(),1);
     }
 
     #[test]

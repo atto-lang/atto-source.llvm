@@ -7,8 +7,11 @@
 //! rejected with a diagnostic and never produces an artifact. See README.md.
 
 pub mod ast;
+/// Pure bounded typed-IR DATA send-effect closure, shared with peer frontend.
+pub mod actor_send_effect_graph;
 pub mod check;
 pub mod diag;
+pub mod directed_pipe;
 pub mod generator_cfg;
 pub mod generator_frame;
 pub mod lexer;
@@ -33,51 +36,68 @@ pub fn compile(source: &str) -> Result<Vec<u8>, Diagnostic> {
         ));
     }
     let toks = lexer::lex(source)?;
+    if let Some(pos) = directed_pipe::unlowered_pos(&toks) {
+        return Err(Diagnostic::new(pos, "E_UNSUPPORTED_CONTINUOUS_PIPE",
+            "typed pipe/rpipe DATA graph is planned but no guest transport or PipeHandle exists"));
+    }
     // Detect target declarations at any file-scope position, not only at
     // source byte zero. Ignore comments/strings (the lexer already tokenizes
     // them) and ignore nested brace bodies so a string or local expression
     // cannot accidentally switch the compiler into the target grammar.
     let mut braces = 0usize;
     let mut target = false;
+    let mut explicit_target = false;
     for i in 0..toks.len() {
         match &toks[i].tok {
             lexer::Tok::LBrace => braces = braces.saturating_add(1),
             lexer::Tok::RBrace => braces = braces.saturating_sub(1),
             lexer::Tok::Ident(word) if braces == 0 => {
                 let next = toks.get(i + 1).map(|token| &token.tok);
-                // Inline `mtd name(...)` inside a class/actor must use the
-                // ordinary executable parser. Only receiver-form `mtd (...)`
-                // selects the syntax-only external-method frontend.
                 if word == "declare" ||
-                    (word == "mtd" && matches!(next, Some(lexer::Tok::LParen))) ||
                     (word == "use" && matches!(next,
                         Some(lexer::Tok::Ident(name)) if name == "namespace")) {
+                    explicit_target = true;
                     target = true;
                     break;
+                }
+                // Only ambiguous receiver-like tokens need a second grammar.
+                if word == "mtd" && matches!(next, Some(lexer::Tok::LParen)) {
+                    target = true;
                 }
             }
             _ => {}
         }
     }
-    let program = if target {
-        // A user callable named mtd(), including an unbraced end-body call,
-        // may look like a receiver-form declaration to a token-only scanner.
-        // Prefer the real executable grammar if it accepts the *entire* file.
-        // True external receiver/declared-actor programs cannot pass it and
-        // remain syntax-only, with their normal fail-closed target diagnostics.
-        match parser::Parser::new(toks.clone()).parse_program() {
-            Ok(program) => program,
-            Err(_) => {
-                let headers = target_syntax::parse_target_declarations(&toks)?;
-                // Type declared signatures without handing unlinked actor
-                // declarations to the executable checker/Wasm emitter.
-                let typed = target_typed::lower_target_signatures(&headers)?;
-                let actor_ast = target_typed::build_actor_program(&headers, &typed);
-                check::check_target_actor_interface(&actor_ast)?;
-                return Err(Diagnostic::new(toks[0].pos, "E_UNSUPPORTED",
-                    "namespace-scoped actor declarations and mtd methods are syntax-only, not browser-lowered"));
-            }
+    // A protected actor attachment must never become an ordinary field
+    // during the scalar/actor guest compiler's fallback parsing.
+    let attached_actor_state = toks.windows(5).any(|w|
+        matches!((&w[0].tok,&w[1].tok,&w[2].tok,&w[3].tok,&w[4].tok),
+            (lexer::Tok::Ident(a),lexer::Tok::Ident(b),
+             lexer::Tok::Ident(c),lexer::Tok::Ident(d),lexer::Tok::Ident(_))
+                if a=="define"&&b=="state"&&c=="on"&&d=="actor"));
+    if attached_actor_state {
+        let headers = target_syntax::parse_target_declarations(&toks)?;
+        if !headers.actor_state_attachments.is_empty() {
+            return Err(Diagnostic::new(toks[0].pos, "E_UNSUPPORTED",
+                "attached actor state is parsed but its guarded native/guest runtime is unavailable"));
         }
+    }
+    // Preserve explicit target/attached actor gates above. Only ambiguous
+    // mtd() names may try the full executable grammar first.
+    let ordinary = if target && !explicit_target && !attached_actor_state {
+        parser::Parser::new(toks.clone()).parse_program().ok()
+    } else { None };
+    let program = if let Some(program) = ordinary {
+        program
+    } else if target {
+        let headers = target_syntax::parse_target_declarations(&toks)?;
+        // Type the declared method signatures without handing unlinked actor
+        // declarations to the executable check / Wasm backend.
+        let typed = target_typed::lower_target_signatures(&headers)?;
+        let actor_ast = target_typed::build_actor_program(&headers, &typed);
+        check::check_target_actor_interface(&actor_ast)?;
+        return Err(Diagnostic::new(toks[0].pos, "E_UNSUPPORTED",
+            "namespace-scoped actor declarations and mtd methods are syntax-only, not browser-lowered"));
     } else {
         parser::Parser::new(toks).parse_program()?
     };
@@ -196,5 +216,51 @@ mod abi {
                 Err(d) => fail(&mut st, d),
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod directional_pipe_guest_gate_tests {
+    use super::*;
+    #[test]
+    fn rejects_continuous_pipe_and_rpipe_without_guest_runtime() {
+        let samples = [
+            "pub fnc main(): int { val c = producer pipe consumer; return 0; }",
+            "pub fnc main(): int { val c = consumer rpipe producer; return 0; }",
+            "define actor Producer as end pub fnc main(): int { val c = spawn Producer() pipe spawn Producer(); return 0; }",
+        ];
+        for source in samples {
+            let d = compile(source).expect_err("continuous graph cannot reach wasm codegen");
+            assert_eq!(d.code, "E_UNSUPPORTED_CONTINUOUS_PIPE", "{source}");
+        }
+    }
+    #[test]
+    fn all_twelve_exact_canonical_pipeline_guests_fail_before_wasm_codegen() {
+        // These are byte-identical atto-platform-conformance #102 fixtures.
+        // This backend has no actual typed continuous guest runtime yet.
+        for (name, source) in [
+            ("actor-forward", include_str!("../../fixtures/pipe-rpipe-v1/actor-forward.atto")),
+            ("actor-reverse", include_str!("../../fixtures/pipe-rpipe-v1/actor-reverse.atto")),
+            ("actor-missing-emits", include_str!("../../fixtures/pipe-rpipe-v1/actor-missing-emits.atto")),
+            ("actor-wrong-direction", include_str!("../../fixtures/pipe-rpipe-v1/actor-wrong-direction.atto")),
+            ("mixed-channel-stream-forward", include_str!("../../fixtures/pipe-rpipe-v1/mixed-channel-stream-forward.atto")),
+            ("mixed-channel-stream-reverse", include_str!("../../fixtures/pipe-rpipe-v1/mixed-channel-stream-reverse.atto")),
+            ("actor-duplicate-direction", include_str!("../../fixtures/pipe-rpipe-v1/actor-duplicate-direction.atto")),
+            ("actor-mixed-directions", include_str!("../../fixtures/pipe-rpipe-v1/actor-mixed-directions.atto")),
+            ("stopped-source", include_str!("../../fixtures/pipe-rpipe-v1/stopped-source.atto")),
+            ("closed-channel", include_str!("../../fixtures/pipe-rpipe-v1/closed-channel.atto")),
+            ("stopped-consumer", include_str!("../../fixtures/pipe-rpipe-v1/stopped-consumer.atto")),
+            ("stopped-actor-sink", include_str!("../../fixtures/pipe-rpipe-v1/stopped-actor-sink.atto")),
+        ] {
+            let d=compile(source).expect_err("unsupported pipeline cannot emit Wasm");
+            assert_eq!(d.code,"E_UNSUPPORTED_CONTINUOUS_PIPE",
+                "{name}: must reject without accepting untyped DATA graphs");
+        }
+    }
+
+    #[test]
+    fn commented_words_are_not_continuous_pipeline_tokens() {
+        let source = "// pipe rpipe\npub fnc main(): int { return 42; }";
+        assert!(compile(source).is_ok());
     }
 }

@@ -9,6 +9,10 @@ mod guard_negative;
 mod pointer_positive;
 #[path = "rust_native_e2e/pointer_negative.rs"]
 mod pointer_negative;
+#[path = "rust_native_e2e/pointer_local_positive.rs"]
+mod pointer_local_positive;
+#[path = "rust_native_e2e/pointer_local_negative.rs"]
+mod pointer_local_negative;
 #[path = "rust_native_e2e/static_ffi.rs"]
 mod static_ffi;
 #[path = "rust_native_e2e/ffi_normal_positive.rs"]
@@ -21,6 +25,7 @@ pub struct Harness {
     clang: PathBuf,
     root: PathBuf,
     count: usize,
+    diagnostic_failures: Vec<String>,
 }
 
 fn output(mut command: Command, label: &str) -> Output {
@@ -40,7 +45,7 @@ impl Harness {
         let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
         let root = env::temp_dir().join(format!("atto-rust-native-{}-{}", std::process::id(), stamp));
         fs::create_dir(&root).expect("create isolated native guest root");
-        Self { compiler, clang, root, count: 0 }
+        Self { compiler, clang, root, count: 0, diagnostic_failures: Vec::new() }
     }
 
     fn compile(&mut self, name: &str, source: &str, flags: &[&str]) -> (PathBuf, Output) {
@@ -126,15 +131,18 @@ impl Harness {
             "rejected source emitted partial LLVM IR/stdout for {}: {}", name, String::from_utf8_lossy(&result.stdout));
         if let Some(wanted) = diagnostic {
             let err = String::from_utf8_lossy(&result.stderr).to_ascii_lowercase();
-            assert!(err.contains(&wanted.to_ascii_lowercase()), "{} missing diagnostic {:?}: {}", name, wanted, err);
+            if !err.contains(&wanted.to_ascii_lowercase()) {
+                self.diagnostic_failures.push(format!("{} missing diagnostic {:?}: {}", name, wanted, err));
+            }
         }
         let entries: Vec<_> = fs::read_dir(&case).expect("inspect rejected source directory")
             .map(|e| e.expect("list entry").file_name().to_string_lossy().into_owned()).collect();
         assert_eq!(entries, vec!["input.atto"], "{} left compiler artifacts: {:?}", name, entries);
-        println!("ATTO_RUST_NATIVE_NO_IR_PASS={}", name);
+        println!("ATTO_RUST_NATIVE_NO_IR_PASS={}", name); // no-artifact proof; diagnostic mismatches fail at finish
     }
 
     fn finish(self) {
+        assert!(self.diagnostic_failures.is_empty(), "typed diagnostic failures:\n{}", self.diagnostic_failures.join("\n"));
         println!("ATTO_RUST_NATIVE_ACTUAL_GUEST_CASES_PASS={}", self.count);
         fs::remove_dir_all(self.root).expect("remove completed guest workspace");
     }
@@ -148,6 +156,8 @@ fn main() {
     guard_negative::run(&mut h);
     pointer_positive::run(&mut h);
     pointer_negative::run(&mut h);
+    pointer_local_positive::run(&mut h);
+    pointer_local_negative::run(&mut h);
     static_ffi::run(&mut h);
     ffi_normal_positive::run(&mut h);
     ffi_normal_negative::run(&mut h);

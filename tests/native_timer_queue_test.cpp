@@ -16,6 +16,53 @@ static void check(bool ok, const char* explanation) {
 }
 
 int main() {
+    // Signed-nanosecond adapter for guest Atto std/time. The native queue
+    // itself remains uint64 and requires a trusted owner clock at this edge.
+    {
+        NativeTimerQueue queue(2);
+        bool negativeStart = false, negativeDelay = false, negativePoll = false;
+        try { (void) queue.arm_after_atto(-1, 1); }
+        catch (const std::invalid_argument&) { negativeStart = true; }
+        try { (void) queue.arm_after_atto(1, -1); }
+        catch (const std::invalid_argument&) { negativeDelay = true; }
+        try { (void) queue.poll_atto(-1, 1); }
+        catch (const std::invalid_argument&) { negativePoll = true; }
+        check(negativeStart && negativeDelay && negativePoll,
+              "Atto negative timestamp/duration crossed the native queue");
+        check(queue.outstanding() == 0,
+              "invalid Atto admission allocated a timer handle");
+
+        bool overflow = false;
+        try {
+            (void) queue.arm_after_atto(
+                std::numeric_limits<std::int64_t>::max(), 1);
+        } catch (const std::overflow_error&) { overflow = true; }
+        check(overflow, "Atto signed deadline overflow was accepted");
+        check(queue.outstanding() == 0, "overflow reserved a timer");
+
+        const auto token = queue.arm_after_atto(100, 10);
+        check(queue.poll_atto(109, 1).empty(), "Atto timer fired before deadline");
+        auto due = queue.poll_atto(110, 1);
+        check(due.size() == 1 && due[0].handle == token,
+              "Atto timer did not fire at inclusive deadline");
+        check(queue.claim_delivery(token), "Atto delivery claim failed");
+        check(!queue.claim_delivery(token), "Atto delivery claimed twice");
+
+        const auto zero = queue.arm_after_atto(200, 0);
+        check(queue.poll_atto(199, 1).empty(), "zero-delay Atto timer fired early");
+        check(queue.poll_atto(200, 1).size() == 1, "zero delay did not become due");
+        check(queue.revoke_before_dispatch(zero),
+              "ready Atto timer cancellation was not honored");
+        check(!queue.claim_delivery(zero),
+              "cancelled Atto timer allowed stale scheduler dispatch");
+
+        const auto last = queue.arm_after_atto(
+                std::numeric_limits<std::int64_t>::max() - 1, 1);
+        check(queue.poll_atto(std::numeric_limits<std::int64_t>::max(), 1).size() == 1,
+              "largest signed Atto deadline did not become due");
+        check(queue.claim_delivery(last), "largest deadline delivery failed");
+        check(queue.outstanding() == 0, "Atto timer adapter leaked handles");
+    }
     {
         NativeTimerQueue queue(2);
         const auto later = queue.arm_after(100, 10);

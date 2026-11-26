@@ -11,9 +11,14 @@ on:
       - 'src/main/cpp/oreslang/types/PointerIntHIR.hpp'
       - 'src/main/cpp/oreslang/types/PointerIntOwnership.hpp'
       - 'src/main/cpp/oreslang/types/OwnershipChecker.cpp'
+      - 'src/main/cpp/oreslang/types/NativeScalarTypes.cpp'
+      - 'tests/native_ownership_bang_aliases_test.cpp'
       - 'src/main/cpp/oreslang/backend/PointerIntCodegen.hpp'
       - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
       - 'tests/pointer_int_hir_admission.cpp'
+      - 'tests/rust_native_e2e.rs'
+      - 'tests/rust_native_e2e/**'
+      - 'docs/POINTER_LOCAL_REF_NATIVE_AOT_V1.md'
       - 'src/main/cpp/oreslang/main.cpp'
       - 'tests/pointer_int_native_e2e.py'
       - 'tests/static_ffi_i64_native_e2e.py'
@@ -44,15 +49,15 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
-          test "$(git hash-object src/main/cpp/oreslang/frontend/Parser.cpp)" = 511d7ec9c348c78713d5a5008df9aad777a6eaf4
-          test "$(git hash-object src/main/cpp/oreslang/frontend/PointerIntSyntax.hpp)" = 356a2bc6f870f3c2cb7b7f848934f708324bb36d
-          test "$(git hash-object src/main/cpp/oreslang/types/PointerIntHIR.hpp)" = ea39b2653d6145d20739b53d7cf76a2af8961078
-          test "$(git hash-object src/main/cpp/oreslang/types/PointerIntOwnership.hpp)" = 9df530bc13383aca0f6edf352403473f1b551208
-          test "$(git hash-object src/main/cpp/oreslang/backend/PointerIntCodegen.hpp)" = b461987568ae2cf4b51831105c583929b40c3d9c
-          test "$(git hash-object tests/pointer_int_hir_admission.cpp)" = 4170a8ba49e1199dfca1bfaf6e701aae2637286b
+          test "$(git hash-object src/main/cpp/oreslang/frontend/Parser.cpp)" = d98605299097d661fcd11a5d2f92033cd04de6e8
+          test "$(git hash-object src/main/cpp/oreslang/frontend/PointerIntSyntax.hpp)" = 63921f51d49d4f5b8779b7833ff1a5ad066ba456
+          test "$(git hash-object src/main/cpp/oreslang/types/PointerIntHIR.hpp)" = 3ecee944fb0cb5b3139950d431ba78a09907a219
+          test "$(git hash-object src/main/cpp/oreslang/types/PointerIntOwnership.hpp)" = 591ea792e175f34ea0819cfc2d59ee7b069df7ca
+          test "$(git hash-object src/main/cpp/oreslang/backend/PointerIntCodegen.hpp)" = 9ccf8cafcddc4f659461830c995a210df502751e
+          test "$(git hash-object tests/pointer_int_hir_admission.cpp)" = 1f1c7fadf8c3adaba5c12299fa9a1b5fc9870ade
           test ! -e src/main/cpp/oreslang/frontend/PointerIntAot.hpp
           test "$(git hash-object tests/pointer_int_native_e2e.py)" = e9f104ba81e6bcc4e4e88f088cebd24e1ebba0a7
-          test "$(git hash-object src/main/cpp/oreslang/main.cpp)" = 85b3fbb377e77e06e71040edd1b6a5415150a78a
+          test "$(git hash-object src/main/cpp/oreslang/main.cpp)" = cd0a3501a3f6a06b537a005e04e3287ea7c5f32b
           git rev-parse HEAD HEAD^{tree}
           git status --porcelain
       - name: Install LLVM18 and Clang18 real native toolchain
@@ -77,6 +82,12 @@ jobs:
         run: |
           set -euo pipefail
           python3 tests/pointer_int_native_e2e.py --compiler build/pointer-m1/oreslang-llvmc --clang /usr/bin/clang-18
+      - name: Execute Rust native compiler/Clang guest driver (including local rt/bang pointers)
+        run: |
+          set -euo pipefail
+          rustc --version
+          rustc --edition=2021 -O tests/rust_native_e2e.rs -o "$RUNNER_TEMP/atto-rust-native-e2e"
+          "$RUNNER_TEMP/atto-rust-native-e2e" "$PWD/build/pointer-m1/oreslang-llvmc" /usr/bin/clang-18
       - name: Regression — execute existing compiled scalar guard guests
         run: |
           set -euo pipefail
@@ -93,6 +104,7 @@ jobs:
         run: |
           echo 'POINTER_INT_CANONICAL_FRONTEND_HIR=RESTRICTED_OPT_IN_ONLY'
           echo 'GENERAL_POINTER_T_HEAP_AOT=UNSUPPORTED'
+          echo 'POINTER_LOCAL_REF_INT=OPT_IN_COMPILED_GUEST_TEST_REQUIRED'
           echo 'POINTER_BORROW_SHARE_ACTOR_TRANSFER=NOT_EXECUTED'
           echo 'OTHER_BACKEND_PARITY=NOT_EXECUTED'
           echo 'STATIC_FFI_I64=OPT_IN_PROOF_ONLY_NOT_SIGNED_OR_SUPERVISED'

@@ -242,7 +242,14 @@ fn main() {
     let root = Scratch::new();
     let negatives = [
         ("canonical-immutable-owner", include_str!("fixtures/audit-immutable-owner.atto"), "cannot mutably borrow immutable owner 'player'"),
-        ("canonical-overlapping-loans", include_str!("fixtures/audit-overlap.atto"), "conflicting active native borrow of 'box'"),
+        ("canonical-overlapping-loans", include_str!("fixtures/ownership-bang-v1/overlapping-call-loans-reject.atto"), "conflicting active native borrow of 'box'"),
+        ("copy-deep-overlapping-mutable-loan",
+            "fnc inspect(borrow mut int owner, int snapshot): int { return snapshot; }
+             pub fnc main(): int {
+                 let mut int item = 42;
+                 return inspect(borrow! mut item, copy!! item);
+             }",
+            "read conflicts with active mutable borrow of 'item'"),
         ("mut-share-scalar-reject", "pub fnc main(): int { let int v = 42; return rt mut share v; }\n", "native rt mut share requires verified SharedMutex<T> capability"),
         ("mut-share-borrow-reject", "pub fnc main(): int { let int v = 42; return rt mut share (rt borrow v); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
         ("mut-share-parenthesized-owned-reject", "pub fnc main(): int { let int v = 42; return rt mut share (v); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
@@ -253,7 +260,7 @@ fn main() {
         ("mut-share-function-argument-reject", "fnc consume(int x): int { return x; }\npub fnc main(): int { let int v = 42; return consume(rt mut share v); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
         ("mut-share-nested-group-reject", "pub fnc main(): int { let int v = 42; return rt mut share ((v)); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
 
-        ("mut-share-constructor-argument-reject", "pub define class Box as let int value=start;\n  pub constructor(int start){return;}\n  pub read()->int{return self.value;}\nend\npub fnc main(): int { let int v = 42; let Box box = new Box(rt mut share v); return box.read(); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
+        ("mut-share-constructor-argument-reject", "pub define class Parcel as let int value=start;\n  pub constructor(int start){return;}\n  pub read()->int{return self.value;}\nend\npub fnc main(): int { let int v = 42; let Parcel box = new Parcel(rt mut share v); return box.read(); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
         ("mut-share-binary-expression-reject", "pub fnc main(): int { let int v = 42; return 1 + (rt mut share v); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
         ("mut-share-borrowed-call-argument-reject", "fnc read(borrow int x): int { return x; }\npub fnc main(): int { let int v = 42; return read(rt mut share v); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
         ("mut-share-nested-rt-borrow-reject", "pub fnc main(): int { let int v = 42; return rt borrow (rt mut share v); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
@@ -280,7 +287,7 @@ fn main() {
         ("temporary-borrow", "fnc get(borrow int x): int { return x; }\npub fnc main(): int { return get(rt borrow (40 + 2)); }\n", "native borrow requires an addressable named int"),
         ("shared-to-mutable", "fnc edit(borrow mut int x): int { return x; }\nfnc inner(borrow int x): int { return edit(rt mut borrow x); }\npub fnc main(): int { let int v = 42; return inner(rt borrow v); }\n", "cannot mutably reborrow shared parameter"),
         ("borrow-to-owned-parameter", "fnc consume(int x): int { return x; }\npub fnc main(): int { let int v = 42; return consume(rt borrow v); }\n", "borrowed reference may only be passed to a borrowed parameter"),
-        ("borrow-to-owned-constructor", "pub define class Box as let int value=start;\n  pub constructor(int start){return;}\n  pub read()->int{return self.value;}\nend\npub fnc main(): int { let int v = 42; let Box box = new Box(rt borrow v); return box.read(); }\n", "native scalar constructor argument requires pure integer expression"),
+        ("borrow-to-owned-constructor", "pub define class Parcel as let int value=start;\n  pub constructor(int start){return;}\n  pub read()->int{return self.value;}\nend\npub fnc main(): int { let int v = 42; let Parcel box = new Parcel(rt borrow v); return box.read(); }\n", "native scalar constructor argument requires pure integer expression"),
         ("generator-yield-loan-unsupported", "generator fnc values(): int { let int x = 1; yield rt borrow x; return; }\n", "bare native generator declaration requires 'generator*'"),
         ("canonical-borrowed-yield-unsupported", "gen* values(): Iterator<int> { yield rt borrow x; return; }\n", "expected integer literal"),
     ];
@@ -294,7 +301,7 @@ fn main() {
         ("valid-shared-borrow", "fnc read(borrow int x): int { return x; }\npub fnc main(): int { let int v = 42; return read(rt borrow v); }\n"),
         ("valid-exclusive-mutable-borrow", "fnc read(borrow mut int x): int { return x; }\npub fnc main(): int { let int v = 42; return read(rt mut borrow v); }\n"),
         ("valid-owned-scalar-call", "fnc consume(int x): int { return x; }\npub fnc main(): int { return consume(42); }\n"),
-        ("valid-owned-constructor", "pub define class Box as let int value=start;\n  pub constructor(int start){return;}\n  pub read()->int{return self.value;}\nend\npub fnc main(): int { let Box box = new Box(42); return box.read(); }\n"),
+        ("valid-owned-constructor", "pub define class Parcel as let int value=start;\n  pub constructor(int start){return;}\n  pub read()->int{return self.value;}\nend\npub fnc main(): int { let Parcel box = new Parcel(42); return box.read(); }\n"),
     ];
     let admitted = positives.len();
     for (name, source) in positives {

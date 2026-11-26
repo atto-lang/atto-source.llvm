@@ -1,7 +1,9 @@
+#define _GNU_SOURCE
 #define _POSIX_C_SOURCE 200809L
 #include "atto/actor_process_isolation.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <signal.h>
 #include <spawn.h>
@@ -12,6 +14,14 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+
+#if defined(__APPLE__) && defined(POSIX_SPAWN_CLOEXEC_DEFAULT)
+#define ATTO_SPAWN_DEFAULT_CLOSE_SUPPORTED 1
+#elif defined(__GLIBC__)
+#if __GLIBC_PREREQ(2, 34)
+#define ATTO_SPAWN_DEFAULT_CLOSE_SUPPORTED 1
+#endif
+#endif
 
 /* This interface intentionally accepts only absolute trusted executable
  * paths. Unlike fork()+guest-code in a multithreaded runtime, posix_spawn()
@@ -33,6 +43,96 @@ static int reap_blocking(pid_t pid, int *status) {
     }
 }
 
+/* An explicit, fail-closed descriptor/signal policy is required before a
+ * worker is launched. Merely passing a sanitized envp does NOT prevent
+ * inheriting the supervisor's open sockets, credentials, and pipes.
+ *
+ * On GNU libc >= 2.34, closefrom runs as a spawn file action (without an
+ * racy scan of the parent's descriptors). On Apple, CLOEXEC_DEFAULT supplies
+ * equivalent default-close behavior. Unsupported targets return ENOTSUP.
+ * Neither mechanism constitutes a complete OS security sandbox. */
+static int spawn_worker(pid_t *pid, const atto_actor_worker_spec *spec) {
+    posix_spawn_file_actions_t actions;
+    posix_spawnattr_t attrs;
+    int rc = posix_spawn_file_actions_init(&actions);
+    if (rc != 0) return rc;
+    rc = posix_spawnattr_init(&attrs);
+    if (rc != 0) {
+        (void)posix_spawn_file_actions_destroy(&actions);
+        return rc;
+    }
+
+#if defined(__APPLE__)
+#if defined(POSIX_SPAWN_CLOEXEC_DEFAULT)
+    const short flags = POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF |
+                        POSIX_SPAWN_CLOEXEC_DEFAULT;
+#else
+    rc = ENOTSUP;
+    goto cleanup;
+#endif
+#elif defined(__GLIBC__)
+#if __GLIBC_PREREQ(2, 34)
+    const short flags = POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF;
+    rc = posix_spawn_file_actions_addclosefrom_np(&actions, 3);
+    if (rc != 0) goto cleanup;
+#else
+    rc = ENOTSUP;
+    goto cleanup;
+#endif
+#else
+    rc = ENOTSUP;
+    goto cleanup;
+#endif
+
+#if defined(ATTO_SPAWN_DEFAULT_CLOSE_SUPPORTED)
+    /* Workers may not inherit the supervisor's stdin/out/err. Real IPC must
+     * be an explicit, authenticated allowlisted endpoint in a later API. */
+    rc = posix_spawn_file_actions_addopen(&actions, STDIN_FILENO,
+                                           "/dev/null", O_RDONLY, 0);
+    if (rc != 0) goto cleanup;
+    rc = posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO,
+                                           "/dev/null", O_WRONLY, 0);
+    if (rc != 0) goto cleanup;
+    rc = posix_spawn_file_actions_addopen(&actions, STDERR_FILENO,
+                                           "/dev/null", O_WRONLY, 0);
+    if (rc != 0) goto cleanup;
+
+    /* Clear masks and restore fatal/termination defaults: an ignored SIGPIPE
+     * or blocked SIGTERM in the parent must not change child semantics. */
+    sigset_t empty_mask, default_signals;
+    if (sigemptyset(&empty_mask) != 0 ||
+        sigemptyset(&default_signals) != 0) {
+        rc = errno;
+        goto cleanup;
+    }
+    const int resets[] = {
+        SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT, SIGTERM,
+        SIGINT, SIGQUIT, SIGPIPE, SIGALRM, SIGUSR1, SIGUSR2
+    };
+    for (size_t i = 0; i < sizeof(resets) / sizeof(resets[0]); ++i) {
+        if (sigaddset(&default_signals, resets[i]) != 0) {
+            rc = errno;
+            goto cleanup;
+        }
+    }
+    rc = posix_spawnattr_setsigmask(&attrs, &empty_mask);
+    if (rc != 0) goto cleanup;
+    rc = posix_spawnattr_setsigdefault(&attrs, &default_signals);
+    if (rc != 0) goto cleanup;
+    rc = posix_spawnattr_setflags(&attrs, flags);
+    if (rc != 0) goto cleanup;
+
+    char *const safe_env[] = {"PATH=/usr/bin:/bin", "LC_ALL=C", NULL};
+    rc = posix_spawn(pid, spec->executable, &actions, &attrs,
+                     (char *const *)spec->argv, safe_env);
+#endif
+
+cleanup:
+    (void)posix_spawnattr_destroy(&attrs);
+    (void)posix_spawn_file_actions_destroy(&actions);
+    return rc;
+}
+
 int atto_actor_run_isolated(const atto_actor_worker_spec *spec,
                             atto_actor_exit_notice *notice) {
     if (!notice) return -1;
@@ -48,13 +148,9 @@ int atto_actor_run_isolated(const atto_actor_worker_spec *spec,
             !spec->argv || !spec->argv[0] ||
             spec->timeout_ms == 0 || spec->timeout_ms > 60000) return -1;
 
-    /* Do not leak API keys or caller-specific execution environment into a
-     * crash-isolated worker. A production policy must also close unapproved
-     * inherited descriptors and apply OS sandbox / cgroup restrictions. */
-    char *const safe_env[] = {"PATH=/usr/bin:/bin", "LC_ALL=C", NULL};
+    /* The launch helper rejects platforms without atomic default-close. */
     pid_t pid = -1;
-    const int err = posix_spawn(&pid, spec->executable, NULL, NULL,
-                                (char *const *)spec->argv, safe_env);
+    const int err = spawn_worker(&pid, spec);
     if (err) {
         notice->os_error = err;
         return 0;

@@ -1,0 +1,43 @@
+name: Atto core-four source model (non-certifying)
+
+on:
+  pull_request:
+    paths:
+      - 'core/range.atto'
+      - 'core/cell.atto'
+      - 'core/contracts.atto'
+      - 'core/num.atto'
+      - 'tests/core-four-v1-source.test.mjs'
+      - 'tests/fixtures/core-four-v1/**'
+      - 'scripts/run-core-four-guest.mjs'
+      - 'contracts/core-four-v1.json'
+      - '.github/workflows/core-four-v1-source.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-model-only:
+    name: Source/BigInt oracle ONLY - not guest compiler proof
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          printf 'NON_CERTIFYING_CORE_FOUR_SOURCE_SHA=%s\n' "$EXPECTED_HEAD"
+          git rev-parse 'HEAD^{tree}'
+      - name: Run independent BigInt oracle and fail-closed runner regression
+        run: node --test tests/core-four-v1-source.test.mjs
+      - name: State evidence limitation
+        run: echo 'CORE_FOUR_GUEST_NOT_EXECUTED=true; source-only tests are not an Atto compiler pass'

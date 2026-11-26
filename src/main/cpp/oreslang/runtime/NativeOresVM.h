@@ -112,11 +112,23 @@ size_t ores_native_vm_started_carriers(
     OresNativeVM* vm, enum OresNativeVMDomain domain);
 OresNativeActorRef ores_native_vm_spawn(
     OresNativeVM* vm, enum OresNativeVMDomain domain, size_t actor_slot);
+/* Java/Graal first-actor parity, opt-in: start one native worker in this
+ * domain, await its scheduler-loop receipt, then publish ActorRef.
+ * Further idle actor refs use the same worker; independent runnable lanes
+ * scale up to carrier_workers. This does not enable untrusted isolation. */
+OresNativeActorRef ores_native_vm_spawn_ready(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, size_t actor_slot);
 /* Trusted host-only immutable parentage. Child and supervisor must be distinct
  * live actors in the SAME VM domain. A child slot is single-use. No delegation
  * capability is granted to guest code, and no cross-domain parent is allowed.
  * Failed registration leaves the child slot unspawned. */
 OresNativeActorRef ores_native_vm_spawn_supervised(
+    OresNativeVM* vm, enum OresNativeVMDomain domain,
+    size_t actor_slot, OresNativeActorRef supervisor);
+/* Identical supervised parent/child identity gate, with first native carrier
+ * started and checked in before the child reference/parentage is published.
+ * Failed creation consumes neither child slot nor supervisor registration. */
+OresNativeActorRef ores_native_vm_spawn_supervised_ready(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     size_t actor_slot, OresNativeActorRef supervisor);
 /* Return immutable registered parent, or zero ref for missing, stale,
@@ -269,7 +281,8 @@ void ores_native_vm_nio_cancel_bootstrap(OresNativeVM* vm);
 int ores_native_vm_attach_nio(OresNativeVM* vm, void* backend,
                               OresNativeVMNioDestroy destroy);
 /* Nonblocking trusted-host pin. Every successful acquisition requires one
- * release, including when VM retirement begins during an operation.
+ * release on the acquiring host thread, including during VM retirement.
+ * At most 16 distinct VMs may be borrowed per host thread; nested pins count separately.
  * External callers must fence new API entry before freeing the VM object.
  */
 void* ores_native_vm_nio_acquire(OresNativeVM* vm);
@@ -277,7 +290,8 @@ void ores_native_vm_nio_release(OresNativeVM* vm, void* backend);
 
 /* No new admissions after retire. Existing mail/control drains before destroy.
  * The caller MUST fence all producer/API calls before close and MUST NOT call
- * close from a carrier callback. Returns 0 if a carrier calls close (VM remains
+ * close from a carrier callback or while owning a NIO pin/reservation.
+ * Returns 0 on such a self-owned close attempt (VM remains
  * retired, and an external host must retry); 1 after complete destruction.
  * No forceful termination of an uncooperative guest callback is attempted.
  */
