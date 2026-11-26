@@ -16,4 +16,5 @@ jobs:
       - name: Execute real compiler candidate
         run: |
           set -eu
-          cargo test --locked --bin atto-llvm incremental_native_ir_session_executes_clean_and_edited_artifacts -- --nocapture
+          cargo generate-lockfile --offline
+          cargo test --offline --locked --bin atto-llvm incremental_native_ir_session_executes_clean_and_edited_artifacts -- --nocapture
