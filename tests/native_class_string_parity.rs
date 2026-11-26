@@ -1230,7 +1230,7 @@ fn main() {
     );
 
     for (name, source, diagnostic) in [
-        ("reserved-box-cannot-be-redefined", "define class Box as pub val int value;end pub fnc main():int{return 0;}", "NATIVE_OWNERSHIP_INTRINSIC_RESERVED"),
+        ("reserved-box-cannot-be-redefined", "define class Box as pub val int value;end pub fnc main():int{return 0;}".to_owned(), "NATIVE_OWNERSHIP_INTRINSIC_RESERVED"),
         ("template-interpolation-limit", interpolation_bomb, "interpolation count limit exceeded"),
         ("template-brace-limit", brace_bomb, "brace nesting limit exceeded"),
         ("template-nesting-limit", nesting_bomb, "nesting limit exceeded"),
