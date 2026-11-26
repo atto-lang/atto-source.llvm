@@ -1035,7 +1035,7 @@ int main(int argc, char** argv) {
          experimental_pointer_int_aot || experimental_static_ffi_i64 ||
          static_ffi_i64_capability || actor_region_v1_guest || actor_region_v2_guest ||
          native_hard_rt_profile || rt_check_only || rt_report_seen || rt_entry_seen ||
-         frontend_check_only || analyze_requested || gpu_g1_kernel_ir || gpu_g1_other_option ||
+         frontend_check_only || analyze_requested || gpu_g1_kernel_ir ||
          verify_actor_source_set_only || verify_actor_headers_only || expected_source_set_seen ||
          constraint_descriptors_only || tree_shake || !tree_shake_roots.empty() ||
          source_log_manifest_seen || isolate_entry_seen || bounded_allocator_provider ||
