@@ -284,6 +284,35 @@ int main() {
     }
     auto changed=scalar;changed.back()^=1;
     fails("digest mismatch",[&]{(void)bind(admit(scalar_pin,{{"math",changed}}));});
+
+    // Compatible releases share only the independently selected logical slot,
+    // never the exact release proof or release-bound symbol.
+    ScalarLogicalSlotPin slot{"acme/app-link","billing",scalar_pin.package_instance_id,
+                              "atto-llvm-1","ownership-strict-v1"};
+    auto stable = [&](const Verified& v, const ScalarLogicalSlotPin& pin) {
+        return stable_scalar_link_symbol(v,pin,"math","algebra","value");
+    };
+    const auto old_symbol=stable(proof,slot);
+    require(old_symbol.size()==79 && old_symbol!=binding.release_bound_symbol(),
+            "stable symbol domain mismatch");
+    const auto next_proof=admit(other_release,{{"math",scalar}});
+    auto next_slot=slot;next_slot.expected_release=other_release.package_instance_id;
+    require(stable(next_proof,next_slot)==old_symbol,
+            "compatible release must preserve logical slot");
+    fails("invalid or stale scalar logical slot pin",[&]{(void)stable(next_proof,slot);});
+    auto sibling=next_slot;sibling.dependency_slot="billing2";
+    require(stable(next_proof,sibling)!=old_symbol,"side-by-side slot collision");
+    auto domain=slot;domain.link_domain="acme/other-app";
+    require(stable(proof,domain)!=old_symbol,"link-domain collision");
+    auto bad_slot=slot;bad_slot.dependency_slot="../billing";
+    fails("invalid or stale scalar logical slot pin",[&]{(void)stable(proof,bad_slot);});
+    auto bad_policy=slot;bad_policy.feature_policy="other-policy";
+    fails("compiler/ABI/profile mismatch",[&]{(void)stable(proof,bad_policy);});
+    auto incompatible=scalar_fixture({"():bool"});
+    auto incompatible_pin=scalar_lock(incompatible);
+    fails("unsupported scalar import signature",[&]{
+        (void)stable(admit(incompatible_pin,{{"math",incompatible}}),slot);});
+    std::cout<<"VERIFIED_LOGICAL_SCALAR_SLOT|host_only=YES|compatible_release_stable=YES|stale_release=REJECTED\n";
     std::cout<<"VERIFIED_SCALAR_IMPORT_BINDING|host_only=YES|zero_arg_i64=YES|release_bound=YES\n";
     std::cout<<"Native .oresi host preflight passed; no Atto guest or binary linker executed\n";
 }
