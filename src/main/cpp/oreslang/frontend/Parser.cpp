@@ -6044,7 +6044,6 @@ private:
                     return;
                 }
             }
-            if(strict_i64_)strict_bindings(function);
             while (!strict_i64_ && accept("val")) {
                 if (function.locals.size() >= 128) fail("E_REFINEMENT_LIMIT: too many immutable bindings");
                 LocalBinding local;
@@ -6069,7 +6068,14 @@ private:
                 function.locals.push_back(std::move(local));
             }
             if(strict_i64_) {
-                function.result=strict_returns(declared_result,guaranteed_result,signature,function,name,0);
+                constexpr std::string_view prefix="__atto_strict_version_";
+                for(const auto& [binding,fact]:verified_locals_){
+                    (void)fact;
+                    if(binding.compare(0,prefix.size(),prefix)==0)fail("E_VERIFY_UNSUPPORTED: reserved strict version identifier");
+                }
+                if(!strict_statement_block(declared_result,guaranteed_result,signature,function,name,
+                        function.statements,{},0,true))
+                    fail("E_VERIFY_UNSUPPORTED: strict function must return on all paths");
                 require("}");
             } else {
                 if (!accept("return"))
@@ -6100,61 +6106,6 @@ private:
         }
     }
 
-    void strict_bindings(Function& function) {
-        std::unordered_map<std::string,RefinedQuantity> mutable_types;
-        constexpr std::string_view version_prefix="__atto_strict_version_";
-        // Internal version identities must be legal ownership CFG place names.
-        for(const auto& [name,fact]:verified_locals_){
-            (void)fact;
-            if(name.compare(0,version_prefix.size(),version_prefix)==0)fail("E_VERIFY_UNSUPPORTED: reserved strict version identifier");
-        }
-        for(;;) {
-            const bool immutable=accept("val");
-            const bool mut=!immutable&&accept("let");
-            if(!immutable&&!mut) {
-                if(token_.kind!=Kind::Identifier||peek_next().text!="=")break;
-                const auto name=identifier();
-                const auto found=mutable_types.find(name);
-                if(found==mutable_types.end())fail("E_VERIFY_UNSUPPORTED: assignment requires mutable scalar");
-                require("=");
-                auto value=verified_expression(0);require(";");
-                found->second.require(value.type(),"E_REFINEMENT_BINDING","assignment "+name);
-                if(function.locals.size()>=128)fail("E_REFINEMENT_LIMIT: too many strict versions");
-                LocalBinding local;
-                local.offset=token_.offset;
-                local.name=std::string(version_prefix)+std::to_string(function.locals.size());
-                local.initializer=std::move(value.expression);
-                strict_slots_[name]=local.name;
-                verified_locals_.at(name)=RefinedQuantity{found->second.unit,value.range,found->second.i32};
-                verified_upper_bounds_.at(name)=std::move(value.upper_bounds);
-                function.locals.push_back(std::move(local));
-                continue;
-            }
-            if(function.locals.size()>=128)fail("E_REFINEMENT_LIMIT: too many strict versions");
-            LocalBinding local;
-            local.offset=token_.offset;
-            RefinedQuantity type;
-            const bool inferred=peek_next().text=="=";
-            if(peek_next().text==":"){
-                local.name=identifier();require(":");type=read_refined_type();
-            }else if(inferred){
-                if(mut)fail("E_VERIFY_UNSUPPORTED: mutable binding requires explicit type");
-                local.name=identifier();
-            }else{
-                type=read_refined_type();local.name=identifier();
-            }
-            require("=");auto value=verified_expression(0);require(";");
-            if(local.name.compare(0,version_prefix.size(),version_prefix)==0)fail("E_VERIFY_UNSUPPORTED: reserved strict version identifier");
-            if(inferred)type=value.type();
-            type.require(value.type(),"E_REFINEMENT_BINDING","binding "+local.name);
-            if(!verified_locals_.emplace(local.name,RefinedQuantity{type.unit,value.range,type.i32}).second)
-                fail("E_REFINEMENT_DUPLICATE: duplicate strict binding");
-            verified_upper_bounds_.emplace(local.name,std::move(value.upper_bounds));
-            if(mut)mutable_types.emplace(local.name,type);
-            local.initializer=std::move(value.expression);
-            function.locals.push_back(std::move(local));
-        }
-    }
     using StrictFacts=std::unordered_map<std::string,RefinedQuantity>;
     struct StrictEdges {
         std::unique_ptr<Expression> test;
@@ -6225,34 +6176,109 @@ private:
         auto e=make_expression(kind,at);e->left=std::move(l.expression);e->right=std::move(r.expression);
         return {std::move(e),std::move(yes),std::move(no)};
     }
-    std::unique_ptr<Expression> strict_returns(const RefinedQuantity& declared,const RefinedQuantity& guaranteed,
-            const VerifiedFunction& signature,const Function& function,const std::string& name,std::size_t depth) {
-        if(depth>16)fail("E_VERIFY_UNSUPPORTED: strict return depth");
-        auto at=token_.offset;
-        if(accept("if")) {
-            auto facts=verified_locals_;
-            auto p=strict_condition(facts,0);
-            require("{");verified_locals_=std::move(p.yes);
-            auto yes=strict_returns(declared,guaranteed,signature,function,name,depth+1);
-            require("}");verified_locals_=std::move(p.no);
-            bool has_else=accept("else");if(has_else)require("{");
-            auto no=strict_returns(declared,guaranteed,signature,function,name,depth+1);
-            if(has_else)require("}");
-            auto e=make_expression(Expression::Kind::Conditional,at);
-            e->condition=std::move(p.test);e->when_true=std::move(yes);e->when_false=std::move(no);
-            return e;
+    bool strict_statement_block(const RefinedQuantity& declared,const RefinedQuantity& guaranteed,
+            const VerifiedFunction& signature,Function& function,const std::string& name,
+            std::vector<Statement>& body,std::unordered_map<std::string,RefinedQuantity> mutable_types,
+            std::size_t depth,bool root=false) {
+        if(depth>16)fail("E_VERIFY_UNSUPPORTED: strict block depth");
+        constexpr std::string_view prefix="__atto_strict_version_";
+        bool returned=false;
+        while(token_.text!="}"){
+            if(returned)fail("E_VERIFY_UNSUPPORTED: statement after strict return");
+            if(body.size()>=128)fail("E_REFINEMENT_LIMIT: strict statement budget");
+            const auto at=token_.offset;
+            if(accept("return")){
+                auto value=verified_expression(0);
+                declared.require(value.type(),"E_REFINEMENT_RETURN","return from "+name);
+                guaranteed.require(value.type(),"E_REFINEMENT_POSTCONDITION","ensures of "+name);
+                for(auto index:signature.upper_parameters){
+                    const auto& parameter=function.parameters[index].name;
+                    if(!value.upper_bounds.count(parameter)&&!value.range.at_most(signature.parameters[index].range))
+                        fail("E_REFINEMENT_POSTCONDITION: cannot prove result <= "+parameter);
+                }
+                require(";");
+                if(root)function.result=std::move(value.expression);
+                else {
+                    Statement stmt{};stmt.kind=Statement::Kind::Return;stmt.offset=at;
+                    stmt.expression=std::move(value.expression);body.push_back(std::move(stmt));
+                }
+                returned=true;continue;
+            }
+            if(accept("if")){
+                const auto incoming=verified_locals_;const auto bounds=verified_upper_bounds_;
+                const auto slots=strict_slots_;
+                auto p=strict_condition(incoming,0);
+                Statement stmt{};stmt.kind=Statement::Kind::Conditional;stmt.offset=at;stmt.condition=std::move(p.test);
+                require("{");verified_locals_=std::move(p.yes);
+                const bool yr=strict_statement_block(declared,guaranteed,signature,function,name,
+                    stmt.then_statements,mutable_types,depth+1);
+                require("}");
+                const auto yes=verified_locals_;const auto ybounds=verified_upper_bounds_;
+                verified_locals_=std::move(p.no);verified_upper_bounds_=bounds;strict_slots_=slots;
+                bool nr=false;
+                if(accept("else")){
+                    require("{");
+                    nr=strict_statement_block(declared,guaranteed,signature,function,name,
+                        stmt.else_statements,mutable_types,depth+1);
+                    require("}");
+                }
+                const auto no=verified_locals_;const auto nbounds=verified_upper_bounds_;
+                verified_locals_=incoming;verified_upper_bounds_=bounds;strict_slots_=slots;
+                for(auto& [key,fact]:verified_locals_){
+                    const auto& y=yes.at(key);const auto& n=no.at(key);
+                    fact=yr?n:nr?y:RefinedQuantity{y.unit,y.range.join(n.range),y.i32};
+                    auto upper=yr?nbounds.at(key):ybounds.at(key);
+                    if(!yr&&!nr){
+                        for(auto it=upper.begin();it!=upper.end();){
+                            if(!nbounds.at(key).count(*it))it=upper.erase(it);else ++it;
+                        }
+                    }
+                    verified_upper_bounds_.at(key)=std::move(upper);
+                }
+                body.push_back(std::move(stmt));returned=yr&&nr;continue;
+            }
+            const bool immutable=accept("val");
+            const bool mut=!immutable&&accept("let");
+            if(immutable||mut){
+                if(function.locals.size()>=128)fail("E_REFINEMENT_LIMIT: too many strict slots");
+                std::string key;RefinedQuantity type;
+                const bool inferred=peek_next().text=="=";
+                if(peek_next().text==":"){key=identifier();require(":");type=read_refined_type();}
+                else if(inferred){if(mut)fail("E_VERIFY_UNSUPPORTED: mutable binding requires explicit type");key=identifier();}
+                else{type=read_refined_type();key=identifier();}
+                if(key.compare(0,prefix.size(),prefix)==0)fail("E_VERIFY_UNSUPPORTED: reserved strict version identifier");
+                require("=");auto value=verified_expression(0);require(";");
+                if(inferred)type=value.type();
+                type.require(value.type(),"E_REFINEMENT_BINDING","binding "+key);
+                if(!verified_locals_.emplace(key,RefinedQuantity{type.unit,value.range,type.i32}).second)
+                    fail("E_REFINEMENT_DUPLICATE: duplicate strict binding");
+                verified_upper_bounds_.emplace(key,std::move(value.upper_bounds));
+                if(mut)mutable_types.emplace(key,type);
+                // Allocate only inert scalar storage in the entry block.
+                // The checked source initializer executes at its lexical statement.
+                LocalBinding slot;slot.offset=at;slot.name=std::string(prefix)+std::to_string(function.locals.size());
+                slot.assignable=true;slot.initializer=make_expression(Expression::Kind::Integer,at);
+                slot.initializer->integer=0;
+                strict_slots_[key]=slot.name;
+                Statement stmt{};stmt.kind=Statement::Kind::ScalarWrite;stmt.offset=at;
+                stmt.receiver=slot.name;stmt.expression=std::move(value.expression);
+                function.locals.push_back(std::move(slot));body.push_back(std::move(stmt));continue;
+            }
+            if(token_.kind==Kind::Identifier&&peek_next().text=="="){
+                const auto key=identifier();require("=");
+                const auto found=mutable_types.find(key);
+                if(found==mutable_types.end())fail("E_VERIFY_UNSUPPORTED: assignment requires mutable scalar");
+                auto value=verified_expression(0);require(";");
+                found->second.require(value.type(),"E_REFINEMENT_BINDING","assignment "+key);
+                verified_locals_.at(key)=RefinedQuantity{found->second.unit,value.range,found->second.i32};
+                verified_upper_bounds_.at(key)=std::move(value.upper_bounds);
+                Statement stmt{};stmt.kind=Statement::Kind::ScalarWrite;stmt.offset=at;
+                stmt.receiver=strict_slots_.at(key);stmt.expression=std::move(value.expression);
+                body.push_back(std::move(stmt));continue;
+            }
+            fail("E_VERIFY_UNSUPPORTED: strict statement not admitted");
         }
-        if(!accept("return"))fail("E_VERIFY_UNSUPPORTED: strict returning conditionals only");
-        auto result=verified_expression(0);
-        declared.require(result.type(),"E_REFINEMENT_RETURN","return from "+name);
-        guaranteed.require(result.type(),"E_REFINEMENT_POSTCONDITION","ensures of "+name);
-        for(auto index:signature.upper_parameters) {
-            const auto& parameter=function.parameters[index].name;
-            if(!result.upper_bounds.count(parameter)&&!result.range.at_most(signature.parameters[index].range))
-                fail("E_REFINEMENT_POSTCONDITION: cannot prove result <= "+parameter);
-        }
-        require(";");
-        return std::move(result.expression);
+        return returned;
     }
 
     QuantityTerm verified_reference(std::size_t depth) {
