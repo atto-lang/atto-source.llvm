@@ -689,7 +689,7 @@ impl Parser {
             };
             // Admit the inert susp marker on an actor's attached receive
             // entrypoint. Any actually suspended body must still be rejected.
-            if actor && self.is_word("susp") && self.word_at(1) == Some("receive")
+            if actor && self.is_word("suspends") && self.word_at(1) == Some("receive")
                 && *self.peek_at(2) == Tok::LParen
             {
                 self.advance();
@@ -1034,7 +1034,7 @@ impl Parser {
         let start = self.pos();
         self.eat_word("pub");
         // Header-level susp does not make unsupported await/resume code legal.
-        let _susp = self.eat_word("susp");
+        let _susp = self.eat_word("suspends");
         if self.is_word("private") {
             return Err(unsupported(self.pos(), "'private' visibility"));
         }
