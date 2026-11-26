@@ -129,7 +129,7 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
             // Mandatory separator for complete Atto keyword suffixes.
             // Keep != and exact !eq comparison token boundaries unchanged.
             if matches!(s.as_str(), "trap" | "throw" | "raise" | "panic" | "copy"
-                | "take" | "borrow" | "share" | "pin" | "drop" | "pipe" | "rpipe" | "stop" | "expand")
+                | "take" | "move" | "borrow" | "share" | "pin" | "drop" | "pipe" | "rpipe" | "stop" | "expand")
                 && chars.get(i) == Some(&'!')
                 && chars.get(i + 1) != Some(&'=')
                 && !(chars.get(i + 1) == Some(&'e') && chars.get(i + 2) == Some(&'q')
@@ -438,7 +438,7 @@ mod bang_exception_keyword_tests {
 #[test]
 fn mandatory_bang_keyword_separator_rejects_compact_forms() {
     for keyword in ["trap!", "throw!", "raise!", "panic!", "copy!", "copy!!",
-        "take!", "borrow!", "share!", "pin!", "drop!", "pipe!", "rpipe!", "stop!", "expand!"] {
+        "take!", "move!", "borrow!", "share!", "pin!", "drop!", "pipe!", "rpipe!", "stop!", "expand!"] {
         for tail in ["value", "(42)", "/*comment*/ value", "", "\u{a0}value"] {
             let source = format!("{keyword}{tail}");
             assert!(lex(&source).is_err(), "{source}");
