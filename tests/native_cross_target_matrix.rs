@@ -28,6 +28,26 @@ const TRIPLES: &[(&str, &str)] = &[
     ("i686-unknown-linux-gnu", "x86-linux-musl"),
     ("armv7-unknown-linux-gnueabihf", "arm-linux-musleabihf"),
 ];
+// Independent semantic oracle: a truncated i32 computation cannot satisfy
+// the >32-bit comparisons even if it preserves the final exit-code byte.
+const REQUIRED_WIDE_SOURCE: &str = r#"
+fnc wide_product(int left, int right): int {
+  return left * right;
+}
+pub fnc main(): int {
+  let int wide = wide_product(65536, 65537);
+  if wide == 4295032832 then
+    if wide / 65536 == 65537 then
+      if wide - 4294967296 == 65536 then
+        if 0 - wide < 0 - 4294967296 then
+          return 42;
+        fi
+      fi
+    fi
+  fi
+  return 1;
+}
+"#;
 const SKIP_MARKERS: &[&str] = &["/fail/", "unsupported", "reject", "invalid", "negative"];
 /// The C actor runtime that compiled actor/record programs link against
 /// (same set as tests/native_kafka_scalar_execution.sh, plus records/RT).
@@ -241,7 +261,15 @@ fn main() {
     let o = parse();
     check_identity_guard();
     let work = env::temp_dir().join(format!("oreslang-cross-matrix-{}", process::id()));
-    fs::create_dir_all(&work).unwrap_or_else(|e| fail(&e.to_string()));
+    fs::create_dir(&work).unwrap_or_else(|e| fail(&e.to_string()));
+    let required_fixture = work.join("required-wide-i64.atto");
+    fs::write(&required_fixture, REQUIRED_WIDE_SOURCE).unwrap_or_else(|e| fail(&e.to_string()));
+    let required_path = required_fixture.to_string_lossy();
+    match run(&o.compiler, &["--target=not-a-real-target", &required_path]) {
+        Some((2, out, _)) if out.is_empty() => {},
+        _ => fail("unknown target did not fail with exit 2 and empty IR"),
+    }
+    let mut required_passed = BTreeSet::new();
     let p = |name: &str| work.join(name).to_string_lossy().into_owned();
     let mut compared: BTreeMap<String, (usize, usize)> = o.triples.iter().map(|t| (t.clone(), (0, 0))).collect();
     let mut failures = Vec::new();
@@ -271,16 +299,21 @@ fn main() {
         runtime_objects.insert(triple.clone(), objs);
     }
 
-    for (i, fixture) in fixtures(&o.root).iter().enumerate() {
+    let mut selected = vec![required_fixture.clone()];
+    selected.extend(fixtures(&o.root));
+    for (i, fixture) in selected.iter().enumerate() {
+        let required = fixture == &required_fixture;
         let src = fixture.to_string_lossy().into_owned();
         let name = fixture.strip_prefix(&o.root).unwrap_or(fixture).to_string_lossy().into_owned();
         // 1. Native oracle.
         let Some((0, host_ir, _)) = run(&o.compiler, &["--target=host", &src]) else {
+            if required { fail("mandatory wide-i64 guest rejected by host compiler"); }
             host_rejected += 1;
             println!("NOT_COMPARED host emission rejected: {name}");
             continue;
         };
         if host_ir.is_empty() {
+            if required { fail("mandatory wide-i64 guest produced empty IR"); }
             host_empty += 1;
             failures.push(format!("{name}: host compiler exited zero with empty IR"));
             continue;
@@ -295,6 +328,7 @@ fn main() {
             args.extend(runtime_sources.iter().map(String::as_str));
             args.extend(["-std=c11", "-pthread", "-DORESLANG_SOURCE_ACTOR_TESTING", include.as_str(), "-o", hbin.as_str()]);
             if runtime_sources.is_empty() || !matches!(run(&o.clang, &args), Some((0, _, _))) {
+                if required { fail("mandatory wide-i64 guest did not link"); }
                 host_runtime += 1;
                 println!("NOT_COMPARED host link failed: {name}");
                 if o.runtime_dir.is_some() {
@@ -308,6 +342,9 @@ fn main() {
         let Some((host_code, host_out, _)) = run(&hbin, &[]) else { fail(&format!("{name}: host binary did not start")) };
 
         if host_code < 0 { fail(&format!("{name}: host oracle terminated by signal")); }
+        if required && (host_code != 42 || !host_out.is_empty()) {
+            fail("mandatory wide-i64 host guest must independently return 42 with empty stdout");
+        }
 
         for triple in &o.triples {
             let zig_target = TRIPLES.iter().find(|(t, _)| t == triple).map(|(_, z)| *z)
@@ -356,7 +393,13 @@ fn main() {
             };
             let entry = compared.get_mut(triple).expect("triple");
             match result {
-                Some((code, out, _)) if code == host_code && out == host_out => entry.0 += 1,
+                Some((code, out, _)) if code == host_code && out == host_out => {
+                    entry.0 += 1;
+                    if required {
+                        required_passed.insert(triple.clone());
+                        println!("PASS mandatory wide-i64 guest {triple}: exit=42");
+                    }
+                },
                 Some((code, _, _)) => {
                     entry.1 += 1;
                     failures.push(format!("{triple} {name}: exit {code} / stdout differs from host exit {host_code}"));
@@ -372,10 +415,13 @@ fn main() {
     println!("fixtures admitted for host: {admitted}; linked with the C actor runtime: {runtime_linked}; not linkable: {host_runtime}; host rejected: {host_rejected}; host empty: {host_empty}");
     println!("Scope: host-admitted, successfully linked fixtures only; not a complete positive/negative corpus qualification.");
     for (triple, (same, diff)) in &compared {
+        if !required_passed.contains(triple) {
+            failures.push(format!("{triple}: mandatory wide-i64 guest did not execute successfully"));
+        }
         let link_abi = TRIPLES.iter().find(|(t, _)| t == triple).expect("selected triple").1;
         println!("IR target={triple} link target={link_abi} libc=musl: identical={same} mismatched={diff}");
-        if *same == 0 {
-            failures.push(format!("{triple}: no fixture was compared (vacuous pass refused)"));
+        if *same <= 1 {
+            failures.push(format!("{triple}: no additional repository fixture was compared (mandatory canary alone is insufficient)"));
         }
     }
     if !failures.is_empty() {
