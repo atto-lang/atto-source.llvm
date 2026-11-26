@@ -2803,7 +2803,8 @@ if(BUILD_TESTING)
     # NativeIpcAuthenticatedStreamSession.hpp is Linux-only (#error elsewhere).
     if(OpenSSL_FOUND AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         add_executable(oreslang-native-ipc-authenticated-session-failpoint-test
-            tests/native_ipc_authenticated_session_failpoint_test.cpp)
+            tests/native_ipc_authenticated_session_failpoint_test.cpp
+            tests/native_ipc_receipt_loss_failpoint_allocator.cpp)
         target_include_directories(oreslang-native-ipc-authenticated-session-failpoint-test PRIVATE
             "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
         target_link_libraries(oreslang-native-ipc-authenticated-session-failpoint-test PRIVATE

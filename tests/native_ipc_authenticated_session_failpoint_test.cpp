@@ -4,24 +4,7 @@
 #include <new>
 #include <string>
 
-static std::atomic<int> fails_after{-1};
-
-void* operator new(std::size_t size) {
-    const int previous = fails_after.load();
-    if (previous >= 0 && fails_after.fetch_sub(1) == 0)
-        throw std::bad_alloc();
-    if (void* memory = std::malloc(size == 0 ? 1 : size))
-        return memory;
-    throw std::bad_alloc();
-}
-
-void operator delete(void* memory) noexcept {
-    std::free(memory);
-}
-
-void operator delete(void* memory, std::size_t) noexcept {
-    std::free(memory);
-}
+void set_ipc_test_allocation_failure(int count) noexcept;
 
 #include "oreslang/runtime/NativeIpcAuthenticatedStreamSession.hpp"
 
@@ -77,14 +60,14 @@ int main() {
     // The retirement snapshot reserves one LostCorrelation. Force that first
     // post-close allocation to fail: physical authority must remain fenced,
     // but the correlation table must stay intact for an explicit retry.
-    fails_after.store(0);
+    set_ipc_test_allocation_failure(0);
     bool allocation_failed = false;
     try {
         session.close_and_retire();
     } catch (const std::bad_alloc&) {
         allocation_failed = true;
     }
-    fails_after.store(-1);
+    set_ipc_test_allocation_failure(-1);
 
     assert(allocation_failed);
     assert(session.phase() ==
