@@ -6030,17 +6030,29 @@ private:
                 LocalBinding local;
                 local.offset = token_.offset;
                 RefinedQuantity type;
+                const bool inferred = peek_next().text == "=";
                 if (peek_next().text == ":") {
                     local.name = identifier();
                     require(":");
                     type = read_refined_type();
+                } else if (inferred) {
+                    local.name = identifier();
                 } else {
                     type = read_refined_type();
                     local.name = identifier();
                 }
+                if (verified_locals_.count(local.name) || refinement_aliases_.count(local.name) ||
+                    quantity_units_.count(local.name) || quantity_dimensions_.count(local.name) ||
+                    local.name == "self" || local.name == "main" || local.name == "int" ||
+                    local.name == "i64" || local.name == "i32" || local.name == "infer" || local.name == "_")
+                    fail("E_REFINEMENT_DUPLICATE: reserved or duplicate binding");
                 require("=");
                 auto value = verified_expression(0);
-                type.require(value.type(), "E_REFINEMENT_BINDING", "binding " + local.name);
+                if (inferred) type = value.type();
+                else {
+                    type.unit.require_compatible(value.unit);
+                    type.require(value.type(), "E_REFINEMENT_BINDING", "binding " + local.name);
+                }
                 require(";");
                 if (!verified_locals_.emplace(local.name, RefinedQuantity{type.unit, value.range, type.i32}).second)
                     fail("E_REFINEMENT_DUPLICATE: duplicate verified binding");
