@@ -88,13 +88,18 @@ public:
     }
 
     VerifiedI64Range constrain(std::string_view op, std::int64_t bound) const {
-        if (op == "eq") return {std::max(bounds_.minimum, bound), std::min(bounds_.maximum, bound)};
-        if (op == "<=") return {bounds_.minimum, std::min(bounds_.maximum, bound)};
-        if (op == ">=") return {std::max(bounds_.minimum, bound), bounds_.maximum};
-        if (op == "<" && bound != Min) return {bounds_.minimum, std::min(bounds_.maximum, bound - 1)};
-        if (op == ">" && bound != Max) return {std::max(bounds_.minimum, bound + 1), bounds_.maximum};
-        if (op == "<" || op == ">")
-            throw std::runtime_error("E_REFINEMENT_EMPTY: contradictory interval");
+        if(op=="!=") {
+            if(bound!=0&&bound!=-1) throw std::runtime_error("E_REFINEMENT_CONTRACT: unsupported exclusion");
+            if(!has(bound))return *this;
+            if(minimum()==maximum())throw std::runtime_error("E_REFINEMENT_EMPTY: contradictory interval");
+            return VerifiedI64Range(minimum(),maximum(),holes_|bit(bound));
+        }
+        if (op == "eq") return VerifiedI64Range(std::max(minimum(), bound), std::min(maximum(), bound), holes_);
+        if (op == "<=") return VerifiedI64Range(minimum(), std::min(maximum(), bound), holes_);
+        if (op == ">=") return VerifiedI64Range(std::max(minimum(), bound), maximum(), holes_);
+        if (op == "<" && bound != Min) return VerifiedI64Range(minimum(), std::min(maximum(), bound - 1), holes_);
+        if (op == ">" && bound != Max) return VerifiedI64Range(std::max(minimum(), bound + 1), maximum(), holes_);
+        if (op == "<" || op == ">") throw std::runtime_error("E_REFINEMENT_EMPTY: contradictory interval");
         throw std::runtime_error("E_REFINEMENT_PREDICATE: expected an interval comparison");
     }
 
