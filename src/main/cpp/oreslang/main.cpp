@@ -1,4 +1,5 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
+#include "oreslang/backend/CountedReadyGuest.hpp"
 #include "oreslang/backend/DurableCounterV1Guest.hpp"
 #include "oreslang/backend/DurableScalarV1Guest.hpp"
 #include "oreslang/backend/NativeSourceLogPathsV1.hpp"
@@ -541,6 +542,21 @@ static void require_actor_region_v1_aot_graph(const oreslang::Program& program) 
 }
 
 int main(int argc, char** argv) {
+    if (argc > 1 && std::string_view(argv[1]) == "--counted-ready-v1") {
+        try {
+            if (argc != 3 || std::filesystem::path(argv[2]).extension() != ".atto")
+                throw std::invalid_argument("usage: --counted-ready-v1 source.atto");
+            auto source = read_regular_source(argv[2], 65536, "counted source exceeds limit");
+            require_valid_source_utf8(source);
+            std::cout << oreslang::counted_ready::compile(source);
+            std::cout.flush();
+            return std::cout ? 0 : 1;
+        } catch (const std::exception& e) {
+            print_safe_diagnostic(std::cerr,e.what(),512);
+            std::cerr << '\n';
+            return 2;
+        }
+    }
     if (argc > 1 && (std::string_view(argv[1]) == "--durable-counter-actor-v1" || std::string_view(argv[1]) == "--durable-scalar-codec-v1")) {
         try {
             if (argc != 3 || std::filesystem::path(argv[2]).extension() != ".atto")
