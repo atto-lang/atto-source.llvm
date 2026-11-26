@@ -632,6 +632,10 @@ fn compile_ir_with_profile(source: &str, profile: LibraryProfile) -> Result<Stri
 }
 
 fn compile_ir_entry(source: &str, profile: LibraryProfile, provider_entry: Option<(&str,usize)>) -> Result<String, String> {
+    let typed=admit_ir_source(source,profile,provider_entry)?;
+    emit_admitted_ir(&typed,provider_entry)
+}
+fn admit_ir_source(source: &str, profile: LibraryProfile, provider_entry: Option<(&str,usize)>) -> Result<TProgram, String> {
     if source.len() > atto_compiler::SOURCE_CAP {
         return Err("E_SOURCE_LIMIT: native Atto input exceeds 64 KiB".into());
     }
@@ -720,6 +724,20 @@ fn compile_ir_entry(source: &str, profile: LibraryProfile, provider_entry: Optio
     if !main.params.is_empty() || main.ret != Type::Int {
         return Err("E_UNSUPPORTED_NATIVE_MAIN: requires main(): int".into());
     }
+    if let Some((symbol,arity))=provider_entry {
+        if profile != LibraryProfile::FreestandingCore || native_actor_mode {
+            return Err("E_NAMESPACE_PROFILE: provider entry requires freestanding scalar profile".into());
+        }
+        let (_,provider)=typed.funcs.iter().enumerate().find(|(_,f)|f.name==symbol)
+            .ok_or("E_NAMESPACE_SYMBOL: checked provider missing")?;
+        if provider.ret!=Type::Int||provider.params.len()!=arity||provider.params.iter().any(|t|*t!=Type::Int){
+            return Err("E_NAMESPACE_ARITY: checked provider ABI mismatch".into());
+        }
+    }
+    Ok(typed)
+}
+fn emit_admitted_ir(typed:&TProgram, provider_entry:Option<(&str,usize)>)->Result<String,String>{
+    let native_actor_mode=!typed.actors.is_empty();
     let mut out = String::from(
         "; Atto scalar native AOT: checked typed frontend, direct LLVM IR, no guest interpreter\n\
          declare void @llvm.trap()\n\
@@ -790,9 +808,6 @@ fn compile_ir_entry(source: &str, profile: LibraryProfile, provider_entry: Optio
         out.push_str("recv_invalid:\n  call void @llvm.trap()\n  unreachable\n}\n");
     }
     if let Some((symbol,arity))=provider_entry {
-        if profile != LibraryProfile::FreestandingCore || native_actor_mode {
-            return Err("E_NAMESPACE_PROFILE: provider entry requires freestanding scalar profile".into());
-        }
         let (idx,provider)=typed.funcs.iter().enumerate().find(|(_,f)|f.name==symbol)
             .ok_or("E_NAMESPACE_SYMBOL: checked provider missing")?;
         if provider.ret!=Type::Int||provider.params.len()!=arity||provider.params.iter().any(|t|*t!=Type::Int){
