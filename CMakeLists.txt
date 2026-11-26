@@ -9402,6 +9402,18 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-selectable-i64-future-test)
     set_tests_properties(native_selectable_i64_future_terminal_readiness PROPERTIES TIMEOUT 30)
 
+    add_executable(oreslang-native-counted-i64-cursor-test
+        tests/native_counted_i64_cursor_test.cpp)
+    target_include_directories(oreslang-native-counted-i64-cursor-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-counted-i64-cursor-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-counted-i64-cursor-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-native-counted-i64-cursor-test PRIVATE Threads::Threads)
+    add_test(NAME native_counted_i64_cursor_exact_batch
+        COMMAND oreslang-native-counted-i64-cursor-test)
+    set_tests_properties(native_counted_i64_cursor_exact_batch PROPERTIES TIMEOUT 30)
+
     add_executable(oreslang-native-select-continuation-fence-test
         tests/native_select_continuation_fence_test.cpp)
     target_include_directories(oreslang-native-select-continuation-fence-test PRIVATE

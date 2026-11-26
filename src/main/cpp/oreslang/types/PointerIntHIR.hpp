@@ -17,7 +17,7 @@ struct Token {
 };
 
 struct Expr {
-    enum class Kind { Literal, Variable, Read, Neg, Add, Subtract, Multiply };
+    enum class Kind { Literal, Variable, Read, Neg, Add, Subtract, Multiply, Length, SizeBytes, ReadonlyCall };
     Kind kind = Kind::Literal;
     std::int64_t known = 0;
     std::size_t index = 0;
@@ -27,11 +27,12 @@ struct Expr {
 };
 
 struct Step {
-    enum class Kind { Write, Scalar, Close };
+    enum class Kind { Write, Scalar, Close, Fill, Swap, MutableCall };
     Kind kind = Kind::Close;
     std::string name;
     std::size_t index = 0;
     std::unique_ptr<Expr> value;
+    std::size_t second_index = 0; // only Swap may use this field
 };
 
 struct Plan {
@@ -41,6 +42,14 @@ struct Plan {
     // obtains the rights of an owning Pointer.alloc region.
     std::string local_handle;
     std::int64_t local_initial = 0;
+    // A private helper has one proven readonly singleton read as its entire body.
+    std::string readonly_helper;
+    std::string readonly_parameter;
+    std::string mutable_helper;
+    std::string mutable_parameter;
+    std::int64_t mutable_write = 0;
+    // Nonempty only for a helper writing its extra Copy-i64 formal.
+    std::string mutable_scalar_parameter;
     std::string owner;
     std::size_t count = 0;
     std::vector<Step> steps;
