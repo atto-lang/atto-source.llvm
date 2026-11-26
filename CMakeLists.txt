@@ -1856,6 +1856,20 @@ if(BUILD_TESTING)
         set_tests_properties(native_trap_arithmetic_${case}_O0_O2 PROPERTIES TIMEOUT 300)
     endforeach()
 
+    # Direct closed Option<int> checked unwrap, actual hosted native guest.
+    foreach(case IN ITEMS none some)
+        add_test(NAME native_trap_option_unwrap_${case}_O0_O2
+            COMMAND "${CMAKE_COMMAND}"
+                "-DORES_TRAP_LLVM_CLI=$<TARGET_FILE:oreslang-llvmc>"
+                "-DORES_TRAP_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/trap-option-unwrap-${case}.atto"
+                "-DORES_TRAP_AOT_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/scripts/compile-aot.sh"
+                "-DORES_TRAP_AUDITOR=${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit"
+                "-DORES_TRAP_CLANG=clang"
+                "-DORES_TRAP_CASE=unwrap_${case}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/trap_int_native_aot_execution.cmake")
+        set_tests_properties(native_trap_option_unwrap_${case}_O0_O2 PROPERTIES TIMEOUT 300)
+    endforeach()
+
     # Trusted-host capability admission only; NOT source-level/hostile-native parity.
     find_package(Threads REQUIRED)
     add_executable(oreslang-native-tenant-domain-host-test
