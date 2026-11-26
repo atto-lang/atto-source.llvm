@@ -4258,5 +4258,49 @@ std::string emit_verified_scalar_namespace_consumer(
     return emit_verified_llvm_ir_impl(program,false,false,false,{},false,{},{},false,symbols);
 }
 
+
+std::string emit_verified_scalar_namespace_provider(
+        std::string_view admitted_provider_source,
+        std::string_view expected_source_sha256,
+        const VerifiedScalarNamespaceBinding& binding,
+        std::string_view namespace_name,
+        std::string_view function_name) {
+    // Both pins are selected by the trusted host, not by provider source.
+    if (admitted_provider_source.size()>65536 ||
+        !package_interface::detail::sha_hex(std::string(expected_source_sha256)) ||
+        package_interface::sha256(std::vector<std::uint8_t>(
+            admitted_provider_source.begin(),admitted_provider_source.end()))!=expected_source_sha256)
+        throw std::runtime_error("verified provider source digest mismatch");
+    const auto symbol=package_interface::stable_scalar_link_symbol(
+        binding.interface,binding.slot,namespace_name,binding.module,function_name);
+    auto p=parse_unresolved_program(admitted_provider_source);
+    if(p.module!=binding.module || !p.namespace_name.empty() ||
+        !p.namespace_imports.empty() || !p.imports.empty() || !p.exports.empty() ||
+        !p.classes.empty() || !p.actors.empty() || !p.sum_types.empty() ||
+        !p.contracts.empty() || !p.conforms.empty() || !p.type_only_declarations.empty() ||
+        !p.type_constraint_descriptors.empty() || !p.generators.empty() ||
+        !p.cooperative_loops.empty() || p.pointer_int_plan || !p.inverted_structs.empty() ||
+        p.inverted_main || p.functions.size()!=1)
+        throw std::runtime_error("restricted provider module inventory mismatch");
+    auto& fn=p.functions.front();
+    if(fn.name!=function_name || fn.name=="main" || !fn.exported ||
+        fn.foreign_import || fn.returns_void || fn.return_type!=ScalarType::I64 ||
+        !fn.parameters.empty() || !fn.generic_parameters.empty() || !fn.locals.empty() ||
+        !fn.statements.empty() || !fn.early_returns.empty() || fn.scalar_while ||
+        !fn.source_tasks.empty() || !fn.future_pipelines.empty() ||
+        !fn.actor_spawns.empty() || !fn.actor_actions.empty() || !fn.actor_sends.empty() ||
+        !fn.actor_stops.empty() || !fn.actor_field_writes.empty() || fn.caught_throw_value ||
+        !fn.caught_throw_defers.empty() || fn.has_declared_effects || fn.async_source_i64 ||
+        !fn.c_export_u32_symbol.empty() || !fn.return_class.empty() ||
+        !fn.return_sum.empty() || !fn.result || !native_trap_pure_integer(*fn.result))
+        throw std::runtime_error("restricted provider must define one public pure i64 function");
+    // Admit the source declaration before translating its compiler-owned
+    // physical name. The same checked scalar ABI is used on both sides.
+    resolve_and_validate_program(p);
+    p.module.clear();
+    p.functions.front().name=symbol;
+    return emit_verified_llvm_ir(p);
+}
+
 } // namespace oreslang
 
