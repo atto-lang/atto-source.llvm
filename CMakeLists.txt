@@ -614,6 +614,9 @@ if(ATTO_ACTOR_LOGICAL_FRAMES_HOST_ONLY)
     add_test(NAME native_vm_registered_actor_frame_quota_supervisor
         COMMAND atto-native-vm-supervised-quota-host-test)
     set_tests_properties(native_vm_registered_actor_frame_quota_supervisor PROPERTIES TIMEOUT 30)
+    add_test(NAME native_vm_supervised_leaf_million_reuse
+        COMMAND atto-native-vm-supervised-quota-host-test --reuse)
+    set_tests_properties(native_vm_supervised_leaf_million_reuse PROPERTIES TIMEOUT 900)
 
     # Compiled native callback test at the actual source-actor bootstrap ABI.
     # This is source-runtime proof, not LLVM-produced .atto guest proof.
@@ -841,6 +844,9 @@ if(BUILD_TESTING)
     add_test(NAME native_vm_registered_actor_quota_failure_control
         COMMAND oreslang-native-vm-supervised-quota-test)
     set_tests_properties(native_vm_registered_actor_quota_failure_control PROPERTIES TIMEOUT 30)
+    add_test(NAME native_vm_supervised_leaf_million_reuse
+        COMMAND oreslang-native-vm-supervised-quota-test --reuse)
+    set_tests_properties(native_vm_supervised_leaf_million_reuse PROPERTIES TIMEOUT 900)
 
 
     # Compiled native callback test at the actual source-actor bootstrap ABI.
