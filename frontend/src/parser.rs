@@ -207,12 +207,23 @@ pub struct Parser {
     type_names: Vec<(String, Pos)>,
     /// Scope of an explicit generator function body.
     in_generator: bool,
+    struct_target: bool,
 }
 
 struct TypeFirstField {
     field: Field,
     /// `T name: e` (class field spelling) rather than `T name = e`.
     init_was_colon: bool,
+}
+
+/// Parse-only nominal struct target; never lowered as an identity-bearing class.
+#[derive(Clone, Debug)]
+pub struct StructWithTarget {
+    pub name: String,
+    pub pos: Pos,
+    pub fields: Vec<(String, Type)>,
+    pub constructors: Vec<(bool, Constructor)>,
+    pub methods: Vec<Method>,
 }
 
 /// Members collected from a class or actor body.
@@ -240,6 +251,7 @@ impl Parser {
             cond: 0,
             type_names: Vec::new(),
             in_generator: false,
+            struct_target: false,
         }
     }
 
@@ -503,6 +515,198 @@ impl Parser {
         }
         prog.type_names = std::mem::take(&mut self.type_names);
         Ok(prog)
+    }
+
+    /// Parse a bounded scalar struct declaration and its grouped/chained
+    /// attachments. This does not certify initialization, layout or guest execution.
+    pub fn parse_struct_with_target(&mut self) -> R<StructWithTarget> {
+        self.struct_target = true;
+        self.expect_word("type")?;
+        let (name, pos) = self.ident("a struct name")?;
+        if UNSUPPORTED_TYPES.contains(&name.as_str()) ||
+            matches!(name.as_str(), "int" | "bool" | "boolean" | "float" | "f64" | "string" | "String" | "void") {
+            return Err(Diagnostic::new(pos, "E_RESERVED_TYPE", "struct name is an intrinsic type"));
+        }
+        self.expect(Tok::Assign, "'=' after struct name")?;
+        self.expect_word("struct")?;
+        self.expect(Tok::LBrace, "'{' after struct")?;
+        let mut fields: Vec<(String, Type)> = Vec::new();
+        while !self.eat(&Tok::RBrace) {
+            if fields.len() >= MAX_MEMBERS {
+                return Err(Diagnostic::new(self.pos(), "E_SOURCE_LIMIT", "too many struct fields"));
+            }
+            let ty = self.parse_type()?;
+            if !matches!(ty, Type::Int | Type::Bool) {
+                return Err(unsupported(self.pos(), "non-int/bool attached struct fields"));
+            }
+            let (field, at) = self.ident("a struct field name")?;
+            if fields.iter().any(|(prior, _)| prior == &field) {
+                return Err(Diagnostic::new(at, "E_DUPLICATE", "duplicate struct field"));
+            }
+            self.expect(Tok::Semi, "';' after struct field")?;
+            fields.push((field, ty));
+        }
+        self.expect_word("with")?;
+        let mut out = StructWithTarget {
+            name, pos, fields, constructors: Vec::new(), methods: Vec::new(),
+        };
+        loop {
+            if self.eat(&Tok::LBrace) {
+                if *self.peek() == Tok::RBrace {
+                    return Err(self.expected("a constructor or method inside with"));
+                }
+                while !self.eat(&Tok::RBrace) {
+                    self.parse_struct_attachment_member(&mut out)?;
+                }
+            } else {
+                self.parse_struct_attachment_member(&mut out)?;
+            }
+            if !self.eat_word("with") { break; }
+        }
+        self.eat(&Tok::Semi);
+        self.struct_target = false;
+        Ok(out)
+    }
+
+    /// A deliberately bounded straight-line scalar constructor proof. Do not
+    /// certify arbitrary calls, control flow or effects until the value ABI
+    /// and full ownership checker can establish those contracts.
+    fn prove_struct_constructor(
+        fields: &[(String, Type)], params: &[Param], body: &[Stmt], pos: Pos,
+    ) -> R<()> {
+        use std::collections::{BTreeMap, BTreeSet};
+        fn scalar(
+            e: &Expr, fields: &BTreeMap<&str, Type>, params: &BTreeMap<&str, Type>,
+            initialized: &BTreeSet<&str>,
+        ) -> R<Type> {
+            let invalid = || Diagnostic::new(e.pos, "E_STRUCT_INIT",
+                "constructor expression is not a proven initialized scalar");
+            match &e.kind {
+                ExprKind::Int(_) => Ok(Type::Int),
+                ExprKind::Bool(_) => Ok(Type::Bool),
+                ExprKind::Var(n) => params.get(n.as_str()).copied().ok_or_else(invalid),
+                ExprKind::Member(base, n) if matches!(&base.kind, ExprKind::SelfRef) => {
+                    if !initialized.contains(n.as_str()) {
+                        return Err(Diagnostic::new(e.pos, "E_STRUCT_INIT",
+                            "read of an uninitialized struct field"));
+                    }
+                    fields.get(n.as_str()).copied().ok_or_else(invalid)
+                }
+                ExprKind::Unary(op, inner) => {
+                    let t = scalar(inner, fields, params, initialized)?;
+                    match (op, t) {
+                        (UnOp::Neg | UnOp::Plus, Type::Int) => Ok(Type::Int),
+                        (UnOp::Not, Type::Bool) => Ok(Type::Bool),
+                        _ => Err(invalid()),
+                    }
+                }
+                ExprKind::Binary(op, l, r) => {
+                    let l = scalar(l, fields, params, initialized)?;
+                    let r = scalar(r, fields, params, initialized)?;
+                    match (op, l, r) {
+                        (BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div, Type::Int, Type::Int) => Ok(Type::Int),
+                        (BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge, Type::Int, Type::Int) => Ok(Type::Bool),
+                        (BinOp::Eq | BinOp::Ne, Type::Int, Type::Int) |
+                        (BinOp::Eq | BinOp::Ne | BinOp::And | BinOp::Or, Type::Bool, Type::Bool) => Ok(Type::Bool),
+                        _ => Err(invalid()),
+                    }
+                }
+                ExprKind::Ternary(cond, yes, no) => {
+                    let c = scalar(cond, fields, params, initialized)?;
+                    let y = scalar(yes, fields, params, initialized)?;
+                    let n = scalar(no, fields, params, initialized)?;
+                    if c == Type::Bool && y == n { Ok(y) } else { Err(invalid()) }
+                }
+                _ => Err(invalid()),
+            }
+        }
+        let field_types: BTreeMap<&str, Type> = fields.iter().map(|(n,t)| (n.as_str(), *t)).collect();
+        let param_types: BTreeMap<&str, Type> = params.iter().map(|p| (p.name.as_str(), p.ty)).collect();
+        let mut initialized = BTreeSet::new();
+        for stmt in body {
+            match stmt {
+                Stmt::FieldAssign { target, field, value, pos: at }
+                    if matches!(&target.kind, ExprKind::SelfRef) => {
+                    let expected = field_types.get(field.as_str()).copied().ok_or_else(||
+                        Diagnostic::new(*at, "E_STRUCT_INIT", "unknown struct field"))?;
+                    if initialized.contains(field.as_str()) {
+                        return Err(Diagnostic::new(*at, "E_STRUCT_INIT", "struct field initialized twice"));
+                    }
+                    let actual = scalar(value, &field_types, &param_types, &initialized)?;
+                    if actual != expected {
+                        return Err(Diagnostic::new(*at, "E_STRUCT_INIT", "struct field initializer type mismatch"));
+                    }
+                    initialized.insert(field.as_str());
+                }
+                _ => return Err(unsupported(pos, "non-straight-line attached struct constructor proof")),
+            }
+        }
+        if initialized.len() != fields.len() {
+            return Err(Diagnostic::new(pos, "E_STRUCT_INIT", "constructor leaves required fields uninitialized"));
+        }
+        Ok(())
+    }
+
+    fn parse_struct_attachment_member(&mut self, out: &mut StructWithTarget) -> R<()> {
+        let pos = self.pos();
+        if out.methods.len() + out.constructors.len() >= MAX_MEMBERS {
+            return Err(Diagnostic::new(pos, "E_SOURCE_LIMIT", "too many attached struct members"));
+        }
+        let public = self.eat_word("pub");
+        if !public { self.eat_word("private"); }
+        let scalar_params = |ps: &[Param]| ps.iter().all(|p| matches!(p.ty, Type::Int | Type::Bool));
+        let same_params = |a: &[Param], b: &[Param]| a.iter().map(|p| p.ty).eq(b.iter().map(|p| p.ty));
+        if self.eat_word("constructor") {
+            self.expect(Tok::LParen, "'(' after constructor")?;
+            let params = self.parse_params()?;
+            if !scalar_params(&params) {
+                return Err(unsupported(pos, "non-int/bool attached constructor parameters"));
+            }
+            if out.constructors.iter().any(|(_, ctor)| same_params(&ctor.params, &params)) {
+                return Err(Diagnostic::new(pos, "E_DUPLICATE", "duplicate struct constructor signature"));
+            }
+            let body = self.parse_block()?;
+            Self::prove_struct_constructor(&out.fields, &params, &body, pos)?;
+            out.constructors.push((public, Constructor { pos, params, body }));
+        } else if self.eat_word("mtd") {
+            let prefixed = if self.return_first_marker_here() {
+                // The bounded profile accepts scalar return types only.
+                // Consume the scalar token before the contextual <- marker,
+                // without letting the generic-type suffix parser see '<'.
+                let ty = match self.word_at(0) {
+                    Some("int") => Type::Int,
+                    Some("bool" | "boolean") => Type::Bool,
+                    Some("void") => Type::Void,
+                    _ => return Err(unsupported(self.pos(), "non-scalar attached method return type")),
+                };
+                self.advance();
+                self.consume_return_first_marker()?;
+                Some(ty)
+            } else { None };
+            let (name, pos) = self.ident("a method name")?;
+            self.expect(Tok::LParen, "'(' after method name")?;
+            let params = self.parse_params()?;
+            let ret = if let Some(ty) = prefixed {
+                if matches!(self.peek(), Tok::Colon | Tok::Arrow) {
+                    return Err(Diagnostic::new(pos, "E_SYNTAX", "duplicate return type"));
+                }
+                ty
+            } else {
+                self.expect(Tok::Colon, "':' before attached method return type")?;
+                self.parse_type()?
+            };
+            if !scalar_params(&params) || !matches!(ret, Type::Int | Type::Bool | Type::Void) {
+                return Err(unsupported(pos, "non-scalar attached method signature"));
+            }
+            if out.methods.iter().any(|m| m.name == name && same_params(&m.params, &params)) {
+                return Err(Diagnostic::new(pos, "E_DUPLICATE", "duplicate attached method signature"));
+            }
+            let body = self.parse_block()?;
+            out.methods.push(Method { name, pos, public, is_static: false, params, ret, body });
+        } else {
+            return Err(self.expected("an attached constructor or mtd"));
+        }
+        Ok(())
     }
 
     /// After `define class`: `Name as { class_member } end`.
@@ -1887,13 +2091,13 @@ impl Parser {
 
     fn parse_cond_and(&mut self) -> R<Expr> {
         let mut links = 0;
-        let mut left = self.parse_equality()?;
+        let mut left = self.parse_struct_logical_and()?;
         while *self.peek() == Tok::Comma {
             let pos = self.pos();
             self.advance();
             self.grow(1)?;
             links += 1;
-            let right = self.parse_equality()?;
+            let right = self.parse_struct_logical_and()?;
             left = Expr {
                 kind: ExprKind::Binary(BinOp::And, Box::new(left), Box::new(right)),
                 pos,
@@ -1913,8 +2117,31 @@ impl Parser {
         r
     }
 
+    /// Target-only canonical AND, lowered to the existing typed short-circuit
+    /// ternary AST. Ordinary executable frontend admission is unchanged.
+    fn parse_struct_logical_and(&mut self) -> R<Expr> {
+        let mut left = self.parse_equality()?;
+        let mut links = 0;
+        while self.struct_target && *self.peek() == Tok::Amp && *self.peek_at(1) == Tok::Amp {
+            let pos = self.pos();
+            let next = self.toks[(self.i + 1).min(self.toks.len() - 1)].pos;
+            if pos.line != next.line || pos.col.checked_add(1) != Some(next.col) {
+                return Err(Diagnostic::new(pos, "E_SYNTAX", "'&&' must be contiguous"));
+            }
+            self.advance();
+            self.advance();
+            self.grow(1)?;
+            links += 1;
+            let right = self.parse_equality()?;
+            left = Expr { kind: ExprKind::Ternary(Box::new(left), Box::new(right),
+                Box::new(Expr { kind: ExprKind::Bool(false), pos })), pos };
+        }
+        self.height -= links;
+        Ok(left)
+    }
+
     fn parse_ternary(&mut self) -> R<Expr> {
-        let mut c = self.parse_equality()?;
+        let mut c = self.parse_struct_logical_and()?;
         // Functional pipeline: value |> f |> g(extra) lowers to g(f(value), extra).
         // Only ordinary named functions are admitted: no computed callees,
         // receiver calls or actor piping. This preserves argument evaluation
