@@ -112,4 +112,13 @@ pub fn run(h: &mut Harness) {
     h.negative("mut_borrow_helper_close",
         "fnc update(mut Pointer<int> q): void { q.close(); } pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(0); update(mut p); p.close(); return 0; }", &flag, Some("expected"));
 
+    h.negative("mixed_duplicate_helper",
+        "fnc inspect(Pointer<int> q): int { return q.read(); } fnc inspect(mut Pointer<int> q): void { q.write(42); } pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(0); p.close(); return 0; }", &flag, Some("duplicate"));
+    h.negative("mixed_duplicate_readonly",
+        "fnc inspect(Pointer<int> q): int { return q.read(); } fnc second(Pointer<int> q): int { return q.read(); } pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(0); p.close(); return 0; }", &flag, Some("excess"));
+    h.negative("mixed_readonly_before_initialization",
+        "fnc inspect(Pointer<int> q): int { return q.read(); } fnc update(mut Pointer<int> q): void { q.write(42); } pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(1); val int a = inspect(p); update(mut p); p.close(); return a; }", &flag, Some("uninitialized"));
+    h.negative("mixed_mutation_after_close",
+        "fnc inspect(Pointer<int> q): int { return q.read(); } fnc update(mut Pointer<int> q): void { q.write(42); } pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(42); p.close(); update(mut p); return 0; }", &flag, Some("unavailable owner"));
+
 }
