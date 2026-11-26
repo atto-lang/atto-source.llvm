@@ -191,6 +191,10 @@ public:
         state_->generation = generation;
     }
 
+    // A claimed execution may retain State after the owning fence dies.
+    // Revoke all queued tickets before relinquishing the owner's reference.
+    ~NativeSelectContinuationFence() noexcept { (void)close(); }
+
     NativeSelectContinuationFence(
         const NativeSelectContinuationFence&) = delete;
     NativeSelectContinuationFence& operator=(
