@@ -1740,6 +1740,17 @@ if(BUILD_TESTING)
     add_test(NAME native_sum_payload_type_admission
         COMMAND oreslang-native-sum-payload-admission-test)
     set_tests_properties(native_sum_payload_type_admission PROPERTIES TIMEOUT 20)
+    # Candidate inline sum layout and active-payload retirement; HOST ONLY.
+    add_executable(oreslang-native-inline-sum-layout-test
+        tests/native_inline_sum_layout_test.cpp)
+    target_include_directories(oreslang-native-inline-sum-layout-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-inline-sum-layout-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_inline_sum_layout_host_only
+        COMMAND oreslang-native-inline-sum-layout-test)
+    set_tests_properties(native_inline_sum_layout_host_only PROPERTIES TIMEOUT 20)
+
     # Recursive Option/Result functor type-shape admission, including the
     # real scalar sum resolver. This is HOST-ONLY, not compiled .atto guest
     # or native ownership/dtor evidence.
