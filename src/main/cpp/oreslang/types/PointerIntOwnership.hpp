@@ -88,7 +88,7 @@ inline void verify_plan(const Plan& plan) {
             ownership_error("invalid readonly helper signature");
     }
     if (!plan.mutable_helper.empty() || !plan.mutable_parameter.empty()) {
-        if (borrowed_local || !plan.readonly_helper.empty() ||
+        if (borrowed_local || plan.mutable_helper == plan.readonly_helper ||
                 !valid_helper_id(plan.mutable_helper) || !valid_helper_id(plan.mutable_parameter) ||
                 plan.mutable_helper == plan.owner || plan.mutable_helper == plan.mutable_parameter)
             ownership_error("invalid mutable helper signature");

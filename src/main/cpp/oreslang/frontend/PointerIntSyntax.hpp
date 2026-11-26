@@ -38,7 +38,7 @@ public:
 
     Plan parse() {
         Plan plan;
-        if (take("fnc")) {
+        while (take("fnc")) {
             const auto helper = identifier();
             need("("); const bool mut = take("mut");
             need("Pointer"); need("<"); need("int"); need(">");
@@ -46,6 +46,9 @@ public:
             need(")"); need(":");
             if (helper == "main" || helper == "Pointer" || helper == parameter)
                 reject("invalid pointer helper identity", token().offset);
+            if (helper == readonly_helper_ || helper == mutable_helper_ ||
+                    (mut ? !mutable_helper_.empty() : !readonly_helper_.empty()))
+                reject("duplicate or excess pointer helper", token().offset);
             if (mut) {
                 plan.mutable_helper = mutable_helper_ = helper;
                 plan.mutable_parameter = parameter;
@@ -74,7 +77,7 @@ public:
         if (token().text == "let" && at_ + 1 < tokens_.size() &&
                 tokens_[at_ + 1].text != "mut")
             return readonly_helper_.empty() && mutable_helper_.empty() ? parse_local() :
-                throw std::runtime_error("Pointer<int> readonly helper requires owned region");
+                throw std::runtime_error("Pointer<int> pointer helpers require owned region");
         need("let"); need("mut"); need("Pointer"); need("<"); need("int"); need(">");
         plan.owner = identifier();
         if (plan.owner == "Pointer" || plan.owner == "main" || plan.owner == "int" || plan.owner == readonly_helper_ || plan.owner == mutable_helper_)
