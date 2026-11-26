@@ -73,10 +73,6 @@ const negatives = [
     ['copy-expression-tail', decl + '\n' + main.replace('    stdio.println(p.sum());', '    let q = copy! p + 1;\n    stdio.println(q.sum());')],
     ['copy-non-struct', decl + '\n' + main.replace('    stdio.println(p.sum());', '    let x = 7;\n    let q = copy! x;\n    stdio.println(q);')],
 
-    ['overload-no-exact-constructor', overloaded + '\n' + overloadMain.replace('Point(enabled, 20)', 'Point(enabled, true)')],
-    ['overload-no-exact-method', overloaded + '\n' + overloadMain.replace('q.pick(p.sum())', 'q.pick("bad")')],
-    ['overload-return-only-duplicate', overloaded.replace('mtd pick(bool b) : int', 'mtd pick(int b) : bool') + '\n' + overloadMain],
-    ['overload-wrong-typed-local', overloaded + '\n' + overloadMain.replace('let enabled = true;', 'let int enabled = true;')],
 
     ['constructor-missing-branch-field', branching.replace('else { self.x = 0 - x; }', 'else {}') + '\n' + main],
     ['constructor-branch-read-before-init', branching.replace('self.x = 0 - x;', 'self.x = self.y;') + '\n' + main],
@@ -107,6 +103,8 @@ const negatives = [
     ['wrong-receiver', decl + '\n' + main.replace('p.sum()', '10.sum()')],
     ['duplicate-method', decl.replace('int <- product()', 'int <- sum()') + '\n' + main],
 ];
+const fixtureIds = [...positives, ...negatives].map(([id]) => id);
+assert.equal(new Set(fixtureIds).size, fixtureIds.length, 'duplicate guest fixture ID');
 const attoc = process.env.ATTOC || './target/debug/attoc';
 const work = await mkdtemp(join(tmpdir(), 'atto-struct-value-'));
 async function build(name, source) {
