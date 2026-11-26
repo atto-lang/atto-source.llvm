@@ -5699,6 +5699,10 @@ private:
             while (accept("|>")) {
                 if (++stages > kMaxNativePipelineStages)
                     fail("pipeline exceeds 128 stages");
+                if (token_.text == "match") {
+                    value = value_match_expression(std::move(value));
+                    continue;
+                }
                 auto stage = primary();
                 if (stage->kind != Expression::Kind::Variable &&
                         stage->kind != Expression::Kind::Call)
@@ -6298,14 +6302,30 @@ private:
         return {native_dispatch_equal(*projection, *literal), std::move(field), key};
     }
 
-    std::unique_ptr<Expression> value_match_expression() {
+    std::unique_ptr<Expression> value_match_expression(std::unique_ptr<Expression> injected = nullptr) {
         const auto offset = token_.offset;
         require("match");
         consume_optional_value_match_result_type();
-        auto subject = expression();
+        const bool pipeline = static_cast<bool>(injected);
+        auto subject = pipeline ? std::move(injected) : expression();
+        // Conditional lowering clones its subject. Until a dedicated match
+        // temporary exists, admit only trivial immutable-observation forms
+        // in pipeline position, not calls, arithmetic or compound stages.
+        if (pipeline && subject->kind != Expression::Kind::Integer &&
+                subject->kind != Expression::Kind::Boolean &&
+                subject->kind != Expression::Kind::Variable)
+            fail("native pipeline match requires a literal or local subject until once-only lowering exists");
         if (!native_pure_scalar_tree(*subject))
             fail("native value match subject must be a replay-safe scalar expression");
         require("over");
+        const bool braced = accept("{");
+        const std::string_view close = braced ? "}" : "end";
+        auto arm_value = [&]() {
+            auto result = token_.text == "{"
+                ? dispatch_value_arm("native value match") : expression();
+            if (!accept(",")) accept(";");
+            return result;
+        };
 
         struct Arm {
             std::unique_ptr<Expression> condition;
@@ -6316,20 +6336,50 @@ private:
         std::unique_ptr<Expression> fallback;
         std::unordered_set<std::string> seen;
         std::string structural_field;
+        bool wildcard_fallback = false;
+        bool exhaustive_type_fallback = false;
 
-        while (token_.text != "end") {
+        while (token_.text != close) {
             if (arms.size() + (fallback ? 1u : 0u) >= 32)
                 fail("native value match arm limit exceeded (32)");
             // All three spellings designate one fallback, evaluated after concrete arms.
             const bool bare_default = accept("default");
-            if (!bare_default) require("on");
-            if (bare_default || accept("default") || accept("_")) {
+            if (!bare_default && token_.text != "is") require("on");
+            // Keep established ordinary value-match fallback spelling and
+            // precedence. The restricted new pipeline profile keeps its
+            // explicitly tested final-fallback syntax.
+            if (pipeline && !bare_default && token_.text == "default")
+                fail("native value match fallback must use 'default ->' without 'on'");
+            const bool on_default = !bare_default && accept("default");
+            const bool wildcard = !bare_default && !on_default && accept("_");
+            if (bare_default || on_default || wildcard) {
                 if (fallback)
                     fail("native value match can contain only one default arm");
                 if (token_.text == "when" || token_.text == "as")
                     fail("native value match default arm cannot have a guard or binding");
                 require("->");
-                fallback = dispatch_value_arm("native value match");
+                wildcard_fallback = wildcard;
+                fallback = arm_value();
+                continue;
+            }
+            if (fallback && (pipeline || exhaustive_type_fallback || token_.text == "is"))
+                fail(wildcard_fallback ? "native value match wildcard arm must be last"
+                                       : "native value match default arm must be last");
+            if (accept("is")) {
+                // Only literal subjects have an exact type at this parser stage.
+                // Do not infer a local's type or drop an effectful scrutinee.
+                const bool proven_int = subject->kind == Expression::Kind::Integer;
+                const bool proven_bool = subject->kind == Expression::Kind::Boolean;
+                if (!((proven_int && accept("int")) || (proven_bool && accept("bool"))))
+                    fail("native type match requires a statically proven int or bool literal subject");
+                if (token_.text == "as" || token_.text == "when")
+                    fail("native scalar type match binding/guard requires dedicated pattern lowering");
+                require("->");
+                // The statically proven type exhausts all remaining values.
+                // Prior literal tests retain source priority.
+                wildcard_fallback = true;
+                exhaustive_type_fallback = true;
+                fallback = arm_value();
                 continue;
             }
             if (token_.text == "structural" || token_.text == "struct")
@@ -6346,7 +6396,7 @@ private:
                 require("->");
                 arms.push_back({
                     std::move(field_test.condition),
-                    dispatch_value_arm("native structural field match"),
+                    arm_value(),
                     "field:" + field_test.field + ":" + field_test.key
                 });
                 continue;
@@ -6368,11 +6418,13 @@ private:
             require("->");
             arms.push_back({
                 native_dispatch_equal(*subject, *constant),
-                dispatch_value_arm("native value match"),
+                arm_value(),
                 key
             });
         }
-        require("end");
+        require(close);
+        if (pipeline && arms.empty() && subject->kind == Expression::Kind::Variable)
+            fail("native pipeline match default-only local requires checked subject evaluation");
 
         // Bool true/false is statically exhaustive; other scalar matches need
         // an explicit wildcard so there is always an ARM_RESULT value.
