@@ -223,7 +223,16 @@ constexpr U MAX = std::numeric_limits<U>::max();
 [[noreturn]] void overflow() { std::fputs("E_U64_OVERFLOW\n", stderr); std::exit(70); }
 [[maybe_unused]] static U checked_add(U a, U b) { if (b > MAX - a) overflow(); return a + b; }
 [[maybe_unused]] static U checked_sub(U a, U b) { if (b > a) overflow(); return a - b; }
-[[maybe_unused]] static U checked_mul(U a, U b) { if (b != 0 && a > MAX / b) overflow(); return a * b; }
+[[maybe_unused]] static U checked_mul(U a, U b) {
+    constexpr U MASK = 0xffffffffULL;
+    const U al = a & MASK, bl = b & MASK, ah = a >> 32, bh = b >> 32;
+    if (ah != 0 && bh != 0) overflow();
+    const U lo = al * bl, cross1 = ah * bl, cross2 = al * bh;
+    if (cross1 > MASK || cross2 > MASK) overflow();
+    const U hi = cross1 + cross2 + (lo >> 32);
+    if (hi > MASK) overflow();
+    return (hi << 32) | (lo & MASK);
+}
 )";
         for (std::size_t i = 0; i < funcs.size(); ++i) {
             out += "[[maybe_unused]] static U f" + std::to_string(i) + "(";
