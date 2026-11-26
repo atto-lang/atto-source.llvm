@@ -17,6 +17,14 @@ class VerifiedI64Range {
     static constexpr auto Min = std::numeric_limits<std::int64_t>::min();
     static constexpr auto Max = std::numeric_limits<std::int64_t>::max();
     types::NativeI64Interval bounds_;
+    unsigned holes_ = 0;
+    static unsigned bit(std::int64_t n) { return n==0?1u:n==-1?2u:0u; }
+    VerifiedI64Range(std::int64_t lo,std::int64_t hi,unsigned holes)
+        : bounds_(checked_bounds(lo,hi)), holes_(holes) {
+        while(holes_&bit(lo))++lo;
+        while(holes_&bit(hi))--hi;
+        bounds_=checked_bounds(lo,hi);
+    }
 
     static types::NativeI64Interval checked_bounds(std::int64_t low, std::int64_t high) {
         if (low > high) throw std::runtime_error("E_REFINEMENT_EMPTY: contradictory interval");
@@ -38,9 +46,29 @@ public:
     VerifiedI64Range(std::int64_t low = Min, std::int64_t high = Max) : bounds_(checked_bounds(low, high)) {}
 
     bool includes(const VerifiedI64Range& actual) const {
-        return actual.bounds_.entails(bounds_);
+        return actual.bounds_.entails(bounds_) &&
+            (!actual.has(0)||has(0)) && (!actual.has(-1)||has(-1));
     }
 
+    bool has(std::int64_t n) const {
+        return minimum()<=n&&n<=maximum()&&!(holes_&bit(n));
+    }
+    VerifiedI64Range join(const VerifiedI64Range& b) const {
+        return VerifiedI64Range(std::min(minimum(),b.minimum()),std::max(maximum(),b.maximum()),
+            (!has(0)&&!b.has(0)?1u:0u)|(!has(-1)&&!b.has(-1)?2u:0u));
+    }
+    VerifiedI64Range restrict(std::string_view op,std::int64_t n) const {
+        try {
+            if(op=="!=") {
+                if(!has(n))return *this;
+                if(n==minimum())return n==Max?*this:VerifiedI64Range(n+1,maximum(),holes_);
+                if(n==maximum())return n==Min?*this:VerifiedI64Range(minimum(),n-1,holes_);
+                return VerifiedI64Range(minimum(),maximum(),holes_|bit(n));
+            }
+            auto r=constrain(op=="=="?"eq":op,n);
+            return VerifiedI64Range(r.minimum(),r.maximum(),holes_);
+        } catch(const std::runtime_error&) { return *this; }
+    }
     std::int64_t minimum() const { return bounds_.minimum; }
     std::int64_t maximum() const { return bounds_.maximum; }
 
@@ -84,8 +112,7 @@ public:
                 [](const auto& l,const auto& r){return l.slt(r);});
             return fits(*ends.first,*ends.second);
         }
-        if (op == "/") return (right.minimum()>0 || right.maximum()<0)
-            && !(minimum()==Min && right.minimum()<=-1 && right.maximum()>=-1);
+        if (op == "/") return !right.has(0) && !(has(Min)&&right.has(-1));
         return false;
     }
     bool proves_negation() const { return minimum()!=Min; }
