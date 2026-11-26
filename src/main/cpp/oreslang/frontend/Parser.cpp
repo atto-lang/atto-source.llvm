@@ -4010,6 +4010,7 @@ private:
                     if (binding.scalar_type == ScalarType::I64) require("int");
                 }
                 if (!type_right_const) binding.name = identifier();
+                if (token_.text == ";") fail("E_MISSING_INITIALIZER: explicit initializer required");
                 require("=");
                 // Lower a terminal unary `pending |> std.await` through
                 // the *same* checked Future/Task await slot and ownership
