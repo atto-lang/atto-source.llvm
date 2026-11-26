@@ -34,6 +34,23 @@ if ! command -v timeout >/dev/null; then
     }
   fi
 fi
+# The stdio reactor needs a pipe. Preserve both pipeline statuses: pipefail
+# alone returns the rightmost failure, not necessarily the guest exit code.
+expect_guest_output() {
+  local binary="$1" expected="$2" prefix="$3" label="$4"
+  local -a pipeline_status
+  if timeout 20s "$binary" 2>"$prefix.stderr" | cat >"$prefix.stdout"; then
+    pipeline_status=("${PIPESTATUS[@]}")
+  else
+    pipeline_status=("${PIPESTATUS[@]}")
+  fi
+  if [[ "${pipeline_status[0]}" -ne 42 || "${pipeline_status[1]}" -ne 0 || -s "$prefix.stderr" ]] ||
+      ! cmp -s "$expected" "$prefix.stdout"; then
+    echo "$label: guest=${pipeline_status[0]} capture=${pipeline_status[1]}" >&2
+    return 1
+  fi
+}
+
 ir="$tmp/positive.ll"
 if ! timeout 40s "$compiler" --target=host "$fixtures/scalar-parity.atto" > "$ir"; then
   echo "native compiler rejected positive .atto source" >&2
@@ -127,15 +144,8 @@ for opt in 0 2; do
   binary="$tmp/xor-order-O$opt"
   timeout 40s "$clang" "-O$opt" -x ir "$order_ir" -x c -std=c11 \
     -I "$root/src/main/cpp" "$string_runtime" -pthread -o "$binary"
-  status=0
-  timeout 20s "$binary" 2>"$tmp/xor-order-O$opt.stderr" |
-    cat >"$tmp/xor-order-O$opt.stdout" || status=$?
-  if [[ "$status" -ne 42 ]] || ! cmp -s "$tmp/xor-order.expected" "$tmp/xor-order-O$opt.stdout"; then
-    echo "XOR operand exactly-once left-to-right proof failed at O$opt: status=$status" >&2
-    cat "$tmp/xor-order-O$opt.stdout" >&2
-    cat "$tmp/xor-order-O$opt.stderr" >&2
-    exit 1
-  fi
+  expect_guest_output "$binary" "$tmp/xor-order.expected" "$tmp/xor-order-O$opt" \
+    "XOR operand exactly-once left-to-right proof failed at O$opt"
 done
 echo "ATTO_LOGICAL_XOR_LEFT_RIGHT_EXACT_ONCE_O0_O2_PASS"
 
@@ -207,13 +217,8 @@ for opt in 0 2; do
   binary="$tmp/compound-xor-O$opt"
   timeout 40s "$clang" "-O$opt" -x ir "$tmp/compound-xor.ll" -x c -std=c11 \
     -I "$root/src/main/cpp" "$string_runtime" -pthread -o "$binary"
-  status=0
-  timeout 20s "$binary" 2>"$tmp/compound-xor-O$opt.stderr" |
-    cat >"$tmp/compound-xor-O$opt.stdout" || status=$?
-  if [[ "$status" -ne 42 ]] || ! cmp -s "$tmp/compound-xor.expected" "$tmp/compound-xor-O$opt.stdout"; then
-    echo "compound XOR boundary or exactly-once RHS failure at O$opt: status=$status" >&2
-    exit 1
-  fi
+  expect_guest_output "$binary" "$tmp/compound-xor.expected" "$tmp/compound-xor-O$opt" \
+    "compound XOR boundary or exactly-once RHS failure at O$opt"
 done
 
 negative_index=0
@@ -238,7 +243,6 @@ for body in 'val int x = 12; x ^^= 10; return x;' \
 done
 echo "ATTO_COMPOUND_XOR_NATIVE_O0_O2_PASS negatives=$negative_index"
 
-echo "logical punctuation: native O0/O2 + short-circuit/trap execution + compile negatives passed"
 
 
 # Named reductions: real source -> IR -> executable, including literal identities.
@@ -264,7 +268,7 @@ for opt in 0 2; do
   timeout 40s "$clang" "-O$opt" -x ir "$tmp/named-reduction.ll" -o "$tmp/named-O$opt"
   status=0
   timeout 20s "$tmp/named-O$opt" >"$tmp/named-O$opt.stdout" 2>"$tmp/named-O$opt.stderr" || status=$?
-  if [[ "$status" -ne 42 || -s "$tmp/named-O$opt.stdout" ]]; then
+  if [[ "$status" -ne 42 || -s "$tmp/named-O$opt.stdout" || -s "$tmp/named-O$opt.stderr" ]]; then
     echo "named Boolean reduction guest failed at O$opt: status=$status" >&2
     exit 1
   fi
@@ -281,3 +285,4 @@ for gate in And Or Xor; do
   done
 done
 echo "ATTO_NAMED_BOOLEAN_NATIVE_O0_O2_PASS negatives=27"
+echo "logical punctuation: native O0/O2 + short-circuit/trap execution + compile negatives passed"
