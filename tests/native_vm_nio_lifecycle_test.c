@@ -1086,15 +1086,17 @@ int main(void) {
 
 
     fprintf(stderr, "NIO_STAGE quota\n");
-    // The VM bridge is bounded at the reactor's global 4x64 capacity. A 257th
-    // actor watch must fail and refund its speculative resource retain. After
-    // STOP, draining/ACKing the accepted 256 must be sufficient for DONE;
-    // any retain leak would make wait_done hang/fail this test.
+    // The VM bridge is bounded at the reactor's global 4x64 capacity. Use
+    // four prestarted reactors: idle watches must NOT cause the throughput
+    // profile to expand, so its single cold-start reactor has only 64 slots.
+    // A 257th actor watch must fail and refund its speculative resource
+    // retain; STOP plus ACK of the accepted 256 must be sufficient for DONE.
     {
         enum { actor_claims = 256 };
         OresNativeVM* actor_vm = ores_native_vm_open(&cfg);
         check(actor_vm != NULL);
-        check(ores_native_vm_enable_nio(actor_vm, 4, 0, 1));
+        check(ores_native_vm_enable_nio(actor_vm, 4, 1, 4));
+        check(ores_native_vm_nio_started(actor_vm) == 4);
         const OresNativeActorRef actor_ref =
             ores_native_vm_spawn(actor_vm, ORES_NATIVE_VM_MAIN, 0);
         check(actor_ref.scheduler_domain != 0);
@@ -1125,8 +1127,14 @@ int main(void) {
         check(!ores_native_vm_poll_done(
             actor_vm, ORES_NATIVE_VM_MAIN, actor_ref));
 
-        for (size_t i = 0; i < actor_claims; ++i)
-            check(ores_native_vm_nio_try_cancel_actor(actor_vm, watches[i]));
+        for (size_t i = 0; i < actor_claims; ++i) {
+            int cancelled = 0;
+            for (int retry = 0; retry < 3000 && !cancelled; ++retry) {
+                cancelled = ores_native_vm_nio_try_cancel_actor(actor_vm, watches[i]);
+                if (!cancelled) sched_yield();
+            }
+            check(cancelled);
+        }
         for (size_t i = 0; i < actor_claims; ++i) {
             OresNativeActorNioCompletion completion =
                 await_actor_completion(actor_vm);
