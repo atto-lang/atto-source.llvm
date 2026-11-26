@@ -151,6 +151,7 @@ struct LocalBinding {
     // binding receives the result of exactly one scheduler-owned Future await.
     std::string future_await_name;
     bool assignable = false; // mutable lexical slot, distinct from referent capability
+    bool explicit_factory_take = false; // direct owned class result, not a place move or record view loan
 };
 
 struct ClassField {
