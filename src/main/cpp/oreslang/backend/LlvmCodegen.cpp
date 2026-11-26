@@ -904,7 +904,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                                   bool actor_region_v1,
                                   const std::vector<CheckedSourceRoutineV1>& checked_routines,
                                   const std::vector<CheckedLogSiteV1>& checked_sites,
-                                  bool tenant_vm_guest) {
+                                  bool tenant_vm_guest,
+                                  bool print_strict_i64) {
     for (const auto& fn : source.functions)
         for (const auto& binding : fn.locals)
             if (binding.native_box_i64 &&
@@ -1231,6 +1232,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         [](const Function& fn) { return fn.name == "main"; });
     const bool native_main = !wasm32_target && !cortex_m_target &&
         main_it != source.functions.end();
+    if (print_strict_i64 && (!native_main || main_it->returns_void ||
+            !main_it->parameters.empty() || !isolate_entry.empty() || actor_region_v1 ||
+            tenant_vm_guest || bounded_allocator_provider))
+        throw std::runtime_error("E_VERIFY_UNSUPPORTED: full-width result requires hosted scalar main");
     bool string_runtime = false, console_runtime = false, record_runtime = !source.sum_types.empty(), iteration_runtime = false;
     const NativeClassLayouts layouts(source);
     std::unordered_map<std::string, ClassDecl> flat_classes;
@@ -4062,7 +4067,23 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             : llvm::ConstantInt::getTrue(context);
         output_ok = builder.CreateAnd(output_ok, records_ok);
         output_ok = builder.CreateAnd(output_ok, tasks_ok);
-        if (main_it->returns_void) {
+        if (print_strict_i64) {
+            if (result->getType() != i64 || module.getNamedValue("printf"))
+                throw std::runtime_error("E_VERIFY_UNSUPPORTED: invalid strict result transport");
+            auto* publish = llvm::BasicBlock::Create(context, "strict.publish", host_main);
+            auto* failed = llvm::BasicBlock::Create(context, "strict.publish.error", host_main);
+            builder.CreateCondBr(output_ok, publish, failed);
+            builder.SetInsertPoint(failed);
+            builder.CreateRet(llvm::ConstantInt::get(i32, 1));
+            builder.SetInsertPoint(publish);
+            auto* fmt = builder.CreateGlobalStringPtr("%lld\n", "strict.i64.format");
+            auto print = module.getOrInsertFunction("printf",
+                llvm::FunctionType::get(i32, {fmt->getType()}, true));
+            auto* written = builder.CreateCall(print, {fmt, result});
+            builder.CreateRet(builder.CreateSelect(
+                builder.CreateICmpSGT(written, llvm::ConstantInt::get(i32, 0)),
+                llvm::ConstantInt::get(i32, 0), llvm::ConstantInt::get(i32, 1)));
+        } else if (main_it->returns_void) {
             builder.CreateRet(builder.CreateSelect(output_ok, llvm::ConstantInt::get(i32, 0), llvm::ConstantInt::get(i32, 1)));
         } else {
             llvm::Value* valid = builder.CreateICmpULE(

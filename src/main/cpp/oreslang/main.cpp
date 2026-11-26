@@ -543,19 +543,20 @@ int main(int argc, char** argv) {
     // Separate opt-in mode: exact single-source admission, no ordinary
     // parser fallback, no partial IR on rejected proof.
     if (argc >= 2 && std::string_view(argv[1]) == "--verify=strict") {
-        if (argc != 3) {
-            std::cerr << "E_VERIFY_UNSUPPORTED: strict mode needs one source path\n";
+        const bool print_i64 = argc == 4 && std::string_view(argv[2]) == "--print-i64";
+        if (argc != 3 && !print_i64) {
+            std::cerr << "E_VERIFY_UNSUPPORTED: strict mode needs [--print-i64] and one source path\n";
             return 1;
         }
         try {
-            const char* strict_path = argv[2];
+            const char* strict_path = argv[argc - 1];
             constexpr std::size_t cap = 8u * 1024u * 1024u;
             const auto identity = capture_source_identity(strict_path,cap,"strict source exceeds limit");
             SourceIdentity actual;
             const auto text = read_regular_source(strict_path,cap,"strict source exceeds limit",&actual,&identity);
             require_valid_source_utf8(text);
             auto program=oreslang::parse_verified_strict_i64(text);
-            const auto ir=oreslang::emit_verified_llvm_ir(program);
+            const auto ir=oreslang::emit_verified_llvm_ir(program, false, false, false, {}, false, {}, {}, false, print_i64);
             std::cout << ir;
             return 0;
         } catch (const std::exception& error) {
