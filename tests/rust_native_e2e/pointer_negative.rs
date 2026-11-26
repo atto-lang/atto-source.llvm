@@ -30,5 +30,5 @@ pub fn run(h: &mut Harness) {
         &[], None);
     h.negative("pointer_rejects_unary_address",
         &src("  p.write_at(0, 1);\n  val int first = &p;\n  p.close();", "first", 4),
-        &flag, Some("unsupported token"));
+        &flag, Some("unsupported oreslang token"));
 }

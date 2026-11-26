@@ -14,7 +14,7 @@ pub fn run(h: &mut Harness) {
         ("wrong_deref", "val Pointer<int> p = rt ref value; val answer = rt deref value; rt unref p; return answer;", "expected"),
         ("wrong_release", "val Pointer<int> p = rt ref value; val answer = rt deref p; rt unref value; return answer;", "expected"),
         ("scalar_cast", "val Pointer<int> p = rt ref value; val answer = p as int; rt unref p; return answer;", "expected"),
-        ("copied_handle", "val Pointer<int> p = rt ref value; val Pointer<int> clone = p; val answer = rt deref p; rt unref p; return answer;", "expected"),
+        ("copied_handle", "val Pointer<int> p = rt ref value; val Pointer<int> clone = p; val answer = rt deref p; rt unref p; return answer;", "duplicate or reserved immutable local"),
         ("mutated_referent", "val Pointer<int> p = rt ref value; value = 43; val answer = rt deref p; rt unref p; return answer;", "expected"),
         ("unsupported_close", "val Pointer<int> p = rt ref value; val answer = rt deref p; p.close(); return answer;", "expected"),
         ("unsupported_write", "val Pointer<int> p = rt ref value; p.write_at(0, 99); val answer = rt deref p; rt unref p; return answer;", "expected"),
@@ -26,7 +26,7 @@ pub fn run(h: &mut Harness) {
         ("branch_cleanup", "val Pointer<int> p = rt ref value; val answer = rt deref p; if true then rt unref p; fi return answer;", "expected"),
         ("shadowed_handle", "val Pointer<int> value = rt ref value; val answer = deref! value; unref! value; return answer;", "shadowing"),
         ("wrong_type", "val Pointer<bool> p = rt ref value; val answer = deref! p; unref! p; return answer;", "expected"),
-        ("forged_address", "val Pointer<int> p = &value; val answer = deref! p; unref! p; return answer;", "unsupported token"),
+        ("forged_address", "val Pointer<int> p = &value; val answer = deref! p; unref! p; return answer;", "unsupported oreslang token"),
     ];
     for (name, body, diagnostic) in invalid {
         h.negative(&format!("pointer_local_{name}"), &local(body), &flags, Some(diagnostic));

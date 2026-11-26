@@ -5730,10 +5730,24 @@ private:
 
         auto result = make_expression(Expression::Kind::Conditional, condition->offset);
         result->condition = std::move(condition);
-        result->when_true = conditional();
+        result->when_true = ternary_arm();
         require(":");
-        result->when_false = conditional();
+        result->when_false = ternary_arm();
         return result;
+    }
+
+    // A braced arm is never a bare Record or Map literal. Single explicit
+    // results use the existing typed branch/PHI lowering; no function return,
+    // closure, or new lexical lifetime is introduced.
+    std::unique_ptr<Expression> ternary_arm() {
+        if (!accept("{")) return conditional();
+        if (!accept("return") && !accept("^"))
+            fail("E_VALUE_ARM: ternary block requires explicit return or ^; lexical prefixes are not lowered");
+        auto value = expression();
+        accept(";");
+        if (!accept("}"))
+            fail("E_VALUE_ARM: single-result ternary block requires closing '}'");
+        return value;
     }
 
     std::unique_ptr<Expression> logical_or() {
@@ -9677,7 +9691,7 @@ void resolve_future_pipeline_contracts(Program& program) {
 // Lexer::next() excludes comments and quoted literals from this check.
 void reject_unlowered_mutex_constructor(std::string_view source,
                                        bool experimental_pointer_int_aot) {
-    Lexer scan(source, experimental_pointer_int_aot);
+    Lexer scan(source, /*unsafe_base_offset=*/0, experimental_pointer_int_aot);
     Token preceding{Kind::End, {}, 0};
     bool expect_angle = false;
     bool within_generic = false;
