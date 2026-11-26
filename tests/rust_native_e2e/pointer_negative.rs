@@ -81,4 +81,19 @@ pub fn run(h: &mut Harness) {
     h.negative("pointer_swap_out_of_bounds", &src("  p.fill(42);\n  p.swap_at(0, 2);\n  p.close();", "0", 2), &flag, Some("bounds"));
     h.negative("pointer_swap_closed", &src("  p.fill(42);\n  p.close();\n  p.swap_at(0, 1);", "0", 2), &flag, Some("swap after close"));
 
+    let helper = "fnc inspect(Pointer<int> q): int { return q.read(); }";
+    for (name, body, diagnostic) in [
+        ("borrow_uninitialized", "let mut Pointer<int> p = Pointer.alloc<int>(1); val int a = inspect(p); p.close(); return a;", "uninitialized"),
+        ("borrow_closed", "let mut Pointer<int> p = Pointer.alloc_value<int>(42); p.close(); return inspect(p);", "unavailable owner"),
+        ("borrow_wrong_owner", "let mut Pointer<int> p = Pointer.alloc_value<int>(42); val int a = inspect(other); p.close(); return a;", "expected"),
+        ("borrow_multi", "let mut Pointer<int> p = Pointer.alloc<int>(2); p.fill(42); val int a = inspect(p); p.close(); return a;", "singleton"),
+        ("borrow_gap", "let mut Pointer<int> p = Pointer.alloc_value<int>(42); val int a = inspect(borrow ! p); p.close(); return a;", "adjacent"),
+        ("borrow_mut_not_admitted", "let mut Pointer<int> p = Pointer.alloc_value<int>(42); val int a = inspect(borrow! mut p); p.close(); return a;", "expected"),
+    ] {
+        let source = format!("{helper} pub fnc main(): int {{ {body} }}");
+        h.negative(name, &source, &flag, Some(diagnostic));
+    }
+    h.negative("borrow_helper_close",
+        "fnc inspect(Pointer<int> q): int { q.close(); return 42; } pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(42); val int a = inspect(p); p.close(); return a; }", &flag, Some("expected"));
+
 }
