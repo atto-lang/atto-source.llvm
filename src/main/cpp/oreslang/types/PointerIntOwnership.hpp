@@ -84,11 +84,35 @@ inline void verify_plan(const Plan& plan) {
     std::size_t close_count = 0;
     std::size_t budget = 0;
 
-    auto checked = [](const __int128 val) -> std::int64_t {
-        if (val < std::numeric_limits<std::int64_t>::min() ||
-                val > std::numeric_limits<std::int64_t>::max())
-            ownership_error("checked integer arithmetic overflow");
-        return static_cast<std::int64_t>(val);
+    // Independently recompute via unsigned magnitudes. No signed overflow
+    // and no dependence on the parser's cached annotation or its bounds logic.
+    auto checked = [](Expr::Kind kind, std::int64_t left, std::int64_t right) -> std::int64_t {
+        auto mag = [](std::int64_t v) -> std::uint64_t {
+            const auto u = static_cast<std::uint64_t>(v);
+            return v < 0 ? std::uint64_t{0} - u : u;
+        };
+        const auto l = mag(left), r = mag(right);
+        const bool ln = left < 0, rn = (right < 0) != (kind == Expr::Kind::Subtract);
+        constexpr auto max = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+        bool negative;
+        std::uint64_t value;
+        if (kind == Expr::Kind::Multiply) {
+            negative = ln != rn;
+            const auto limit = max + static_cast<std::uint64_t>(negative);
+            if (r != 0 && l > limit / r) ownership_error("checked integer arithmetic overflow");
+            value = l * r;
+        } else if (ln == rn) {
+            negative = ln;
+            const auto limit = max + static_cast<std::uint64_t>(negative);
+            if (r > limit || l > limit - r) ownership_error("checked integer arithmetic overflow");
+            value = l + r;
+        } else {
+            negative = l >= r ? ln : rn;
+            value = l >= r ? l - r : r - l;
+        }
+        if (value > max + static_cast<std::uint64_t>(negative)) ownership_error("checked integer arithmetic overflow");
+        if (negative && value == max + 1) return std::numeric_limits<std::int64_t>::min();
+        return negative ? -static_cast<std::int64_t>(value) : static_cast<std::int64_t>(value);
     };
     auto eval = [&](auto&& self, const Expr& expr, unsigned depth) -> std::int64_t {
         if (depth > 64 || ++budget > 4096)
@@ -121,18 +145,16 @@ inline void verify_plan(const Plan& plan) {
         case Expr::Kind::Neg:
             if (!expr.lhs || expr.rhs)
                 ownership_error("malformed unary pointer expression");
-            result = checked(-static_cast<__int128>(self(self, *expr.lhs, depth + 1)));
+            result = checked(Expr::Kind::Subtract, 0, self(self, *expr.lhs, depth + 1));
             break;
         case Expr::Kind::Add:
         case Expr::Kind::Subtract:
         case Expr::Kind::Multiply: {
             if (!expr.lhs || !expr.rhs)
                 ownership_error("malformed arithmetic expression");
-            const __int128 left = self(self, *expr.lhs, depth + 1);
-            const __int128 right = self(self, *expr.rhs, depth + 1);
-            result = checked(expr.kind == Expr::Kind::Add ? left + right :
-                             expr.kind == Expr::Kind::Subtract ? left - right :
-                             left * right);
+            const auto left = self(self, *expr.lhs, depth + 1);
+            const auto right = self(self, *expr.rhs, depth + 1);
+            result = checked(expr.kind, left, right);
             break;
         }
         }

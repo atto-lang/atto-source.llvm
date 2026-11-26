@@ -50,7 +50,7 @@ jobs:
           test "$(git hash-object src/main/cpp/oreslang/frontend/Parser.cpp)" = 511d7ec9c348c78713d5a5008df9aad777a6eaf4
           test "$(git hash-object src/main/cpp/oreslang/frontend/PointerIntSyntax.hpp)" = ba2b2c6100a6c73283d277f12ae25150409eccf1
           test "$(git hash-object src/main/cpp/oreslang/types/PointerIntHIR.hpp)" = 3ecee944fb0cb5b3139950d431ba78a09907a219
-          test "$(git hash-object src/main/cpp/oreslang/types/PointerIntOwnership.hpp)" = eaa0b8b0ea75a73202bda755c08be20b0faf942d
+          test "$(git hash-object src/main/cpp/oreslang/types/PointerIntOwnership.hpp)" = 719de34cebc8f9ff3043c0c04a6eee46e68fc50f
           test "$(git hash-object src/main/cpp/oreslang/backend/PointerIntCodegen.hpp)" = 9ccf8cafcddc4f659461830c995a210df502751e
           test "$(git hash-object tests/pointer_int_hir_admission.cpp)" = 51942d191235c08697a8f2467238523fe2a928a7
           test ! -e src/main/cpp/oreslang/frontend/PointerIntAot.hpp
