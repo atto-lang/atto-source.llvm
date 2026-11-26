@@ -1,7 +1,9 @@
 #include "oreslang/runtime/NativeI64ChannelAbi.h"
 #include "oreslang/runtime/NativeSelectableI64Channel.hpp"
 
+#include <atomic>
 #include <memory>
+#include <thread>
 #include <new>
 #include <optional>
 
@@ -353,4 +355,65 @@ extern "C" int ores_native_select2_try_commit_i64_write(
     batch.batch.dispatch();
     if (context.failed || won < 0) return -1;
     return won;
+}
+
+
+namespace {
+struct ReadyNowReadContext {
+    OresNativeSelect2* select;
+    uint32_t index;
+    OresNativeI64Channel1* channel;
+    const std::thread::id owner = std::this_thread::get_id();
+    std::atomic<bool> armed{true};
+    int status = ORES_NATIVE_I64_READ_WOULD_BLOCK;
+    int64_t value = 0;
+    int result = 0;
+
+    ReadyNowReadContext(OresNativeSelect2* s, uint32_t i,
+                        OresNativeI64Channel1* c)
+        : select(s), index(i), channel(c) {}
+};
+}  // namespace
+
+extern "C" int ores_native_select2_read_i64_ready_now(
+        OresNativeSelect2* select,
+        uint32_t index,
+        OresNativeI64Channel1* channel,
+        int* status,
+        int64_t* value) {
+    if (!select || !channel || !status || !value || index >= 2)
+        return -1;
+
+    *status = ORES_NATIVE_I64_READ_WOULD_BLOCK;
+    *value = 0;
+    return guarded([&] {
+        // The channel may already have captured a notification when close()
+        // returns. Never give that notification a stack pointer or authority
+        // to consume on another thread. Only synchronous owner readiness
+        // inside subscribe is admissible for this ready-now bridge.
+        auto context = std::make_shared<ReadyNowReadContext>(select,index,channel);
+        Subscription subscription;
+        try {
+            subscription = channel->channel.subscribe_readable(
+                [context](const Subscription& token) {
+                    if (std::this_thread::get_id() != context->owner ||
+                        !context->armed.exchange(false))
+                        return;
+                    const OresNativeI64ChannelPermit permit{context->channel,&token};
+                    context->result = ores_native_select2_try_commit_i64_read(
+                        context->select,context->index,context->channel,&permit,
+                        &context->status,&context->value);
+                });
+        } catch (...) {
+            context->armed.store(false);
+            throw;
+        }
+        context->armed.store(false);
+        (void)subscription.close();
+        // No stale callback can read these borrowed handles or caller outputs.
+        if (context->result < 0) return -1;
+        *status = context->status;
+        *value = context->value;
+        return context->result;
+    });
 }

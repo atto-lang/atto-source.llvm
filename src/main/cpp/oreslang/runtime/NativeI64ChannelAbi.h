@@ -84,6 +84,13 @@ int ores_native_select2_try_commit_i64_write(
     int64_t value,
     int* status);
 
+int ores_native_select2_read_i64_ready_now(
+    OresNativeSelect2*,
+    uint32_t index,
+    OresNativeI64Channel1*,
+    int* status,
+    int64_t* value);
+
 #ifdef __cplusplus
 }
 #endif
