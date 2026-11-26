@@ -539,6 +539,43 @@ static void require_actor_region_v1_aot_graph(const oreslang::Program& program) 
 }
 
 int main(int argc, char** argv) {
+#ifdef ATTO_TEST_INTERFACE_CONSUMER
+    // Test-only fixed metadata. Production builds have no such CLI mode.
+    if (argc==3 && std::string_view(argv[1])=="--selftest-interface-consumer") {
+        try {
+            using namespace oreslang::package_interface;
+            const std::string mode=argv[2];
+            auto fixture=[](const std::string& name,const std::string& signature) {
+                std::vector<std::uint8_t> bytes={'O','R','E','S','I',0,1};
+                auto str=[&](const std::string& v){
+                    const auto n=static_cast<std::uint32_t>(v.size());
+                    for(int i=3;i>=0;--i)bytes.push_back(static_cast<std::uint8_t>(n>>(8*i)));
+                    bytes.insert(bytes.end(),v.begin(),v.end());
+                };
+                str(name);str("atto-llvm-1");str("llvm-aot-v1");str("ownership-strict-v1");
+                bytes.insert(bytes.end(),{0,0,0,2});
+                str(name);bytes.push_back(0);str(name);str("");
+                str(name);bytes.push_back(1);str("value");str(signature);
+                DependencyPin pin{name,"fixture/"+name+"@1","atto-llvm-1","llvm-aot-v1",
+                    "ownership-strict-v1",{{name,sha256(bytes)}}};
+                return admit(pin,{{name,bytes}});
+            };
+            auto cart=fixture("cart",mode=="signature"?"():bool":"():int");
+            auto tax=fixture("tax","():int");
+            ScalarLogicalSlotPin cart_slot{"fixture/app","cart",
+                mode=="stale"?"fixture/cart@2":"fixture/cart@1","atto-llvm-1","ownership-strict-v1"};
+            ScalarLogicalSlotPin tax_slot{"fixture/app","tax","fixture/tax@1","atto-llvm-1","ownership-strict-v1"};
+            std::string source="import namespace cart from \"cart\"; import namespace tax from \"tax\"; pub fnc main(): int { return cart.value() + tax.value(); }";
+            if(mode=="missing")source.replace(source.find("cart.value"),10,"cart.unknown");
+            else if(mode=="arity")source.replace(source.find("cart.value()"),12,"cart.value(1)");
+            else if(mode!="ok"&&mode!="stale"&&mode!="signature")throw std::runtime_error("invalid fixture mode");
+            std::cout<<oreslang::emit_verified_scalar_namespace_consumer(source,
+                {{cart,cart_slot,"cart"},{tax,tax_slot,"tax"}});
+            return 0;
+        } catch(const std::exception& e) {std::cerr<<e.what()<<'\n';return 65;}
+    }
+#endif
+
     if (argc == 2 && std::string_view(argv[1]) == "--selftest-native-log-info-ir") {
         try {
             auto program = oreslang::parse_program(
