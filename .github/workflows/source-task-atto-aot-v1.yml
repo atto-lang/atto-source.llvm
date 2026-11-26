@@ -36,7 +36,7 @@ jobs:
           set -euo pipefail
           bash -n scripts/compile-aot.sh scripts/test-source-task-atto-aot.sh
           if grep -Fq '\${' scripts/compile-aot.sh scripts/test-source-task-atto-aot.sh; then echo 'Escaped Bash expansion detected' >&2; exit 1; fi
-          ctest --test-dir build -R native_source_task_i64_shared_scheduler_runtime --output-on-failure --timeout 30
+          ctest --test-dir build -R '^native_source_task_i64_shared_scheduler_runtime
       - name: Execute exact-head source Task .atto guest O0 and O2
         shell: bash
         env:
@@ -44,8 +44,23 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/test-source-task-atto-aot.sh | tee build/task-v1-guest.log
-          test "$(grep -c '^TASK_I64_ATTO_GUEST_PASS|' build/task-v1-guest.log)" = 2
-          test "$(grep -c '^TASK_I64_ATTO_NEGATIVE_PASS|' build/task-v1-guest.log)" = 4
+          bash scripts/verify-source-task-aot-receipts.sh "$EXPECTED_HEAD" build/task-v1-guest.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: task-v1-llvm-source-local
+          path: build/task-v1-guest.log
+          if-no-files-found: ignore
+ --output-on-failure --timeout 30 --no-tests=error
+          bash scripts/test-source-task-aot-receipt-verifier.sh
+      - name: Execute exact-head source Task .atto guest O0 and O2
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          bash scripts/test-source-task-atto-aot.sh | tee build/task-v1-guest.log
+          bash scripts/verify-source-task-aot-receipts.sh "$EXPECTED_HEAD" build/task-v1-guest.log
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
