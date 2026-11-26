@@ -74,4 +74,11 @@ pub fn run(h: &mut Harness) {
         "pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(9223372036854775807 + 1); p.close(); return 0; }",
         &flag, Some("overflow"));
 
+    h.negative("pointer_fill_closed", &src("  p.close();\n  p.fill(42);", "0", 2), &flag, Some("fill after close"));
+    h.negative("pointer_fill_uninitialized_source", &src("  p.fill(p.read_at(0));\n  p.close();", "0", 2), &flag, Some("uninitialized"));
+    h.negative("pointer_fill_overflow", &src("  p.fill(9223372036854775807 + 1);\n  p.close();", "0", 2), &flag, Some("overflow"));
+    h.negative("pointer_swap_uninitialized", &src("  p.write_at(0, 42);\n  p.swap_at(0, 1);\n  p.close();", "0", 2), &flag, Some("initialized"));
+    h.negative("pointer_swap_out_of_bounds", &src("  p.fill(42);\n  p.swap_at(0, 2);\n  p.close();", "0", 2), &flag, Some("bounds"));
+    h.negative("pointer_swap_closed", &src("  p.fill(42);\n  p.close();\n  p.swap_at(0, 1);", "0", 2), &flag, Some("swap after close"));
+
 }
