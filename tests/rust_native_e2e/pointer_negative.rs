@@ -25,6 +25,14 @@ pub fn run(h: &mut Harness) {
     h.negative("pointer_escaped_owner",
         &src("  val int first = p;\n  p.close();", "first", 4),
         &flag, Some("escape"));
+    for (name, expr) in [
+        ("pointer_add_overflow", "9223372036854775807 + 1"),
+        ("pointer_sub_overflow", "(-9223372036854775807 - 1) - 1"),
+        ("pointer_mul_overflow", "3037000500 * 3037000500"),
+        ("pointer_mul_min_neg_one", "(-9223372036854775807 - 1) * -1"),
+    ] {
+        h.negative(name, &src("  p.close();", expr, 4), &flag, Some("overflow"));
+    }
     h.negative("pointer_requires_opt_in",
         &src("  p.close();", "0", 4),
         &[], None);
