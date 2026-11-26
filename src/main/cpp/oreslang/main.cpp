@@ -540,6 +540,30 @@ static void require_actor_region_v1_aot_graph(const oreslang::Program& program) 
 }
 
 int main(int argc, char** argv) {
+    if (argc > 1 && std::string_view(argv[1]) == "--verify=strict") {
+        if (argc != 3) { std::cerr << "E_USAGE: --verify=strict source.atto\n"; return 2; }
+        try {
+            constexpr std::size_t limit = 8u * 1024u * 1024u;
+            constexpr const char* overflow = "strict source exceeds 8 MiB";
+            const auto identity = capture_source_identity(argv[2], limit, overflow);
+            SourceIdentity read_identity;
+            auto text = read_regular_source(argv[2], limit, overflow, &read_identity, &identity);
+            require_valid_source_utf8(text);
+            if (text.find("// ores:") != std::string::npos)
+                throw std::runtime_error("E_VERIFY_UNSUPPORTED: source target directives");
+            auto ast = oreslang::parse_verified_strict_i64(text);
+            auto ir = oreslang::emit_verified_llvm_ir(ast);
+            std::cout.exceptions(std::ios::badbit | std::ios::failbit);
+            std::cout << ir;
+            std::cout.flush();
+            return 0;
+        } catch (const std::exception& error) {
+            std::cerr << "oreslang-llvmc: ";
+            print_safe_diagnostic(std::cerr, error.what(), 1024);
+            std::cerr << '\n';
+            return 1;
+        }
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--selftest-native-log-info-ir") {
         try {
             auto program = oreslang::parse_program(
