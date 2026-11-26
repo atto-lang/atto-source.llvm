@@ -6470,6 +6470,7 @@ private:
                 else if(inferred){if(mut)fail("E_VERIFY_UNSUPPORTED: mutable binding requires explicit type");key=identifier();}
                 else{type=read_refined_type();key=identifier();}
                 if(key.compare(0,prefix.size(),prefix)==0||strict_arrays_.count(key))fail("E_VERIFY_UNSUPPORTED: reserved or reused strict binding");
+                if(token_.text==";")fail("E_MISSING_INITIALIZER: explicit initializer required");
                 require("=");
                 if(accept("Array")){
                     if(mut||!inferred||verified_locals_.count(key))fail("E_VERIFY_UNSUPPORTED: fixed array requires fresh inferred val");
