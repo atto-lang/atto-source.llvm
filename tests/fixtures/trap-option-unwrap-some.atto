@@ -1,0 +1,5 @@
+pub fnc main(): int {
+  val Option<int> present = Some(42);
+  val Result<int, Error> captured = trap present.unwrap();
+  return captured.is_ok() ? captured.unwrap_or(0) : 1;
+}

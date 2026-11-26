@@ -218,7 +218,7 @@ inline void resolve_native_sums(Program& program) {
                     e = std::move(*preserved);
                     return inner;
                 }
-                if (!native_trap_pure_integer(operand))
+                if (!native_trap_pure_integer(operand) && !native_trap_direct_unwrap_shape(operand))
                     throw std::runtime_error("invalid native trap AST: operand must be a pure i64 expression");
                 if (!expected.empty() && expected != "Result<int,Error>")
                     throw std::runtime_error("native trap yields exactly Result<int, Error>, no Option or erased result conversion");
@@ -253,6 +253,9 @@ inline void resolve_native_sums(Program& program) {
             // generic/owned payloads require an independently verified ABI.
             for (auto& arg : e.arguments) {
                 const Hint payload = expression(*arg, env, {});
+                if (e.trap_origin && !native_trap_pure_integer(*arg)
+                        && !native_trap_checked_option_unwrap(*arg))
+                    throw std::runtime_error("native trapped unwrap requires a direct Option<int> binding");
                 const ScalarType required = e.name == "Err" ? type.error_type : type.value_type;
                 if (!payload.sum.empty() || !payload.cls.empty() || payload.array)
                     throw std::runtime_error("native sum compound payload requires ownership/lifetime ABI");

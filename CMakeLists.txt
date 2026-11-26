@@ -1856,6 +1856,30 @@ if(BUILD_TESTING)
         set_tests_properties(native_trap_arithmetic_${case}_O0_O2 PROPERTIES TIMEOUT 300)
     endforeach()
 
+    # Host-only shape proof; separate from real compiled guest below.
+    add_executable(oreslang-native-checked-unwrap-shape-test
+        tests/native_checked_unwrap_shape_test.cpp)
+    target_include_directories(oreslang-native-checked-unwrap-shape-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-checked-unwrap-shape-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+    add_test(NAME native_checked_unwrap_shape_host_only
+        COMMAND oreslang-native-checked-unwrap-shape-test)
+
+    # Direct closed Option<int> checked unwrap, actual hosted native guest.
+    foreach(case IN ITEMS none some)
+        add_test(NAME native_trap_option_unwrap_${case}_O0_O2
+            COMMAND "${CMAKE_COMMAND}"
+                "-DORES_TRAP_LLVM_CLI=$<TARGET_FILE:oreslang-llvmc>"
+                "-DORES_TRAP_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/trap-option-unwrap-${case}.atto"
+                "-DORES_TRAP_AOT_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/scripts/compile-aot.sh"
+                "-DORES_TRAP_AUDITOR=${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit"
+                "-DORES_TRAP_CLANG=clang"
+                "-DORES_TRAP_CASE=unwrap_${case}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/trap_int_native_aot_execution.cmake")
+        set_tests_properties(native_trap_option_unwrap_${case}_O0_O2 PROPERTIES TIMEOUT 300)
+    endforeach()
+
     # Real native nominal Error projection; no guest integer Error handle.
     add_test(NAME native_numeric_error_type_identity_O0_O2
         COMMAND "${CMAKE_COMMAND}"
