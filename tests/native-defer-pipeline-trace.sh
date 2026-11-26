@@ -12,7 +12,7 @@ trap 'rm -rf "$work"' EXIT
 "$compiler" "$fixture" > "$work/guest.ll"
 grep -F 'call void @cleanup' "$work/guest.ll" >/dev/null
 for opt in 0 2; do
-    "$clang" "-O$opt" -x ir "$work/guest.ll" -x c "$runtime" -std=c11 -I "$root/src/main/cpp" -o "$work/guest-O$opt"
+    "$clang" "-O$opt" -x ir "$work/guest.ll" -x c "$runtime" -std=c11 -pthread -I "$root/src/main/cpp" -o "$work/guest-O$opt"
     status=0
     "$work/guest-O$opt" > "$work/stdout-O$opt" || status=$?
     test "$status" = 42
@@ -21,3 +21,9 @@ for opt in 0 2; do
     printf 'NATIVE_DEFER_PIPELINE_PASS O%s\n' "$opt"
     sha256sum "$work/guest.ll" "$work/guest-O$opt"
 done
+"$clang" -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -x ir "$work/guest.ll" -x c "$runtime" -std=c11 -pthread -I "$root/src/main/cpp" -o "$work/guest-sanitized"
+status=0
+ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 "$work/guest-sanitized" > "$work/stdout-sanitized" || status=$?
+test "$status" = 42
+cmp "$work/expected" "$work/stdout-sanitized"
+printf 'NATIVE_DEFER_PIPELINE_PASS ASAN_UBSAN\n'
