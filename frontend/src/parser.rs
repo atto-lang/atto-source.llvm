@@ -457,6 +457,15 @@ impl Parser {
 
     // ------------------------------------------------------------ top level
 
+    /// Only the attached scalar value lowerer uses this target binding parser.
+    /// Compiler-generated copy marker cannot be spelled as a source identifier.
+    pub(crate) fn parse_struct_value_program(&mut self) -> R<Program> {
+        self.struct_target = true;
+        let result = self.parse_program();
+        self.struct_target = false;
+        result
+    }
+
     pub fn parse_program(&mut self) -> R<Program> {
         let mut prog = Program::default();
         let mut decls = 0usize;
@@ -1682,7 +1691,16 @@ impl Parser {
             ));
         }
         self.advance();
-        let init = self.parse_expr()?;
+        let init = if self.struct_target && self.is_word("copy") && *self.peek_at(1) == Tok::Bang {
+            let copy_pos = self.pos();
+            self.advance();
+            self.advance();
+            let (source, source_pos) = self.ident("a local scalar struct after copy!")?;
+            Expr { kind: ExprKind::Call("$struct_copy_operand".to_owned(),
+                vec![Expr { kind: ExprKind::Var(source), pos: source_pos }]), pos: copy_pos }
+        } else {
+            self.parse_expr()?
+        };
         Ok(Stmt::Bind { kind, name, ty, init, pos })
     }
 
