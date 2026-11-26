@@ -4401,9 +4401,22 @@ private:
                         require("!");
                     }
                     const bool parenthesized = accept("(");
-                    binding.move_source = identifier();
+                    // Preserve the local-place move path. A fresh direct factory
+                    // call instead uses the existing owning result-region ABI.
+                    auto source = expression();
                     if (parenthesized) require(")");
-                    binding.move_class = true;
+                    if (source->kind == Expression::Kind::Variable) {
+                        binding.move_source = source->name;
+                        binding.move_class = true;
+                    } else if (source->kind == Expression::Kind::Call) {
+                        if (!binding.owner_mutable)
+                            fail("native owned factory result requires let mut owner");
+                        binding.initializer = std::move(source);
+                        binding.record_view = true;
+                        binding.explicit_factory_take = true;
+                    } else {
+                        fail("native class take requires a local owner or direct owned factory result");
+                    }
                 }
                 }
             } else {
