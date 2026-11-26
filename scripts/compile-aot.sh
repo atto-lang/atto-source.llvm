@@ -33,6 +33,17 @@ case "$lto_mode" in
   thin) lto_flags=(-flto=thin -fuse-ld=lld) ;;
   *) echo 'ORESLANG_AOT_LTO must be off, full or thin.' >&2; exit 64 ;;
 esac
+# Opt-in first native object stage. No persistent object reuse is claimed.
+object_pipeline="${ORESLANG_AOT_OBJECT_PIPELINE:-direct}"
+case "$object_pipeline" in
+  direct) ;;
+  separate)
+    [[ "$(uname -s)" == Linux && "$lto_mode" == off ]] || {
+      echo 'E_OBJECT_PIPELINE_UNSUPPORTED: separate mode requires Linux and LTO off' >&2
+      exit 64
+    } ;;
+  *) echo 'E_OBJECT_PIPELINE: expected direct or separate' >&2; exit 64 ;;
+esac
 source_dir="$(cd "$(dirname "$1")" && pwd -P)"
 source_file="$source_dir/$(basename "$1")"
 # Optional fail-closed scalar-only closed-world check; legacy AOT behavior
@@ -160,7 +171,13 @@ if [[ "$aot_admission" != off ]] && (( ${#runtime_sources[@]} > 0 )); then
   echo 'sealed AOT refuses unchecked native runtime dependency; require a certified zero-GC link closure' >&2
   exit 65
 fi
-if (( ${#runtime_sources[@]} )); then
+if [[ "$object_pipeline" == separate ]] && (( ${#runtime_sources[@]} > 0 )); then
+  echo 'E_OBJECT_PIPELINE_UNSUPPORTED: separate mode requires runtime-free scalar IR' >&2
+  exit 65
+fi
+if [[ "$object_pipeline" == separate ]]; then
+  bash "$root/scripts/link-scalar-object.sh" "$clang" "$opt_level" "$work/program.ll" "$work/program.o" "$work/program"
+elif (( ${#runtime_sources[@]} )); then
   "$clang" "-O${opt_level}" "${lto_flags[@]}" -x ir "$work/program.ll" -x c -std=c11 \
     -I "$root/src/main/cpp" "${runtime_sources[@]}" -pthread -o "$work/program"
 else
