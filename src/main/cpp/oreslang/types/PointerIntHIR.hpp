@@ -48,6 +48,8 @@ struct Plan {
     std::string mutable_helper;
     std::string mutable_parameter;
     std::int64_t mutable_write = 0;
+    // Nonempty only for a helper writing its extra Copy-i64 formal.
+    std::string mutable_scalar_parameter;
     std::string owner;
     std::size_t count = 0;
     std::vector<Step> steps;

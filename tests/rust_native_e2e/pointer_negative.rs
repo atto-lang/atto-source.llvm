@@ -121,4 +121,18 @@ pub fn run(h: &mut Harness) {
     h.negative("mixed_mutation_after_close",
         "fnc inspect(Pointer<int> q): int { return q.read(); } fnc update(mut Pointer<int> q): void { q.write(42); } pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(42); p.close(); update(mut p); return 0; }", &flag, Some("unavailable owner"));
 
+    let scalar_helper = "fnc update(mut Pointer<int> q, int value): void { q.write(value); }";
+    for (name, body, diagnostic) in [
+        ("mut_scalar_missing", "let mut Pointer<int> p = Pointer.alloc_value<int>(0); update(mut p); p.close(); return 0;", "expected"),
+        ("mut_scalar_conflict", "let mut Pointer<int> p = Pointer.alloc_value<int>(42); update(mut p, p.read()); p.close(); return 0;", "conflicting access"),
+        ("mut_scalar_metadata_conflict", "let mut Pointer<int> p = Pointer.alloc_value<int>(42); update(mut p, p.len()); p.close(); return 0;", "conflicting access"),
+        ("mut_scalar_overflow", "let mut Pointer<int> p = Pointer.alloc_value<int>(0); update(mut p, 9223372036854775807 + 1); p.close(); return 0;", "overflow"),
+        ("mut_scalar_extra", "let mut Pointer<int> p = Pointer.alloc_value<int>(0); update(mut p, 42, 0); p.close(); return 0;", "expected"),
+    ] {
+        let source = format!("{scalar_helper} pub fnc main(): int {{ {body} }}");
+        h.negative(name, &source, &flag, Some(diagnostic));
+    }
+    h.negative("mut_scalar_readonly_call_conflict",
+        "fnc inspect(Pointer<int> q): int { return q.read(); } fnc update(mut Pointer<int> q, int value): void { q.write(value); } pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(42); update(mut p, inspect(p)); p.close(); return 0; }", &flag, Some("conflicting access"));
+
 }
