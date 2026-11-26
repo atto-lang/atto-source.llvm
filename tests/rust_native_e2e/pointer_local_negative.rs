@@ -26,7 +26,7 @@ pub fn run(h: &mut Harness) {
         ("branch_cleanup", "val Pointer<int> p = rt ref value; val answer = rt deref p; if true then rt unref p; fi return answer;", "expected"),
         ("shadowed_handle", "val Pointer<int> value = rt ref value; val answer = deref! value; unref! value; return answer;", "shadowing"),
         ("wrong_type", "val Pointer<bool> p = rt ref value; val answer = deref! p; unref! p; return answer;", "expected"),
-        ("forged_address", "val Pointer<int> p = &value; val answer = deref! p; unref! p; return answer;", "unsupported token"),
+        ("forged_address", "val Pointer<int> p = &value; val answer = deref! p; unref! p; return answer;", "unsupported oreslang token"),
     ];
     for (name, body, diagnostic) in invalid {
         h.negative(&format!("pointer_local_{name}"), &local(body), &flags, Some(diagnostic));
