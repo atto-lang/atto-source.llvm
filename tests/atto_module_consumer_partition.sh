@@ -34,7 +34,7 @@ for opt in 0 2; do
   "$clang" "-O$opt" -x ir -c "$d/consumer.ll" -o "$d/consumer.o"
   # No provider body in the consumer, and both imports must survive optimization.
   nm --defined-only --format=posix "$d/consumer.o" >"$d/defined"
-  ! grep -Fq '__ores_module_' "$d/defined"
+  if grep -Fq '__ores_module_' "$d/defined"; then echo 'provider definition leaked into consumer' >&2; exit 1; fi
   nm --undefined-only --format=posix "$d/consumer.o" | awk '$1 ~ /^__ores_module_/ {print $1}' | sort >"$d/imports"
   printf '%s\n' __ores_module_1.value __ores_module_2.value >"$d/expected"
   cmp "$d/imports" "$d/expected"
@@ -54,7 +54,7 @@ for opt in 0 2; do
   rc=0; "$d/old" || rc=$?; test "$rc" = 42
   sed -i 's/return 40/return 41/' "$work/cart.atto"
   provider cart 1 "$d/cart-new.o"
-  ! cmp -s "$d/cart.o" "$d/cart-new.o"
+  if cmp -s "$d/cart.o" "$d/cart-new.o"; then echo "provider edit did not change object" >&2; exit 1; fi
   sha256sum -c "$d/reuse"
   # Source-free relink and execution. Missing provider must fail to link.
   mv "$work/cart.atto" "$work/cart.hidden"
