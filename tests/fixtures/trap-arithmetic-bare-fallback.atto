@@ -1,0 +1,6 @@
+// Hosted closed arithmetic: bare trap recovers overflow, preserving fallback 7.
+// Terminal behavior is independently tested with an untrapped expression.
+pub fnc main(): int {
+  val Result<int, Error> wrapped = trap (9223372036854775807 + 1);
+  return wrapped.unwrap_or(7);
+}
