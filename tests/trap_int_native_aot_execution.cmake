@@ -11,7 +11,36 @@ if(NOT DEFINED ORES_TRAP_CLANG OR ORES_TRAP_CLANG STREQUAL "")
     message(FATAL_ERROR "missing Clang for actual native guest execution")
 endif()
 
-set(work "${CMAKE_CURRENT_BINARY_DIR}/native_trap_int_aot_exec")
+# Each CTest case owns its artifact directory; parallel jobs cannot
+# accidentally execute an executable from a different fixture.
+if(NOT DEFINED ORES_TRAP_CASE)
+    set(ORES_TRAP_CASE "scalar")
+endif()
+if(NOT ORES_TRAP_CASE MATCHES "^(scalar|ok|err|nested|whitespace|arithmetic_add|arithmetic_sub|arithmetic_mul|arithmetic_neg|arithmetic_nested_overflow|arithmetic_rem_zero|arithmetic_mod_zero|arithmetic_rem_signed|arithmetic_mod_signed|arithmetic_rem_min|arithmetic_mod_min|arithmetic_div_zero|arithmetic_div_overflow|arithmetic_div_signed|arithmetic_div_precedence|numeric_error_identity)$")
+    message(FATAL_ERROR "unknown native trap test case")
+endif()
+# Check the actual compiler output for the stable nominal arithmetic ID.
+# Guest exit checks independently establish the taken Err path at O0/O2.
+if(ORES_TRAP_CASE MATCHES "^arithmetic_")
+    execute_process(COMMAND "${ORES_TRAP_LLVM_CLI}" "${ORES_TRAP_SOURCE}"
+        RESULT_VARIABLE ir_status OUTPUT_VARIABLE arithmetic_ir ERROR_VARIABLE ir_error
+        TIMEOUT 30)
+    if(NOT "${ir_status}" STREQUAL "0" OR
+            NOT arithmetic_ir MATCHES "trap.arithmetic.err" OR
+            NOT arithmetic_ir MATCHES "65537")
+        message(FATAL_ERROR "missing real native arithmetic error edge/ID: ${ir_error}")
+    endif()
+endif()
+# Require the actual zero-divisor predecessor and matching ID in the
+# emitted Result error phi. This complements, not replaces, guest execution.
+if(ORES_TRAP_CASE MATCHES "^arithmetic_(rem|mod|div)_")
+    if(NOT arithmetic_ir MATCHES "br i1[^\n]*trap.division.zero.err" OR
+            NOT arithmetic_ir MATCHES "65538, %trap.division.zero.err")
+        message(FATAL_ERROR "missing checked divisor branch or nominal error ID 65538")
+    endif()
+endif()
+set(work "${CMAKE_CURRENT_BINARY_DIR}/native_trap_int_aot_exec_${ORES_TRAP_CASE}")
+file(REMOVE_RECURSE "${work}")
 file(MAKE_DIRECTORY "${work}")
 foreach(level IN ITEMS 0 2)
     set(out "${work}/trap_guest_O${level}")
@@ -38,4 +67,4 @@ foreach(level IN ITEMS 0 2)
             "compiled native trap guest O${level} expected exit 42, got '${guest_exit}' stdout='${guest_stdout}' stderr='${guest_stderr}'")
     endif()
 endforeach()
-message(STATUS "LLVM_TRAP_INT_NATIVE_GUEST_O0_O2_PASS (NOT nested Result/throw parity)")
+message(STATUS "LLVM_TRAP_NATIVE_GUEST_O0_O2_PASS case=${ORES_TRAP_CASE} (NOT nested payload/throw parity)")

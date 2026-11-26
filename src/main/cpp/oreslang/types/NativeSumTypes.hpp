@@ -1,4 +1,5 @@
 #pragma once
+#include "oreslang/types/NativeNumericErrorAbi.hpp"
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/types/FunctorTypeRules.hpp"
@@ -177,13 +178,6 @@ inline void resolve_native_sums(Program& program) {
         validate_native_sum_expression_shape(e);
         using E = Expression::Kind;
         if (e.kind == E::SumConstruct) {
-            if (e.trap_origin && (e.name != "Ok" || e.arguments.size() != 1 ||
-                    !native_trap_pure_integer(*e.arguments.front())))
-                throw std::runtime_error("invalid native trap AST: operand must be a pure i64 expression");
-            // trap yields Result<T, Error> (spec ch. 7, S-04). Only the pure i64
-            // slice is lowered; it cannot fail, so the Error slot is never set.
-            if (e.trap_origin && !expected.empty() && expected != "Result<int,Error>")
-                throw std::runtime_error("native trap yields exactly Result<int, Error>, no Option or erased result conversion");
             // Do not admit a partially rewritten/malformed constructor AST.
             // The native lowering consumes only name + positional payloads;
             // stray children must not hide effectful or ownership-sensitive IR.
@@ -198,6 +192,37 @@ inline void resolve_native_sums(Program& program) {
             for (const auto& payload : e.arguments)
                 if (!payload)
                     throw std::runtime_error("malformed native sum constructor AST");
+            if (e.trap_origin) {
+                if (e.name != "Ok" || e.arguments.size() != 1)
+                    throw std::runtime_error("invalid native trap AST");
+                const auto& operand = *e.arguments.front();
+                if (operand.kind == E::Variable ||
+                        (operand.kind == E::SumConstruct && operand.trap_origin)) {
+                    // Resolve once, preserve the complete nominal Result type,
+                    // and reuse its existing ownership/lowering path. No new
+                    // tagged record is allocated for an idempotent trap.
+                    if (operand.kind == E::Variable && !env.count(operand.name))
+                        throw std::runtime_error("native trap operand is not a known Result binding");
+                    const Hint inner = expression(*e.arguments.front(), env, expected);
+                    if (inner.sum.empty() || !inner.cls.empty() || inner.array)
+                        throw std::runtime_error("native trap operand unsupported: only pure integer literals and checked arithmetic are lowered, or existing Result values");
+                    const auto& type = native_sum(program, inner.sum);
+                    if (type.kind != NativeSumType::Kind::Result)
+                        throw std::runtime_error("native trap Option payload requires checked nested ownership ABI");
+                    if (type.value_type == ScalarType::String ||
+                            (!type.trap_error && type.error_type == ScalarType::String))
+                        throw std::runtime_error("native trap owned Result payload requires checked cleanup lowering");
+                    if (!expected.empty() && inner.sum != expected)
+                        throw std::runtime_error("native trap existing Result type does not match expected Result");
+                    auto preserved = std::move(e.arguments.front());
+                    e = std::move(*preserved);
+                    return inner;
+                }
+                if (!native_trap_pure_integer(operand))
+                    throw std::runtime_error("invalid native trap AST: operand must be a pure i64 expression");
+                if (!expected.empty() && expected != "Result<int,Error>")
+                    throw std::runtime_error("native trap yields exactly Result<int, Error>, no Option or erased result conversion");
+            }
             std::string selected = expected;
             if (selected.empty() && e.trap_origin)
                 selected = add_type(NativeSumType::Kind::Result, ScalarType::I64, ScalarType::String, true);
@@ -210,7 +235,7 @@ inline void resolve_native_sums(Program& program) {
             const NativeSumType type = native_sum(program, selected);
             const bool option = type.kind == NativeSumType::Kind::Option;
             if (e.trap_origin && (option || !type.trap_error || type.value_type != ScalarType::I64))
-                throw std::runtime_error("native trap only lowers Result<int, Error> with noncatching checked arithmetic");
+                throw std::runtime_error("native trap only lowers the closed Result<int, Error> arithmetic slice");
             if (type.trap_error && !e.trap_origin)
                 throw std::runtime_error("native Result<_, Error> values are minted only by trap; Ok/Err cannot construct them");
             if ((option && e.name != "Some" && e.name != "None") || (!option && e.name != "Ok" && e.name != "Err"))
@@ -307,6 +332,16 @@ inline void resolve_native_sums(Program& program) {
                 e.sum_type = sum;
                 return {ScalarType::I64, sum};
             }
+            if (types::native_error_projection(e.name)) {
+                if (e.kind != E::SumAccess || !e.arguments.empty() ||
+                        !e.argument_names.empty() || owner.sum != "Result<int,Error>" ||
+                        !types::native_numeric_error_type(types::native_error_projection_type(e.name)) ||
+                        !native_sum(program, owner.sum).trap_error)
+                    throw std::runtime_error("native numeric Error projection requires nominal Result<int,Error>");
+                e.sum_type = owner.sum;
+                e.resolved_type = ScalarType::Bool;
+                return {ScalarType::Bool};
+            }
             if (!owner.sum.empty()) {
                 const NativeSumType type = native_sum(program, owner.sum);
                 const bool option = type.kind == NativeSumType::Kind::Option;
@@ -354,7 +389,7 @@ inline void resolve_native_sums(Program& program) {
         Hint left, right;
         if (e.left) left = expression(*e.left, env, {});
         if (e.right) right = expression(*e.right, env, {});
-        if ((e.kind == E::Add || e.kind == E::Subtract || e.kind == E::Multiply ||
+        if ((e.kind == E::Add || e.kind == E::Subtract || e.kind == E::Multiply || e.kind == E::Divide ||
                 e.kind == E::Negate) && (!left.sum.empty() || !right.sum.empty()))
             throw std::runtime_error("native tagged Option/Result is not an integer arithmetic operand");
         for (auto& arg : e.arguments) expression(*arg, env, {});

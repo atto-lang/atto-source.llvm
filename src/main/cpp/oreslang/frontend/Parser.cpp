@@ -1,3 +1,4 @@
+#include "oreslang/types/NativeNumericErrorAbi.hpp"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/SHA256.h"
 #include "oreslang/frontend/CallableSelector.hpp"
@@ -323,6 +324,17 @@ public:
                     && !(source_.substr(at_, 3) == "!eq"
                          && (at_ + 3 == source_.size() || !identifier_part(source_[at_ + 3])))) {
                 ++at_;
+                // A canonical AttoLang bang keyword is contiguous internally
+                // but MUST have ASCII whitespace immediately after the suffix.
+                // Comments alone, punctuation and NBSP are not separators.
+                const bool separated = at_ < source_.size() &&
+                        (source_[at_] == ' ' || source_[at_] == '\t' ||
+                         source_[at_] == '\n' || source_[at_] == '\r' ||
+                         source_[at_] == '\v' || source_[at_] == '\f');
+                if (!separated)
+                    throw std::runtime_error(
+                            "E_BANG_KEYWORD_WHITESPACE: whitespace required after trap! at byte " +
+                            std::to_string(start));
             }
             return {Kind::Identifier, source_.substr(start, at_ - start), start};
         }
@@ -602,6 +614,7 @@ bool native_pure_scalar_tree(const Expression& expr, std::size_t depth = 1) {
     if (expr.kind == Expression::Kind::Add ||
             expr.kind == Expression::Kind::Subtract ||
             expr.kind == Expression::Kind::Multiply ||
+            expr.kind == Expression::Kind::Divide ||
             expr.kind == Expression::Kind::Remainder ||
             expr.kind == Expression::Kind::ShiftLeft ||
             expr.kind == Expression::Kind::ShiftRight ||
@@ -5858,6 +5871,25 @@ private:
     std::unique_ptr<Expression> comparison() {
         auto left = shift(); // main: shifts bind tighter than comparison and cast
         while (true) {
+            // Closed nominal Error observation, not a general Error object ABI.
+            // Fuse only the Java spelling: result.unwrap_err() is type E.
+            if (token_.text == "is") {
+                const auto offset = token_.offset;
+                advance();
+                require("type");
+                const std::string name = identifier();
+                if (!types::native_numeric_error_type(name) ||
+                        left->kind != Expression::Kind::ArrayCall ||
+                        left->name != "unwrap_err" || !left->left ||
+                        !left->arguments.empty() || !left->argument_names.empty())
+                    fail("native is type requires a checked numeric Result.unwrap_err() projection");
+                auto projection = make_expression(Expression::Kind::SumAccess, offset);
+                projection->name = std::string(types::native_error_projection_prefix) + name;
+                projection->left = std::move(left->left);
+                projection->resolved_type = ScalarType::Bool;
+                left = std::move(projection);
+                continue;
+            }
             // Match Java comparison precedence. A checked scalar identity cast
             // is a proof, never a numeric/string conversion or a bitcast.
             if (token_.text == "as") {
@@ -5952,19 +5984,15 @@ private:
     std::unique_ptr<Expression> product() {
         auto left = unary();
         while (token_.text == "*" || token_.text == "/" || token_.text == "%") {
-            // Java defines int/int division as a FLOAT result; this native
-            // source compiler lowers expressions only to signed i64. Reject
-            // at the operator before either lowering or emitting partial IR.
-            if (token_.text == "/")
-                fail("native floating division unsupported: int/int yields float in Java; "
-                     "LLVM float typing and zero-divisor semantics are not implemented");
+            // Java's checked numeric contract now defines int/int as i64.
+            const bool divide = token_.text == "/";
             if (token_.text == "%")
                 fail("'%' is reserved and is not AttoLang source syntax; "
                      "use Integer.rem(a, b) or Integer.mod(a, b)");
             const auto offset = token_.offset;
             advance();
             auto right = unary();
-            auto expr = make_expression(Expression::Kind::Multiply, offset);
+            auto expr = make_expression(divide ? Expression::Kind::Divide : Expression::Kind::Multiply, offset);
             expr->left = std::move(left);
             expr->right = std::move(right);
             left = std::move(expr);
@@ -5989,11 +6017,14 @@ private:
             const auto offset = token_.offset;
             advance();
             auto payload = unary(); // prefix precedence, evaluated once
-            // Only closed, synchronous i64 expressions are admitted. No
-            // source-level ordinary throw is possible in this grammar;
-            // future effects require real exception/cleanup lowering.
-            if (!native_trap_pure_integer(*payload))
-                fail("native trap operand unsupported: only pure integer literals and checked arithmetic are lowered");
+            // Admit existing Result references and nested traps for nominal
+            // resolution, without admitting calls, allocations or effects.
+            // The resolver erases the redundant trap only for checked Result
+            // values; scalar variables and owned compound payloads stay closed.
+            if (!native_trap_pure_integer(*payload) &&
+                    payload->kind != Expression::Kind::Variable &&
+                    !(payload->kind == Expression::Kind::SumConstruct && payload->trap_origin))
+                fail("native trap operand unsupported: only pure integer literals and checked arithmetic are lowered, or existing Result values");
             auto result = make_expression(Expression::Kind::SumConstruct, offset);
             result->name = "Ok"; // trap yields Result<int, Error> (spec ch. 7)
             result->trap_origin = true;
@@ -7372,6 +7403,8 @@ private:
             fail("NATIVE_OWNERSHIP_INTRINSIC_RESERVED: compiler-owned nominal cannot be redefined");
         if (name == "Option" || name == "Result")
             fail("native sum type names are compiler-owned");
+        if (types::native_numeric_error_type(name))
+            fail("native numeric Error identities are compiler-owned");
         if (types::protected_core_identity(name))
             fail("E_PRELUDE_SPOOF: nominal declaration cannot replace compiler-owned core identity");
         if (name == "pattern") fail("contextual pattern keyword cannot declare a native nominal type");
@@ -7701,6 +7734,7 @@ private:
             case Expression::Kind::Add:
             case Expression::Kind::Subtract:
             case Expression::Kind::Multiply:
+            case Expression::Kind::Divide:
             case Expression::Kind::Remainder:
             case Expression::Kind::ShiftLeft:
             case Expression::Kind::ShiftRight:
@@ -7982,6 +8016,7 @@ private:
             }
             case Expression::Kind::Subtract:
             case Expression::Kind::Multiply:
+            case Expression::Kind::Divide:
             case Expression::Kind::Remainder:
             case Expression::Kind::ShiftLeft:
             case Expression::Kind::ShiftRight:

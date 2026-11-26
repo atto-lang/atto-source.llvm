@@ -1,0 +1,4 @@
+pub fnc main(): int {
+  val Result<int, Error> wrapped = trap! (Integer.rem(42, 0));
+  return wrapped.is_err() ? wrapped.unwrap_or(42) : 0;
+}

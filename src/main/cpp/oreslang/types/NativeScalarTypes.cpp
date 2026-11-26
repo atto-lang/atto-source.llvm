@@ -1,3 +1,4 @@
+#include "oreslang/types/NativeNumericErrorAbi.hpp"
 #include "oreslang/types/NativeScalarTypes.hpp"
 #include "oreslang/types/NativeClassLayout.hpp"
 #include "oreslang/types/NativeSumTypes.hpp"
@@ -94,6 +95,14 @@ void validate_native_scalar_types(const Program& program) {
             case E::SumConstruct: {
                 const auto& type = native_sum(program, e.sum_type);
                 const bool option = type.kind == NativeSumType::Kind::Option;
+                // Independent type fence for compiler-created or rewritten ASTs.
+                if (type.trap_error && !e.trap_origin)
+                    fail(e.offset, "native Result<_, Error> values are minted only by trap");
+                if (e.trap_origin && (!type.trap_error || option ||
+                        type.value_type != ScalarType::I64 || e.name != "Ok" ||
+                        e.arguments.size() != 1 || !e.arguments.front() ||
+                        !native_trap_pure_integer(*e.arguments.front())))
+                    fail(e.offset, "invalid native trap Result construction");
                 if ((option && e.name != "Some" && e.name != "None") || (!option && e.name != "Ok" && e.name != "Err") ||
                         e.arguments.size() != (e.name == "None" ? 0u : 1u)) fail(e.offset, "sum variant/payload arity");
                 if (!e.arguments.empty()) require(expression(*e.arguments[0], locals), scalar(e.name == "Err" ? type.error_type : type.value_type), e.offset, "sum payload type");
@@ -103,6 +112,13 @@ void validate_native_scalar_types(const Program& program) {
                 require(expression(*e.left, locals), {Kind::Sum, e.sum_type}, e.offset, "sum receiver type");
                 const auto& type = native_sum(program, e.sum_type);
                 const bool option = type.kind == NativeSumType::Kind::Option;
+                if (types::native_error_projection(e.name)) {
+                    if (option || !type.trap_error || e.sum_type != "Result<int,Error>" ||
+                            !e.arguments.empty() || !e.argument_names.empty() ||
+                            !types::native_numeric_error_type(types::native_error_projection_type(e.name)))
+                        fail(e.offset, "native numeric Error projection requires nominal Result<int,Error>");
+                    return scalar(true);
+                }
                 const bool query = option ? e.name == "is_some" || e.name == "is_none" : e.name == "is_ok" || e.name == "is_err";
                 const bool with_argument = e.name == "unwrap_or" || e.name == "expect";
                 if ((!query && e.name != "unwrap" && e.name != "unwrap_or" && e.name != "expect") || e.arguments.size() != (with_argument ? 1u : 0u))
@@ -194,7 +210,7 @@ void validate_native_scalar_types(const Program& program) {
                 if (left.kind != Kind::Int && left.kind != Kind::String) fail(e.offset, "addition requires int or string");
                 return left;
             }
-            case E::Subtract: case E::Multiply: case E::Remainder: case E::Modulo: case E::BitXor:
+            case E::Subtract: case E::Multiply: case E::Divide: case E::Remainder: case E::Modulo: case E::BitXor:
             case E::ShiftLeft: case E::ShiftRight: case E::ShiftUnsignedRight:
                 require(expression(*e.left, locals), scalar(false), e.offset, "arithmetic requires int");
                 require(expression(*e.right, locals), scalar(false), e.offset, "arithmetic requires int");

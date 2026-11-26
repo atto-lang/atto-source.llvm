@@ -1,0 +1,4 @@
+pub fnc main(): int {
+    val Result<int, int> result = Err(65537);
+    return (result.unwrap_err() is type ArithmeticOverflowError) ? 42 : 0;
+}
