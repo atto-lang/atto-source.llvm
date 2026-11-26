@@ -49,11 +49,27 @@ public:
         if (plan.owner == "Pointer" || plan.owner == "main" || plan.owner == "int")
             reject("reserved pointer owner", token().offset);
         owner_ = plan.owner;
-        need("="); need("Pointer"); need("."); need("alloc"); need("<");
-        need("int"); need(">"); need("(");
-        plan.count = index_literal(1, 16);
+        need("="); need("Pointer"); need(".");
+        const bool initialized_singleton = take("alloc_value");
+        if (!initialized_singleton) need("alloc");
+        need("<"); need("int"); need(">"); need("(");
+        if (initialized_singleton) {
+            // A Copy scalar initializer is evaluated before the new owner exists.
+            // No pointer metadata or access is available during that expression.
+            plan.count = count_ = 1;
+            initializing_owner_ = true;
+            Step initial;
+            initial.kind = Step::Kind::Write;
+            initial.index = 0;
+            initial.value = expression();
+            initializing_owner_ = false;
+            initialized_[0] = true;
+            contents_[0] = initial.value->known;
+            plan.steps.push_back(std::move(initial));
+        } else {
+            plan.count = count_ = index_literal(1, 16);
+        }
         need(")"); need(";");
-        count_ = plan.count;
         while (token().text != "return") {
             if (token().text == "<eof>") reject("missing return and close", token().offset);
             if (plan.steps.size() >= 128) reject("pointer operation budget exceeded", token().offset);
@@ -196,6 +212,7 @@ private:
     std::string owner_;
     std::size_t count_ = 0;
     bool live_ = true;
+    bool initializing_owner_ = false;
     std::array<bool, 16> initialized_{};
     std::array<std::int64_t, 16> contents_{};
     std::unordered_map<std::string, std::int64_t> known_locals_;
@@ -249,8 +266,18 @@ private:
         const std::size_t offset = token().offset;
         const auto name = identifier();
         if (name == owner_) {
+            if (initializing_owner_) reject("pointer owner unavailable during initializer", offset);
             if (!live_) reject("read after close or pointer escape", offset);
             if (!take(".")) reject("Pointer<int> owner cannot escape as a scalar or handle", offset);
+            if (token().text == "len" || token().text == "size_bytes") {
+                const bool length = take("len");
+                if (!length) need("size_bytes");
+                need("("); need(")");
+                auto expr = std::make_unique<Expr>();
+                expr->kind = length ? Expr::Kind::Length : Expr::Kind::SizeBytes;
+                expr->known = static_cast<std::int64_t>(count_ * (length ? 1 : 8));
+                return expr;
+            }
             const bool singleton = take("read");
             if (!singleton) need("read_at");
             need("(");
