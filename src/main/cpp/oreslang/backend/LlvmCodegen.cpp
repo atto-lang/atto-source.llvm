@@ -4199,6 +4199,7 @@ std::string emit_verified_scalar_namespace_consumer(
         throw std::runtime_error("restricted interface consumer requires pure i64 main expression");
     std::unordered_map<std::string,const VerifiedScalarNamespaceBinding*> aliases;
     std::unordered_set<std::string> used_aliases, symbols;
+    std::unordered_set<const VerifiedScalarNamespaceBinding*> selected_bindings;
     for (const auto& imp : program.namespace_imports) {
         const VerifiedScalarNamespaceBinding* selected=nullptr;
         for (const auto& b:bindings)
@@ -4206,7 +4207,8 @@ std::string emit_verified_scalar_namespace_consumer(
                 if (selected) throw std::runtime_error("ambiguous interface selector");
                 selected=&b;
             }
-        if (!selected || !aliases.emplace(imp.local_name,selected).second)
+        if (!selected || !selected_bindings.insert(selected).second ||
+                !aliases.emplace(imp.local_name,selected).second)
             throw std::runtime_error("unbound interface selector");
     }
     std::vector<Function> witnesses;
