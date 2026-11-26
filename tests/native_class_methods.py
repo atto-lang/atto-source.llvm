@@ -49,15 +49,12 @@ def main():
         ('canonical-mtd-marker', {'main.ores':'''define class Box as let int value=40;
           pub mtd add(int value):int{return self.value+value;}end
           pub fnc main():int{let Box b=new Box();return b.add(2);}'''}),
-        ('legacy-method-marker', {'main.ores':'''define class Box as let int value=40;
-          pub method add(int value):int{return self.value+value;}end
-          pub fnc main():int{let Box b=new Box();return b.add(2);}'''}),
         ('legacy-fnc-marker', {'main.ores':'''define class Box as let int value=40;
           pub fnc add(int value):int{return self.value+value;}end
           pub fnc main():int{let Box b=new Box();return b.add(2);}'''}),
         ('nested-contextual-names', {'main.ores':'''define class Box as let int value=40;
           pub mtd method():int{return self.value+1;}
-          pub method mtd():int{return self.value+1;}end
+          pub mtd mtd():int{return self.value+1;}end
           pub fnc main():int{let Box b=new Box();return b.method()+b.mtd()-40;}'''}),
 
         ('shared-reborrow', {'main.ores':COUNTER+'''fnc read(borrow Counter c):int{return c.read()+2;}
@@ -129,6 +126,9 @@ def main():
           pub mtd read():int{return self.value;}
           pub fnc read():int{return self.value;}end
           pub fnc main():int{return 0;}''',{},'duplicate native method name/arity'),
+        ('obsolete-method-marker', '''define class Box as let int value=40;
+          pub method add(int value):int{return self.value+value;}end
+          pub fnc main():int{return 0;}''',{},'obsolete method introducer'),
         ('double-method-introducer', '''define class Box as let int value=40;
           pub mtd method read():int{return self.value;}end
           pub fnc main():int{return 0;}''',{},'native duplicate instance method introducer'),
