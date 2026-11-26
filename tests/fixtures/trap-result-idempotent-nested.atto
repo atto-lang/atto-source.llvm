@@ -1,0 +1,5 @@
+pub fnc main(): int {
+    val Result<int,Error> original = trap! trap (40 + 2);
+    val Result<int,Error> again = trap original;
+    return again.unwrap_or(0);
+}
