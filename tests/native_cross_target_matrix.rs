@@ -201,8 +201,18 @@ fn check_identity_guard() {
 
 /// (exit code, stdout, stderr); None if the program could not be started.
 fn run(program: &str, args: &[&str]) -> Option<(i32, Vec<u8>, String)> {
-    let out = Command::new(program).args(args).output().ok()?;
+    // This hosted Linux harness requires GNU coreutils timeout. Bound every
+    // compiler, linker and guest invocation, including descendant processes.
+    // Reserve ambiguous timeout/launcher exit codes rather than counting a
+    // matching pair of infrastructure failures as guest parity.
+    let out = Command::new("timeout")
+        .args(["--kill-after=5s", "--", "120s"])
+        .arg(program).args(args).output()
+        .unwrap_or_else(|e| fail(&format!("cannot start timeout for {program}: {e}")));
     let code = out.status.code().unwrap_or(-1);
+    if code < 0 || (124..=127).contains(&code) || code >= 128 {
+        fail(&format!("{program}: timeout, launcher failure, signal, or reserved exit status {code}"));
+    }
     Some((code, out.stdout, String::from_utf8_lossy(&out.stderr).into_owned()))
 }
 
@@ -236,6 +246,8 @@ fn main() {
     let mut compared: BTreeMap<String, (usize, usize)> = o.triples.iter().map(|t| (t.clone(), (0, 0))).collect();
     let mut failures = Vec::new();
     let (mut admitted, mut host_runtime, mut runtime_linked) = (0usize, 0usize, 0usize);
+    let mut host_rejected = 0usize;
+    let mut host_empty = 0usize;
 
     // Runtime sources and per-triple runtime objects (cross-compiled once).
     let include = format!("-I{}", o.root.join("src/main/cpp").display());
@@ -263,8 +275,14 @@ fn main() {
         let src = fixture.to_string_lossy().into_owned();
         let name = fixture.strip_prefix(&o.root).unwrap_or(fixture).to_string_lossy().into_owned();
         // 1. Native oracle.
-        let Some((0, host_ir, _)) = run(&o.compiler, &["--target=host", &src]) else { continue };
+        let Some((0, host_ir, _)) = run(&o.compiler, &["--target=host", &src]) else {
+            host_rejected += 1;
+            println!("NOT_COMPARED host emission rejected: {name}");
+            continue;
+        };
         if host_ir.is_empty() {
+            host_empty += 1;
+            failures.push(format!("{name}: host compiler exited zero with empty IR"));
             continue;
         }
         admitted += 1;
@@ -277,7 +295,11 @@ fn main() {
             args.extend(runtime_sources.iter().map(String::as_str));
             args.extend(["-std=c11", "-pthread", "-DORESLANG_SOURCE_ACTOR_TESTING", include.as_str(), "-o", hbin.as_str()]);
             if runtime_sources.is_empty() || !matches!(run(&o.clang, &args), Some((0, _, _))) {
-                host_runtime += 1; // needs a runtime this gate was not given
+                host_runtime += 1;
+                println!("NOT_COMPARED host link failed: {name}");
+                if o.runtime_dir.is_some() {
+                    failures.push(format!("{name}: host link failed despite supplied runtime"));
+                }
                 continue;
             }
             needs_runtime = true;
@@ -347,9 +369,11 @@ fn main() {
         failures.push("runtime requested but no runtime-backed fixture linked; vacuous actor lane refused".into());
     }
     let _ = fs::remove_dir_all(&work);
-    println!("fixtures admitted for host: {admitted}; linked with the C actor runtime: {runtime_linked}; not linkable: {host_runtime}");
+    println!("fixtures admitted for host: {admitted}; linked with the C actor runtime: {runtime_linked}; not linkable: {host_runtime}; host rejected: {host_rejected}; host empty: {host_empty}");
+    println!("Scope: host-admitted, successfully linked fixtures only; not a complete positive/negative corpus qualification.");
     for (triple, (same, diff)) in &compared {
-        println!("{triple}: identical={same} mismatched={diff}");
+        let link_abi = TRIPLES.iter().find(|(t, _)| t == triple).expect("selected triple").1;
+        println!("IR target={triple} link target={link_abi} libc=musl: identical={same} mismatched={diff}");
         if *same == 0 {
             failures.push(format!("{triple}: no fixture was compared (vacuous pass refused)"));
         }
@@ -360,5 +384,5 @@ fn main() {
         }
         fail(&format!("{} problem(s)", failures.len()));
     }
-    println!("PASS native cross-target matrix: {} triples", compared.len());
+    println!("PASS scoped musl differential matrix: {} triples", compared.len());
 }
