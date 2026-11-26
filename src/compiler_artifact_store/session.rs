@@ -29,7 +29,7 @@ impl NativeSession {
         }
         let digest=key::encode(&key::Input{stage:"llvm-ir",owner:&self.scope,unit_kind:"source-unit",unit:"main.atto",
             compiler:&self.compiler,toolchain:&self.toolchain,target:&hex_digest(b"linux-x86_64"),
-            configuration:&hex_digest(b"standalone-trusted-host-v1"),sources:&hex_digest(source.as_bytes()),
+            configuration:&hex_digest(b"freestanding-core-trusted-host-v1"),sources:&hex_digest(source.as_bytes()),
             bindings:&hex_digest(b"no external inputs"),generated:None,dependencies:&[]}).map_err(str::to_owned)?;
         let mut out=[0;32];for(i,b)in out.iter_mut().enumerate(){*b=u8::from_str_radix(&digest[i*2..i*2+2],16).map_err(|e|e.to_string())?;}Ok(out)
     }
@@ -38,7 +38,7 @@ impl NativeSession {
         let lease=self.authority.lease(&self.scope,current_pin,master).map_err(|e|e.to_string())?;
         let secret=lease.secret();
         if !cold {if let Some(bytes)=self.store.load(&key,&secret).map_err(|e|e.to_string())?{return Ok(Build{bytes,reused:true});}}
-        let bytes=crate::compile_ir(source).map(String::into_bytes)?;
+        let bytes=crate::compile_ir_with_profile(source,crate::LibraryProfile::FreestandingCore).map(String::into_bytes)?;
         let envelope=receipt::seal(&key,&bytes,&secret).map_err(str::to_owned)?;
         self.store.publish(&key,&envelope,&secret).map_err(|e|e.to_string())?;
         Ok(Build{bytes,reused:false})
