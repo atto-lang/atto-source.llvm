@@ -27,4 +27,38 @@ pub fn run(h: &mut Harness) {
         "pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(1); p.write_at(0, 21); val int first = p.read(); p.write(first * 2); val int answer = p.read_at(0); p.close(); return answer; }",
         &["--experimental-pointer-int-aot"], 42, true, None);
 
+    h.positive("pointer_initialized_singleton_42",
+        "pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(21 * 2); val int result = p.read(); p.close(); return result; }",
+        &["--experimental-pointer-int-aot"], 42, true, None);
+    h.positive("pointer_region_metadata_42",
+        "pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(4); val int count = p.len(); val int bytes = p.size_bytes(); p.close(); return count + bytes + 6; }",
+        &["--experimental-pointer-int-aot"], 42, true, None);
+
+    h.positive("pointer_fill_evaluate_once_42",
+        "pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(3); p.write_at(0, 13); p.fill(p.read_at(0) + 1); val int a = p.read_at(0); val int b = p.read_at(1); val int c = p.read_at(2); p.close(); return a + b + c; }",
+        &["--experimental-pointer-int-aot"], 42, true, None);
+    h.positive("pointer_swap_distinct_42",
+        "pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(2); p.write_at(0, 7); p.write_at(1, 35); p.swap_at(0, 1); val int a = p.read_at(0); val int b = p.read_at(1); p.close(); return a + b * 1 + (a - 35); }",
+        &["--experimental-pointer-int-aot"], 42, true, None);
+    h.positive("pointer_swap_self_42",
+        "pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(42); p.swap_at(0, 0); val int a = p.read(); p.close(); return a; }",
+        &["--experimental-pointer-int-aot"], 42, true, None);
+
+    h.positive("pointer_readonly_implicit_42",
+        "fnc inspect(Pointer<int> q): int { return q.read(); } pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(13); val int a = inspect(p); p.write(29); val int b = inspect(p); p.close(); return a + b; }",
+        &["--experimental-pointer-int-aot"], 42, true, None);
+    h.positive("pointer_readonly_explicit_42",
+        "fnc inspect(Pointer<int> q): int { return q.read(); } pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(13); val int a = inspect(borrow! p); p.write(29); val int b = inspect(borrow! p); p.close(); return a + b; }",
+        &["--experimental-pointer-int-aot"], 42, true, None);
+
+    h.positive("pointer_mutable_implicit_42",
+        "fnc update(mut Pointer<int> q): void { q.write(42); } pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(0); update(mut p); val int a = p.read(); p.close(); return a; }",
+        &["--experimental-pointer-int-aot"], 42, true, None);
+    h.positive("pointer_mutable_explicit_42",
+        "fnc update(mut Pointer<int> q): void { q.write(42); } pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(0); update(borrow! mut p); val int a = p.read(); p.close(); return a; }",
+        &["--experimental-pointer-int-aot"], 42, true, None);
+    h.positive("pointer_mutable_initializes_and_releases_42",
+        "fnc update(mut Pointer<int> q): void { q.write(13); } pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(1); update(mut p); val int a = p.read(); p.write(29); val int b = p.read(); p.close(); return a + b; }",
+        &["--experimental-pointer-int-aot"], 42, true, None);
+
 }
