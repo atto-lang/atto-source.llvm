@@ -6267,6 +6267,27 @@ if(BUILD_TESTING)
         native-entry-reject.ores --diagnostic "native Entry<K,V> unsupported")
     oreslang_contract_test(native_entry_generic_product_failclosed
         native-entry-generic-reject.ores --diagnostic "native Entry<K,V> unsupported")
+    oreslang_contract_test(native_pair_string_projection_ir
+        native-pair-string-projection.ores --ir "define i64 @__oreslang_guest_main")
+    oreslang_contract_test(native_pair_typed_projection_ir
+        native-pair-string-typed-projection.ores --ir "define i64 @__oreslang_guest_main")
+    oreslang_contract_test(native_pair_integer_key_failclosed
+        native-pair-integer-key-reject.ores --diagnostic "E_PAIR_KEY_TYPE")
+    oreslang_contract_test(native_pair_generic_key_failclosed
+        native-pair-generic-key-reject.ores --diagnostic "E_PAIR_KEY_TYPE")
+    oreslang_contract_test(native_pair_escape_failclosed
+        native-pair-escape-reject.ores --diagnostic "E_PAIR_ESCAPE_UNSUPPORTED")
+    oreslang_contract_test(native_pair_first_projection_failclosed
+        native-pair-first-projection-reject.ores --diagnostic "E_PAIR_PROJECTION_UNSUPPORTED")
+    oreslang_contract_test(native_pair_shadow_failclosed
+        native-pair-shadow-reject.ores --diagnostic "E_PAIR_SCOPE_UNSUPPORTED")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_pair_string_projection_executes
+            native-pair-string-projection.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_pair_typed_projection_executes
+            native-pair-string-typed-projection.ores --run 42 --clang "${ORE_CLANG}")
+        set_tests_properties(native_pair_string_projection_executes native_pair_typed_projection_executes PROPERTIES TIMEOUT 60)
+    endif()
     oreslang_contract_test(native_user_tuple_call_is_ordinary
         native-user-tuple-call.ores --ir "call i64 @tuple")
     oreslang_contract_test(native_local_entry_identifier_is_ordinary
