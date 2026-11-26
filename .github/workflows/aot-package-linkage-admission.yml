@@ -5,6 +5,8 @@ on:
       - 'scripts/compile-aot.sh'
       - 'scripts/link-scalar-object.sh'
       - 'tests/aot_package_linkage_admission.sh'
+      - 'tests/test_aot_lto_driver.sh'
+      - 'scripts/audit-aot-linked-image.sh'
       - '.github/workflows/aot-package-linkage-admission.yml'
   workflow_dispatch:
 permissions:
@@ -12,7 +14,7 @@ permissions:
 jobs:
   driver:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -27,5 +29,6 @@ jobs:
           git rev-parse HEAD HEAD^{tree}
           clang --version
           ld.lld --version
-          for script in scripts/compile-aot.sh scripts/link-scalar-object.sh tests/aot_package_linkage_admission.sh; do bash -n "$script"; done
+          for script in scripts/compile-aot.sh scripts/link-scalar-object.sh tests/aot_package_linkage_admission.sh tests/test_aot_lto_driver.sh scripts/audit-aot-linked-image.sh; do bash -n "$script"; done
           bash tests/aot_package_linkage_admission.sh
+          bash tests/test_aot_lto_driver.sh
