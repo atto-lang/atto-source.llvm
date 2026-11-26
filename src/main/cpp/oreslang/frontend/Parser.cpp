@@ -3,6 +3,7 @@
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/ChannelGuestGate.hpp"
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/PortableUnicodeIdentifier.hpp"
 #include "oreslang/types/CoreTypeRegistry.hpp"
 #include "oreslang/frontend/PointerIntSyntax.hpp"
 #include "oreslang/frontend/NativeTelemetryLiteralV1.hpp"
@@ -51,6 +52,18 @@ bool identifier_start(char ch) {
     return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_';
 }
 bool identifier_part(char ch) { return identifier_start(ch) || digit(ch); }
+bool identifier_part_at(std::string_view text, std::size_t offset) {
+    const auto scalar = frontend::unicode_at(text, offset);
+    return scalar.width != 0 && frontend::portable_name_part(scalar.value);
+}
+bool identifier_before(std::string_view text, std::size_t offset) {
+    if (!offset) return false;
+    auto start = offset - 1;
+    while (start > 0 && (static_cast<unsigned char>(text[start]) & 0xc0u) == 0x80u) --start;
+    const auto scalar = frontend::unicode_at(text, start);
+    return scalar.width && start + scalar.width == offset &&
+           frontend::portable_name_part(scalar.value);
+}
 
 inline constexpr std::size_t kMaxNativeBlockCommentNesting = 128;
 inline constexpr std::size_t kMaxNativeTemplateNesting = 32;
@@ -148,6 +161,10 @@ std::size_t template_interpolation_close(std::string_view source, std::size_t fr
     std::size_t at = from;
     while (at < source.size()) {
         const char ch = source[at];
+        if (scalar.width && scalar.value == 0xacu) {
+            at_ += scalar.width;
+            return {Kind::Symbol, source_.substr(start, scalar.width), start};
+        }
         if (ch == '"' || ch == '\'') {
             at = skip_template_quoted(source, at + 1, ch, origin);
         } else if (static_cast<unsigned char>(ch) == 0x60) {
@@ -264,9 +281,10 @@ public:
         }
         const std::size_t start = at_;
         const char ch = source_[at_];
-        if (identifier_start(ch)) {
-            ++at_;
-            while (at_ < source_.size() && identifier_part(source_[at_])) ++at_;
+        const auto scalar = frontend::unicode_at(source_, at_);
+        if (scalar.width && frontend::portable_name_start(scalar.value)) {
+            at_ += scalar.width;
+            while (identifier_part_at(source_, at_)) at_ += frontend::unicode_at(source_, at_).width;
             // Keep 'critical-read' / 'critical-write' as ordinary
             // IDENT '-' IDENT tokens. The parser recognizes them *only*
             // in callable modifier positions: arbitrary expressions must
@@ -312,7 +330,7 @@ public:
             if (first == "nb" && source_.substr(at_, 7) == "-select") {
                 const auto end = at_ + 7;
                 if (end == source_.size() ||
-                        (source_[end] != '-' && !identifier_part(source_[end]))) {
+                        (source_[end] != '-' && !identifier_part_at(source_, end))) {
                     at_ = end;
                 }
             }
@@ -321,7 +339,7 @@ public:
             if (first == "trap" && at_ < source_.size() && source_[at_] == '!'
                     && source_.substr(at_, 2) != "!="
                     && !(source_.substr(at_, 3) == "!eq"
-                         && (at_ + 3 == source_.size() || !identifier_part(source_[at_ + 3])))) {
+                         && (at_ + 3 == source_.size() || !identifier_part_at(source_, at_ + 3)))) {
                 ++at_;
             }
             return {Kind::Identifier, source_.substr(start, at_ - start), start};
@@ -380,7 +398,7 @@ public:
                 }
             }
             if (at_ < source_.size() && source_[at_] == 'd' &&
-                    (at_ + 1 == source_.size() || !identifier_part(source_[at_ + 1]))) {
+                    (at_ + 1 == source_.size() || !identifier_part_at(source_, at_ + 1))) {
                 ++at_;
                 real = true;
             }
@@ -398,7 +416,7 @@ public:
         // compatibility migration; no source-profile switch is invented here.
         if (source_.substr(at_, 3) == "!eq" &&
                 (at_ + 3 == source_.size() ||
-                 !identifier_part(source_[at_ + 3]))) {
+                 !identifier_part_at(source_, at_ + 3))) {
             at_ += 3;
             return {Kind::Symbol, source_.substr(start, 3), start};
         }
@@ -408,7 +426,7 @@ public:
         // This lexer has already skipped comments and quoted source.
         if (source_.substr(at_, 3) == "!eq") {
             const auto end = at_ + 3;
-            if (end == source_.size() || !identifier_part(source_[end])) {
+            if (end == source_.size() || !identifier_part_at(source_, end)) {
                 at_ = end;
                 return {Kind::Identifier, "neq", start};
             }
@@ -419,7 +437,7 @@ public:
         // expression kind; no reflection, interpreter or runtime dispatch.
         if (source_.substr(at_, 3) == "!eq" &&
             (at_ + 3 == source_.size() ||
-             !identifier_part(source_[at_ + 3]))) {
+             !identifier_part_at(source_, at_ + 3))) {
             at_ += 3;
             return {Kind::Symbol, source_.substr(start, 3), start};
         }
@@ -442,8 +460,8 @@ public:
         // This lexer only reaches executable tokens (not comments/strings).
         if (ch == '@') {
             std::size_t after_name = start + 1;
-            while (after_name < source_.size() && identifier_part(source_[after_name]))
-                ++after_name;
+            while (identifier_part_at(source_, after_name))
+                after_name += frontend::unicode_at(source_, after_name).width;
             const auto annotation = source_.substr(start + 1, after_name - start - 1);
             if (annotation == "Inject" || annotation == "StateBacked" ||
                     annotation == "MutableStateContainer" || annotation == "StateContainer") {
@@ -476,7 +494,7 @@ public:
             if (before >= marker.size() &&
                     source_.substr(before - marker.size(), marker.size()) == marker &&
                     (before == marker.size() ||
-                     !identifier_part(source_[before - marker.size() - 1]))) {
+                     !identifier_before(source_, before - marker.size()))) {
                 ++at_;
                 return {Kind::Symbol, source_.substr(start, 1), start};
             }
@@ -6157,7 +6175,7 @@ private:
             expr->left = unary();
             return expr;
         }
-        if (token_.text == "!") {
+        if (token_.text == "!" || token_.text == "\xc2\xac") {
             const auto offset = token_.offset;
             advance();
             auto expr = make_expression(Expression::Kind::LogicalNot, offset);
