@@ -2,7 +2,17 @@
 # Compile the admitted host-language subset to a standalone native executable.
 # Unsupported source must fail in oreslang-llvmc, never fall back to an interpreter.
 set -euo pipefail
-[[ $# == 2 ]] || { echo 'Usage: scripts/compile-aot.sh source.atto|source.ores output-executable' >&2; exit 64; }
+[[ $# == 2 || $# == 3 ]] || { echo 'Usage: scripts/compile-aot.sh source.atto|source.ores output-executable [--link=static]' >&2; exit 64; }
+# Existing path links the admitted guest IR into one executable. Package
+# linkage is independent of system libc/host-runtime linkage and AOT LTO.
+# Do not silently treat dynamic/hybrid as this existing static guest path.
+case "${3---link=static}" in
+  --link=static) ;;
+  --link=dynamic|--link=hybrid)
+    echo 'E_LINK_MODE_UNSUPPORTED: separate precompiled package ABI not admitted by this driver' >&2
+    exit 64 ;;
+  *) echo 'E_LINK_MODE: expected --link=static|dynamic|hybrid' >&2; exit 64 ;;
+esac
 # Clang optimization level only; frontend semantics and the native no-GC IR
 # admission gate must remain identical at both levels.
 opt_level="${ORESLANG_LLVM_AOT_OPT_LEVEL:-2}"
@@ -23,6 +33,17 @@ case "$lto_mode" in
   thin) lto_flags=(-flto=thin -fuse-ld=lld) ;;
   *) echo 'ORESLANG_AOT_LTO must be off, full or thin.' >&2; exit 64 ;;
 esac
+# Opt-in first native object stage. No persistent object reuse is claimed.
+object_pipeline="${ORESLANG_AOT_OBJECT_PIPELINE:-direct}"
+case "$object_pipeline" in
+  direct) ;;
+  separate)
+    [[ "$(uname -s)" == Linux && "$lto_mode" == off ]] || {
+      echo 'E_OBJECT_PIPELINE_UNSUPPORTED: separate mode requires Linux and LTO off' >&2
+      exit 64
+    } ;;
+  *) echo 'E_OBJECT_PIPELINE: expected direct or separate' >&2; exit 64 ;;
+esac
 source_dir="$(cd "$(dirname "$1")" && pwd -P)"
 source_file="$source_dir/$(basename "$1")"
 # Optional fail-closed scalar-only closed-world check; legacy AOT behavior
@@ -38,7 +59,7 @@ case "$aot_admission" in
 esac
 output_dir="$(cd "$(dirname "$2")" && pwd -P)"
 output_file="$output_dir/$(basename "$2")"
-[[ ! -d "$output_file" ]] || { echo 'Output must be a file, not a directory.' >&2; exit 64; }
+[[ ! -L "$output_file" && ( ! -e "$output_file" || -f "$output_file" ) ]] || { echo 'E_ARTIFACT_PUBLICATION: output must be absent or a regular non-symlink file.' >&2; exit 64; }
 [[ "$source_file" != "$output_file" ]] || { echo 'Source and executable paths must differ.' >&2; exit 64; }
 [[ -x "$compiler" ]] || { echo 'Build oreslang-llvmc first or set ORESLANG_LLVMC.' >&2; exit 69; }
 auditor="${ORES_NO_GC_IR_AUDIT:-$root/build/oreslang-no-gc-ir-audit}"
@@ -150,11 +171,17 @@ if [[ "$aot_admission" != off ]] && (( ${#runtime_sources[@]} > 0 )); then
   echo 'sealed AOT refuses unchecked native runtime dependency; require a certified zero-GC link closure' >&2
   exit 65
 fi
-if (( ${#runtime_sources[@]} )); then
-  "$clang" "-O${opt_level}" -x ir "$work/program.ll" -x c -std=c11 \
+if [[ "$object_pipeline" == separate ]] && (( ${#runtime_sources[@]} > 0 )); then
+  echo 'E_OBJECT_PIPELINE_UNSUPPORTED: separate mode requires runtime-free scalar IR' >&2
+  exit 65
+fi
+if [[ "$object_pipeline" == separate ]]; then
+  bash "$root/scripts/link-scalar-object.sh" "$clang" "$opt_level" "$work/program.ll" "$work/program.o" "$work/program"
+elif (( ${#runtime_sources[@]} )); then
+  "$clang" "-O${opt_level}" "${lto_flags[@]}" -x ir "$work/program.ll" -x c -std=c11 \
     -I "$root/src/main/cpp" "${runtime_sources[@]}" -pthread -o "$work/program"
 else
-  "$clang" "-O${opt_level}" -x ir "$work/program.ll" -o "$work/program"
+  "$clang" "-O${opt_level}" "${lto_flags[@]}" -x ir "$work/program.ll" -o "$work/program"
 fi
 # This is a Linux ELF *known collector/linkage* screen, not a proof of
 # process-wide zero GC. It must run before publishing the executable so
@@ -295,6 +322,18 @@ case "$(uname -s)" in
     exit 69
     ;;
 esac
+# Recheck after compiler/linker execution. In particular, mv must not
+# interpret a newly created directory (or directory symlink) as a target.
+# This driver assumes a trusted output parent, not an adversarial directory.
+[[ ! -L "$output_file" && ( ! -e "$output_file" || -f "$output_file" ) ]] || {
+  echo 'E_ARTIFACT_PUBLICATION: destination changed to nonregular file.' >&2
+  exit 65
+}
+if [[ "$output_file" -ef "$source_file" || "$output_file" -ef "$compiler" ||
+      "$output_file" -ef "$clang_path" || "$output_file" -ef "$auditor" ]]; then
+  echo 'E_ARTIFACT_PUBLICATION: destination aliases a protected input.' >&2
+  exit 65
+fi
 mv -f -- "$work/program" "$output_file"
 printf 'Native executable: %s\n' "$output_file"
 
