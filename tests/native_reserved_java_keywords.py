@@ -220,6 +220,10 @@ UNSAFE_IMPORT_PATHS = (
     "std/unsafe/../safe", "atto.std/unsafe/../safe", "atto::std/unsafe/../safe",
     "ores:std/unsafe/../safe", "atto::std/../safe", "ores:std/../safe",
     "atto/std/../safe", "ores/std/../safe",
+    "std/other/../unsafe/../safe", "./std/other/../unsafe/../safe",
+    "pkg/../std/other/../unsafe/../safe", "atto//std/../safe", "atto/./std/../safe",
+    "./atto::std/../safe", "pkg/../ores.std/../safe", "atto/std/other/../unsafe/../safe",
+    "atto/:/std/../safe", "std/other/../unsafe::ffi/../safe",
 )
 for index, path in enumerate(UNSAFE_IMPORT_PATHS):
     CASES[f"unsafe-stdlib-import-{index}"] = (

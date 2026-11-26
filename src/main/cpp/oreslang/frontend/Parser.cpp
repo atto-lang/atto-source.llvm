@@ -77,46 +77,42 @@ bool reserved_unsafe_stdlib_import(std::string_view path) {
                parts[offset] == "std" && parts[offset + 1] == "unsafe";
     };
     if (reserved(path)) return true;
-    const auto first_slash = path.find('/');
-    const auto first = path.substr(0, first_slash);
-    std::vector<std::string_view> head;
-    for (std::size_t from = 0; from < first.size();) {
-        const auto end = first.find_first_of(".:", from);
-        const auto part = first.substr(from, end == std::string_view::npos
-            ? first.size() - from : end - from);
-        if (!part.empty()) head.push_back(part);
-        if (end == std::string_view::npos) break;
-        from = end + 1;
-    }
-    const bool vendor = !head.empty() && (head[0] == "atto" || head[0] == "ores");
-    const auto tail = first_slash == std::string_view::npos ? std::string_view{} : path.substr(first_slash + 1);
-    const auto second = tail.substr(0, tail.find('/'));
-    const std::size_t root_depth =
-        (head.size() == 1 && head[0] == "std") ||
-        (vendor && head.size() == 2 && head[1] == "std") ? 1 :
-        (vendor && head.size() == 1 && second == "std") ? 2 : 0;
-    // Relative imports may canonicalize into the reserved stdlib namespace.
-    if (path.find('/') == std::string_view::npos) return false;
-    std::vector<std::string_view> segments;
+    // Track the first three logical segments before traversal erases them.
+    // This is linear in path size and does not repeatedly join prefixes.
+    std::vector<std::string_view> prefix;
+    std::vector<std::size_t> stack;
+    std::size_t root_depth = 0;
     for (std::size_t from = 0; from <= path.size();) {
         const auto slash = path.find('/', from);
-        const auto part = path.substr(from, slash == std::string_view::npos
-                ? path.size() - from : slash - from);
-        if (part == "..") {
-            if (root_depth != 0 && segments.size() <= root_depth) return true; // Root traversal is noncanonical.
-            if (!segments.empty()) segments.pop_back();
-        } else if (!part.empty() && part != ".") {
-            segments.push_back(part);
+        const auto component = path.substr(from, slash == std::string_view::npos
+            ? path.size() - from : slash - from);
+        if (component == "..") {
+            if (root_depth != 0 && stack.size() <= root_depth) return true;
+            if (!stack.empty()) {
+                prefix.resize(stack.back());
+                stack.pop_back();
+            }
+        } else if (!component.empty() && component != ".") {
+            stack.push_back(prefix.size());
+            for (std::size_t at = 0; at < component.size() && prefix.size() < 3;) {
+                const auto delimiter = component.find_first_of(".:", at);
+                const auto segment = component.substr(at, delimiter == std::string_view::npos
+                    ? component.size() - at : delimiter - at);
+                if (!segment.empty()) prefix.push_back(segment);
+                if (delimiter == std::string_view::npos) break;
+                at = delimiter + 1;
+            }
+            const std::size_t offset = !prefix.empty() &&
+                (prefix[0] == "atto" || prefix[0] == "ores") ? 1 : 0;
+            if (prefix.size() > offset && prefix[offset] == "std") {
+                if (root_depth == 0) root_depth = stack.size();
+                if (prefix.size() > offset + 1 && prefix[offset + 1] == "unsafe") return true;
+            }
         }
         if (slash == std::string_view::npos) break;
         from = slash + 1;
     }
-    std::string canonical;
-    for (const auto part : segments) {
-        if (!canonical.empty()) canonical.push_back('/');
-        canonical.append(part);
-    }
-    return reserved(canonical);
+    return false;
 }
 
 [[noreturn]] void template_error(std::string_view detail, std::size_t offset) {
