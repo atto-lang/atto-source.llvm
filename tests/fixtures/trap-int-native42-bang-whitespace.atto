@@ -1,0 +1,8 @@
+// Canonical trap! accepts ASCII tab and line break separators.
+// Actual LLVM -> Clang O0/O2 compiled guest must exit 42 with no-GC IR audit.
+pub fnc main(): int {
+    val Result<int, Error> left = trap!	(20 + 1);
+    val Result<int, Error> right = trap!
+        (20 + 1);
+    return left.unwrap_or(0) + right.unwrap_or(0);
+}
