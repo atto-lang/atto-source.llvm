@@ -100,7 +100,8 @@ void validate_native_scalar_types(const Program& program) {
                 if (e.trap_origin && (!type.trap_error || option ||
                         type.value_type != ScalarType::I64 || e.name != "Ok" ||
                         e.arguments.size() != 1 || !e.arguments.front() ||
-                        !native_trap_pure_integer(*e.arguments.front())))
+                        (!native_trap_pure_integer(*e.arguments.front()) &&
+                         !native_trap_checked_option_unwrap(*e.arguments.front()))))
                     fail(e.offset, "invalid native trap Result construction");
                 if ((option && e.name != "Some" && e.name != "None") || (!option && e.name != "Ok" && e.name != "Err") ||
                         e.arguments.size() != (e.name == "None" ? 0u : 1u)) fail(e.offset, "sum variant/payload arity");
