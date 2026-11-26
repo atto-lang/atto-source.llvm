@@ -6271,6 +6271,16 @@ if(BUILD_TESTING)
         native-pair-string-projection.ores --ir "define i64 @__oreslang_guest_main")
     oreslang_contract_test(native_pair_typed_projection_ir
         native-pair-string-typed-projection.ores --ir "define i64 @__oreslang_guest_main")
+    oreslang_contract_test(native_pair_dynamic_projection_ir
+        native-pair-dynamic-projection.ores --ir "call i64 @twice")
+    oreslang_contract_test(native_pair_dynamic_bool_failclosed
+        native-pair-dynamic-bool-reject.ores --diagnostic "impossible native cast")
+    oreslang_contract_test(native_pair_dynamic_unknown_failclosed
+        native-pair-dynamic-unknown-reject.ores --diagnostic "unknown")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_pair_dynamic_projection_executes
+            native-pair-dynamic-projection.ores --run 42 --clang "${ORE_CLANG}")
+    endif()
     oreslang_contract_test(native_pair_integer_key_failclosed
         native-pair-integer-key-reject.ores --diagnostic "E_PAIR_KEY_TYPE")
     oreslang_contract_test(native_pair_generic_key_failclosed
