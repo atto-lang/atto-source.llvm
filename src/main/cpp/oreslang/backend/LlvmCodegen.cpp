@@ -227,7 +227,7 @@ llvm::Value* lower(const Expression& expr,
                     // Literal message (enforced by the sum resolver) to stderr, then the
                     // same abort path as unwrap. Java appends ": <payload>"; this slice does not.
                     const std::string message = expr.arguments[0]->name + "\n";
-                    auto* text = builder.CreateGlobalStringPtr(message, "expect.message");
+                    auto* text = native_global_string_ptr(builder, message, "expect.message");
                     auto write = function->getParent()->getOrInsertFunction("write", llvm::FunctionType::get(
                         i64, {builder.getInt32Ty(), builder.getPtrTy(), i64}, false));
                     builder.CreateCall(write, {builder.getInt32(2), text, llvm::ConstantInt::get(i64, message.size())});
@@ -286,7 +286,7 @@ llvm::Value* lower(const Expression& expr,
         }
         case Expression::Kind::String: {
             auto* module = builder.GetInsertBlock()->getModule();
-            auto* bytes = builder.CreateGlobalStringPtr(expr.name, "string.literal");
+            auto* bytes = native_global_string_ptr(builder, expr.name, "string.literal");
             auto runtime = module->getOrInsertFunction("ores_string_literal",
                 llvm::FunctionType::get(i64, {bytes->getType(), i64}, false));
             return builder.CreateCall(runtime, {bytes, llvm::ConstantInt::get(i64, expr.name.size())}, "string.handle");
@@ -2567,7 +2567,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                         result = (result << 8) | id.bytes[k];
                     return result;
                 };
-                auto* literal = builder.CreateGlobalStringPtr(
+                auto* literal = native_global_string_ptr(builder, 
                     effect.telemetry_operation, "atto.telemetry.log.literal");
                 auto* siteCall = builder.CreateCall(telemetryLog, {
                     llvm::ConstantInt::get(i64, lane(rid, 0)),
@@ -2773,7 +2773,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 if (!has_native_telemetry || !telemetryBegin.getCallee()
                         || !telemetryEnd.getCallee())
                     throw std::runtime_error("LLVM native telemetry ABI missing");
-                llvm::Value* name = builder.CreateGlobalStringPtr(
+                llvm::Value* name = native_global_string_ptr(builder, 
                     stmt.telemetry_operation, "atto.telemetry.operation");
                 llvm::Value* token = builder.CreateCall(
                     telemetryBegin,
@@ -4076,7 +4076,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             builder.SetInsertPoint(failed);
             builder.CreateRet(llvm::ConstantInt::get(i32, 1));
             builder.SetInsertPoint(publish);
-            auto* fmt = builder.CreateGlobalStringPtr("%lld\n", "strict.i64.format");
+            auto* fmt = native_global_string_ptr(builder, "%lld\n", "strict.i64.format");
             auto print = module.getOrInsertFunction("printf",
                 llvm::FunctionType::get(i32, {fmt->getType()}, true));
             auto* written = builder.CreateCall(print, {fmt, result});
