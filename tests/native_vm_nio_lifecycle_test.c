@@ -908,11 +908,25 @@ int main(void) {
         check(ores_native_vm_wait_done(
             actor_vm, ORES_NATIVE_VM_MAIN, probe.actor));
 
-        // ACK releases the wrapper-level FD ownership fence.
+        // ACK releases the wrapper-level FD ownership fence. Drain the
+        // byte that made the original watch READY before re-registering:
+        // otherwise a real READY can legitimately win the cancel race.
+        char consumed = 0;
+        check(read(actor_pipe[0], &consumed, 1) == 1 && consumed == 'a');
         OresNativeNioWatch reused = {0};
-        check(ores_native_vm_nio_try_watch(
-            actor_vm, actor_pipe[0], EPOLLIN, &reused));
-        check(ores_native_vm_nio_try_cancel(actor_vm, reused));
+        int reused_admitted = 0;
+        for (int retry = 0; retry < 3000 && !reused_admitted; ++retry) {
+            reused_admitted = ores_native_vm_nio_try_watch(
+                actor_vm, actor_pipe[0], EPOLLIN, &reused);
+            if (!reused_admitted) sched_yield();
+        }
+        check(reused_admitted);
+        int reused_cancelled = 0;
+        for (int retry = 0; retry < 3000 && !reused_cancelled; ++retry) {
+            reused_cancelled = ores_native_vm_nio_try_cancel(actor_vm, reused);
+            if (!reused_cancelled) sched_yield();
+        }
+        check(reused_cancelled);
         OresNativeNioCompletion host_cancel = await_completion(actor_vm);
         check(host_cancel.watch.ticket == reused.ticket);
         check(host_cancel.outcome == ORES_NATIVE_NIO_CANCELLED);
