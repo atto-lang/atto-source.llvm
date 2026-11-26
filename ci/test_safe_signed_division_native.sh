@@ -1,26 +1,43 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-compiler=target/release/atto-llvm
+backend=${1:-native}
+case "$backend" in
+  native) compiler=target/release/atto-llvm ;;
+  wasm) compiler=frontend/target/release/attoc ;;
+  *) exit 2 ;;
+esac
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 ok() {
   local name="$1"; shift
   printf '%s\n' "$1" > "$work/$name.atto"
-  "$compiler" "$work/$name.atto" -o "$work/$name.elf"
-  readelf -h "$work/$name.elf" | grep -q ELF64
-  local status=0
-  "$work/$name.elf" || status=$?
-  test "$status" = 42
-  echo "PASS signed division native $name"
+  if [[ "$backend" == native ]]; then
+    "$compiler" "$work/$name.atto" -o "$work/$name.elf"
+    readelf -h "$work/$name.elf" | grep -q ELF64
+    local status=0
+    "$work/$name.elf" || status=$?
+    test "$status" = 42
+  else
+    "$compiler" "$work/$name.atto" -o "$work/$name.wasm"
+    node --input-type=module -e '
+      import {readFileSync} from "node:fs";
+      import assert from "node:assert/strict";
+      const {instance}=await WebAssembly.instantiate(readFileSync(process.argv[1]),{});
+      assert.equal(instance.exports.main(),42n);
+      assert.equal(instance.exports.panic_code.value,0);
+    ' "$work/$name.wasm"
+  fi
+  echo "PASS signed division $backend $name"
 }
 bad() {
   local name="$1"; shift
   printf '%s\n' "$1" > "$work/$name.atto"
-  if "$compiler" "$work/$name.atto" -o "$work/$name.elf" > "$work/log" 2>&1; then
+  local output="$work/$name.$backend"
+  if "$compiler" "$work/$name.atto" -o "$output" > "$work/log" 2>&1; then
     cat "$work/log"; exit 1
   fi
-  test ! -e "$work/$name.elf"
+  test ! -e "$output"
   grep -F 'E_UNSUPPORTED' "$work/log"
   echo "PASS no artifact $name"
 }
