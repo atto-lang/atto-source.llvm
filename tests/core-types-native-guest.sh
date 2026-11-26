@@ -10,14 +10,14 @@ compiler="$1"; clang="$2"; fixtures="$3"
 fail(){ echo "CORE_TYPES_LLVM_GUEST_FAIL: $*" >&2; exit 1; }
 [[ -x "$compiler" ]] || fail "missing executable Atto compiler"
 command -v "$clang" >/dev/null 2>&1 || fail "missing Clang"
-for f in edge-positive.atto edge-matrix-positive.atto void-value-negative.atto void-return-negative.atto bool-truthiness-negative.atto i64-literal-overflow-negative.atto wrong-arg-negative.atto u64-outside-int-negative.atto namespace-duplicate-negative.atto namespace-late-negative.atto; do
+for f in edge-positive.atto edge-matrix-positive.atto bool-call-composition-positive.atto void-value-negative.atto void-return-negative.atto bool-truthiness-negative.atto i64-literal-overflow-negative.atto wrong-arg-negative.atto u64-outside-int-negative.atto namespace-duplicate-negative.atto namespace-late-negative.atto; do
   [[ -f "$fixtures/$f" ]] || fail "missing $f"
 done
 work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
-for positive_fixture in edge-positive.atto edge-matrix-positive.atto; do
+for positive_fixture in edge-positive.atto edge-matrix-positive.atto bool-call-composition-positive.atto; do
   "$compiler" --target=host "$fixtures/$positive_fixture" > "$work/positive.ll" 2> "$work/compiler.err" ||
-    fail "$positive_fixture: real compiler could not link core/types"
+    { cat "$work/compiler.err" >&2; fail "$positive_fixture: real compiler could not link core/types"; }
   [[ -s "$work/positive.ll" ]] || fail "$positive_fixture: compiler produced no IR"
   grep -Fq '@main(' "$work/positive.ll" || fail "$positive_fixture: no compiled main in IR"
   for opt in 0 2; do
@@ -64,4 +64,15 @@ for f in void-value-negative.atto void-return-negative.atto bool-truthiness-nega
   esac
   echo "CORE_TYPES_LLVM_COMPILE_REJECTED=$f"
 done
-echo "CORE_TYPES_LLVM_GUEST=4_EXECUTED_8_REJECTED"
+echo "CORE_TYPES_LLVM_GUEST=6_EXECUTED_8_REJECTED"
+
+# The contextual namespace name must not authorize standalone library helpers
+# or become an ordinary callable identifier. Both must fail before IR.
+for source in 'use namespace types; pub fnc helper() -> int { return 42; }' 'pub fnc types() -> int { return 42; } pub fnc main() -> int { return 0; }'; do
+  printf '%s\n' "$source" > "$work/contextual-negative.atto"
+  if "$compiler" --target=host "$work/contextual-negative.atto" > "$work/contextual-negative.ll" 2> "$work/contextual-negative.err"; then
+    fail "contextual types escaped its admission boundary"
+  fi
+  [[ ! -s "$work/contextual-negative.ll" && -s "$work/contextual-negative.err" ]] || fail "contextual rejection did not fail before IR"
+done
+echo 'CORE_TYPES_LLVM_CONTEXTUAL_REJECTIONS=PASS'

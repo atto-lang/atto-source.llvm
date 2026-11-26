@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cstdint>
 #include <exception>
+#include <functional>
 #include <memory>
 #include <stdexcept>
 #include <thread>
@@ -28,6 +29,7 @@ public:
     using Channel = NativeSelectableI64Channel<ChannelCapacity,MaxWaiters>;
     using Future = NativeSelectableI64Future<MaxWaiters>;
     using Source = std::variant<std::shared_ptr<Channel>,std::shared_ptr<Future>>;
+    using Projection = std::function<std::int64_t(std::int64_t)>;
     enum class State { Ready, Waiting, Success, Cancelled, Failed };
 private:
     using Arbiter = NativeSelectArbiter<MaxCases>;
@@ -47,6 +49,7 @@ private:
     bool fair_, driving_=false;
     State state_=State::Ready;
     std::vector<Source> live_;
+    std::vector<Projection> projections_;
     std::vector<std::int64_t> values_;
     std::unique_ptr<Round> round_;
     std::exception_ptr failure_;
@@ -75,7 +78,7 @@ private:
     }
     void fail(std::exception_ptr error) {
         try {cleanup();}catch(...){error=std::current_exception();}
-        live_.clear();values_.clear();failure_=std::move(error);state_=State::Failed;
+        live_.clear();projections_.clear();values_.clear();failure_=std::move(error);state_=State::Failed;
     }
     void advance(std::size_t index,bool retire) {
         auto n=live_.size(), next=(index+1)%n;
@@ -89,11 +92,20 @@ private:
         position_=0;
         if(next_index!=n)
             for(std::size_t k=0;k<next_index;++k)if(!same(live_[k],winner))++position_;
-        live_.erase(std::remove_if(live_.begin(),live_.end(),
-            [&](const Source& s){return same(s,winner);}),live_.end());
+        // Keep lexical arm positions aligned, even when Future wrappers
+        // share the same underlying source identity.
+        for(std::size_t k=n;k>0;--k){
+            auto i=k-1;
+            if(same(live_[i],winner)){
+                live_.erase(live_.begin()+static_cast<std::ptrdiff_t>(i));
+                if(!projections_.empty())
+                    projections_.erase(projections_.begin()+static_cast<std::ptrdiff_t>(i));
+            }
+        }
     }
 public:
-    NativeCountedI64Cursor(std::size_t count,const std::vector<Source>& sources,bool fair=true)
+    NativeCountedI64Cursor(std::size_t count,const std::vector<Source>& sources,bool fair=true,
+            const std::vector<Projection>& projections={})
         :count_(count),fair_(fair) {
         if(count>1024)throw std::invalid_argument("SelectCountInvalid");
         if(!count){state_=State::Success;return;}
@@ -105,7 +117,11 @@ public:
                     future && !(*future)->valid_source())
                 throw std::invalid_argument("moved-from counted Future");
         }
-        live_=sources;values_.reserve(count);
+        if(!projections.empty() && projections.size()!=sources.size())
+            throw std::invalid_argument("one counted projector per lexical arm required");
+        for(const auto& projector:projections)
+            if(!projector)throw std::invalid_argument("empty counted projector");
+        live_=sources;projections_=projections;values_.reserve(count);
     }
     NativeCountedI64Cursor(const NativeCountedI64Cursor&)=delete;
     NativeCountedI64Cursor& operator=(const NativeCountedI64Cursor&)=delete;
@@ -178,9 +194,11 @@ public:
                 }
                 cleanup();
                 if(error){fail(error);return true;}
-                if(!eof)values_.push_back(value);
+                // Only the serialized owner invokes trusted projections,
+                // after loser revocation and notification cleanup.
+                if(!eof)values_.push_back(projections_.empty()?value:projections_[i](value));
                 advance(i,retire);
-                if(values_.size()==count_){live_.clear();state_=State::Success;}
+                if(values_.size()==count_){live_.clear();projections_.clear();state_=State::Success;}
                 else if(live_.empty())fail(std::make_exception_ptr(NativeSelectExhausted()));
                 else state_=State::Ready;
                 return true;
@@ -193,7 +211,7 @@ public:
         if(state_!=State::Ready&&state_!=State::Waiting)return false;
         Drive drive(driving_);
         try{
-            cleanup();values_.clear();live_.clear();state_=State::Cancelled;return true;
+            cleanup();values_.clear();live_.clear();projections_.clear();state_=State::Cancelled;return true;
         }catch(...){fail(std::current_exception());throw;}
     }
 };
