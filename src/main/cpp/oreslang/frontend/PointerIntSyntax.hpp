@@ -294,16 +294,25 @@ private:
     }
     std::unique_ptr<Expr> combine(Expr::Kind kind, std::unique_ptr<Expr> lhs,
                                   std::unique_ptr<Expr> rhs) {
-        const __int128 x = lhs->known;
-        const __int128 y = rhs->known;
-        const __int128 value = kind == Expr::Kind::Add ? x + y :
+        const std::int64_t x = lhs->known, y = rhs->known;
+        constexpr auto lo = std::numeric_limits<std::int64_t>::min();
+        constexpr auto hi = std::numeric_limits<std::int64_t>::max();
+        bool overflow = false;
+        if (kind == Expr::Kind::Add) {
+            overflow = (y > 0 && x > hi - y) || (y < 0 && x < lo - y);
+        } else if (kind == Expr::Kind::Subtract) {
+            overflow = (y > 0 && x < lo + y) || (y < 0 && x > hi + y);
+        } else if (x > 0) {
+            overflow = (y > 0 && x > hi / y) || (y < 0 && y < lo / x);
+        } else if (x < 0) {
+            overflow = (y > 0 && x < lo / y) || (y < 0 && x < hi / y);
+        }
+        if (overflow) reject("checked arithmetic overflow", token().offset);
+        const std::int64_t value = kind == Expr::Kind::Add ? x + y :
             kind == Expr::Kind::Subtract ? x - y : x * y;
-        if (value < std::numeric_limits<std::int64_t>::min() ||
-                value > std::numeric_limits<std::int64_t>::max())
-            reject("checked arithmetic overflow", token().offset);
         auto expr = std::make_unique<Expr>();
         expr->kind = kind;
-        expr->known = static_cast<std::int64_t>(value);
+        expr->known = value;
         expr->lhs = std::move(lhs);
         expr->rhs = std::move(rhs);
         return expr;
