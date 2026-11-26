@@ -85,6 +85,8 @@ public:
             // The current linker transports ordinary scalar/class/actor
             // declarations only. An inverted owner must never disappear
             // while imported source units are combined.
+            if (unit.program.protocol_guest)
+                fail(unit, "E_PROTOCOL_GUEST: a protocol guest main requires standalone source");
             if (!unit.program.inverted_structs.empty() || unit.program.inverted_main)
                 fail(unit, "DOP_INVERTED_CROSS_UNIT_UNSUPPORTED: linked inverted owner needs checked schema/owner identity");
             // A file-scoped `use namespace foo;` header is source metadata,

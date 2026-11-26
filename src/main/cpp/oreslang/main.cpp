@@ -2,6 +2,7 @@
 #include "oreslang/backend/CountedReadyGuest.hpp"
 #include "oreslang/backend/DurableCounterV1Guest.hpp"
 #include "oreslang/backend/DurableScalarV1Guest.hpp"
+#include "oreslang/backend/ProtocolActorCodegen.hpp"
 #include "oreslang/backend/NativeSourceLogPathsV1.hpp"
 #include "oreslang/backend/ActorRegionV1Guest.hpp"
 #include "oreslang/backend/ActorRegionV2Guest.hpp"
@@ -572,6 +573,31 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    // Separate opt-in mode: exact single-source admission, no ordinary
+    // parser fallback, no partial IR on rejected proof.
+    if (argc >= 2 && std::string_view(argv[1]) == "--verify=strict") {
+        const bool print_i64 = argc == 4 && std::string_view(argv[2]) == "--print-i64";
+        if (argc != 3 && !print_i64) {
+            std::cerr << "E_VERIFY_UNSUPPORTED: strict mode needs [--print-i64] and one source path\n";
+            return 1;
+        }
+        try {
+            const char* strict_path = argv[argc - 1];
+            constexpr std::size_t cap = 8u * 1024u * 1024u;
+            const auto identity = capture_source_identity(strict_path,cap,"strict source exceeds limit");
+            SourceIdentity actual;
+            const auto text = read_regular_source(strict_path,cap,"strict source exceeds limit",&actual,&identity);
+            require_valid_source_utf8(text);
+            auto program=oreslang::parse_verified_strict_i64(text);
+            const auto ir=oreslang::emit_verified_llvm_ir(program, false, false, false, {}, false, {}, {}, false, print_i64);
+            std::cout << ir;
+            return 0;
+        } catch (const std::exception& error) {
+            std::cerr << "oreslang-llvmc: " << error.what() << '\n';
+            return 1;
+        }
+    }
+
     if (argc == 2 && std::string_view(argv[1]) == "--selftest-native-log-info-ir") {
         try {
             auto program = oreslang::parse_program(
@@ -774,6 +800,7 @@ int main(int argc, char** argv) {
     bool bounded_allocator_provider = false;
     bool rt_check_only = false;
     bool frontend_check_only = false;
+    bool emit_protocol_actors = false;
     bool analyze_requested = false;
     bool gpu_g1_kernel_ir = false;
     bool gpu_g1_other_option = false;
@@ -893,6 +920,9 @@ int main(int argc, char** argv) {
                 return 2;
             }
             native_hard_rt_profile = true;
+        } else if (arg == "--emit-protocol-actors") {
+            if (emit_protocol_actors) { std::cerr << "duplicate protocol artifact option\n"; return 2; }
+            emit_protocol_actors = true;
         } else if (arg == "--check") {
             if (frontend_check_only) { std::cerr << "duplicate check option\n"; return 2; }
             frontend_check_only = true;
@@ -1079,6 +1109,20 @@ int main(int argc, char** argv) {
                      "use atto test --effects for advisory lexical scanning\n";
         return 2;
     }
+    if (emit_protocol_actors &&
+            (frontend_check_only || wasm32_target || cortex_m_target ||
+             tenant_vm_guest || experimental_owned_int || experimental_static_ffi_i64 ||
+             static_ffi_i64_capability || experimental_pointer_int_aot ||
+             experimental_rt_scalar_loop || tree_shake || !tree_shake_roots.empty() ||
+             native_hard_rt_profile || rt_check_only || rt_entry_seen || rt_report_seen ||
+             allocator_provider_seen || library_profile_seen || constraint_descriptors_only ||
+             actor_region_v1_guest || actor_region_v2_guest || sealed_scalar_aot ||
+             sealed_class_fields_aot || actor_region_v1_aot || isolate_entry_seen ||
+             source_log_manifest_seen || verify_actor_source_set_only ||
+             verify_actor_headers_only || expected_source_set_seen || gpu_g1_kernel_ir)) {
+        std::cerr << "--emit-protocol-actors requires the standalone host protocol profile\n";
+        return 2;
+    }
     if (frontend_check_only &&
             (rt_check_only || rt_report_seen || rt_entry_seen || native_hard_rt_profile ||
              tree_shake || !tree_shake_roots.empty() || constraint_descriptors_only ||
@@ -1222,7 +1266,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--guest-abi=tenant-vm] [--experimental-pointer-int-aot] [--experimental-static-ffi-i64-aot] [--ffi-grant=atto.math.i64.v1] [--release|--strict-aot|--hard-rt] [--freestanding] [--deployment-profile=ebpf-xdp|ebpf-tc|carrier-linux|fpga-hls|asic-rtl (not yet certified)] [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--aot-profile=sealed-scalar-v1|sealed-class-fields-v1|actor-region-v1] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--check|--analyze] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--guest-abi=tenant-vm] [--experimental-pointer-int-aot] [--experimental-static-ffi-i64-aot] [--ffi-grant=atto.math.i64.v1] [--release|--strict-aot|--hard-rt] [--freestanding] [--deployment-profile=ebpf-xdp|ebpf-tc|carrier-linux|fpga-hls|asic-rtl (not yet certified)] [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--aot-profile=sealed-scalar-v1|sealed-class-fields-v1|actor-region-v1] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--check|--analyze|--emit-protocol-actors] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -1351,12 +1395,29 @@ int main(int argc, char** argv) {
                  experimental_pointer_int_aot || bounded_allocator_provider))
             throw std::runtime_error(
                 "normal static FFI i64 requires host AOT with isolated approved linker grant");
+        if (emit_protocol_actors) {
+            const auto program = oreslang::parse_verified_protocol_actor_library(text, language_version);
+            std::cout << oreslang::protocol_actor_codegen::emit(program);
+            return 0;
+        }
         auto ast = oreslang::load_native_program(
             path, text, source_identity, experimental_owned_int,
             experimental_rt_scalar_loop, !wasm32_target && !cortex_m_target,
             admitted_provider_bits, static_ffi_i64_capability, language_version);
         source_module = ast.module;
         source_namespace = ast.namespace_name;
+        if (ast.protocol_guest) {
+            if (wasm32_target || cortex_m_target || tenant_vm_guest || freestanding ||
+                experimental_owned_int || experimental_rt_scalar_loop || static_ffi_i64_capability ||
+                native_hard_rt_profile || rt_check_only || rt_report_seen || rt_entry_seen ||
+                tree_shake || !tree_shake_roots.empty() || constraint_descriptors_only ||
+                allocator_provider_seen || library_profile_seen || actor_region_v1_guest ||
+                actor_region_v2_guest || sealed_scalar_aot || sealed_class_fields_aot ||
+                actor_region_v1_aot || isolate_entry_seen || source_log_manifest_seen)
+                throw std::runtime_error("E_PROTOCOL_GUEST: verified protocol main requires the host profile");
+            if (!frontend_check_only) std::cout << oreslang::protocol_actor_codegen::emit(ast);
+            return 0;
+        }
         // A lexical scalar loop has valid native CFG continuation semantics,
         // but no static WCET / termination proof or actor scheduler yield.
         // Preserve strict target admission for hard-RT and freestanding ABIs.

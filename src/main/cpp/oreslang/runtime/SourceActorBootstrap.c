@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define SOURCE_ACTOR_MAGIC UINT64_C(0x4f52455353504157)
 #define SOURCE_GROUP_SLOTS 64u
@@ -22,6 +23,8 @@
 #define SOURCE_ROOT_CONTROL_DONE_SUSPEND UINT64_C(3)
 #define SOURCE_ROOT_CONTROL_DONE_RESUME UINT64_C(4)
 
+#include "oreslang/runtime/SourceActorProtocol.h"
+
 typedef struct {
     uint64_t magic;
     uint64_t id;
@@ -31,6 +34,7 @@ typedef struct {
     OresNativeActorRef ref;
     OresSourceActorInit constructor;
     OresSourceActorMessage on_message;
+    SourceProtocol* protocol;
     atomic_int initialized;
     atomic_int startup_state;
     atomic_int constructor_started;
@@ -75,6 +79,7 @@ typedef struct {
 typedef struct {
     pthread_mutex_t mutex;
     pthread_cond_t observer_drained;
+    pthread_cond_t protocol_receipt_ready;
     OresNativeVM* vm;
     OresNativeActorRef root_ref;
     OresNativeExecutionContextStore* executions;
@@ -97,7 +102,8 @@ typedef struct {
  */
 static SourceActorGroup group = {
     .mutex = PTHREAD_MUTEX_INITIALIZER,
-    .observer_drained = PTHREAD_COND_INITIALIZER
+    .observer_drained = PTHREAD_COND_INITIALIZER,
+    .protocol_receipt_ready = PTHREAD_COND_INITIALIZER
 };
 /* Protected by group.mutex. Never wraps or resets across VM group reopen. */
 static uint64_t next_actor_id = UINT64_C(4100);
@@ -676,12 +682,57 @@ static void initialize(void* raw, size_t slot, uint64_t payload) {
     group_unlock();
 }
 
+/* Called only from the VM's serial DATA delivery callback. Each occupied
+ * slot has exactly one admitted message. STOP shares the publication gate. */
+static void deliver_protocol(SourceActor* actor, uint64_t ticket) {
+    group_lock();
+    SourceProtocol* protocol = actor->protocol;
+    ensure(ticket && ticket <= SOURCE_GROUP_MAILBOX);
+    SourceProtocolFrame* frame = &protocol->pending[ticket - 1];
+    ensure(frame->occupied && protocol->pending_count);
+    ensure(protocol->receipt_count < SOURCE_GROUP_MAILBOX);
+    const uint16_t source = protocol->state;
+    uint16_t destination = source;
+    int64_t staged = protocol->value;
+    unsigned status = protocol_transition(protocol, frame, &destination, &staged);
+    if (status == PROTOCOL_COMMITTED) {
+        if (atomic_load_explicit(&actor->stop_requested, memory_order_acquire)) {
+            status = PROTOCOL_INTERRUPTED;
+            destination = source;
+        } else {
+            protocol->state = destination;
+            protocol->value = staged;
+        }
+    }
+    frame->occupied = 0;
+    --protocol->pending_count;
+
+    const size_t tail = (protocol->receipt_head + protocol->receipt_count) % SOURCE_GROUP_MAILBOX;
+    uint8_t* receipt = protocol->receipts[tail];
+    memcpy(receipt, "ATPR\1", 5);
+    protocol_write_u64(receipt + 5, actor->id);
+    protocol_write_u64(receipt + 13, 1);
+    protocol_write_u64(receipt + 21, ++protocol->turn);
+    receipt[29] = (uint8_t)status;
+    protocol_write_u16(receipt + 30, source);
+    protocol_write_u16(receipt + 32, destination);
+    ++protocol->receipt_count;
+    ensure(pthread_cond_broadcast(&group.protocol_receipt_ready) == 0);
+    atomic_fetch_add_explicit(&actor->successful, 1, memory_order_release);
+    atomic_fetch_add_explicit(&actor->processed, 1, memory_order_release);
+    group_unlock();
+}
+
 static void deliver(void* raw, size_t slot, uint64_t payload) {
     ensure(raw == &group && slot != SOURCE_GROUP_ROOT_SLOT);
     SourceActor* instance = lookup(slot);
-    ensure(instance->on_message != NULL);
     ensure(atomic_load_explicit(
         &instance->initialized, memory_order_acquire) == 1);
+    if (instance->protocol) {
+        deliver_protocol(instance, payload);
+        return;
+    }
+    ensure(instance->on_message != NULL);
     OresActorTurn turn =
         ores_actor_i64_heap_enter(instance->heap, instance->id, 1);
     OresLogicalTurnV1 logical = {0};
@@ -837,10 +888,11 @@ static void open_group_locked(void) {
 #endif
 }
 
-void* oreslang_source_actor_spawn(
+static SourceActor* spawn_source_actor(
         OresSourceActorInit constructor,
         OresSourceActorMessage on_message,
-        uint64_t fields) {
+        uint64_t fields,
+        SourceProtocol* protocol) {
     ensure(constructor != NULL && fields >= 1 && fields <= 4096);
     group_lock();
     if (!group.vm) open_group_locked();
@@ -869,6 +921,7 @@ void* oreslang_source_actor_spawn(
     instance->id = next_actor_id++;
     instance->constructor = constructor;
     instance->on_message = on_message;
+    instance->protocol = protocol;
 
     /*
      * SourceActor is dynamically allocated. Initialize every C11 atomic
@@ -927,6 +980,111 @@ void* oreslang_source_actor_spawn(
         group.vm, ORES_NATIVE_VM_MAIN, instance->ref, 0));
     group_unlock();
     return instance;
+}
+
+void* oreslang_source_actor_spawn(
+        OresSourceActorInit constructor, OresSourceActorMessage on_message, uint64_t fields) {
+    return spawn_source_actor(constructor, on_message, fields, NULL);
+}
+
+static void init_protocol(OresActorI64Heap* heap, uint64_t domain, uint64_t epoch) {
+    (void)heap;
+    (void)domain;
+    (void)epoch;
+}
+
+OresSourceActorId oreslang_source_actor_spawn_protocol_id(
+        const uint8_t* plan, uint64_t length) {
+    if (length > SIZE_MAX) return 0;
+    SourceProtocol* protocol = protocol_open(plan, (size_t)length);
+    return protocol ? spawn_source_actor(init_protocol, NULL, 1, protocol)->id : 0;
+}
+
+uint64_t oreslang_source_actor_encode_protocol_data(const uint8_t* digest,
+        uint64_t tag, const int64_t* fields, uint64_t count,
+        uint8_t* out, uint64_t capacity) {
+    if (!digest || tag > UINT16_MAX || count > PROTOCOL_MAX_FIELDS ||
+        (count && !fields) || !out || capacity < PROTOCOL_HEADER_SIZE + 8 * count)
+        return 0;
+    memcpy(out, "ATPM\1", 5);
+    memcpy(out + 5, digest, PROTOCOL_DIGEST_SIZE);
+    protocol_write_u16(out + 37, (uint16_t)tag);
+    for (size_t i = 0; i < count; ++i)
+        protocol_write_u64(out + PROTOCOL_HEADER_SIZE + 8 * i, (uint64_t)fields[i]);
+    return PROTOCOL_HEADER_SIZE + 8 * count;
+}
+
+int oreslang_source_actor_try_send_protocol_id(OresSourceActorId id,
+        const uint8_t* bytes, uint64_t length) {
+    if (!bytes && length) return 0;
+    group_lock();
+    SourceActor* actor = lookup_actor_id_locked(id);
+    SourceProtocol* protocol = actor ? actor->protocol : NULL;
+    int accepted = 0;
+    if (protocol && !atomic_load_explicit(&actor->stop_requested, memory_order_acquire) &&
+        protocol->pending_count + protocol->receipt_count < SOURCE_GROUP_MAILBOX &&
+        protocol->turn < UINT64_MAX - protocol->pending_count) {
+        size_t slot = 0;
+        while (slot < SOURCE_GROUP_MAILBOX && protocol->pending[slot].occupied) ++slot;
+        ensure(slot < SOURCE_GROUP_MAILBOX);
+        SourceProtocolFrame* frame = &protocol->pending[slot];
+        /* Copy only the maximum canonical frame. Preserve oversize as a
+         * length mismatch without allocating storage proportional to input. */
+        const size_t copy = length > sizeof(frame->bytes) ? sizeof(frame->bytes) : (size_t)length;
+        if (copy) memcpy(frame->bytes, bytes, copy);
+        frame->occupied = 1;
+        frame->length = length > copy ? copy + 1 : copy;
+        accepted = ores_native_vm_try_send(group.vm, ORES_NATIVE_VM_MAIN, actor->ref, slot + 1)
+            == ORES_NATIVE_SEND_ACCEPTED;
+        if (accepted) ++protocol->pending_count;
+        else frame->occupied = 0;
+    }
+    group_unlock();
+    return accepted;
+}
+
+int oreslang_source_actor_try_pop_protocol_receipt_id(
+        OresSourceActorId id, uint8_t* out, uint64_t capacity) {
+    if (!out || capacity < ORES_SOURCE_PROTOCOL_RECEIPT_SIZE) return 0;
+    group_lock();
+    SourceActor* actor = lookup_actor_id_locked(id);
+    SourceProtocol* protocol = actor ? actor->protocol : NULL;
+    const int available = protocol && protocol->receipt_count;
+    if (available) {
+        memcpy(out, protocol->receipts[protocol->receipt_head], ORES_SOURCE_PROTOCOL_RECEIPT_SIZE);
+        protocol->receipt_head = (protocol->receipt_head + 1) % SOURCE_GROUP_MAILBOX;
+        --protocol->receipt_count;
+    }
+    group_unlock();
+    return available;
+}
+
+int oreslang_source_actor_complete_protocol_send_id(OresSourceActorId id, int admitted) {
+    /* Only the compiler-generated trusted main calls this blocking boundary. */
+    struct timespec deadline;
+    ensure(timespec_get(&deadline, TIME_UTC) == TIME_UTC);
+    deadline.tv_sec += 15;
+    int status = 0;
+    group_lock();
+    SourceActor* actor = lookup_actor_id_locked(id);
+    while (admitted && actor && actor->protocol &&
+            !atomic_load_explicit(&actor->stop_requested, memory_order_acquire)) {
+        SourceProtocol* protocol = actor->protocol;
+        if (protocol->receipt_count) {
+            status = protocol->receipts[protocol->receipt_head][29];
+            protocol->receipt_head = (protocol->receipt_head + 1) % SOURCE_GROUP_MAILBOX;
+            --protocol->receipt_count;
+            break;
+        }
+        if (pthread_cond_timedwait(&group.protocol_receipt_ready, &group.mutex, &deadline) != 0) break;
+        actor = lookup_actor_id_locked(id);
+    }
+    group_unlock();
+    if (!status) {
+        if (oreslang_source_actor_try_request_stop_id(id)) oreslang_source_actor_join_done_id(id);
+        ensure(0);
+    }
+    return status;
 }
 
 /* Checked identity is a minted value, not an encoded host pointer. The
@@ -1444,6 +1602,7 @@ static void source_actor_join_claimed(
         (unsigned long long)failure_code);
 #endif
     group.actors[slot] = NULL;
+    free(instance->protocol);
     instance->magic = 0;
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
     if (test_force_address_reuse) {
