@@ -36,6 +36,7 @@ fn main(){
         ("comment-control","pub fnc main(): int { /* |(a,b)| -> */ return 42; }\n",42),
         ("logical-control","fnc logical(): bool { return true || false; } pub fnc main(): int { return 42; }\n",42),
         ("repeated-binding","pub fnc main(): int { return (5,8) |> |(a,_)| -> a+a; }\n",10),
+        ("discard-name-collision","pub fnc main(): int { return (5,99) |> |(__atto_tuple_discard_1,_)| -> __atto_tuple_discard_1; }\n",5),
     ];
     for (name,source,want) in positive {
         let cwd=dir.0.join(name);let r=compile(&compiler,&cwd,source);
@@ -85,5 +86,5 @@ fn main(){
             assert!(!r.status.success()&&r.stdout.is_empty());
         }
     }
-    println!("LLVM_TUPLE_NATIVE_PASS 13 shared + 4 extra positive at O0/O2, 11 negative and 4 discarded overflow outcomes");
+    println!("LLVM_TUPLE_NATIVE_PASS 13 shared + 5 extra positive at O0/O2, 11 negative and 4 discarded overflow outcomes");
 }
