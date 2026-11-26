@@ -6102,6 +6102,12 @@ private:
 
     void strict_bindings(Function& function) {
         std::unordered_map<std::string,RefinedQuantity> mutable_types;
+        constexpr std::string_view version_prefix="__atto_strict_version_";
+        // Internal version identities must be legal ownership CFG place names.
+        for(const auto& [name,fact]:verified_locals_){
+            (void)fact;
+            if(name.starts_with(version_prefix))fail("E_VERIFY_UNSUPPORTED: reserved strict version identifier");
+        }
         for(;;) {
             const bool immutable=accept("val");
             const bool mut=!immutable&&accept("let");
@@ -6116,7 +6122,7 @@ private:
                 if(function.locals.size()>=128)fail("E_REFINEMENT_LIMIT: too many strict versions");
                 LocalBinding local;
                 local.offset=token_.offset;
-                local.name="$strict$"+std::to_string(function.locals.size());
+                local.name=std::string(version_prefix)+std::to_string(function.locals.size());
                 local.initializer=std::move(value.expression);
                 strict_slots_[name]=local.name;
                 verified_locals_.at(name)=RefinedQuantity{found->second.unit,value.range,found->second.i32};
@@ -6138,6 +6144,7 @@ private:
                 type=read_refined_type();local.name=identifier();
             }
             require("=");auto value=verified_expression(0);require(";");
+            if(local.name.starts_with(version_prefix))fail("E_VERIFY_UNSUPPORTED: reserved strict version identifier");
             if(inferred)type=value.type();
             type.require(value.type(),"E_REFINEMENT_BINDING","binding "+local.name);
             if(!verified_locals_.emplace(local.name,RefinedQuantity{type.unit,value.range,type.i32}).second)
