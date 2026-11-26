@@ -14,7 +14,7 @@ pub fn run(h: &mut Harness) {
         ("wrong_deref", "val Pointer<int> p = rt ref value; val answer = rt deref value; rt unref p; return answer;", "expected"),
         ("wrong_release", "val Pointer<int> p = rt ref value; val answer = rt deref p; rt unref value; return answer;", "expected"),
         ("scalar_cast", "val Pointer<int> p = rt ref value; val answer = p as int; rt unref p; return answer;", "expected"),
-        ("copied_handle", "val Pointer<int> p = rt ref value; val Pointer<int> clone = p; val answer = rt deref p; rt unref p; return answer;", "expected"),
+        ("copied_handle", "val Pointer<int> p = rt ref value; val Pointer<int> clone = p; val answer = rt deref p; rt unref p; return answer;", "duplicate or reserved immutable local"),
         ("mutated_referent", "val Pointer<int> p = rt ref value; value = 43; val answer = rt deref p; rt unref p; return answer;", "expected"),
         ("unsupported_close", "val Pointer<int> p = rt ref value; val answer = rt deref p; p.close(); return answer;", "expected"),
         ("unsupported_write", "val Pointer<int> p = rt ref value; p.write_at(0, 99); val answer = rt deref p; rt unref p; return answer;", "expected"),
