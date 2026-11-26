@@ -1,5 +1,6 @@
 #include "oreslang/types/OwnershipChecker.hpp"
 #include "oreslang/types/NativeOwnershipJoin.hpp"
+#include "oreslang/types/NativeOwnershipPlace.hpp"
 #include "oreslang/types/NativeClassLayout.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/types/OwnershipCfg.hpp"
@@ -312,6 +313,23 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             if (expr.left->kind == Expression::Kind::Conditional)
                 reject(expr, "E_TAKE_UNTRACKED_SELECT: rt take of a conditional "
                              "requires a tracked source place; bind the result first");
+            // Literal Copy scalars have no source owner to invalidate.
+            // Preserve the existing native rt take literal contract without
+            // relaxing the tracked-place requirement for computed rvalues.
+            if (expr.left->kind == Expression::Kind::Integer ||
+                    expr.left->kind == Expression::Kind::Boolean) {
+                check_value(*expr.left, locals, functions);
+                return;
+            }
+            // Other rvalues (arithmetic, calls, copy/share wrappers, unary
+            // expressions and nested projections) likewise lack an exact
+            // source-place invalidation in the stage-one native checker.
+            // Check before evaluating the expression; a later read cannot
+            // turn an untracked rvalue into an ownership move.
+            if (native_ownership::take_source_kind(*expr.left) ==
+                    native_ownership::TakeSourceKind::Untracked)
+                reject(expr, "E_TAKE_UNTRACKED_PLACE: rt take requires a "
+                             "tracked named owner or direct class field");
             // The bounded class subset has only trivially destructible i64
             // fields. Lowering a field take as a load is valid only because
             // checker state invalidates that place until an explicit write.
