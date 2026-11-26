@@ -150,7 +150,27 @@ int main() {
     metadata.result = literal(16);
     metadata.result->kind = Expr::Kind::SizeBytes;
     must_reject("metadata after close", [&] { verify_plan(metadata); });
-    std::cout << "POINTER_HIR_ADVERSARIAL_REJECTIONS=14\n";
+    auto region = plan();
+    region.steps[0].kind = Step::Kind::Fill;
+    Step swap;
+    swap.kind = Step::Kind::Swap;
+    swap.second_index = 1;
+    region.steps.insert(region.steps.begin() + 1, std::move(swap));
+    validate_ownership(region);
+    region.steps[1].second_index = 2;
+    must_reject("out-of-bounds swap after admission", [&] { verify_plan(region); });
+    region.steps[1].second_index = 1;
+    region.steps[0].kind = Step::Kind::Write;
+    must_reject("swap of uninitialized cell", [&] { verify_plan(region); });
+    region.steps[0].kind = Step::Kind::Fill;
+    region.steps[0].second_index = 1;
+    must_reject("malformed fill second index", [&] { verify_plan(region); });
+    region.steps[0].second_index = 0;
+    region.steps[1].value = literal(42);
+    must_reject("malformed swap payload", [&] { verify_plan(region); });
+    region.steps[1].value.reset();
+    validate_ownership(region);
+    std::cout << "POINTER_HIR_ADVERSARIAL_REJECTIONS=18\n";
 
     // The independently verified HIR arithmetic must agree at the signed
     // boundaries and reject overflow even when supplied a fabricated annotation.

@@ -34,4 +34,14 @@ pub fn run(h: &mut Harness) {
         "pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(4); val int count = p.len(); val int bytes = p.size_bytes(); p.close(); return count + bytes + 6; }",
         &["--experimental-pointer-int-aot"], 42, true, None);
 
+    h.positive("pointer_fill_evaluate_once_42",
+        "pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(3); p.write_at(0, 13); p.fill(p.read_at(0) + 1); val int a = p.read_at(0); val int b = p.read_at(1); val int c = p.read_at(2); p.close(); return a + b + c; }",
+        &["--experimental-pointer-int-aot"], 42, true, None);
+    h.positive("pointer_swap_distinct_42",
+        "pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(2); p.write_at(0, 7); p.write_at(1, 35); p.swap_at(0, 1); val int a = p.read_at(0); val int b = p.read_at(1); p.close(); return a + b * 1 + (a - 35); }",
+        &["--experimental-pointer-int-aot"], 42, true, None);
+    h.positive("pointer_swap_self_42",
+        "pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(42); p.swap_at(0, 0); val int a = p.read(); p.close(); return a; }",
+        &["--experimental-pointer-int-aot"], 42, true, None);
+
 }

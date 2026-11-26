@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <utility>
 
 namespace oreslang::pointer_int_aot {
 
@@ -153,6 +154,8 @@ inline void verify_plan(const Plan& plan) {
     };
 
     for (const Step& step : plan.steps) {
+        if (step.kind != Step::Kind::Swap && step.second_index != 0)
+            ownership_error("unexpected second pointer index");
         switch (step.kind) {
         case Step::Kind::Write:
             if (borrowed_local)
@@ -161,6 +164,23 @@ inline void verify_plan(const Plan& plan) {
                 ownership_error("write after close, missing value, forged index or unsupported side effect");
             elements[step.index] = eval(eval, *step.value, 0);
             initialized[step.index] = true;
+            break;
+        case Step::Kind::Fill: {
+            if (borrowed_local || !live || !step.value || step.index != 0 || !step.name.empty())
+                ownership_error("invalid fill authority or shape");
+            const auto value = eval(eval, *step.value, 0);
+            for (std::size_t i = 0; i < plan.count; ++i) {
+                elements[i] = value;
+                initialized[i] = true;
+            }
+            break;
+        }
+        case Step::Kind::Swap:
+            if (borrowed_local || !live || step.value || !step.name.empty() ||
+                    step.index >= plan.count || step.second_index >= plan.count ||
+                    !initialized[step.index] || !initialized[step.second_index])
+                ownership_error("invalid swap authority, bounds or initialization");
+            std::swap(elements[step.index], elements[step.second_index]);
             break;
         case Step::Kind::Scalar:
             if (step.name.empty() || step.name == plan.owner ||
