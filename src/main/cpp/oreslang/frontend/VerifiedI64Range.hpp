@@ -86,7 +86,7 @@ public:
 
     VerifiedI64Range constrain(std::string_view op, std::int64_t bound) const {
         if (op == "eq") return {std::max(bounds_.minimum, bound), std::min(bounds_.maximum, bound), exclusions_};
-        if (op == "<=") return {bounds_.minimum, std::min(bounds_.maximum, bound)};
+        if (op == "<=") return {bounds_.minimum, std::min(bounds_.maximum, bound), exclusions_};
         if (op == ">=") return {std::max(bounds_.minimum, bound), bounds_.maximum, exclusions_};
         if (op == "<" && bound != Min) return {bounds_.minimum, std::min(bounds_.maximum, bound - 1), exclusions_};
         if (op == ">" && bound != Max) return {std::max(bounds_.minimum, bound + 1), bounds_.maximum, exclusions_};
