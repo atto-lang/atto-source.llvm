@@ -1918,6 +1918,18 @@ if(BUILD_TESTING)
         COMMAND atto-distributed-symbol-manifest-v1-test)
     set_tests_properties(distributed_symbol_manifest_host_only_v1 PROPERTIES TIMEOUT 15)
 
+    if(UNIX)
+        add_executable(atto-distributed-symbol-mapped-process-v1-test
+            tests/distributed_symbol_mapped_process_v1_test.cpp)
+        target_include_directories(atto-distributed-symbol-mapped-process-v1-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime")
+        target_compile_options(atto-distributed-symbol-mapped-process-v1-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+        add_test(NAME distributed_symbol_mapped_process_host_only_v1
+            COMMAND atto-distributed-symbol-mapped-process-v1-test)
+        set_tests_properties(distributed_symbol_mapped_process_host_only_v1 PROPERTIES TIMEOUT 15)
+    endif()
+
     # Host-only immutable Symbol literal image, generation pins and scoped
     # core-copy checks. NOT native guest #Symbol lowering or OS RO protection.
     find_package(Threads REQUIRED)
