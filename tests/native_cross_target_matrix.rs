@@ -16,7 +16,7 @@
 //!       --root . [--runtime-dir src/main/cpp/oreslang/runtime] [--triple T ...] [--runner TRIPLE=CMD ...]
 //! Default triples: x86_64, aarch64, i686, armv7 (hosted Linux).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -77,7 +77,10 @@ fn parse() -> Options {
             "--runner" => {
                 let v = value();
                 let (t, cmd) = v.split_once('=').unwrap_or_else(|| fail("--runner wants TRIPLE=CMD"));
-                o.runners.insert(t.to_string(), cmd.split_whitespace().map(String::from).collect());
+                let prefix: Vec<String> = cmd.split_whitespace().map(String::from).collect();
+                if prefix.is_empty() || o.runners.insert(t.to_string(), prefix).is_some() {
+                    fail("empty or duplicate runner prefix");
+                }
             }
             _ => fail(&format!("unknown argument: {arg}")),
         }
@@ -88,7 +91,68 @@ fn parse() -> Options {
     if o.triples.is_empty() {
         o.triples = TRIPLES.iter().map(|(t, _)| t.to_string()).collect();
     }
+    let unique: BTreeSet<_> = o.triples.iter().collect();
+    if unique.len() != o.triples.len() || o.triples.iter().any(|t| !TRIPLES.iter().any(|(known, _)| known == t)) {
+        fail("unknown or duplicate target triple");
+    }
+    if o.runners.keys().any(|t| !unique.contains(t)) {
+        fail("runner provided for an unselected target");
+    }
     o
+}
+
+/// Reject host-fallback objects and binaries before running a target lane.
+/// This is an ELF identity preflight, not a complete loader or libc ABI check.
+fn elf_identity(bytes: &[u8], triple: &str, executable: bool) -> bool {
+    let (class, machine, header_len) = match triple {
+        "x86_64-unknown-linux-gnu" => (2, 62, 64),
+        "aarch64-unknown-linux-gnu" => (2, 183, 64),
+        "i686-unknown-linux-gnu" => (1, 3, 52),
+        "armv7-unknown-linux-gnueabihf" => (1, 40, 52),
+        _ => return false,
+    };
+    if bytes.len() < header_len || &bytes[..4] != b"\x7fELF" || bytes[4] != class || bytes[5] != 1 || bytes[6] != 1 {
+        return false;
+    }
+    let kind = u16::from_le_bytes([bytes[16], bytes[17]]);
+    let actual = u16::from_le_bytes([bytes[18], bytes[19]]);
+    actual == machine && if executable { kind == 2 || kind == 3 } else { kind == 1 }
+}
+
+fn require_elf(path: &str, triple: &str, executable: bool) {
+    let bytes = fs::read(path).unwrap_or_else(|e| fail(&format!("{path}: {e}")));
+    if !elf_identity(&bytes, triple, executable) {
+        fail(&format!("{triple}: wrong ELF class, byte order, machine or type: {path}"));
+    }
+}
+
+/// Run deterministic negative checks on every invocation of the matrix.
+fn check_identity_guard() {
+    for (triple, _) in TRIPLES {
+        let (class, machine, len) = match *triple {
+            "x86_64-unknown-linux-gnu" => (2, 62u16, 64),
+            "aarch64-unknown-linux-gnu" => (2, 183, 64),
+            "i686-unknown-linux-gnu" => (1, 3, 52),
+            "armv7-unknown-linux-gnueabihf" => (1, 40, 52),
+            _ => fail("unhandled guard fixture"),
+        };
+        let mut h = vec![0u8; len];
+        h[..4].copy_from_slice(b"\x7fELF");
+        h[4] = class; h[5] = 1; h[6] = 1; h[16] = 1;
+        h[18..20].copy_from_slice(&machine.to_le_bytes());
+        assert!(elf_identity(&h, triple, false));
+        assert!(!elf_identity(&h, triple, true));
+        assert!(!elf_identity(&h[..20], triple, false));
+        for (other, _) in TRIPLES {
+            if other != triple { assert!(!elf_identity(&h, other, false)); }
+        }
+        h[16] = 2;
+        assert!(elf_identity(&h, triple, true));
+        assert!(!elf_identity(&h, triple, false));
+        h[5] = 2;
+        assert!(!elf_identity(&h, triple, true));
+    }
+    println!("PASS ELF identity guard positive/negative checks (host structural only)");
 }
 
 /// (exit code, stdout, stderr); None if the program could not be started.
@@ -121,6 +185,7 @@ fn fixtures(root: &Path) -> Vec<PathBuf> {
 
 fn main() {
     let o = parse();
+    check_identity_guard();
     let work = env::temp_dir().join(format!("oreslang-cross-matrix-{}", process::id()));
     fs::create_dir_all(&work).unwrap_or_else(|e| fail(&e.to_string()));
     let p = |name: &str| work.join(name).to_string_lossy().into_owned();
@@ -143,7 +208,7 @@ fn main() {
             let args = ["cc", "-target", zt, "-std=c11", "-O2", "-pthread", "-D_GNU_SOURCE",
                 "-DORESLANG_SOURCE_ACTOR_TESTING", "-Wall", "-Werror", include.as_str(), "-c", source.as_str(), "-o", obj.as_str()];
             match run(&o.zig, &args) {
-                Some((0, _, _)) => objs.push(obj),
+                Some((0, _, _)) => { require_elf(&obj, triple, false); objs.push(obj); }
                 other => fail(&format!("{triple}: runtime {source} did not cross-compile: {}", other.map(|r| r.2).unwrap_or_default())),
             }
         }
@@ -176,6 +241,8 @@ fn main() {
         }
         let Some((host_code, host_out, _)) = run(&hbin, &[]) else { fail(&format!("{name}: host binary did not start")) };
 
+        if host_code < 0 { fail(&format!("{name}: host oracle terminated by signal")); }
+
         for triple in &o.triples {
             let zig_target = TRIPLES.iter().find(|(t, _)| t == triple).map(|(_, z)| *z)
                 .unwrap_or_else(|| fail(&format!("no zig target for {triple}")));
@@ -201,6 +268,7 @@ fn main() {
                 failures.push(format!("{triple} {name}: clang could not compile the IR"));
                 continue;
             }
+            require_elf(&obj, triple, false);
             let mut link: Vec<&str> = vec!["cc", "-target", zig_target, "-static", &obj];
             if needs_runtime {
                 link.extend(runtime_objects[triple].iter().map(String::as_str));
@@ -211,6 +279,7 @@ fn main() {
                 failures.push(format!("{triple} {name}: static link failed"));
                 continue;
             }
+            require_elf(&bin, triple, true);
             let result = match o.runners.get(triple) {
                 Some(prefix) => {
                     let mut args: Vec<&str> = prefix[1..].iter().map(String::as_str).collect();
@@ -229,6 +298,9 @@ fn main() {
                 None => failures.push(format!("{triple} {name}: target binary did not start (missing binfmt/qemu runner?)")),
             }
         }
+    }
+    if o.runtime_dir.is_some() && runtime_linked == 0 {
+        failures.push("runtime requested but no runtime-backed fixture linked; vacuous actor lane refused".into());
     }
     let _ = fs::remove_dir_all(&work);
     println!("fixtures admitted for host: {admitted}; linked with the C actor runtime: {runtime_linked}; not linkable: {host_runtime}");
