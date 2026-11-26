@@ -6295,7 +6295,7 @@ private:
                     do{
                         if(cells.size()>=16||function.locals.size()>=128)fail("E_REFINEMENT_LIMIT: fixed array cell budget");
                         auto cell=verified_expression(0);
-                        if(cell.unit!=QuantityUnit())fail("E_UNIT_DIMENSION: scalar array cell");
+                        if(!(cell.unit==QuantityUnit()))fail("E_UNIT_DIMENSION: scalar array cell");
                         LocalBinding slot;slot.offset=at;slot.name=std::string(prefix)+std::to_string(function.locals.size());
                         slot.assignable=true;slot.initializer=make_expression(Expression::Kind::Integer,at);
                         slot.initializer->integer=0;
@@ -6353,7 +6353,7 @@ private:
             if(const auto a=strict_arrays_.find(name);a!=strict_arrays_.end()){
                 if(!accept("["))fail("E_VERIFY_UNSUPPORTED: array cannot escape or be used as scalar");
                 auto index=verified_expression(depth+1);require("]");
-                if(index.unit!=QuantityUnit())fail("E_UNIT_DIMENSION: scalar index required");
+                if(!(index.unit==QuantityUnit()))fail("E_UNIT_DIMENSION: scalar index required");
                 const auto lo=index.range.minimum(),hi=index.range.maximum();
                 if(lo<0||hi>=static_cast<std::int64_t>(a->second.size()))fail("E_VERIFY_UNPROVEN: index not proved within receiver bounds");
                 if(index.expression->kind!=Expression::Kind::Variable&&index.expression->kind!=Expression::Kind::Integer)
