@@ -135,3 +135,24 @@ fn forged_void_payload_effect_does_not_bypass_parser_rejection() {
     program.actors[0].sends = Some(ActorSendEffect::Payload(Type::Void));
     assert_eq!(check::check(&program).unwrap_err().code, "E_ACTOR_SEND_CONTRACT");
 }
+
+#[test]
+fn suspension_aliases_share_the_existing_bounded_scalar_profile() {
+    let mut canonical = None;
+    for spelling in ["suspends", "susp", "⧖", "∂"] {
+        let source = ACTOR
+            .replace("receive(ActorMail<int>", &format!("{spelling} receive(ActorMail<int>"))
+            .replace("pub fnc main()", &format!("pub {spelling} fnc main()"));
+        let compiled = compile(&source).expect("bounded non-suspending profile");
+        assert!(compiled.starts_with(b"\0asm"));
+        if let Some(ref expected) = canonical {
+            assert_eq!(&compiled, expected, "{spelling}");
+        } else {
+            canonical = Some(compiled);
+        }
+        let unsupported = format!("pub {spelling} fnc main(): int {{ return await 42; }}");
+        assert!(compile(&unsupported).is_err(), "{spelling}");
+        let identifier = format!("pub fnc main(): int {{ val int {spelling} = 1; return 0; }}");
+        assert!(compile(&identifier).is_err(), "{spelling}");
+    }
+}
