@@ -69,7 +69,7 @@ fn main(){
         return new_row.x - old.x + 20;
       }"#,48)
     ];
-    const rejected=[
+    let rejected=[
       ("missing spread source",r#"pub fnc main():int{
         const r=infer struct{...missing,y:2}; return r.y;
       }"#),

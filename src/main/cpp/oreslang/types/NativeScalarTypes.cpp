@@ -107,9 +107,17 @@ void validate_native_scalar_types(const Program& program) {
         switch (e.kind) {
             case E::AggregateConstruct: {
                 if (!e.aggregate_type ||
-                        e.aggregate_type->kind != types::NativeAggregateShape::Kind::ExactStruct ||
+                        (e.aggregate_type->kind != types::NativeAggregateShape::Kind::ExactStruct &&
+                         e.aggregate_type->kind != types::NativeAggregateShape::Kind::ReadonlyRecord) ||
                         e.argument_names.size() != e.arguments.size())
                     fail(e.offset, "AGGREGATE_CONSTRUCTOR_UNVERIFIED");
+                // An inferred spread can write a field more than once,
+                // with a different scalar type before the final override.
+                // Validate every evaluated value, then the final slot types.
+                const bool planned = !e.aggregate_argument_types.empty();
+                if (planned && e.aggregate_argument_types.size() != e.arguments.size())
+                    fail(e.offset, "AGGREGATE_CONSTRUCTOR_PLAN_ARITY");
+                std::unordered_map<std::string, Type> final_types;
                 for (std::size_t i = 0; i < e.arguments.size(); ++i) {
                     const auto& name = e.argument_names[i];
                     const auto& fields = e.aggregate_type->fields;
@@ -120,9 +128,23 @@ void validate_native_scalar_types(const Program& program) {
                     if (found == fields.end() ||
                             (found->type != "int" && found->type != "bool"))
                         fail(e.offset, "AGGREGATE_NATIVE_FIELD_UNVERIFIED");
-                    require(expression(*e.arguments[i], locals),
-                        scalar(found->type == "bool"), e.arguments[i]->offset,
+                    const auto actual = expression(*e.arguments[i], locals);
+                    const auto expected = planned ? scalar(e.aggregate_argument_types[i])
+                        : scalar(found->type == "bool");
+                    if (expected.kind != Kind::Int && expected.kind != Kind::Bool)
+                        fail(e.offset, "AGGREGATE_NATIVE_FIELD_UNVERIFIED");
+                    require(actual, expected, e.arguments[i]->offset,
                         "AGGREGATE_CONSTRUCTOR_FIELD_TYPE_MISMATCH");
+                    if (!planned && final_types.count(name))
+                        fail(e.offset, "AGGREGATE_CONSTRUCTOR_DUPLICATE_FIELD");
+                    final_types.insert_or_assign(name, actual);
+                }
+                for (const auto& field : e.aggregate_type->fields) {
+                    const auto found = final_types.find(field.name);
+                    if (found == final_types.end())
+                        fail(e.offset, "AGGREGATE_CONSTRUCTOR_MISSING_FIELD");
+                    require(found->second, scalar(field.type == "bool"), e.offset,
+                        "AGGREGATE_CONSTRUCTOR_FINAL_FIELD_TYPE_MISMATCH");
                 }
                 return aggregate(*e.aggregate_type);
             }

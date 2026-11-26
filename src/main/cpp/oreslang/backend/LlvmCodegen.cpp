@@ -2695,7 +2695,11 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         } else {
             llvm::Value* valid = builder.CreateICmpULE(
                 result, llvm::ConstantInt::get(i64, 255), "valid.exit.status");
-            valid = builder.CreateAnd(valid, output_ok);
+            // In the closed scalar/aggregate profile no shutdown helper is
+            // present. Preserve the direct range-check data dependency;
+            // runtime-bearing profiles must still include every shutdown guard.
+            if (string_runtime || record_runtime || has_source_tasks)
+                valid = builder.CreateAnd(valid, output_ok);
             llvm::Value* narrowed = builder.CreateTrunc(result, i32);
             builder.CreateRet(builder.CreateSelect(valid, narrowed,
                 llvm::ConstantInt::get(i32, 1), "checked.exit.status"));
