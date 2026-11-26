@@ -69,6 +69,7 @@ impl LockedRoot {
     }
 }
 pub(crate) mod authority;
+pub(crate) mod session;
 pub struct ArtifactStore { root:LockedRoot }
 impl ArtifactStore {
     pub fn open(path:&Path)->io::Result<Self>{
@@ -364,4 +365,28 @@ mod tests {
             println!("NATIVE_CACHE_AUTHORITY_CHILD|protected-hit-no-compile|guest=42");
         }
     }
+    #[test]
+    fn restricted_native_session_real_guest(){
+        use crate::{compiler_cache_ledger as ledger,sha256::{sha256,hex_digest}};
+        let t=Temp::new();let cache=t.0.join("cache");let host=t.0.join("host");
+        for d in [&cache,&host]{fs::DirBuilder::new().mode(0o700).create(d).unwrap();}
+        let authority=authority::Authority::open(&host).unwrap();
+        let pin=sha256(&ledger::record("tenant/a",1,SECRET).unwrap());
+        authority.provision("tenant/a",1,SECRET,&pin).unwrap();
+        let compiler=hex_digest(b"fixture compiler identity");let toolchain=hex_digest(b"fixture toolchain");
+        let open=||session::NativeSession::open(&cache,&host,"tenant/a",&compiler,&toolchain).unwrap();
+        let s=open();let a=s.build(A,&pin,SECRET,true).unwrap();assert!(!a.reused);
+        assert_eq!(a.bytes,compile_fixture(A).unwrap());execute_native(&t.0,&a.bytes,42);drop(s);
+        let s=open();let b=s.build(A,&pin,SECRET,false).unwrap();assert!(b.reused);assert_eq!(b.bytes,a.bytes);
+        let c=s.build(B,&pin,SECRET,false).unwrap();assert!(!c.reused);execute_native(&t.0,&c.bytes,43);
+        assert!(s.build(BAD,&pin,SECRET,true).is_err());assert!(s.build(B,&pin,SECRET,false).unwrap().reused);
+        assert!(s.build(B,&[0;32],SECRET,false).is_err());
+        assert!(s.build("import pkg x;",&pin,SECRET,false).is_err());
+        assert!(s.build(&"x".repeat(65537),&pin,SECRET,false).is_err());
+        let different=hex_digest(b"new toolchain");
+        let changed=session::NativeSession::open(&cache,&host,"tenant/a",&compiler,&different).unwrap();
+        assert!(!changed.build(B,&pin,SECRET,false).unwrap().reused);
+        println!("RESTRICTED_NATIVE_SESSION|guest=42/43|reopen-hit|toolchain-fence|rollback|source-budget");
+    }
+
 }

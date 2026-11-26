@@ -8,6 +8,7 @@ on:
       - 'src/compiler_artifact_receipt.rs'
       - 'src/compiler_artifact_store.rs'
       - 'src/compiler_artifact_store/authority.rs'
+      - 'src/compiler_artifact_store/session.rs'
       - 'src/compiler_cache_key_policy.rs'
       - 'src/compiler_cache_ledger.rs'
       - '.github/workflows/incremental-session-candidate.yml'

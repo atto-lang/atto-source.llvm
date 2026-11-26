@@ -1,4 +1,4 @@
-//! Test-only Linux x86-64 local authority adapter. Requires protected host
+//! Restricted trusted-host Linux x86-64 local authority adapter. Requires protected host
 //! directory/ancestors, trusted procfs, local fs flock/fsync semantics and
 //! cooperative clients. External current pins remain the trust root; a
 //! restored directory plus restored external authority is NOT rollback-proof.
@@ -38,7 +38,7 @@ impl Authority{
         }
         let file=File::open(format!("/proc/self/fd/{}",fd.as_raw_fd()))?;
         let now=file.metadata()?;
-        if !now.is_file()||now.dev()!=meta.dev()||now.ino()!=meta.ino(){return Err(invalid("authority record inode changed"));}
+        if !now.is_file()||now.dev()!=meta.dev()||now.ino()!=meta.ino()||now.nlink()!=1||now.uid()!=unsafe{geteuid()}||now.mode()&0o077!=0{return Err(invalid("authority record inode changed"));}
         let mut bytes=Vec::new();file.take((RECORD_MAX+1) as u64).read_to_end(&mut bytes)?;
         if bytes.len()>RECORD_MAX{return Err(invalid("authority record too large"));}
         Ok(bytes)
