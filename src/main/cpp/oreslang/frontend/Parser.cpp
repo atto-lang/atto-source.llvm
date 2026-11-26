@@ -6106,7 +6106,7 @@ private:
         // Internal version identities must be legal ownership CFG place names.
         for(const auto& [name,fact]:verified_locals_){
             (void)fact;
-            if(name.starts_with(version_prefix))fail("E_VERIFY_UNSUPPORTED: reserved strict version identifier");
+            if(name.compare(0,version_prefix.size(),version_prefix)==0)fail("E_VERIFY_UNSUPPORTED: reserved strict version identifier");
         }
         for(;;) {
             const bool immutable=accept("val");
@@ -6144,7 +6144,7 @@ private:
                 type=read_refined_type();local.name=identifier();
             }
             require("=");auto value=verified_expression(0);require(";");
-            if(local.name.starts_with(version_prefix))fail("E_VERIFY_UNSUPPORTED: reserved strict version identifier");
+            if(local.name.compare(0,version_prefix.size(),version_prefix)==0)fail("E_VERIFY_UNSUPPORTED: reserved strict version identifier");
             if(inferred)type=value.type();
             type.require(value.type(),"E_REFINEMENT_BINDING","binding "+local.name);
             if(!verified_locals_.emplace(local.name,RefinedQuantity{type.unit,value.range,type.i32}).second)
