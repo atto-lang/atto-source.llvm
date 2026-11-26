@@ -2,7 +2,17 @@
 # Compile the admitted host-language subset to a standalone native executable.
 # Unsupported source must fail in oreslang-llvmc, never fall back to an interpreter.
 set -euo pipefail
-[[ $# == 2 ]] || { echo 'Usage: scripts/compile-aot.sh source.atto|source.ores output-executable' >&2; exit 64; }
+[[ $# == 2 || $# == 3 ]] || { echo 'Usage: scripts/compile-aot.sh source.atto|source.ores output-executable [--link=static]' >&2; exit 64; }
+# Existing path links the admitted guest IR into one executable. Package
+# linkage is independent of system libc/host-runtime linkage and AOT LTO.
+# Do not silently treat dynamic/hybrid as this existing static guest path.
+case "${3:---link=static}" in
+  --link=static) ;;
+  --link=dynamic|--link=hybrid)
+    echo 'E_LINK_MODE_UNSUPPORTED: separate precompiled package ABI not admitted by this driver' >&2
+    exit 64 ;;
+  *) echo 'E_LINK_MODE: expected --link=static|dynamic|hybrid' >&2; exit 64 ;;
+esac
 # Clang optimization level only; frontend semantics and the native no-GC IR
 # admission gate must remain identical at both levels.
 opt_level="${ORESLANG_LLVM_AOT_OPT_LEVEL:-2}"
