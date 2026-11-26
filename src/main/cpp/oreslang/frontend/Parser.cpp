@@ -4386,12 +4386,28 @@ private:
                         require(")");
                     }
                     binding.new_class = true;
+                } else if (!binding.owner_mutable && token_.text != "rt" &&
+                        ![&] {
+                            if (token_.text != "take" && token_.text != "move") return false;
+                            Lexer probe = lexer_;
+                            return probe.next().text == "!";
+                        }()) {
+                    // Like const Class, immutable let may bind the existing
+                    // checked record-result path. The ownership pass still
+                    // rejects an owning array-containing result without a
+                    // mutable owner, and raw local aliases remain forbidden.
+                    binding.initializer = expression();
+                    if (binding.initializer->kind != Expression::Kind::Call &&
+                            binding.initializer->kind != Expression::Kind::Conditional &&
+                            binding.initializer->kind != Expression::Kind::ArrayCall)
+                        fail("native class initializer requires new or immutable record value");
+                    binding.record_view = true;
                 } else {
                     if (accept("rt")) {
                         require("take");
                     } else {
-                        if (token_.text != "take")
-                            fail("native class move requires explicit take! or rt take");
+                        if (token_.text != "take" && token_.text != "move")
+                            fail("native class move requires explicit take! or rt take (move! is an alias)");
                         Lexer probe = lexer_;
                         const Token bang = probe.next();
                         if (bang.text != "!" ||

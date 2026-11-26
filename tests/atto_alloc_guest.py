@@ -160,7 +160,7 @@ pub fnc main(): int {
             entry = d / "main.atto"
             entry.write_text(source, encoding="utf-8")
             rejected = run([compiler, str(entry)])
-            if rejected.returncode == 0 or rejected.stdout.strip():
+            if not 0 < rejected.returncode < 128 or rejected.stdout.strip():
                 raise AssertionError((module, "private field access admitted or IR leaked",
                                       rejected.returncode, rejected.stderr[:1500]))
             negative += 1

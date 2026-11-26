@@ -34,10 +34,11 @@ def main():
     runtime = ROOT / "src/main/cpp/oreslang/runtime/NativeIntArrayRegion.c"
     with tempfile.TemporaryDirectory(prefix="owned-factory-") as root:
         root = Path(root)
-        for i, initializer in enumerate(("take! make()", "rt take make()", "take! (make())")):
+        for i, initializer in enumerate(("take! make()", "rt take make()", "take! (make())", "move! make()")):
             source = root / f"positive{i}.atto"
             source.write_text(DEFS + "pub fnc main():int { let mut Bag b = " + initializer +
-                              "; let mut Bag moved = take! b; return moved.size() == 1 ? 42 : 7; }\n")
+                              "; let mut Bag moved = " + ("move!" if i == 3 else "take!") +
+                              " b; return moved.size() == 1 ? 42 : 7; }\n")
             emitted = run([compiler, str(source)])
             assert emitted.returncode == 0 and "@main" in emitted.stdout, emitted.stderr
             ir = source.with_suffix(".ll")
@@ -54,6 +55,10 @@ def main():
             ("let mut Bag b = take! scalar(); return 0;", "matching nominal class result"),
             ("let Bag b = take! make(); return 0;", "requires let mut owner"),
             ("let mut Bag b = take! make(); let mut Bag c = take! b; return b.size();", "move"),
+            ("let mut Bag b = move! make(); let mut Bag c = move! b; return b.size();", "move"),
+            ("let mut Other b = move! make(); return 0;", "matching nominal class result"),
+            ("let Bag b = make(); return 0;", "owning class result requires"),
+            ("let mut Bag b = take! make(); let Bag alias = b; return 0;", "immutable record value"),
         ]
         for i, (body, diagnostic) in enumerate(negatives):
             source = root / f"negative{i}.atto"
@@ -61,7 +66,7 @@ def main():
             denied = run([compiler, str(source)])
             assert 0 < denied.returncode < 128 and not denied.stdout.strip(), denied
             assert diagnostic in denied.stderr, denied.stderr
-    print("OWNED_FACTORY_TAKE: 3 native executions, 4 targeted denials")
+    print("OWNED_FACTORY_TAKE: 4 native executions, 8 targeted denials")
 
 if __name__ == "__main__":
     main()
