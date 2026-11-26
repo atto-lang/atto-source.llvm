@@ -1887,13 +1887,13 @@ impl Parser {
 
     fn parse_cond_and(&mut self) -> R<Expr> {
         let mut links = 0;
-        let mut left = self.parse_equality()?;
+        let mut left = self.parse_logical_or()?;
         while *self.peek() == Tok::Comma {
             let pos = self.pos();
             self.advance();
             self.grow(1)?;
             links += 1;
-            let right = self.parse_equality()?;
+            let right = self.parse_logical_or()?;
             left = Expr {
                 kind: ExprKind::Binary(BinOp::And, Box::new(left), Box::new(right)),
                 pos,
@@ -1913,8 +1913,43 @@ impl Parser {
         r
     }
 
+    // Canonical punctuation short-circuits. Lower to typed ternaries so
+    // both branches are checked, but only the selected operand executes.
+    // Legacy condition separators keep their existing semantics for now.
+    fn parse_logical_or(&mut self) -> R<Expr> {
+        let mut left = self.parse_logical_and()?;
+        let mut links = 0;
+        while *self.peek() == Tok::LogicalOr {
+            let pos = self.pos();
+            self.advance();
+            self.grow(1)?;
+            links += 1;
+            let right = self.parse_logical_and()?;
+            let yes = Expr { kind: ExprKind::Bool(true), pos };
+            left = Expr { kind: ExprKind::Ternary(Box::new(left), Box::new(yes), Box::new(right)), pos };
+        }
+        self.height -= links;
+        Ok(left)
+    }
+
+    fn parse_logical_and(&mut self) -> R<Expr> {
+        let mut left = self.parse_equality()?;
+        let mut links = 0;
+        while *self.peek() == Tok::LogicalAnd {
+            let pos = self.pos();
+            self.advance();
+            self.grow(1)?;
+            links += 1;
+            let right = self.parse_equality()?;
+            let no = Expr { kind: ExprKind::Bool(false), pos };
+            left = Expr { kind: ExprKind::Ternary(Box::new(left), Box::new(right), Box::new(no)), pos };
+        }
+        self.height -= links;
+        Ok(left)
+    }
+
     fn parse_ternary(&mut self) -> R<Expr> {
-        let mut c = self.parse_equality()?;
+        let mut c = self.parse_logical_or()?;
         // Functional pipeline: value |> f |> g(extra) lowers to g(f(value), extra).
         // Only ordinary named functions are admitted: no computed callees,
         // receiver calls or actor piping. This preserves argument evaluation
@@ -2400,6 +2435,8 @@ fn describe(t: &Tok) -> String {
                 Tok::Pipe => "|",
                 Tok::PipeGt => "|>",
                 Tok::Amp => "&",
+                Tok::LogicalAnd => "&&",
+                Tok::LogicalOr => "||",
                 Tok::Caret => "^",
                 Tok::At => "@",
                 _ => "?",
