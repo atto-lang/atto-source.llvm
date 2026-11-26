@@ -2,6 +2,12 @@
 
 #include <atomic>
 #include <cassert>
+#include <condition_variable>
+#include <mutex>
+
+#ifdef NDEBUG
+#error "Continuation lifecycle tests require enabled assertions"
+#endif
 #include <limits>
 #include <stdexcept>
 #include <thread>
@@ -324,7 +330,60 @@ static void mixed_pending_execution_churn() {
     assert(fence.close() && fence.retirement_ready());
 }
 
+static void million_generation_reuse() {
+    using Fence = NativeSelectContinuationFence<4>;
+    Fence fence; Fence::Ticket old;
+    for (int i=0;i<1000000;++i) {
+        const auto g=fence.generation(); const auto t=fence.register_continuation(g);
+        auto lease=fence.try_claim(t);
+        assert(lease.valid() && fence.executing()==1);
+        assert(!fence.advance(g));
+        assert(!fence.try_claim(t).valid() && !t.close());
+        assert(!fence.try_claim(old).valid() && !old.close());
+        assert(lease.close() && !lease.close());
+        assert(fence.advance(g));
+        assert(fence.pending_tickets()==0 && fence.executing()==0);
+        old=t;
+    }
+    assert(fence.close() && fence.retirement_ready());
+}
+class LifecycleTestBarrier {
+    std::mutex mutex_; std::condition_variable cv_; unsigned arrived_=0, phase_=0;
+public:
+    void wait() {
+        std::unique_lock<std::mutex> lock(mutex_); const auto phase=phase_;
+        if (++arrived_==3) { arrived_=0; ++phase_; cv_.notify_all(); }
+        else cv_.wait(lock,[&]{return phase_!=phase;});
+    }
+};
+static void concurrent_claim_cancel_lifecycle_stress() {
+    using Fence=NativeSelectContinuationFence<1>;
+    constexpr int rounds=100000; Fence fence; Fence::Ticket ticket;
+    LifecycleTestBarrier barrier; bool claimed=false,cancelled=false;
+    std::thread consumer([&]{ for(int i=0;i<rounds;++i){
+        barrier.wait(); auto lease=fence.try_claim(ticket); claimed=lease.valid();
+        barrier.wait(); barrier.wait(); if(claimed) assert(lease.close()); barrier.wait();
+    }});
+    std::thread canceller([&]{ for(int i=0;i<rounds;++i){
+        barrier.wait(); cancelled=ticket.close(); barrier.wait(); barrier.wait(); barrier.wait();
+    }});
+    for(int i=0;i<rounds;++i){
+        const auto g=fence.generation(); ticket=fence.register_continuation(g);
+        barrier.wait(); barrier.wait();
+        assert(claimed!=cancelled && fence.pending_tickets()==0);
+        assert(fence.executing()==(claimed?1u:0u));
+        assert(!fence.try_claim(ticket).valid() && !ticket.close());
+        if(claimed) assert(!fence.advance(g));
+        barrier.wait(); barrier.wait();
+        assert(fence.executing()==0 && fence.advance(g));
+        assert(!fence.try_claim(ticket).valid());
+    }
+    consumer.join(); canceller.join(); assert(fence.close() && fence.retirement_ready());
+}
+
 int main() {
+    million_generation_reuse();
+    concurrent_claim_cancel_lifecycle_stress();
     mixed_pending_execution_churn();
     claim_holds_generation_until_physical_retirement();
     stale_and_foreign_tickets_fail_closed();
