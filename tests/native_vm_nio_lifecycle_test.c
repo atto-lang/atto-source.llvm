@@ -510,8 +510,6 @@ int main(void) {
             .wake_errors = 0,
             .rearm_attempted = 0,
             .rearm_accepted = 0,
-            .rearm_watch = {0},
-            .await = {0}
         };
         OresNativeVMConfig actor_cfg = config();
         actor_cfg.domains[ORES_NATIVE_VM_MAIN].on_message =
@@ -634,8 +632,6 @@ int main(void) {
             .wake_errors = 0,
             .rearm_attempted = 0,
             .rearm_accepted = 0,
-            .rearm_watch = {0},
-            .await = {0}
         };
         OresNativeVMConfig actor_cfg = config();
         actor_cfg.domains[ORES_NATIVE_VM_MAIN].on_message =
@@ -711,8 +707,6 @@ int main(void) {
             .wake_errors = 0,
             .rearm_attempted = 0,
             .rearm_accepted = 0,
-            .rearm_watch = {0},
-            .await = {0}
         };
         OresNativeVMConfig actor_cfg = config();
         actor_cfg.domains[ORES_NATIVE_VM_MAIN].on_message =
@@ -783,8 +777,6 @@ int main(void) {
             .wake_errors = 0,
             .rearm_attempted = 0,
             .rearm_accepted = 0,
-            .rearm_watch = {0},
-            .await = {0}
         };
         OresNativeVMConfig actor_cfg = config();
         actor_cfg.domains[ORES_NATIVE_VM_MAIN].on_message =
@@ -835,7 +827,6 @@ int main(void) {
             .go = 0,
             .attempted = 0,
             .accepted = 0,
-            .watch = {0}
         };
         OresNativeVMConfig actor_cfg = config();
         actor_cfg.domains[ORES_NATIVE_VM_MAIN].on_message = on_owned_actor_nio;
@@ -935,7 +926,6 @@ int main(void) {
             .go = 0,
             .attempted = 0,
             .accepted = 0,
-            .watch = {0}
         };
         OresNativeVMConfig actor_cfg = config();
         actor_cfg.domains[ORES_NATIVE_VM_MAIN].on_message = on_owned_actor_nio;
@@ -993,7 +983,6 @@ int main(void) {
             .go = 0,
             .attempted = 0,
             .accepted = 0,
-            .watch = {0}
         };
         OresNativeVMConfig actor_cfg = config();
         actor_cfg.domains[ORES_NATIVE_VM_MAIN].on_message = on_owned_actor_nio;
@@ -1038,7 +1027,6 @@ int main(void) {
                 .go = 0,
                 .attempted = 0,
                 .accepted = 0,
-                .watch = {0}
             };
             OresNativeVMConfig actor_cfg = config();
             actor_cfg.domains[ORES_NATIVE_VM_MAIN].on_message =
