@@ -1093,6 +1093,18 @@ public:
         if (!experimental_pointer_int_aot_) reject_unlowered_with_update();
     }
 
+    Program parse_strict_i64() {
+        strict_i64_ = true;
+        Program program;
+        while (token_.text == "define" &&
+                (peek_next().text == "dimension" || peek_next().text == "unit"))
+            quantity_declaration();
+        if (!at_refined_quantity_alias())
+            fail("E_VERIFY_UNSUPPORTED: strict refinement profile required");
+        parse_verified_functions(program, false);
+        return program;
+    }
+
     Program parse(bool protocol_actor_library = false) {
         Program program;
         if (experimental_pointer_int_aot_) {
@@ -5625,7 +5637,10 @@ private:
 
     RefinedQuantity read_refined_type() {
         if (accept("int")) return {};
-        if (accept("i32")) return {QuantityUnit(), VerifiedI64Range::signed_i32(), true};
+        if (accept("i32")) {
+            if (strict_i64_) fail("E_VERIFY_UNSUPPORTED: i32 strict proof pending");
+            return {QuantityUnit(), VerifiedI64Range::signed_i32(), true};
+        }
         const auto name = identifier();
         auto found = refinement_aliases_.find(name);
         if (found == refinement_aliases_.end())
@@ -5638,6 +5653,7 @@ private:
         const auto name = identifier();
         require("=");
         const bool i32 = accept("i32");
+        if (strict_i64_ && i32) fail("E_VERIFY_UNSUPPORTED: i32 strict proof pending");
         if (!i32) require("int");
         require("where");
         RefinedQuantity type{QuantityUnit(), i32 ? VerifiedI64Range::signed_i32() : VerifiedI64Range(), i32};
@@ -5939,6 +5955,8 @@ private:
 
     void parse_verified_functions(Program& program, bool protocol_actor_library) {
         while (at_refined_quantity_alias()) parse_refined_quantity_alias();
+        if (strict_i64_ && (at_protocol_declaration() || at_protocol_actor()))
+            fail("E_VERIFY_UNSUPPORTED: strict protocol effects not established");
         std::unordered_set<std::string> protocol_names;
         while (at_protocol_declaration()) program.protocols.push_back(parse_protocol_declaration(protocol_names));
         std::unordered_set<std::string> actor_names;
@@ -6116,6 +6134,18 @@ private:
 
     QuantityTerm quantity_binary(Expression::Kind kind, std::size_t offset, QuantityTerm left,
                                  QuantityTerm right, QuantityUnit unit) {
+        if (strict_i64_) {
+            std::string_view op;
+            switch (kind) {
+                case Expression::Kind::Add: op="+"; break;
+                case Expression::Kind::Subtract: op="-"; break;
+                case Expression::Kind::Multiply: op="*"; break;
+                case Expression::Kind::DivideQuantity: op="/"; break;
+                default: fail("E_VERIFY_UNSUPPORTED: unknown strict arithmetic");
+            }
+            if (!left.range.proves_arithmetic(op,right.range))
+                fail("E_VERIFY_UNPROVEN: signed arithmetic may overflow or divide by zero");
+        }
         const bool i32 = left.i32 || right.i32;
         const auto carrier = VerifiedI64Range::signed_i32();
         if (i32 && (!carrier.includes(left.range) || !carrier.includes(right.range)))
@@ -6175,6 +6205,8 @@ private:
         if (target.unit.scalar() && !term.unit.scalar())
             fail("E_UNIT_ERASURE: scalar cast cannot erase units");
         target.unit.require_compatible(term.unit);
+        if (strict_i64_ && !target.range.includes(term.range))
+            fail("E_VERIFY_UNPROVEN: refinement cast may fail");
         if (++term.depth >= kMaxNativeExpressionDepth)
             fail("E_UNIT_LIMIT: quantity expression is too deep");
         auto checked = make_expression(Expression::Kind::CheckRefinement, offset);
@@ -6223,7 +6255,7 @@ private:
             advance();
             auto right = quantity_atom(depth);
             const bool divide = op.text == "/";
-            if (divide && !left.i32 && !right.i32 && left.unit.scalar() && right.unit.scalar())
+            if (!strict_i64_ && divide && !left.i32 && !right.i32 && left.unit.scalar() && right.unit.scalar())
                 fail("E_UNIT_SCALAR_DIVISION: two plain int operands use ordinary division");
             auto unit = left.unit.combine(right.unit, divide);
             left = quantity_binary(divide ? Expression::Kind::DivideQuantity : Expression::Kind::Multiply,
@@ -6308,6 +6340,8 @@ private:
             }
             advance();
             auto term = quantity_atom(depth + 1);
+            if (strict_i64_ && !term.range.proves_negation())
+                fail("E_VERIFY_UNPROVEN: signed negation may overflow");
             if (!term.i32) {
                 auto negated = make_expression(Expression::Kind::Negate, start.offset);
                 negated->left = std::move(term.expression);
@@ -10210,6 +10244,7 @@ private:
     std::unordered_map<std::string, std::unordered_set<std::string>> verified_upper_bounds_;
     std::unordered_map<std::string, VerifiedFunction> verified_functions_;
     bool verified_callable_ = false;
+    bool strict_i64_ = false;
     std::string_view source_;
     Lexer lexer_;
     Token token_;
@@ -10558,6 +10593,13 @@ Program parse_program(std::string_view source, bool experimental_owned_int,
                       int language_version) {
     auto program = parse_unresolved_program(source, experimental_owned_int,
         experimental_rt_scalar_loop, experimental_pointer_int_aot, language_version);
+    resolve_and_validate_program(program);
+    return program;
+}
+
+Program parse_verified_strict_i64(std::string_view source, int language_version) {
+    reject_unlowered_mutex_constructor(source, false);
+    auto program = Parser(source, false, false, false, 0, false, language_version).parse_strict_i64();
     resolve_and_validate_program(program);
     return program;
 }
