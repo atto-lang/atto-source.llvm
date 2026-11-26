@@ -715,6 +715,7 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    bool stable_local_scalar_modules = false;
     bool experimental_owned_int = false;
     bool experimental_rt_scalar_loop = false;
     bool experimental_pointer_int_aot = false;
@@ -953,6 +954,9 @@ int main(int argc, char** argv) {
             tenant_vm_guest = true;
         } else if (arg == "--no-core-log") {
             coreLogLevel = "off";
+        } else if (arg == "--experimental-stable-local-scalar-modules") {
+            if (stable_local_scalar_modules) { std::cerr << "duplicate stable local module option\n"; return 2; }
+            stable_local_scalar_modules = true;
         } else if (arg == "--experimental-rt-scalar-loop") {
             if (experimental_rt_scalar_loop) {
                 std::cerr << "duplicate rt scalar loop option\n"; return 2;
@@ -1024,6 +1028,21 @@ int main(int argc, char** argv) {
             return 2;
         } else if (!arg.empty() && arg[0] != '-' && path == nullptr) path = argv[i];
         else { std::cerr << "unrecognized or duplicate option: " << arg << '\n'; return 2; }
+    }
+    if (stable_local_scalar_modules &&
+        (!target_seen || wasm32_target || cortex_m_target || tenant_vm_guest ||
+         experimental_owned_int || experimental_rt_scalar_loop ||
+         experimental_pointer_int_aot || experimental_static_ffi_i64 ||
+         static_ffi_i64_capability || actor_region_v1_guest || actor_region_v2_guest ||
+         native_hard_rt_profile || rt_check_only || rt_report_seen || rt_entry_seen ||
+         frontend_check_only || analyze_requested || gpu_g1_kernel_ir || gpu_g1_other_option ||
+         verify_actor_source_set_only || verify_actor_headers_only || expected_source_set_seen ||
+         constraint_descriptors_only || tree_shake || !tree_shake_roots.empty() ||
+         source_log_manifest_seen || isolate_entry_seen || bounded_allocator_provider ||
+         sealed_scalar_aot || sealed_class_fields_aot || actor_region_v1_aot ||
+         freestanding || build_profile != BuildProfile::Dev || library_profile_seen)) {
+        std::cerr << "stable local scalar modules require isolated --target=host\n";
+        return 2;
     }
     if (build_profile != BuildProfile::Dev) {
         const char* requested =
@@ -1321,7 +1340,8 @@ int main(int argc, char** argv) {
         auto ast = oreslang::load_native_program(
             path, text, source_identity, experimental_owned_int,
             experimental_rt_scalar_loop, !wasm32_target && !cortex_m_target,
-            admitted_provider_bits, static_ffi_i64_capability, language_version);
+            admitted_provider_bits, static_ffi_i64_capability, language_version,
+            stable_local_scalar_modules);
         source_module = ast.module;
         source_namespace = ast.namespace_name;
         // A lexical scalar loop has valid native CFG continuation semantics,
