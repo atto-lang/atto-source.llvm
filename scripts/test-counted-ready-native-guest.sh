@@ -27,4 +27,24 @@ for name in reject-counted-negative reject-counted-bool reject-counted-scalar re
   test ! -s "$work/denial"
   grep -F E_COUNTED_READY_PROFILE "$work/err"
 done
+# Additional actual generated guest error controls; no constant folding oracle.
+for case in invalid-count overflow-before-await empty-read would-suspend capacity; do
+  case "$case" in
+    invalid-count) body='val int count = 17; val Array[int] b = await select<int>(count) { when readch a: int n -> { return n; } }; return b[0];'; expected=SelectCountInvalid;;
+    overflow-before-await) body='writech a, 42; val Future<Array<int>> pending = select<int>(1) { when readch a: int n -> { return n; } }; val int x = 9223372036854775807 + 1; val Array[int] b = await pending; return b[0];'; expected=E_I64_OVERFLOW;;
+    empty-read) body='val Array[int] b = await select<int>(0) { when readch a: int n -> { return n; } }; return readch a;'; expected=E_READY_ONLY;;
+    would-suspend) body='val Array[int] b = await select<int>(1) { when readch a: int n -> { return n; } }; return b[0];'; expected=E_READY_ONLY;;
+    capacity) body='writech a, 42; writech a, 43; val Array[int] b = await select<int>(1) { when readch a: int n -> { return n; } }; return b[0];'; expected=E_READY_ONLY;;
+  esac
+  printf 'suspends fnc main(): int { val Channel<int> a = Channel.new<int>(1); %s }\n' "$body" > "$work/$case.atto"
+  "$compiler" --counted-ready-v1 "$work/$case.atto" > "$work/guest.cpp"
+  clang++ -std=c++17 -O1 -pthread -fsanitize=address,undefined -fno-sanitize-recover=all -I src/main/cpp "$work/guest.cpp" -o "$work/guest"
+  status=0
+  ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 "$work/guest" > "$work/out" 2> "$work/err" || status=$?
+  test "$status" = 2
+  test ! -s "$work/out"
+  grep -F "$expected" "$work/err"
+  ! grep -E 'AddressSanitizer|runtime error:|LeakSanitizer' "$work/err"
+  echo "NEGATIVE_RUNTIME_PASS $case"
+done
 echo LLVM_COUNTED_READY_NATIVE_GUEST_PASS

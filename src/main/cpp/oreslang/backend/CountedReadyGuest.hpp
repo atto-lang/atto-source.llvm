@@ -78,7 +78,13 @@ class Compiler {
     Value counted(bool direct){
         if(!pending.empty())bad("await batch first");if(eat("<")){need("int");need(">");}
         need("(");auto begin=pos;auto n=check(expr(0,"@count"),"int");auto end=pos;need(")");
-        bool zero=end==begin+1&&tokens[begin]=="0";
+        bool zero=false;
+        if(end==begin+1&&digit(tokens[begin][0])){
+            std::int64_t constant=0;const auto& tok=tokens[begin];
+            auto parsed=std::from_chars(tok.data(),tok.data()+tok.size(),constant);
+            if(parsed.ec!=std::errc{}||constant>16)bad("SelectCountInvalid");
+            zero=constant==0;
+        }
         if(end==begin+2&&tokens[begin]=="-"&&digit(tokens[begin+1][0]))bad("SelectCountInvalid");
         bool fair=eat("fair");if(!fair)eat("first");bool over=eat("over");if(!over)need("{");
         std::vector<std::string> sources,projects;std::set<std::string> futures;
@@ -152,7 +158,7 @@ template<class F> static auto ready(F p){auto f=std::make_shared<Future>();try{f
 struct Plan{std::vector<Cursor::Source> sources;std::vector<Cursor::Projection> projections;};
 struct Pending{std::unique_ptr<Cursor> cursor;std::size_t limit;};
 template<class F> static Pending start(I n,F p,bool fair){if(n<0||n>16)throw std::range_error("SelectCountInvalid");auto plan=n?p():Plan{};return {std::make_unique<Cursor>(static_cast<std::size_t>(n),plan.sources,fair,plan.projections),2*(static_cast<std::size_t>(n)+plan.sources.size())+2};}
-static std::vector<I> finish(Pending& pending){auto& c=*pending.cursor;for(std::size_t i=0;i<pending.limit;++i){switch(c.state()){case Cursor::State::Success:return c.result();case Cursor::State::Failed:std::rethrow_exception(c.failure());case Cursor::State::Ready:c.begin_round();break;case Cursor::State::Waiting:if(!c.pump())throw std::runtime_error("E_READY_ONLY: selection would suspend");break;default:throw std::runtime_error("cancelled");}}throw std::runtime_error("E_READY_ONLY: pump budget");}
+static std::vector<I> finish(Pending& pending){auto owned=std::move(pending.cursor);if(!owned)throw std::logic_error("counted batch already consumed");auto& c=*owned;for(std::size_t i=0;i<pending.limit;++i){switch(c.state()){case Cursor::State::Success:return c.result();case Cursor::State::Failed:std::rethrow_exception(c.failure());case Cursor::State::Ready:c.begin_round();break;case Cursor::State::Waiting:if(!c.pump())throw std::runtime_error("E_READY_ONLY: selection would suspend");break;default:throw std::runtime_error("cancelled");}}throw std::runtime_error("E_READY_ONLY: pump budget");}
 [[maybe_unused]] static std::vector<I> finish(Pending&& p){return finish(p);}
 static I guest(){
 )ATTO"+body+R"ATTO(
