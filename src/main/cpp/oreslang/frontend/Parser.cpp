@@ -6066,19 +6066,24 @@ private:
                 local.initializer = std::move(value.expression);
                 function.locals.push_back(std::move(local));
             }
-            if (!accept("return"))
-                fail("E_REFINEMENT_BODY: expected an explicit return after immutable bindings");
-            auto result = verified_expression(0);
-            declared_result.require(result.type(), "E_REFINEMENT_RETURN", "return from " + name);
-            guaranteed_result.require(result.type(), "E_REFINEMENT_POSTCONDITION", "ensures of " + name);
-            for (const auto index : signature.upper_parameters) {
-                const auto& parameter = function.parameters[index].name;
-                if (!result.upper_bounds.count(parameter) && !result.range.at_most(signature.parameters[index].range))
-                    fail("E_REFINEMENT_POSTCONDITION: cannot prove result <= " + parameter);
+            if(strict_i64_) {
+                function.result=strict_returns(declared_result,guaranteed_result,signature,function,name,0);
+                require("}");
+            } else {
+                if (!accept("return"))
+                    fail("E_REFINEMENT_BODY: expected an explicit return after immutable bindings");
+                auto result = verified_expression(0);
+                declared_result.require(result.type(), "E_REFINEMENT_RETURN", "return from " + name);
+                guaranteed_result.require(result.type(), "E_REFINEMENT_POSTCONDITION", "ensures of " + name);
+                for (const auto index : signature.upper_parameters) {
+                    const auto& parameter = function.parameters[index].name;
+                    if (!result.upper_bounds.count(parameter) && !result.range.at_most(signature.parameters[index].range))
+                        fail("E_REFINEMENT_POSTCONDITION: cannot prove result <= " + parameter);
+                }
+                require(";");
+                require("}");
+                function.result = std::move(result.expression);
             }
-            require(";");
-            require("}");
-            function.result = std::move(result.expression);
             program.functions.push_back(std::move(function));
             verified_functions_.emplace(name, std::move(signature));
             main_seen = main;
@@ -6091,6 +6096,104 @@ private:
         } else if (!main_seen) {
             fail("E_REFINEMENT_EXPORT: verified source requires a public main");
         }
+    }
+
+    using StrictFacts=std::unordered_map<std::string,RefinedQuantity>;
+    struct StrictEdges {
+        std::unique_ptr<Expression> test;
+        StrictFacts yes,no;
+    };
+    static StrictFacts join_strict_facts(StrictFacts a,const StrictFacts& b) {
+        for(auto& [name,value]:a)value.range=value.range.join(b.at(name).range);
+        return a;
+    }
+    StrictEdges strict_condition(const StrictFacts& facts,std::size_t depth) {
+        if(depth>16)fail("E_VERIFY_UNSUPPORTED: condition depth");
+        auto p=strict_and(facts,depth);
+        while(token_.text=="||") {
+            auto at=token_.offset;advance();
+            auto q=strict_and(p.no,depth);
+            auto e=make_expression(Expression::Kind::LogicalOr,at);
+            e->left=std::move(p.test);e->right=std::move(q.test);
+            p={std::move(e),join_strict_facts(std::move(p.yes),q.yes),std::move(q.no)};
+        }
+        return p;
+    }
+    StrictEdges strict_and(const StrictFacts& facts,std::size_t depth) {
+        auto p=strict_predicate(facts,depth);
+        while(token_.text=="&&") {
+            auto at=token_.offset;advance();
+            auto q=strict_predicate(p.yes,depth);
+            auto e=make_expression(Expression::Kind::LogicalAnd,at);
+            e->left=std::move(p.test);e->right=std::move(q.test);
+            p={std::move(e),std::move(q.yes),join_strict_facts(std::move(p.no),q.no)};
+        }
+        return p;
+    }
+    StrictEdges strict_predicate(const StrictFacts& facts,std::size_t depth) {
+        if(depth>16)fail("E_VERIFY_UNSUPPORTED: predicate depth");
+        verified_locals_=facts;
+        auto at=token_.offset;
+        if(accept("!")) {
+            auto p=strict_predicate(facts,depth+1);
+            auto e=make_expression(Expression::Kind::LogicalNot,at);e->left=std::move(p.test);
+            return {std::move(e),std::move(p.no),std::move(p.yes)};
+        }
+        if(accept("(")) {
+            auto p=strict_condition(facts,depth+1);require(")");return p;
+        }
+        auto l=verified_expression(0);
+        std::string op(token_.text);advance();
+        if(op=="eq")op="==";
+        if(op=="neq"||op=="!eq")op="!=";
+        auto kind=Expression::Kind::Equal;
+        std::string_view inverse;
+        if(op=="==")inverse="!=";
+        else if(op=="!="){kind=Expression::Kind::NotEqual;inverse="==";}
+        else if(op=="<"){kind=Expression::Kind::Less;inverse=">=";}
+        else if(op=="<="){kind=Expression::Kind::LessEqual;inverse=">";}
+        else if(op==">"){kind=Expression::Kind::Greater;inverse="<=";}
+        else if(op==">="){kind=Expression::Kind::GreaterEqual;inverse="<";}
+        else fail("E_VERIFY_UNSUPPORTED: strict comparison required");
+        auto r=verified_expression(0);l.unit.require_compatible(r.unit);
+        auto yes=facts,no=facts;
+        if(l.expression->kind==Expression::Kind::Variable && facts.count(l.expression->name) &&
+           r.range.minimum()==r.range.maximum()) {
+            auto name=l.expression->name;auto n=r.range.minimum();
+            yes.at(name).range=facts.at(name).range.restrict(op,n);
+            no.at(name).range=facts.at(name).range.restrict(inverse,n);
+        }
+        auto e=make_expression(kind,at);e->left=std::move(l.expression);e->right=std::move(r.expression);
+        return {std::move(e),std::move(yes),std::move(no)};
+    }
+    std::unique_ptr<Expression> strict_returns(const RefinedQuantity& declared,const RefinedQuantity& guaranteed,
+            const VerifiedFunction& signature,const Function& function,const std::string& name,std::size_t depth) {
+        if(depth>16)fail("E_VERIFY_UNSUPPORTED: strict return depth");
+        auto at=token_.offset;
+        if(accept("if")) {
+            auto facts=verified_locals_;
+            auto p=strict_condition(facts,0);
+            require("{");verified_locals_=std::move(p.yes);
+            auto yes=strict_returns(declared,guaranteed,signature,function,name,depth+1);
+            require("}");verified_locals_=std::move(p.no);
+            bool has_else=accept("else");if(has_else)require("{");
+            auto no=strict_returns(declared,guaranteed,signature,function,name,depth+1);
+            if(has_else)require("}");
+            auto e=make_expression(Expression::Kind::Conditional,at);
+            e->condition=std::move(p.test);e->when_true=std::move(yes);e->when_false=std::move(no);
+            return e;
+        }
+        if(!accept("return"))fail("E_VERIFY_UNSUPPORTED: strict returning conditionals only");
+        auto result=verified_expression(0);
+        declared.require(result.type(),"E_REFINEMENT_RETURN","return from "+name);
+        guaranteed.require(result.type(),"E_REFINEMENT_POSTCONDITION","ensures of "+name);
+        for(auto index:signature.upper_parameters) {
+            const auto& parameter=function.parameters[index].name;
+            if(!result.upper_bounds.count(parameter)&&!result.range.at_most(signature.parameters[index].range))
+                fail("E_REFINEMENT_POSTCONDITION: cannot prove result <= "+parameter);
+        }
+        require(";");
+        return std::move(result.expression);
     }
 
     QuantityTerm verified_reference(std::size_t depth) {
