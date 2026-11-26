@@ -84,7 +84,7 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
         if c == '\0' {
             return Err(Diagnostic::new(pos, "E_NUL", "NUL characters are not allowed in source"));
         }
-        if c == ' ' || c == '\t' || c == '\r' || c == '\n' {
+        if matches!(c, ' ' | '\t' | '\r' | '\n' | '\u{b}' | '\u{c}') {
             bump!();
             continue;
         }
@@ -441,8 +441,11 @@ fn mandatory_bang_keyword_separator_rejects_compact_forms() {
         "take!", "move!", "borrow!", "share!", "pin!", "drop!", "pipe!", "rpipe!", "stop!", "expand!"] {
         for tail in ["value", "(42)", "/*comment*/ value", "", "\u{a0}value"] {
             let source = format!("{keyword}{tail}");
-            assert!(lex(&source).is_err(), "{source}");
+            let error = lex(&source).unwrap_err();
+            assert_eq!(error.code, "E_BANG_KEYWORD_WHITESPACE", "{source}: {error}");
         }
-        assert!(lex(&format!("{keyword} value")).is_ok(), "{keyword}");
+        for gap in [" ", "\t", "\n", "\r\n", "\u{b}", "\u{c}"] {
+            assert!(lex(&format!("{keyword}{gap}value")).is_ok(), "{keyword} {gap:?}");
+        }
     }
 }
