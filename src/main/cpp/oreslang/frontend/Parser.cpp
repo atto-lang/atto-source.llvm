@@ -423,6 +423,11 @@ public:
             at_ += 3;
             return {Kind::Symbol, source_.substr(start, 3), start};
         }
+        // Longest contiguous caret token first; do not accept spaced ^^ =.
+        if (source_.substr(at_, 3) == "^^=") {
+            at_ += 3;
+            return {Kind::Symbol, source_.substr(start, 3), start};
+        }
         // Contiguous comparison/logical operators are single tokens, matching
         // the Java/Graal precedence grammar.
         for (std::string_view op : {"->", "::", "|>", "<|", "==", "!=", "<=", ">=", "&&", "||", "^^"}) {
@@ -4869,7 +4874,16 @@ private:
                     continue;
                 }
                 auto target = primary();
-                if (target->kind == Expression::Kind::Variable && accept("=")) {
+                if (target->kind == Expression::Kind::Variable && token_.text == "^^=") {
+                    const auto offset = token_.offset;
+                    advance();
+                    statement.kind = Statement::Kind::ScalarWrite;
+                    statement.receiver = target->name;
+                    auto rhs = make_expression(Expression::Kind::BitXor, offset);
+                    rhs->left = std::move(target);
+                    rhs->right = expression();
+                    statement.expression = std::move(rhs);
+                } else if (target->kind == Expression::Kind::Variable && accept("=")) {
                     statement.kind = Statement::Kind::ScalarWrite;
                     statement.receiver = target->name; statement.expression = expression();
                 } else if (target->kind == Expression::Kind::Field && accept("=")) {
@@ -5545,7 +5559,18 @@ private:
                                                value.actor_sends.size() - 1});
                 continue;
             }
-            if (action->kind == Expression::Kind::Variable && accept("=")) {
+            // Restrict compound XOR to scalar local names. Existing ScalarWrite
+            // type/mutability checks and BitXor lowering remain authoritative.
+            if (action->kind == Expression::Kind::Variable && token_.text == "^^=") {
+                const auto offset = token_.offset;
+                advance();
+                statement.kind = Statement::Kind::ScalarWrite;
+                statement.receiver = action->name;
+                auto rhs = make_expression(Expression::Kind::BitXor, offset);
+                rhs->left = std::move(action);
+                rhs->right = expression();
+                statement.expression = std::move(rhs);
+            } else if (action->kind == Expression::Kind::Variable && accept("=")) {
                 statement.kind = Statement::Kind::ScalarWrite;
                 statement.receiver = action->name; statement.expression = expression();
             } else if (action->kind == Expression::Kind::Field && accept("=")) {
