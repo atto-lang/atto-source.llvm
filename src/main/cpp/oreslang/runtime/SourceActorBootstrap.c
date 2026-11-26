@@ -1,4 +1,5 @@
 #include "oreslang/runtime/SourceActorBootstrap.h"
+#include "oreslang/runtime/SourceRecoveryLeaseV1.h"
 #include "oreslang/runtime/NativeActorLogicalFramesV1.h"
 #include "oreslang/runtime/NativeOresVM.h"
 #include "oreslang/runtime/NativeAwaitTraceBridge.h"
@@ -21,12 +22,25 @@
 #define SOURCE_ROOT_CONTROL_DONE_SUSPEND UINT64_C(3)
 #define SOURCE_ROOT_CONTROL_DONE_RESUME UINT64_C(4)
 
-typedef struct {
+typedef struct SourceActor {
     uint64_t magic;
     uint64_t id;
     OresActorI64Heap* heap;
     OresNativeActorLogicalFramesV1* logical_frames;
     uint32_t frame_budget;
+    uint32_t lifetime_frame_budget;
+    uint32_t lifetime_frame_admissions;
+    uint32_t restart_remaining;
+    uint64_t fields_count;
+    /* For a failed supervised incarnation, this metadata remains an invalid
+     * tombstone until the root group closes. Every backing heap/frame is
+     * reclaimed before the root supervisor authorizes a fresh incarnation.
+     * This prevents raw opaque ActorRef addresses from being immediately
+     * recycled into an unrelated actor within the same source program. */
+    struct SourceActor* replacement;
+    int restart_decided;
+    int restart_settled;
+    int tombstone;
     /* Accepted guest DATA snapshot and waiters are guarded by group.mutex.
      * Physical callbacks signal this preinitialized condition after their
      * success/failure receipts become observable. No per-message allocation. */
@@ -83,6 +97,9 @@ typedef struct {
     ReadyAwaitFrame* pending_ready;
     DoneAwaitFrame* pending_done;
     SourceActor* actors[SOURCE_GROUP_SLOTS];
+    SourceActor* retired[SOURCE_GROUP_SLOTS];
+    pthread_cond_t supervisor_progress;
+    OresSourceRecoveryLeaseV1 recovery_lease;
     size_t next_slot;
     size_t live;
     size_t peak;
@@ -97,7 +114,10 @@ typedef struct {
  * in a zero-argument top-level main. There is exactly one worker pool per
  * active group, not one pool per actor.
  */
-static SourceActorGroup group = { .mutex = PTHREAD_MUTEX_INITIALIZER };
+static SourceActorGroup group = {
+    .mutex = PTHREAD_MUTEX_INITIALIZER,
+    .supervisor_progress = PTHREAD_COND_INITIALIZER
+};
 static _Atomic uint64_t next_actor_id = 4100;
 static _Thread_local OresNativeExecutionHandle current_source_execution;
 
@@ -128,10 +148,15 @@ static int reject_compiled_frame(void) {
  */
 int oreslang_source_actor_frame_push(void) {
     if (!frame_actor || frame_faulted || frame_active ||
-        frame_actor->frame_budget == 0) return reject_compiled_frame();
+        frame_actor->frame_budget == 0
+        || (frame_actor->lifetime_frame_budget != 0
+            && frame_actor->lifetime_frame_admissions
+                >= frame_actor->lifetime_frame_budget))
+        return reject_compiled_frame();
     if (!ores_logical_frames_v1_push(frame_actor->logical_frames,
                                     frame_turn, &frame_handle))
         return reject_compiled_frame();
+    frame_actor->lifetime_frame_admissions++;
     frame_active = 1;
     return 1;
 }
@@ -639,10 +664,6 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
     } else {
         atomic_fetch_add_explicit(&instance->failed, 1, memory_order_release);
     }
-    /* Matches the scheduler's *physically processed* DATA callback count.
-     * A failed callback is processed by the carrier, not a successful turn. */
-    atomic_fetch_add_explicit(&instance->processed, 1, memory_order_release);
-
     if (!succeeded) {
         /* Seal future DATA immediately on a frame failure while allowing this
          * callback to finish its physical carrier turn. Stop is idempotent
@@ -657,6 +678,11 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
         }
         group_unlock();
     }
+    /* A DATA callback is only completed after failure admission is sealed.
+     * Publishing 'processed' before STOP sealing let flush_blocking return
+     * with a failed-count receipt but a still-live mailbox. The ordered
+     * release also covers last_success_result/success/failed/failure_code. */
+    atomic_fetch_add_explicit(&instance->processed, 1, memory_order_release);
     /* An explicit trusted-main flush_blocking barrier observes physical
      * callback completion, regardless of whether the guest succeeded. */
     group_lock();
@@ -669,12 +695,79 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
  * and the typed, runtime-issued terminal envelope cross this boundary.
  * Policy-driven automatic restart is a separate compiler/runtime milestone.
  */
+/* A root supervisor CONTROL turn authorizes a bounded one-for-one restart.
+ * It never publishes a synthetic guest success and never restarts a STOPPED
+ * child. The replacement is a fresh physical slot, actor ID, private heap,
+ * logical-frame store and mailbox. We leave the mutex before spawn: a worker
+ * may concurrently publish the new incarnation's initialization CONTROL.
+ *
+ * No root callback blocks waiting for a carrier or for guest execution.
+ * The old actor must already have physical DONE and host finalization before
+ * NativeOresVM can publish this authenticated terminal envelope. */
 static void source_supervisor_notice(
         void* raw, size_t parent_slot, OresNativeActorTerminalFailure failure) {
     ensure(raw == &group && parent_slot == SOURCE_GROUP_ROOT_SLOT);
     ensure(failure.child.scheduler_domain == group.root_ref.scheduler_domain
         && failure.child.actor_slot < SOURCE_GROUP_ROOT_SLOT
         && failure.child.generation != 0 && failure.correlation != 0);
+
+    SourceActor* original = NULL;
+    OresSourceActorInit constructor = NULL;
+    OresSourceActorMessage receiver = NULL;
+    uint64_t fields = 0, depth = 0, lifetime = 0, remaining = 0;
+    int approved = 0;
+    group_lock();
+    const size_t slot = (size_t)failure.child.actor_slot;
+    original = group.actors[slot] ? group.actors[slot] : group.retired[slot];
+    if (original && original->magic == SOURCE_ACTOR_MAGIC
+        && original->ref.scheduler_domain == failure.child.scheduler_domain
+        && original->ref.actor_slot == failure.child.actor_slot
+        && original->ref.generation == failure.child.generation
+        && original->id == failure.correlation
+        && failure.kind == ORES_NATIVE_CONTROL_PANIC
+        && failure.failure_code == ORES_SOURCE_ACTOR_FAILURE_FRAME
+        && original->restart_remaining != 0
+        && !original->restart_decided) {
+        original->restart_decided = 1;
+        if (group.next_slot < SOURCE_GROUP_ROOT_SLOT) {
+            approved = 1;
+            constructor = original->constructor;
+            receiver = original->on_message;
+            fields = original->fields_count;
+            depth = original->frame_budget;
+            lifetime = original->lifetime_frame_budget;
+            remaining = original->restart_remaining - 1;
+        }
+    }
+    if (original && original->restart_decided && !approved) {
+        original->restart_settled = 1;
+        ensure(pthread_cond_broadcast(&group.supervisor_progress) == 0);
+    }
+    group_unlock();
+    if (approved) {
+        SourceActor* fresh = (SourceActor*)
+            oreslang_source_actor_spawn_supervised_budgeted(
+                constructor, receiver, fields, depth, lifetime, remaining);
+        /* The original actor is a bounded tombstone, not a live mailbox.
+         * Do not migrate its state or preserve any old borrow or pointer. */
+        group_lock();
+        ensure(original && original->magic == SOURCE_ACTOR_MAGIC
+            && original->ref.actor_slot == failure.child.actor_slot
+            && original->replacement == NULL);
+        original->replacement = fresh;
+        original->restart_settled = 1;
+        ensure(pthread_cond_broadcast(&group.supervisor_progress) == 0);
+        group_unlock();
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+        fprintf(stderr,
+            "SOURCE_ACTOR_ONE_FOR_ONE_RESTART_VERIFIED old_slot=%llu new_slot=%llu old_generation=%llu new_generation=%llu remaining=%llu\n",
+            (unsigned long long)failure.child.actor_slot,
+            (unsigned long long)fresh->ref.actor_slot,
+            (unsigned long long)failure.child.generation,
+            (unsigned long long)fresh->ref.generation,
+            (unsigned long long)remaining);
+#endif
+    }
     if (failure.kind == ORES_NATIVE_CONTROL_PANIC) {
         ensure(failure.failure_code != 0);
         atomic_store_explicit(&group.last_panic_code,
@@ -687,7 +780,10 @@ static void source_supervisor_notice(
         atomic_fetch_add_explicit(
             &group.terminal_stopped_notices, 1, memory_order_release);
     }
+    group_lock();
     atomic_fetch_add_explicit(&group.terminal_notices, 1, memory_order_release);
+    ensure(pthread_cond_broadcast(&group.supervisor_progress) == 0);
+    group_unlock();
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
     fprintf(stderr,
         "SOURCE_ACTOR_TERMINAL_CONTROL_VERIFIED kind=%s slot=%llu generation=%llu code=%llu correlation=%llu\n",
@@ -702,6 +798,7 @@ static void source_supervisor_notice(
 static void open_group_locked(void) {
     ensure(!group.vm && !group.executions && !group.continuations);
     ensure(group.live == 0 && group.next_slot == 0 && group.peak == 0);
+    ensure(!group.recovery_lease.held);
     ensure(group.pending_ready == NULL && group.pending_done == NULL);
     atomic_store_explicit(&group.terminal_notices, 0, memory_order_release);
     atomic_store_explicit(&group.terminal_published, 0, memory_order_release);
@@ -759,13 +856,16 @@ static void open_group_locked(void) {
 #endif
 }
 
-void* oreslang_source_actor_spawn_budgeted(
+void* oreslang_source_actor_spawn_supervised_budgeted(
         OresSourceActorInit constructor,
         OresSourceActorMessage on_message,
         uint64_t fields,
-        uint64_t max_frames) {
+        uint64_t max_frames,
+        uint64_t lifetime_frame_budget,
+        uint64_t restart_limit) {
     ensure(constructor != NULL && fields >= 1 && fields <= 4096
-        && max_frames <= 16);
+        && max_frames <= 16 && lifetime_frame_budget <= 64
+        && restart_limit <= 4);
     group_lock();
     if (!group.vm) open_group_locked();
 
@@ -780,6 +880,14 @@ void* oreslang_source_actor_spawn_budgeted(
     instance->constructor = constructor;
     instance->on_message = on_message;
     instance->frame_budget = (uint32_t)max_frames;
+    instance->lifetime_frame_budget = (uint32_t)lifetime_frame_budget;
+    instance->lifetime_frame_admissions = 0;
+    instance->restart_remaining = (uint32_t)restart_limit;
+    instance->fields_count = fields;
+    instance->replacement = NULL;
+    instance->restart_decided = 0;
+    instance->restart_settled = 0;
+    instance->tombstone = 0;
     instance->admitted_sends = 0;
     instance->flush_waiters = 0;
     ensure(pthread_cond_init(&instance->callback_completed, NULL) == 0);
@@ -871,6 +979,14 @@ int oreslang_source_actor_flush_blocking(void* opaque) {
     ensure(pthread_cond_broadcast(&instance->callback_completed) == 0);
     group_unlock();
     return completed;
+}
+void* oreslang_source_actor_spawn_budgeted(
+        OresSourceActorInit constructor,
+        OresSourceActorMessage on_message,
+        uint64_t fields,
+        uint64_t max_frames) {
+    return oreslang_source_actor_spawn_supervised_budgeted(
+        constructor, on_message, fields, max_frames, 0, 0);
 }
 void* oreslang_source_actor_spawn(
         OresSourceActorInit constructor,
@@ -1136,6 +1252,57 @@ void oreslang_source_actor_request_stop(void* opaque) {
     group_unlock();
 }
 
+/* Caller holds group.mutex. A recovery lease keeps the group and its
+ * bounded tombstones alive until the outer-main consumer reads the decision.
+ * This does not make raw source pointers reusable or concurrently callable. */
+static void close_idle_group_locked(void) {
+    if (ores_source_recovery_can_close(&group.recovery_lease, group.live)) {
+        /* An outstanding final CONTROL callback may authorize and create
+         * a new actor. Release group.mutex while waiting: the callback must
+         * acquire it to spawn and publish its decision. A finite spin while
+         * holding this mutex would deadlock the supervisor. */
+        uint64_t published = atomic_load_explicit(
+            &group.terminal_published, memory_order_acquire);
+        while (ores_source_recovery_can_close(&group.recovery_lease, group.live)
+               && atomic_load_explicit(
+                   &group.terminal_notices, memory_order_acquire) < published)
+            ensure(pthread_cond_wait(
+                &group.supervisor_progress, &group.mutex) == 0);
+    }
+    if (ores_source_recovery_can_close(&group.recovery_lease, group.live)) {
+        ensure(group.pending_ready == NULL && group.pending_done == NULL);
+        ensure(ores_native_execution_context_store_live(group.executions) == 0);
+        ensure(ores_native_continuation_store_live(group.continuations) == 0);
+
+        ensure(ores_native_vm_close(group.vm));
+        group.vm = NULL;
+        group.root_ref = (OresNativeActorRef){0, 0, 0};
+
+        ensure(ores_native_continuation_store_close(group.continuations));
+        group.continuations = NULL;
+        ensure(ores_native_execution_context_store_close(group.executions));
+        group.executions = NULL;
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+        fprintf(stderr,
+            "SOURCE_ACTOR_GROUP_VERIFIED active=0 slots=%zu peak=%zu carriers=%u\n",
+            group.next_slot, group.peak, SOURCE_GROUP_CARRIERS);
+#endif
+        /* Old opaque handles are kept as bounded tombstones until no guest
+         * actor remains. No address is recycled while the group is live. */
+        for (size_t i = 0; i < group.next_slot; ++i) {
+            SourceActor* retired = group.retired[i];
+            if (!retired) continue;
+            ensure(retired->tombstone && retired->heap == NULL
+                && retired->logical_frames == NULL);
+            retired->magic = 0;
+            free(retired);
+            group.retired[i] = NULL;
+        }
+        group.next_slot = 0;
+        group.peak = 0;
+    }
+}
+
 void oreslang_source_actor_join_done(void* opaque) {
     SourceActor* instance = (SourceActor*)opaque;
     ensure(instance && instance->magic == SOURCE_ACTOR_MAGIC);
@@ -1201,8 +1368,10 @@ void oreslang_source_actor_join_done(void* opaque) {
      */
     ores_actor_i64_heap_retire(instance->heap);
     ensure(ores_actor_i64_heap_try_destroy(instance->heap));
+    instance->heap = NULL;
     /* Physical STOP acknowledgement gates both heap and logical-frame free. */
     ensure(ores_logical_frames_v1_close(instance->logical_frames));
+    instance->logical_frames = NULL;
 
     /* The VM requires a trusted resource-finalization receipt *after* the
      * physical actor DONE and both actor-owned allocations are gone. Only
@@ -1251,45 +1420,80 @@ void oreslang_source_actor_join_done(void* opaque) {
         ensure(pthread_cond_wait(&instance->callback_completed, &group.mutex) == 0);
     ensure(pthread_cond_destroy(&instance->callback_completed) == 0);
     group.actors[slot] = NULL;
-    instance->magic = 0;
-    free(instance);
+    if (failure_code != 0 && instance->restart_remaining != 0) {
+        /* Preserve only metadata for rejecting stale ActorRef pointers and
+         * returning a supervisor-selected replacement. The actor-owned heap
+         * and all logical frames were destroyed before terminal CONTROL. */
+        instance->tombstone = 1;
+        group.retired[slot] = instance;
+    } else {
+        instance->magic = 0;
+        free(instance);
+    }
     ensure(group.live > 0);
     group.live--;
 
-    if (group.live == 0) {
-        /* Publication is not delivery. Ensure all authenticated priority
-         * CONTROL callbacks have actually executed before destroying the
-         * supervisor pool and dropping the audit receipt. */
-        uint64_t published = atomic_load_explicit(
-            &group.terminal_published, memory_order_acquire);
-        unsigned spins = 0;
-        while (atomic_load_explicit(
-                   &group.terminal_notices, memory_order_acquire) < published
-               && spins++ < 1000000)
-            sched_yield();
-        ensure(atomic_load_explicit(
-            &group.terminal_notices, memory_order_acquire) == published);
-        ensure(group.pending_ready == NULL && group.pending_done == NULL);
-        ensure(ores_native_execution_context_store_live(group.executions) == 0);
-        ensure(ores_native_continuation_store_live(group.continuations) == 0);
-
-        ensure(ores_native_vm_close(group.vm));
-        group.vm = NULL;
-        group.root_ref = (OresNativeActorRef){0, 0, 0};
-
-        ensure(ores_native_continuation_store_close(group.continuations));
-        group.continuations = NULL;
-        ensure(ores_native_execution_context_store_close(group.executions));
-        group.executions = NULL;
-#ifdef ORESLANG_SOURCE_ACTOR_TESTING
-        fprintf(stderr,
-            "SOURCE_ACTOR_GROUP_VERIFIED active=0 slots=%zu peak=%zu carriers=%u\n",
-            group.next_slot, group.peak, SOURCE_GROUP_CARRIERS);
-#endif
-        group.next_slot = 0;
-        group.peak = 0;
-    }
+    close_idle_group_locked();
     group_unlock();
+}
+
+void* oreslang_source_actor_recover_blocking(void* opaque) {
+    if (!opaque) return NULL;
+    group_lock();
+    SourceActor* previous = NULL;
+    for (size_t slot = 0; slot < group.next_slot; ++slot) {
+        if (group.actors[slot] == opaque) { previous = group.actors[slot]; break; }
+    }
+    /* This is a consuming trusted-main bridge. A nonfailed actor, forged
+     * reference, duplicate recovery request, or retired incarnation cannot
+     * be restarted by simply calling a runtime symbol. */
+    int eligible = group.vm && previous && previous->magic == SOURCE_ACTOR_MAGIC
+        && !previous->tombstone
+        && previous->restart_remaining != 0
+        && atomic_load_explicit(&previous->logical_frame_failed,
+                                memory_order_acquire)
+        && atomic_load_explicit(&previous->stop_requested,
+                                memory_order_acquire)
+        && !atomic_load_explicit(&previous->join_started,
+                                 memory_order_acquire)
+        && previous->ref.actor_slot < group.next_slot
+        && group.actors[previous->ref.actor_slot] == previous;
+    if (eligible) {
+        OresNativeExecutionContext carrier = {0};
+        eligible = !ores_native_vm_current_execution_context(
+            group.vm, ORES_NATIVE_VM_MAIN, &carrier);
+    }
+    if (eligible) eligible = ores_source_recovery_claim(&group.recovery_lease,
+        (size_t)previous->ref.actor_slot, previous->ref.generation, previous->id);
+    group_unlock();
+    if (!eligible) return NULL;
+
+    /* Physical DONE, heap retirement, frame scrubbing, host finalization,
+     * registered root CONTROL publication. No guest carrier parks here.
+     * Root's CONTROL callback decides policy and creates a fresh child,
+     * which cannot see any of the previous incarnation's owned storage. */
+    oreslang_source_actor_join_done(previous);
+    group_lock();
+    const size_t old_slot = (size_t)previous->ref.actor_slot;
+    ensure(old_slot < group.next_slot && group.retired[old_slot] == previous);
+    while (!previous->restart_settled)
+        ensure(pthread_cond_wait(
+            &group.supervisor_progress, &group.mutex) == 0);
+    SourceActor* fresh = previous->replacement;
+    if (fresh) {
+        ensure(fresh != previous && fresh->id != previous->id
+            && fresh->ref.scheduler_domain == previous->ref.scheduler_domain
+            && fresh->ref.actor_slot != previous->ref.actor_slot
+            && group.actors[fresh->ref.actor_slot] == fresh
+            && fresh->lifetime_frame_admissions == 0
+            && fresh->frame_budget == previous->frame_budget
+            && fresh->lifetime_frame_budget == previous->lifetime_frame_budget);
+    }
+    ensure(ores_source_recovery_release(&group.recovery_lease, old_slot,
+        previous->ref.generation, previous->id));
+    close_idle_group_locked();
+    group_unlock();
+    return fresh;
 }
 
 void oreslang_source_actor_stop(void* opaque) {

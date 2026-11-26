@@ -18,6 +18,8 @@ def expected_prefix_last(name, actor_index, processed):
         return 0
     if name == "actor-logical-frame-aot-two-actors.atto":
         return [1, 42][actor_index] if processed else 0
+    if name == "actor-one-for-one-restart-a-b-42.atto":
+        return [7, 9, 42][actor_index]
     if name == "actor-a-frame-quota-b-42.atto":
         return [0, 42][actor_index] if processed else 0
     if name == "source-actor-fifo-ten.ores":
@@ -105,6 +107,7 @@ def main():
         ("source-actor-two-owned-heaps.ores", 2, 4, None),
         ("actor-logical-frame-aot-two-actors.atto", 2, 1, None),
         ("actor-a-frame-quota-b-42.atto", 2, 1, None),
+        ("actor-one-for-one-restart-a-b-42.atto", 3, None, None),
         ("source-actor-interleaved-stop.ores", 2, None, None),
         ("source-actor-send-moved-value.ores", 1, 2, 3),
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
@@ -112,6 +115,8 @@ def main():
     negatives = {
         "actor-frame-budget-over-limit-reject.atto":
             "@ActorFrameBudget exceeds native actor frame limit (16)",
+        "actor-restart-limit-over-bound-reject.atto":
+            "@ActorRestartLimit requires 0..4",
         "source-actor-pipe-unlowered-reject.ores":
             "NATIVE_ACTOR_PIPE_UNSUPPORTED: typed actor pipe requires guest port, mailbox and supervisor lowering",
         "source-actor-transform-pipe-unlowered-reject.ores":
@@ -232,6 +237,10 @@ def main():
                 assert "oreslang_source_actor_await_done" in guest.stdout, name
                 assert "done_continuation" in guest.stdout, name
                 assert "call void @oreslang_source_actor_request_stop" in guest.stdout, name
+            if name == "actor-one-for-one-restart-a-b-42.atto":
+                calls = [line for line in guest.stdout.splitlines()
+                         if "call " in line and "@oreslang_source_actor_recover_blocking(" in line]
+                assert len(calls) == 1, (name, "expected one generated recovery call", calls)
             if name == "source-actor-interleaved-stop.ores":
                 # IR call ordering must reflect lexical source ordering.
                 # Previous lowering grouped every send before every stop.
@@ -264,6 +273,7 @@ def main():
             expected_exit = 42 if name in {
                 "actor-logical-frame-aot-two-actors.atto",
                 "actor-a-frame-quota-b-42.atto",
+                "actor-one-for-one-restart-a-b-42.atto",
             } else 43
             assert executed.returncode == expected_exit, (name, executed.returncode, executed.stderr)
             vm_lines = [line for line in executed.stderr.splitlines()
@@ -295,6 +305,7 @@ def main():
                 expected_accepted = (
                     [1, 2][i]
                     if name == "source-actor-interleaved-stop.ores"
+                    else [2, 1, 1][i] if name == "actor-one-for-one-restart-a-b-42.atto"
                     else count)
                 assert accepted == expected_accepted, (
                     name, i, accepted, expected_accepted)
@@ -313,6 +324,20 @@ def main():
                 assert receipts[1]["successful"] == 1, (name, receipts)
                 assert receipts[1]["failed"] == 0, (name, receipts)
                 assert receipts[1]["last"] == 42, (name, receipts)
+            if name == "actor-one-for-one-restart-a-b-42.atto":
+                restart_lines = [line for line in executed.stderr.splitlines()
+                                 if line.startswith("SOURCE_ACTOR_ONE_FOR_ONE_RESTART_VERIFIED ")]
+                assert len(restart_lines) == 1, (name, restart_lines)
+                match = re.fullmatch(
+                    r"SOURCE_ACTOR_ONE_FOR_ONE_RESTART_VERIFIED old_slot=(\d+) new_slot=(\d+) old_generation=(\d+) new_generation=(\d+) remaining=(\d+)",
+                    restart_lines[0])
+                assert match is not None, (name, restart_lines)
+                old_slot, new_slot, old_gen, new_gen, remaining = map(int, match.groups())
+                assert old_slot != new_slot and old_gen > 0 and new_gen > 0 and remaining == 0, (name, restart_lines)
+                assert [(r["processed"], r["successful"], r["failed"], r["last"], r["failure_code"]) for r in receipts] == [
+                    (2, 1, 1, 7, 0xA7700001), (1, 1, 0, 9, 0), (1, 1, 0, 42, 0)
+                ], (name, receipts)
+                print("PASS compiled one-for-one restart: old A fenced, fresh A2=9, sibling B=42", flush=True)
             if name == "source-actor-two-owned-heaps.ores":
                 assert [r["last"] for r in receipts] == [
                     expected_prefix_last(name, i, r["processed"])

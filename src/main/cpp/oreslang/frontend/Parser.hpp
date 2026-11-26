@@ -290,7 +290,7 @@ struct ActorSend {
 // Preserve the sequence of source-visible actor effects. Separating sends
 // from stops changes program behavior and can hide use-after-stop errors.
 struct ActorAction {
-    enum class Kind { Send, FlushBlocking, Stop };
+    enum class Kind { Send, FlushBlocking, RecoverBlocking, Stop };
     Kind kind;
     std::size_t index = 0;
 };
@@ -384,6 +384,7 @@ struct Function {
     std::vector<ActorSend> actor_sends;
     std::vector<std::string> actor_stops;
     std::vector<std::string> actor_flushes; // trusted-main mailbox callback barrier
+    std::vector<std::string> actor_recovers; // consumes old incarnation, replaces ActorRef
     std::vector<ActorAction> actor_actions; // source order of send/stop
     std::vector<ActorFieldWrite> actor_field_writes;
     bool returns_void = false;
@@ -419,6 +420,12 @@ struct ActorDecl {
     // Maximum simultaneously owned logical frames per scalar receiver turn.
     // Zero deliberately refuses frame admission without process abort.
     std::uint32_t frame_budget = 16;
+    // The number of successful frame admissions permitted per incarnation.
+    // Zero disables this optional cumulative quota (depth quota is separate).
+    std::uint32_t lifetime_frame_budget = 0;
+    // Bounded one-for-one supervisor restarts for this actor family.
+    // A replacement inherits both frame budgets; zero disables restart.
+    std::uint32_t restart_limit = 0;
 };
 
 // Compiler-only structural contract evidence for the native i64 subset.

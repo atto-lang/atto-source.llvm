@@ -79,6 +79,21 @@ void* oreslang_source_actor_spawn_budgeted(OresSourceActorInit initializer,
                                            OresSourceActorMessage on_message,
                                            uint64_t fields,
                                            uint64_t max_frames);
+/* Native AOT-only supervisor contract: the root CONTROL handler owns a
+ * bounded one-for-one policy. Every replacement keeps original frame-depth
+ * and per-incarnation cumulative admission quotas, with a fresh frame store
+ * and scheduler identity. restart_limit=0 preserves ordinary stop semantics. */
+void* oreslang_source_actor_spawn_supervised_budgeted(
+    OresSourceActorInit initializer, OresSourceActorMessage on_message,
+    uint64_t fields, uint64_t max_frames,
+    uint64_t lifetime_frame_budget, uint64_t restart_limit);
+
+/* Consumes a logically failed ActorRef and awaits the root supervisor's
+ * CONTROL-selected replacement. The old ActorRef remains an invalid,
+ * generation-fenced tombstone until group teardown. No scheduler carrier
+ * may call this blocking trusted-main bridge. Returns NULL on escalation. */
+void* oreslang_source_actor_recover_blocking(void* failed_actor);
+
 /* Nonblocking bounded one-way send. Overload currently fails closed with a
  * host error; a typed guest overload result still needs compiler lowering.
  */

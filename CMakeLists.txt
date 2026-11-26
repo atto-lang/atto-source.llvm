@@ -613,6 +613,49 @@ if(ATTO_ACTOR_LOGICAL_FRAMES_HOST_ONLY)
     add_test(NAME native_source_actor_failure_supervisor_host
         COMMAND atto-native-source-actor-failure-host-test)
     set_tests_properties(native_source_actor_failure_supervisor_host PROPERTIES TIMEOUT 30)
+
+    # Root supervisor policy admits one fresh replacement only after physical
+    # DONE, per-incarnation frame cleanup, and registered CONTROL publication.
+    add_executable(atto-native-source-actor-restart-host-test
+        tests/source_actor_one_for_one_restart_test.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+        src/main/cpp/oreslang/runtime/NativeLogicalTrace.c)
+    target_include_directories(atto-native-source-actor-restart-host-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(atto-native-source-actor-restart-host-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_definitions(atto-native-source-actor-restart-host-test PRIVATE ORESLANG_SOURCE_ACTOR_TESTING)
+    target_compile_options(atto-native-source-actor-restart-host-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(atto-native-source-actor-restart-host-test PRIVATE Threads::Threads)
+    add_test(NAME native_source_actor_one_for_one_restart_host
+        COMMAND atto-native-source-actor-restart-host-test)
+    set_tests_properties(native_source_actor_one_for_one_restart_host PROPERTIES TIMEOUT 30)
+    add_test(NAME native_source_actor_restart_budget_exhausted_host
+        COMMAND atto-native-source-actor-restart-host-test --exhaust)
+    set_tests_properties(native_source_actor_restart_budget_exhausted_host PROPERTIES TIMEOUT 30)
+    add_test(NAME native_source_actor_last_capacity_denial_host
+        COMMAND atto-native-source-actor-restart-host-test --capacity)
+    set_tests_properties(native_source_actor_last_capacity_denial_host PROPERTIES TIMEOUT 60)
+    add_executable(atto-native-source-recovery-lease-test
+        tests/source_recovery_lease_v1_test.c)
+    target_include_directories(atto-native-source-recovery-lease-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(atto-native-source-recovery-lease-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(atto-native-source-recovery-lease-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_source_recovery_lease_host
+        COMMAND atto-native-source-recovery-lease-test)
+    set_tests_properties(native_source_recovery_lease_host PROPERTIES TIMEOUT 30)
     return()
 endif()
 
@@ -801,6 +844,35 @@ if(BUILD_TESTING)
     add_test(NAME native_source_actor_failure_supervisor_bridge
         COMMAND oreslang-native-source-actor-failure-test)
     set_tests_properties(native_source_actor_failure_supervisor_bridge PROPERTIES TIMEOUT 30)
+
+    # Root supervisor policy admits one fresh replacement only after physical
+    # DONE, per-incarnation frame cleanup, and registered CONTROL publication.
+    add_executable(oreslang-native-source-actor-restart-test
+        tests/source_actor_one_for_one_restart_test.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+        src/main/cpp/oreslang/runtime/NativeLogicalTrace.c)
+    target_include_directories(oreslang-native-source-actor-restart-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(oreslang-native-source-actor-restart-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_definitions(oreslang-native-source-actor-restart-test PRIVATE ORESLANG_SOURCE_ACTOR_TESTING)
+    target_compile_options(oreslang-native-source-actor-restart-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-native-source-actor-restart-test PRIVATE Threads::Threads)
+    add_test(NAME native_source_actor_one_for_one_restart_e2e
+        COMMAND oreslang-native-source-actor-restart-test)
+    set_tests_properties(native_source_actor_one_for_one_restart_e2e PROPERTIES TIMEOUT 30)
+    add_test(NAME native_source_actor_restart_budget_exhausted_e2e
+        COMMAND oreslang-native-source-actor-restart-test --exhaust)
+    set_tests_properties(native_source_actor_restart_budget_exhausted_e2e PROPERTIES TIMEOUT 30)
     # Static byte/bit/packet match plan host proof, NOT compiled .atto guest AOT.
     add_executable(oreslang-atto-byte-bit-pattern-plan-test
         tests/atto_byte_bit_pattern_plan_test.cpp)

@@ -1482,7 +1482,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     // No actor imports appear in ordinary scalar/class compilation.
     llvm::FunctionCallee fieldInit, fieldInitMutable, fieldRead, fieldWrite;
     llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop, sourceRequestStop,
-        sourceFlushBlocking, sourceAwaitReady, sourceAwaitDone;
+        sourceFlushBlocking, sourceRecoverBlocking, sourceAwaitReady, sourceAwaitDone;
     llvm::FunctionCallee actorScopedNew, actorScopedDrop;
     llvm::FunctionCallee actorFramePush, actorFrameStore, actorFrameLoad, actorFramePop;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
@@ -1514,8 +1514,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             llvm::FunctionType::get(i32, {native_ptr}, false));
         actorFramePop = module.getOrInsertFunction("oreslang_source_actor_frame_pop",
             llvm::FunctionType::get(i32, {}, false));
-        sourceSpawn = module.getOrInsertFunction("oreslang_source_actor_spawn_budgeted",
-            llvm::FunctionType::get(native_ptr, {native_ptr, native_ptr, i64, i64}, false));
+        sourceSpawn = module.getOrInsertFunction("oreslang_source_actor_spawn_supervised_budgeted",
+            llvm::FunctionType::get(native_ptr, {native_ptr, native_ptr, i64, i64, i64, i64}, false));
         sourceSend = module.getOrInsertFunction("oreslang_source_actor_send",
             llvm::FunctionType::get(voidTy, {native_ptr, i64}, false));
         sourceStop = module.getOrInsertFunction("oreslang_source_actor_stop",
@@ -1523,6 +1523,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         sourceFlushBlocking = module.getOrInsertFunction(
             "oreslang_source_actor_flush_blocking",
             llvm::FunctionType::get(i32, {native_ptr}, false));
+        sourceRecoverBlocking = module.getOrInsertFunction(
+            "oreslang_source_actor_recover_blocking",
+            llvm::FunctionType::get(native_ptr, {native_ptr}, false));
         sourceRequestStop = module.getOrInsertFunction(
             "oreslang_source_actor_request_stop",
             llvm::FunctionType::get(voidTy, {native_ptr}, false));
@@ -1775,7 +1778,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             llvm::Value* ref = builder.CreateCall(sourceSpawn, {ctor, handler,
                 llvm::ConstantInt::get(i64,
                     actor->fields.size() + actor->on_message.locals.size()),
-                llvm::ConstantInt::get(i64, actor->frame_budget)},
+                llvm::ConstantInt::get(i64, actor->frame_budget),
+                llvm::ConstantInt::get(i64, actor->lifetime_frame_budget),
+                llvm::ConstantInt::get(i64, actor->restart_limit)},
                 spawn.name + ".actor.ref");
             actorRefs.emplace(spawn.name, ref);
         }
@@ -2718,7 +2723,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             lower_effect(stmt);
         }
 
-        if (!fn.actor_flushes.empty()
+        if ((!fn.actor_flushes.empty() || !fn.actor_recovers.empty())
                 && (!fn.ready_await_actor.empty() || !fn.done_await_actor.empty()))
             throw std::runtime_error("flush_blocking requires independent lifecycle continuation lowering");
 
@@ -2883,6 +2888,15 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                     builder.CreateCall(
                         sourceFlushBlocking,
                         {actorRefs.at(fn.actor_flushes.at(action.index))});
+                } else if (action.kind == ActorAction::Kind::RecoverBlocking) {
+                    const std::string& name = fn.actor_recovers.at(action.index);
+                    // Linear consume of the failed incarnation: replace the
+                    // compiler-owned reference with the fresh supervisor
+                    // child, never alias or resurrect the old mailbox/heap.
+                    llvm::Value* fresh = builder.CreateCall(
+                        sourceRecoverBlocking, {actorRefs.at(name)},
+                        name + ".restarted.ref");
+                    actorRefs.at(name) = fresh;
                 } else {
                     builder.CreateCall(
                         sourceStop,
