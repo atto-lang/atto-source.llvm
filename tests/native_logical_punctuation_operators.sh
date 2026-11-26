@@ -239,3 +239,45 @@ done
 echo "ATTO_COMPOUND_XOR_NATIVE_O0_O2_PASS negatives=$negative_index"
 
 echo "logical punctuation: native O0/O2 + short-circuit/trap execution + compile negatives passed"
+
+
+# Named reductions: real source -> IR -> executable, including literal identities.
+cat >"$tmp/named-reduction.atto" <<'ATTO'
+fnc risky(int n): bool { return Integer.rem(1,n) eq 0; }
+pub fnc main(): int {
+  val bool a = Xor(true, false);
+  val bool b = And(true, false);
+  val bool c = Or(true, false);
+  val bool d = Xor([true, false]);
+  val bool e = And([true, false, true, true, true]);
+  val bool f = Or([true, false, true, false]);
+  return (a && !b && c && d && !e && f &&
+    And([]) && !Or([]) && !Xor([]) &&
+    And([true]) && !Or([false]) && Xor([true]) &&
+    Xor(true,true,true) && !Xor(true,true) &&
+    !And(false,risky(0)) && Or(true,risky(0))) ? 42 : 7;
+}
+ATTO
+timeout 40s "$compiler" --target=host "$tmp/named-reduction.atto" >"$tmp/named-reduction.ll"
+test -s "$tmp/named-reduction.ll"
+for opt in 0 2; do
+  timeout 40s "$clang" "-O$opt" -x ir "$tmp/named-reduction.ll" -o "$tmp/named-O$opt"
+  status=0
+  timeout 20s "$tmp/named-O$opt" >"$tmp/named-O$opt.stdout" 2>"$tmp/named-O$opt.stderr" || status=$?
+  if [[ "$status" -ne 42 || -s "$tmp/named-O$opt.stdout" ]]; then
+    echo "named Boolean reduction guest failed at O$opt: status=$status" >&2
+    exit 1
+  fi
+done
+for gate in And Or Xor; do
+  for args in '' 'true' '1,2' 'false,1' 'true,1' '[true,1]' '[[true]]' '[true],[false]' '[true,risky(0)]'; do
+    printf 'fnc risky(int n): bool { return Integer.rem(1,n) eq 0; }\npub fnc main(): int { return %s(%s) ? 42 : 7; }\n' "$gate" "$args" >"$tmp/named-reject.atto"
+    status=0
+    timeout 40s "$compiler" --target=host "$tmp/named-reject.atto" >"$tmp/named-reject.ll" 2>"$tmp/named-reject.stderr" || status=$?
+    if [[ "$status" -ne 1 || -s "$tmp/named-reject.ll" || ! -s "$tmp/named-reject.stderr" ]]; then
+      echo "named reduction rejection failed: $gate($args) status=$status" >&2
+      exit 1
+    fi
+  done
+done
+echo "ATTO_NAMED_BOOLEAN_NATIVE_O0_O2_PASS negatives=27"
