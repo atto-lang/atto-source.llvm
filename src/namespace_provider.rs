@@ -5,27 +5,52 @@ fn ident(s:&str)->bool{
         c.is_ascii_alphabetic()||c==b'_'||(i>0&&c.is_ascii_digit()))
 }
 fn deny(reason:&str)->String{format!("E_NAMESPACE_PROFILE: {reason}")}
-pub(crate) fn compile(input:&str,namespace:&str,symbol:&str)->Result<String,String>{
+#[cfg(test)]
+fn compile(input:&str,namespace:&str,symbol:&str)->Result<String,String>{
+    compile_arity(input,namespace,symbol,0)
+}
+pub(crate) fn compile_arity(input:&str,namespace:&str,symbol:&str,arity:usize)->Result<String,String>{
+    let typed=admit_arity(input,namespace,symbol,arity)?;
+    crate::emit_admitted_ir(&typed,Some((symbol,arity)))
+}
+pub(crate) fn admit_arity(input:&str,namespace:&str,symbol:&str,arity:usize)->Result<atto_compiler::check::TProgram,String>{
     if input.len()>4096||input.contains('\0')||!ident(namespace)||!ident(symbol)||symbol=="main"{
         return Err(deny("source or identifier budget"));
     }
     let header=format!("namespace {namespace};\npub fnc {symbol}(");
     let rest=input.strip_prefix(&header).ok_or_else(||deny("explicit public provider required"))?;
     let (params,tail)=rest.split_once(')').ok_or_else(||deny("signature"))?;
-    if !params.is_empty(){return Err("E_NAMESPACE_ARITY: zero-argument provider required".into());}
-    let literal=tail.strip_prefix(": int { return ").and_then(|s|s.strip_suffix("; }\n"))
-        .ok_or_else(||deny("closed literal body required"))?;
-    let digits=literal.strip_prefix('-').unwrap_or(literal);
-    if digits.is_empty()||digits.len()>19||!digits.bytes().all(|b|b.is_ascii_digit())||
-        (digits.len()>1&&digits.starts_with('0')){
-        return Err(deny("integer literal required"));
+    let count=if params.is_empty(){0}else{params.split(", ").count()};
+    if count!=arity||count>4{return Err("E_NAMESPACE_ARITY: incompatible selected call".into());}
+    let mut names=std::collections::HashSet::new();
+    if count>0 {
+        for p in params.split(", "){
+            let name=p.strip_prefix("int ").ok_or_else(||deny("exact integer parameters required"))?;
+            if !ident(name)||!names.insert(name){return Err(deny("invalid parameter"));}
+        }
     }
-    // Preserve the verified provider declaration and expression. The closed
-    // namespace metadata is authenticated by the caller; the checked scalar
-    // compiler sees the declaration and a synthetic entry invoking it.
+    let expr=tail.strip_prefix(": int { return ").and_then(|s|s.strip_suffix("; }\n"))
+        .ok_or_else(||deny("closed expression body required"))?;
+    if expr.is_empty()||expr.len()>1024||!expr.bytes().all(|b|b.is_ascii_alphanumeric()||b"_+*() -".contains(&b)){
+        return Err(deny("closed integer expression required"));
+    }
+    // Only parameter identifiers, integer digits and arithmetic punctuation.
+    // Reject calls before the actual frontend checks the original expression.
+    let bytes=expr.as_bytes();let mut k=0;
+    while k<bytes.len(){
+        if bytes[k].is_ascii_alphabetic()||bytes[k]==b'_'{
+            let start=k;k+=1;
+            while k<bytes.len()&&(bytes[k].is_ascii_alphanumeric()||bytes[k]==b'_'){k+=1;}
+            if !names.contains(&expr[start..k])||expr[k..].trim_start().starts_with('('){
+                return Err(deny("closed integer expression required"));
+            }
+        }else{k+=1;}
+    }
     let declaration=input.split_once('\n').ok_or_else(||deny("header"))?.1;
-    let source=format!("{declaration}pub fnc main(): int {{ return {symbol}(); }}\n");
-    crate::compile_ir_entry(&source,crate::LibraryProfile::FreestandingCore,true)
+    // Keep a valid ordinary zero-argument main to preserve the normal
+    // checker contract. Export only the checked provider's full-width ABI.
+    let source=format!("{declaration}pub fnc main(): int {{ return 0; }}\n");
+    crate::admit_ir_source(&source,crate::LibraryProfile::FreestandingCore,Some((symbol,arity)))
 }
 #[cfg(test)]
 mod tests{
