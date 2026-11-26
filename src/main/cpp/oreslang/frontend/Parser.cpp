@@ -281,6 +281,20 @@ public:
             // Existing nb-select recognition is intentionally unchanged
             // until native select lowering supports that grammar.
             const auto first = source_.substr(start, at_ - start);
+            // Transfer aliases require the same complete-bang ASCII separator
+            // as the Rust frontend. Comparisons and bare identifiers are inert.
+            if ((first == "take" || first == "move") &&
+                    at_ < source_.size() && source_[at_] == '!' &&
+                    source_.substr(at_, 2) != "!=" &&
+                    !(source_.substr(at_, 3) == "!eq" &&
+                      (at_ + 3 == source_.size() || !identifier_part(source_[at_ + 3])))) {
+                const auto after = at_ + 1;
+                if (after == source_.size() ||
+                        std::string_view(" \t\r\n\v\f").find(source_[after]) == std::string_view::npos)
+                    throw std::runtime_error(
+                        "E_BANG_KEYWORD_WHITESPACE: whitespace required after complete transfer bang at byte " +
+                        std::to_string(start));
+            }
             if (first == "susp")
                 return {Kind::Identifier, "suspends", start};
             // Channel<int> has a distinct result/EOF/cancellation/ownership
@@ -4424,7 +4438,7 @@ private:
                         const Token bang = probe.next();
                         if (bang.text != "!" ||
                                 bang.offset != token_.offset + token_.text.size())
-                            fail("native class move requires explicit take! or rt take");
+                            fail("E_BANG_KEYWORD_WHITESPACE: take! and move! require an adjacent bang");
                         advance();
                         require("!");
                     }

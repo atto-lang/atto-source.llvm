@@ -34,10 +34,14 @@ def main():
     runtime = ROOT / "src/main/cpp/oreslang/runtime/NativeIntArrayRegion.c"
     with tempfile.TemporaryDirectory(prefix="owned-factory-") as root:
         root = Path(root)
-        for i, initializer in enumerate(("take! make()", "rt take make()", "take! (make())", "move! make()")):
+        initializers = ["take! make()", "rt take make()", "take! (make())", "move! make()"]
+        for spelling in ("take", "move"):
+            for gap in ("\t", "\n", "\r\n", "\v", "\f", " /* gap */ "):
+                initializers.append(spelling + "!" + gap + "make()")
+        for i, initializer in enumerate(initializers):
             source = root / f"positive{i}.atto"
             source.write_text(DEFS + "pub fnc main():int { let mut Bag b = " + initializer +
-                              "; let mut Bag moved = " + ("move!" if i == 3 else "take!") +
+                              "; let mut Bag moved = " + ("move!" if initializer.startswith("move!") else "take!") +
                               " b; return moved.size() == 1 ? 42 : 7; }\n")
             emitted = run([compiler, str(source)])
             assert emitted.returncode == 0 and "@main" in emitted.stdout, emitted.stderr
@@ -60,13 +64,25 @@ def main():
             ("let Bag b = make(); return 0;", "owning class result requires"),
             ("let mut Bag b = take! make(); let Bag alias = b; return 0;", "immutable record value"),
         ]
+        for spelling in ("take", "move"):
+            for gap in ("", "/*gap*/", "//gap\n", "\u00a0"):
+                negatives.append(("let mut Bag b = " + spelling + "!" + gap + "make(); return 0;",
+                                  "E_BANG_KEYWORD_WHITESPACE"))
+            for gap in (" ", "/*gap*/", "\n"):
+                negatives.append(("let mut Bag b = " + spelling + gap + "! make(); return 0;",
+                                  "E_BANG_KEYWORD_WHITESPACE"))
+            negatives.append(("let mut Bag b = " + spelling + "!(make()); return 0;",
+                              "E_BANG_KEYWORD_WHITESPACE"))
+        # Preserve fail-closed ownership admission before scoped class cleanup exists.
+        negatives.append(("if true; do let mut Bag b = take! make(); fi return 0;",
+                          "native branch-local class owner requires destructor/drop lowering"))
         for i, (body, diagnostic) in enumerate(negatives):
             source = root / f"negative{i}.atto"
             source.write_text(DEFS + "pub fnc main():int { " + body + " }\n")
             denied = run([compiler, str(source)])
             assert 0 < denied.returncode < 128 and not denied.stdout.strip(), denied
             assert diagnostic in denied.stderr, denied.stderr
-    print("OWNED_FACTORY_TAKE: 4 native executions, 8 targeted denials")
+    print(f"OWNED_FACTORY_TAKE: {len(initializers)} native executions, {len(negatives)} targeted denials")
 
 if __name__ == "__main__":
     main()
