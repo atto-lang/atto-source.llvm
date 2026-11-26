@@ -197,7 +197,7 @@ llvm::Value* lower(const Expression& expr,
                     // Literal message (enforced by the sum resolver) to stderr, then the
                     // same abort path as unwrap. Java appends ": <payload>"; this slice does not.
                     const std::string message = expr.arguments[0]->name + "\n";
-                    auto* text = builder.CreateGlobalStringPtr(message, "expect.message");
+                    auto* text = builder.CreateGlobalString(message, "expect.message");
                     auto write = function->getParent()->getOrInsertFunction("write", llvm::FunctionType::get(
                         i64, {builder.getInt32Ty(), builder.getPtrTy(), i64}, false));
                     builder.CreateCall(write, {builder.getInt32(2), text, llvm::ConstantInt::get(i64, message.size())});
@@ -256,7 +256,7 @@ llvm::Value* lower(const Expression& expr,
         }
         case Expression::Kind::String: {
             auto* module = builder.GetInsertBlock()->getModule();
-            auto* bytes = builder.CreateGlobalStringPtr(expr.name, "string.literal");
+            auto* bytes = builder.CreateGlobalString(expr.name, "string.literal");
             auto runtime = module->getOrInsertFunction("ores_string_literal",
                 llvm::FunctionType::get(i64, {bytes->getType(), i64}, false));
             return builder.CreateCall(runtime, {bytes, llvm::ConstantInt::get(i64, expr.name.size())}, "string.handle");
