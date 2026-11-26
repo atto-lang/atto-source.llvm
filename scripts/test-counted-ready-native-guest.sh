@@ -10,12 +10,12 @@ python3 - "$corpus" <<'PY'
 import json,sys,pathlib,hashlib
 root=pathlib.Path(sys.argv[1])
 cases=[c for c in json.loads((root/'manifest.json').read_text())['cases'] if c['id'].startswith(('counted-','reject-counted-'))]
-assert len(cases)==16
+assert len(cases)==17
 for c in cases:
     raw=(root/c['path']).read_bytes()
     assert hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()==c['gitBlobSha1']
 PY
-for name in counted-three counted-zero counted-one counted-alias counted-dynamic counted-dynamic-zero counted-mixed-future-alias counted-multi-channel-fair counted-mixed-zero; do
+for name in counted-distinct-alias-projection counted-three counted-zero counted-one counted-alias counted-dynamic counted-dynamic-zero counted-mixed-future-alias counted-multi-channel-fair counted-mixed-zero; do
   "$compiler" --counted-ready-v1 "$corpus/$name.atto" > "$work/guest.cpp"
   clang++ -std=c++17 -O1 -pthread -I src/main/cpp -S -emit-llvm "$work/guest.cpp" -o "$work/guest.ll"
   clang++ -O1 -pthread "$work/guest.ll" -o "$work/guest"
