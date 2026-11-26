@@ -6001,6 +6001,7 @@ private:
             if (main && (!function.parameters.empty() || !declared_result.unit.scalar()
                     || !declared_result.range.includes(VerifiedI64Range())))
                 fail("E_REFINEMENT_EXPORT: main must have signature () -> int");
+            const auto contract_start = token_.offset;
             while (accept("requires")) {
                 if (main) fail("E_REFINEMENT_EXPORT: main cannot require caller facts");
                 const auto parameter = identifier();
@@ -6029,7 +6030,18 @@ private:
                 }
             }
             signature.result = guaranteed_result;
-            require("{");
+            const bool contracted = token_.offset != contract_start;
+            bool end_delimited = false;
+            if (!accept("{")) {
+                if (accept("::")) end_delimited = true;
+                else if (token_.text == "begin") {
+                    if (contracted && (last_token_end_ > token_.offset ||
+                        source_.substr(last_token_end_, token_.offset-last_token_end_).find('\n') == std::string_view::npos))
+                        fail("E_SYNTAX: contracted begin must start on a later line");
+                    advance();
+                    end_delimited = true;
+                } else fail("E_SYNTAX: expected verified callable body opener");
+            }
             if (main && !program.protocol_actors.empty() && token_.text == "val") {
                 auto lookahead = lexer_;
                 if (lookahead.next().kind == Kind::Identifier && lookahead.next().text == "=" &&
@@ -6039,6 +6051,7 @@ private:
                         guaranteed_result.range.maximum() != declared_result.range.maximum() ||
                         !signature.upper_parameters.empty())
                         fail("E_PROTOCOL_GUEST: actor main requires a standalone uncontracted entrypoint");
+                    if (end_delimited) fail("E_PROTOCOL_GUEST: protocol guest still requires braces");
                     parse_protocol_guest(program);
                     return;
                 }
@@ -6145,7 +6158,7 @@ private:
                     }
                 }
                 function.result=strict_returns(declared_result,guaranteed_result,signature,function,name,0);
-                require("}");
+                require(end_delimited ? "end" : "}");
             } else {
                 if (!accept("return"))
                     fail("E_REFINEMENT_BODY: expected an explicit return after immutable bindings");
@@ -6158,7 +6171,7 @@ private:
                         fail("E_REFINEMENT_POSTCONDITION: cannot prove result <= " + parameter);
                 }
                 require(";");
-                require("}");
+                require(end_delimited ? "end" : "}");
                 function.result = std::move(result.expression);
             }
             program.functions.push_back(std::move(function));
