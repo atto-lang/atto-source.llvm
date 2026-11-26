@@ -67,14 +67,23 @@ static void check_last_actor_capacity_denial(void) {
     CHECK(oreslang_source_actor_try_send(a, 8));
     CHECK(oreslang_source_actor_flush_blocking(a));
     CHECK(!oreslang_source_actor_recover_blocking(a));
-    /* Recovery consumed A; do not dereference the old raw pointer. */
+    /* Recovery consumed A; old identities never resolve in a fresh group. */
+    CHECK(!oreslang_source_actor_try_send(a, 99));
+    CHECK(oreslang_source_actor_ready_status(a) == -1);
+    OresSourceActorMessageReceipt stale = {0};
+    CHECK(!oreslang_source_actor_message_receipt(a, &stale));
+    CHECK(!oreslang_source_actor_flush_blocking(a));
     CHECK(oreslang_source_actor_test_terminal_notices() == 63);
     CHECK(oreslang_source_actor_test_panic_notices() == 1);
     CHECK(oreslang_source_actor_test_stopped_notices() == 62);
     CHECK(oreslang_source_actor_test_last_panic_code() == ORES_SOURCE_ACTOR_FAILURE_FRAME);
     /* A fresh group must start with fresh capacity after the denied decision. */
     void* b = oreslang_source_actor_spawn(initialize, actor_b, 1);
-    CHECK(b);
+    CHECK(b && b != a);
+    CHECK(!oreslang_source_actor_try_send(a, 99));
+    CHECK(oreslang_source_actor_ready_status(a) == -1);
+    CHECK(!oreslang_source_actor_message_receipt(a, &stale));
+    CHECK(!oreslang_source_actor_flush_blocking(a));
     CHECK(oreslang_source_actor_try_send(b, 42));
     CHECK(oreslang_source_actor_flush_blocking(b));
     oreslang_source_actor_stop(b);
