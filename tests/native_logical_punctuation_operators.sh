@@ -34,6 +34,23 @@ if ! command -v timeout >/dev/null; then
     }
   fi
 fi
+# The stdio reactor needs a pipe. Preserve both pipeline statuses: pipefail
+# alone returns the rightmost failure, not necessarily the guest exit code.
+expect_guest_output() {
+  local binary="$1" expected="$2" prefix="$3" label="$4"
+  local -a pipeline_status
+  if timeout 20s "$binary" 2>"$prefix.stderr" | cat >"$prefix.stdout"; then
+    pipeline_status=("${PIPESTATUS[@]}")
+  else
+    pipeline_status=("${PIPESTATUS[@]}")
+  fi
+  if [[ "${pipeline_status[0]}" -ne 42 || "${pipeline_status[1]}" -ne 0 || -s "$prefix.stderr" ]] ||
+      ! cmp -s "$expected" "$prefix.stdout"; then
+    echo "$label: guest=${pipeline_status[0]} capture=${pipeline_status[1]}" >&2
+    return 1
+  fi
+}
+
 ir="$tmp/positive.ll"
 if ! timeout 40s "$compiler" --target=host "$fixtures/scalar-parity.atto" > "$ir"; then
   echo "native compiler rejected positive .atto source" >&2
@@ -79,7 +96,7 @@ for opt in 0 2; do
   fi
 done
 # Java LogicalPunctuationOperatorTest.tokensAreAdjacentAndWordsRemainOrdinaryIdentifiers:
-# `val and: bool` locals, adjacent `a^^b`, and operator words inside a comment.
+# `val and: bool` locals, named Boolean Xor and operator words inside a comment.
 annotated_ir="$tmp/val-annotated-identifiers.ll"
 timeout 40s "$compiler" --target=host "$fixtures/val-annotated-identifiers.atto" >"$annotated_ir"
 test -s "$annotated_ir" || { echo "missing annotated identifier IR" >&2; exit 1; }
@@ -127,15 +144,8 @@ for opt in 0 2; do
   binary="$tmp/xor-order-O$opt"
   timeout 40s "$clang" "-O$opt" -x ir "$order_ir" -x c -std=c11 \
     -I "$root/src/main/cpp" "$string_runtime" -pthread -o "$binary"
-  status=0
-  timeout 20s "$binary" 2>"$tmp/xor-order-O$opt.stderr" |
-    cat >"$tmp/xor-order-O$opt.stdout" || status=$?
-  if [[ "$status" -ne 42 ]] || ! cmp -s "$tmp/xor-order.expected" "$tmp/xor-order-O$opt.stdout"; then
-    echo "XOR operand exactly-once left-to-right proof failed at O$opt: status=$status" >&2
-    cat "$tmp/xor-order-O$opt.stdout" >&2
-    cat "$tmp/xor-order-O$opt.stderr" >&2
-    exit 1
-  fi
+  expect_guest_output "$binary" "$tmp/xor-order.expected" "$tmp/xor-order-O$opt" \
+    "XOR operand exactly-once left-to-right proof failed at O$opt"
 done
 echo "ATTO_LOGICAL_XOR_LEFT_RIGHT_EXACT_ONCE_O0_O2_PASS"
 
@@ -151,8 +161,8 @@ for name in xor-eager-trap and-reached-rhs-trap or-reached-rhs-trap; do
     timeout 40s "$clang" "-O$opt" -x ir "$ir" -o "$binary"
     status=0
     timeout 20s "$binary" >"$tmp/$name-O$opt.stdout" 2>"$tmp/$name-O$opt.stderr" || status=$?
-    if (( status <= 128 || status == 124 || status == 125 || status == 126 || status == 127 )); then
-      echo "expected native guest trap for $name at O$opt; got status=$status" >&2
+    if [[ "$status" -ne $((128 + $(kill -l ILL))) && "$status" -ne $((128 + $(kill -l TRAP))) ]]; then
+      echo "expected LLVM trap (SIGILL or SIGTRAP) for $name at O$opt; got status=$status" >&2
       exit 1
     fi
     if [[ -s "$tmp/$name-O$opt.stdout" ]]; then
@@ -163,17 +173,13 @@ for name in xor-eager-trap and-reached-rhs-trap or-reached-rhs-trap; do
   echo "ATTO_LOGICAL_TRAP_RUNTIME_O0_O2_PASS name=$name"
 done
 
-for name in reject-int-and reject-int-or reject-int-xor reject-int-and-dead-rhs reject-int-or-dead-rhs reject-int-xor-left reject-single-caret reject-spaced-caret reject-bare-pipe reject-bare-ampersand; do
+for name in reject-int-and reject-int-or reject-int-xor reject-int-and-dead-rhs reject-int-or-dead-rhs reject-int-xor-left reject-bool-double-caret reject-int-xor-equality-precedence reject-single-caret reject-spaced-caret reject-bare-pipe reject-bare-ampersand; do
   out="$tmp/$name.ll"
   diagnostic="$tmp/$name.stderr"
   status=0
   timeout 40s "$compiler" --target=host "$fixtures/$name.atto" >"$out" 2>"$diagnostic" || status=$?
-  if [[ "$status" -eq 0 ]]; then
-    echo "native compiler accepted invalid boolean punctuation fixture $name" >&2
-    exit 1
-  fi
-  if [[ "$status" -eq 124 || "$status" -eq 125 || "$status" -eq 126 || "$status" -eq 127 ]]; then
-    echo "compiler timed out or was unavailable (not a valid compile-negative): $name, status=$status" >&2
+  if [[ "$status" -ne 1 ]]; then
+    echo "expected compiler source rejection, not success or infrastructure failure: $name, status=$status" >&2
     exit 1
   fi
   if [[ -s "$out" ]]; then
@@ -185,4 +191,98 @@ for name in reject-int-and reject-int-or reject-int-xor reject-int-and-dead-rhs 
     exit 1
   fi
 done
+# Compound XOR is restricted to writable integer locals.
+cat >"$tmp/compound-xor.atto" <<'ATTO'
+fnc rhs(): int {
+  stdio.stdout.println(3);
+  return 10;
+}
+pub fnc main(): int {
+  let int x = 12;
+  x ^^= rhs();
+  let int edge = -9223372036854775807 - 1;
+  edge ^^= -1;
+  let int high = edge;
+  edge ^^= -1;
+  let int low = edge;
+  edge ^^= edge;
+  return (x eq 6 && high eq 9223372036854775807 &&
+          low eq (-9223372036854775807 - 1) && edge eq 0) ? 42 : 7;
+}
+ATTO
+timeout 40s "$compiler" --target=host "$tmp/compound-xor.atto" >"$tmp/compound-xor.ll"
+test -s "$tmp/compound-xor.ll"
+printf '3\n' >"$tmp/compound-xor.expected"
+for opt in 0 2; do
+  binary="$tmp/compound-xor-O$opt"
+  timeout 40s "$clang" "-O$opt" -x ir "$tmp/compound-xor.ll" -x c -std=c11 \
+    -I "$root/src/main/cpp" "$string_runtime" -pthread -o "$binary"
+  expect_guest_output "$binary" "$tmp/compound-xor.expected" "$tmp/compound-xor-O$opt" \
+    "compound XOR boundary or exactly-once RHS failure at O$opt"
+done
+
+negative_index=0
+for body in 'val int x = 12; x ^^= 10; return x;' \
+            'let int x = 12; x ^^= true; return x;' \
+            'let bool x = true; x ^^= false; return 0;' \
+            'let int x = 12; x ^^= 1.5; return x;' \
+            'let int x = 12; x ^= 10; return x;' \
+            'let int x = 12; x ^^ = 10; return x;' \
+            'let int x = 12; x ^ ^= 10; return x;' \
+            'let int x = 12; x ^/*gap*/^= 10; return x;' \
+            'let int x = 12; x ^^/*gap*/= 10; return x;'; do
+  negative_index=$((negative_index + 1))
+  printf 'pub fnc main(): int { %s }\n' "$body" >"$tmp/compound-reject.atto"
+  status=0
+  timeout 40s "$compiler" --target=host "$tmp/compound-reject.atto" \
+    >"$tmp/compound-reject.ll" 2>"$tmp/compound-reject.stderr" || status=$?
+  if [[ "$status" -ne 1 || -s "$tmp/compound-reject.ll" || ! -s "$tmp/compound-reject.stderr" ]]; then
+    echo "compound XOR negative $negative_index did not produce a clean source rejection: status=$status" >&2
+    exit 1
+  fi
+done
+echo "ATTO_COMPOUND_XOR_NATIVE_O0_O2_PASS negatives=$negative_index"
+
+
+
+# Named reductions: real source -> IR -> executable, including literal identities.
+cat >"$tmp/named-reduction.atto" <<'ATTO'
+fnc risky(int n): bool { return Integer.rem(1,n) eq 0; }
+pub fnc main(): int {
+  val bool a = Xor(true, false);
+  val bool b = And(true, false);
+  val bool c = Or(true, false);
+  val bool d = Xor([true, false]);
+  val bool e = And([true, false, true, true, true]);
+  val bool f = Or([true, false, true, false]);
+  return (a && !b && c && d && !e && f &&
+    And([]) && !Or([]) && !Xor([]) &&
+    And([true]) && !Or([false]) && Xor([true]) &&
+    Xor(true,true,true) && !Xor(true,true) &&
+    !And(false,risky(0)) && Or(true,risky(0))) ? 42 : 7;
+}
+ATTO
+timeout 40s "$compiler" --target=host "$tmp/named-reduction.atto" >"$tmp/named-reduction.ll"
+test -s "$tmp/named-reduction.ll"
+for opt in 0 2; do
+  timeout 40s "$clang" "-O$opt" -x ir "$tmp/named-reduction.ll" -o "$tmp/named-O$opt"
+  status=0
+  timeout 20s "$tmp/named-O$opt" >"$tmp/named-O$opt.stdout" 2>"$tmp/named-O$opt.stderr" || status=$?
+  if [[ "$status" -ne 42 || -s "$tmp/named-O$opt.stdout" || -s "$tmp/named-O$opt.stderr" ]]; then
+    echo "named Boolean reduction guest failed at O$opt: status=$status" >&2
+    exit 1
+  fi
+done
+for gate in And Or Xor; do
+  for args in '' 'true' '1,2' 'false,1' 'true,1' '[true,1]' '[[true]]' '[true],[false]' '[true,risky(0)]'; do
+    printf 'fnc risky(int n): bool { return Integer.rem(1,n) eq 0; }\npub fnc main(): int { return %s(%s) ? 42 : 7; }\n' "$gate" "$args" >"$tmp/named-reject.atto"
+    status=0
+    timeout 40s "$compiler" --target=host "$tmp/named-reject.atto" >"$tmp/named-reject.ll" 2>"$tmp/named-reject.stderr" || status=$?
+    if [[ "$status" -ne 1 || -s "$tmp/named-reject.ll" || ! -s "$tmp/named-reject.stderr" ]]; then
+      echo "named reduction rejection failed: $gate($args) status=$status" >&2
+      exit 1
+    fi
+  done
+done
+echo "ATTO_NAMED_BOOLEAN_NATIVE_O0_O2_PASS negatives=27"
 echo "logical punctuation: native O0/O2 + short-circuit/trap execution + compile negatives passed"
