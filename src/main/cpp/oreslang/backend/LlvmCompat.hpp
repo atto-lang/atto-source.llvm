@@ -10,12 +10,9 @@
 
 namespace oreslang {
 inline llvm::Type* native_pointer_type(llvm::LLVMContext& context, llvm::Type* pointee) {
-#if LLVM_VERSION_MAJOR >= 23
+    // All supported LLVM versions (19+) use opaque pointers.
     (void)pointee;
     return llvm::PointerType::get(context, 0);
-#else
-    return pointee->getPointerTo();
-#endif
 }
 
 inline void native_lifetime_start(llvm::IRBuilder<>& builder, llvm::Value* ptr,
