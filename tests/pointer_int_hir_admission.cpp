@@ -223,7 +223,20 @@ int main() {
     mut_call.readonly_helper = "inspect";
     mut_call.steps[1].value->name = "inspect";
     validate_ownership(mut_call);
-    std::cout << "POINTER_HIR_ADVERSARIAL_REJECTIONS=27\n";
+    mut_call.mutable_scalar_parameter = "value";
+    mut_call.mutable_write = 0;
+    mut_call.steps[0].value = literal(42);
+    validate_ownership(mut_call);
+    mut_call.steps[0].value.reset();
+    must_reject("missing scalar call payload", [&] { verify_plan(mut_call); });
+    mut_call.steps[0].value = read_slot(0, 42);
+    must_reject("owner access in exclusive scalar argument", [&] { verify_plan(mut_call); });
+    mut_call.steps[0].value = literal(42);
+    mut_call.mutable_scalar_parameter = "q";
+    must_reject("duplicate scalar formal", [&] { verify_plan(mut_call); });
+    mut_call.mutable_scalar_parameter = "value";
+    validate_ownership(mut_call);
+    std::cout << "POINTER_HIR_ADVERSARIAL_REJECTIONS=30\n";
 
     // The independently verified HIR arithmetic must agree at the signed
     // boundaries and reject overflow even when supplied a fabricated annotation.
