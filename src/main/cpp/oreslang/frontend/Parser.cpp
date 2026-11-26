@@ -5557,6 +5557,15 @@ private:
         for (Token token = token_; token.kind != Kind::End; token = cursor.next()) {
             if (token.text == ";" || token.text == "{" || token.text == "}" ||
                     token.text == "end" || token.text == "return") break;
+            if (token.text == "." || token.text == "::") {
+                Lexer suffix = cursor;
+                if (suffix.next().text == "<" && suffix.next().kind == Kind::Identifier
+                        && suffix.next().text == ">") return true;
+            }
+            if (token.text == "as") {
+                Lexer suffix = cursor;
+                if (quantity_units_.count(std::string(suffix.next().text))) return true;
+            }
             if (token.kind != Kind::Integer) continue;
             Lexer suffix = cursor;
             const auto open = suffix.next();
@@ -6138,28 +6147,57 @@ private:
                 bounded_by_left ? std::move(left.upper_bounds) : std::unordered_set<std::string>{}, i32};
     }
 
+    QuantityTerm attach_verified_unit(QuantityTerm term, const std::string& name) {
+        auto found = quantity_units_.find(name);
+        if (found == quantity_units_.end()) fail("E_UNIT_NAME: unknown unit");
+        if (refinement_aliases_.count(name) || name == "int" || name == "i64" || name == "i32")
+            fail("E_UNIT_NAME: ambiguous unit and type target");
+        if (!term.unit.scalar()) fail("E_UNIT_ATTACHMENT: unit attachment requires dimensionless scale one");
+        if (++term.depth >= kMaxNativeExpressionDepth) fail("E_UNIT_LIMIT: quantity expression is too deep");
+        term.unit = found->second;
+        term.upper_bounds.clear();
+        return term;
+    }
+
+    QuantityTerm checked_verified_cast(QuantityTerm term, std::size_t offset, bool legacy_unit) {
+        const std::string name(token_.text);
+        if (legacy_unit && quantity_units_.count(name)) {
+            advance();
+            return attach_verified_unit(std::move(term), name);
+        }
+        RefinedQuantity target;
+        if (name == "i64") advance();
+        else target = read_refined_type();
+        return apply_verified_cast(std::move(term), std::move(target), offset);
+    }
+
+    QuantityTerm apply_verified_cast(QuantityTerm term, RefinedQuantity target, std::size_t offset) {
+        if (target.unit.scalar() && !term.unit.scalar())
+            fail("E_UNIT_ERASURE: scalar cast cannot erase units");
+        target.unit.require_compatible(term.unit);
+        if (++term.depth >= kMaxNativeExpressionDepth)
+            fail("E_UNIT_LIMIT: quantity expression is too deep");
+        auto checked = make_expression(Expression::Kind::CheckRefinement, offset);
+        checked->left = std::move(term.expression);
+        for (auto bound : {target.range.minimum(), target.range.maximum()}) {
+            auto limit = make_expression(Expression::Kind::Integer, offset);
+            limit->integer = bound;
+            checked->arguments.push_back(std::move(limit));
+        }
+        term.expression = std::move(checked);
+        term.unit = std::move(target.unit);
+        term.range = term.range.on_normal_result_within(target.range);
+        term.i32 = target.i32;
+        return term;
+    }
+
     QuantityTerm verified_expression(std::size_t depth) {
         auto term = quantity_sum(depth);
         while (token_.text == "as") {
             const auto offset = token_.offset;
             advance();
-            if (token_.text == "?")
-                fail("E_REFINEMENT_CAST: optional refinement casts are unsupported");
-            auto target = read_refined_type();
-            target.unit.require_compatible(term.unit);
-            if (++term.depth >= kMaxNativeExpressionDepth)
-                fail("E_UNIT_LIMIT: quantity expression is too deep");
-            auto checked = make_expression(Expression::Kind::CheckRefinement, offset);
-            checked->left = std::move(term.expression);
-            for (auto bound : {target.range.minimum(), target.range.maximum()}) {
-                auto limit = make_expression(Expression::Kind::Integer, offset);
-                limit->integer = bound;
-                checked->arguments.push_back(std::move(limit));
-            }
-            term.expression = std::move(checked);
-            term.unit = std::move(target.unit);
-            term.range = term.range.on_normal_result_within(target.range);
-            term.i32 = target.i32;
+            if (token_.text == "?") fail("E_REFINEMENT_CAST: optional refinement casts are unsupported");
+            term = checked_verified_cast(std::move(term), offset, true);
         }
         return term;
     }
@@ -6200,7 +6238,8 @@ private:
             advance();
             unit = read_quantity_unit();
             require(">");
-            if (accept(".")) {
+            if (token_.text == "." && peek_next().text != "<") {
+                advance();
                 require("to_unit");
                 require("<");
                 auto target = read_quantity_unit();
@@ -6217,9 +6256,42 @@ private:
     }
 
     QuantityTerm quantity_atom(std::size_t depth) {
+        auto term = quantity_atom_base(depth);
+        while ((token_.text == "." || token_.text == "::") && peek_next().text == "<") {
+            const auto offset = token_.offset;
+            const bool unit_only = token_.text == ".";
+            advance();
+            require("<");
+            if (unit_only) term = attach_verified_unit(std::move(term), identifier());
+            else term = checked_verified_cast(std::move(term), offset, true);
+            require(">");
+        }
+        if (token_.text == "." && peek_next().text == "to_unit" &&
+                term.expression->kind == Expression::Kind::Integer && !term.unit.scalar()) {
+            advance();
+            require("to_unit"); require("<");
+            auto target = read_quantity_unit();
+            require(">"); require("("); require(")");
+            auto value = term.unit.convert_exact(term.expression->integer, target);
+            term.expression->integer = value;
+            term.unit = std::move(target);
+            term.range = VerifiedI64Range(value, value);
+        }
+        return term;
+    }
+
+    QuantityTerm quantity_atom_base(std::size_t depth) {
         if (depth >= kMaxNativeExpressionDepth) fail("E_UNIT_LIMIT: quantity expression is too deep");
+        if (token_.text == "<") {
+            const auto offset = token_.offset;
+            advance();
+            RefinedQuantity target;
+            if (!accept("i64")) target = read_refined_type();
+            require(">");
+            return apply_verified_cast(quantity_atom(depth + 1), std::move(target), offset);
+        }
         if (accept("(")) {
-            auto term = verified_callable_ ? verified_expression(depth + 1) : quantity_sum(depth + 1);
+            auto term = verified_expression(depth + 1);
             require(")");
             return term;
         }
@@ -6256,7 +6328,7 @@ private:
 
     std::unique_ptr<Expression> return_expression() {
         if (!has_quantity_return()) return expression();
-        auto term = quantity_sum(0);
+        auto term = verified_expression(0);
         if (!term.unit.scalar()) fail("E_UNIT_ERASURE: an unannotated int requires dimensionless scale one");
         return std::move(term.expression);
     }
