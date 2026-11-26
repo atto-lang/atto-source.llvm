@@ -1078,8 +1078,8 @@ public:
                     bool experimental_rt_scalar_loop,
                     bool verified_namespace_metadata_only = false,
                     std::size_t unsafe_base_offset = 0,
-                    bool experimental_pointer_int_aot = false, int language_version = 0)
-        : source_(source),
+                    bool experimental_pointer_int_aot = false, int language_version = 0, bool strict_verified = false)
+        : strict_verified_(strict_verified), source_(source),
           lexer_(source, unsafe_base_offset, experimental_pointer_int_aot),
           token_(lexer_.next()),
           unsafe_base_offset_(unsafe_base_offset),
@@ -1296,6 +1296,8 @@ public:
         while (token_.text == "define" &&
                 (peek_next().text == "dimension" || peek_next().text == "unit"))
             quantity_declaration();
+        if (strict_verified_ && !at_refined_quantity_alias())
+            fail("E_VERIFY_UNSUPPORTED: strict signed-i64 refinement source required");
         if (at_refined_quantity_alias() || at_protocol_declaration()) {
             if (!program.namespace_name.empty() || !program.imports.empty()
                     || !program.namespace_imports.empty() || !program.exports.empty())
@@ -5939,6 +5941,8 @@ private:
 
     void parse_verified_functions(Program& program, bool protocol_actor_library) {
         while (at_refined_quantity_alias()) parse_refined_quantity_alias();
+        if (strict_verified_ && (at_protocol_declaration() || at_protocol_actor()))
+            fail("E_VERIFY_UNSUPPORTED: strict actor proof not implemented");
         std::unordered_set<std::string> protocol_names;
         while (at_protocol_declaration()) program.protocols.push_back(parse_protocol_declaration(protocol_names));
         std::unordered_set<std::string> actor_names;
@@ -6129,6 +6133,29 @@ private:
     QuantityTerm quantity_binary(Expression::Kind kind, std::size_t offset, QuantityTerm left,
                                  QuantityTerm right, QuantityUnit unit) {
         const bool i32 = left.i32 || right.i32;
+        if (strict_verified_) {
+            if (i32) fail("E_VERIFY_UNSUPPORTED: strict i32 arithmetic not implemented");
+            // Widen before computing endpoints. Never use a clipped normal-result
+            // interval as evidence that an operation cannot trap.
+            const auto wide = [](std::int64_t v) { return llvm::APInt(128, static_cast<std::uint64_t>(v), true); };
+            const auto a=wide(left.range.minimum()), b=wide(left.range.maximum());
+            const auto c=wide(right.range.minimum()), d=wide(right.range.maximum());
+            const auto min=wide(std::numeric_limits<std::int64_t>::min());
+            const auto max=wide(std::numeric_limits<std::int64_t>::max());
+            const auto fits=[&](const llvm::APInt& v){return v.sge(min)&&v.sle(max);};
+            bool proven=false;
+            switch(kind){
+                case Expression::Kind::Add: proven=fits(a+c)&&fits(b+d);break;
+                case Expression::Kind::Subtract: proven=fits(a-d)&&fits(b-c);break;
+                case Expression::Kind::Multiply: proven=fits(a*c)&&fits(a*d)&&fits(b*c)&&fits(b*d);break;
+                case Expression::Kind::DivideQuantity:
+                    proven=(right.range.minimum()>0||right.range.maximum()<0)
+                        && !(left.range.minimum()==std::numeric_limits<std::int64_t>::min()
+                            && right.range.minimum()<=-1&&right.range.maximum()>=-1);break;
+                default:break;
+            }
+            if(!proven)fail("E_VERIFY_UNPROVEN: signed arithmetic may overflow or divide by zero");
+        }
         const auto carrier = VerifiedI64Range::signed_i32();
         if (i32 && (!carrier.includes(left.range) || !carrier.includes(right.range)))
             fail("E_I32_RANGE: checked i32 arithmetic requires both operands to fit i32");
@@ -6187,6 +6214,8 @@ private:
         if (target.unit.scalar() && !term.unit.scalar())
             fail("E_UNIT_ERASURE: scalar cast cannot erase units");
         target.unit.require_compatible(term.unit);
+        if(strict_verified_ && !target.range.includes(term.range))
+            fail("E_VERIFY_UNPROVEN: refinement cast may fail");
         if (++term.depth >= kMaxNativeExpressionDepth)
             fail("E_UNIT_LIMIT: quantity expression is too deep");
         auto checked = make_expression(Expression::Kind::CheckRefinement, offset);
@@ -6235,7 +6264,7 @@ private:
             advance();
             auto right = quantity_atom(depth);
             const bool divide = op.text == "/";
-            if (divide && !left.i32 && !right.i32 && left.unit.scalar() && right.unit.scalar())
+            if (!strict_verified_ && divide && !left.i32 && !right.i32 && left.unit.scalar() && right.unit.scalar())
                 fail("E_UNIT_SCALAR_DIVISION: two plain int operands use ordinary division");
             auto unit = left.unit.combine(right.unit, divide);
             left = quantity_binary(divide ? Expression::Kind::DivideQuantity : Expression::Kind::Multiply,
@@ -10222,6 +10251,7 @@ private:
     std::unordered_map<std::string, std::unordered_set<std::string>> verified_upper_bounds_;
     std::unordered_map<std::string, VerifiedFunction> verified_functions_;
     bool verified_callable_ = false;
+    bool strict_verified_ = false;
     std::string_view source_;
     Lexer lexer_;
     Token token_;
@@ -10570,6 +10600,16 @@ Program parse_program(std::string_view source, bool experimental_owned_int,
                       int language_version) {
     auto program = parse_unresolved_program(source, experimental_owned_int,
         experimental_rt_scalar_loop, experimental_pointer_int_aot, language_version);
+    resolve_and_validate_program(program);
+    return program;
+}
+
+Program parse_verified_strict_i64(std::string_view source) {
+    reject_unlowered_mutex_constructor(source, false);
+    auto program = Parser(source, false, false, false, 0, false, 0, true).parse();
+    if (program.functions.empty() || !program.protocols.empty() || !program.protocol_actors.empty() ||
+        !program.imports.empty() || !program.namespace_imports.empty() || !program.namespace_name.empty())
+        throw std::runtime_error("E_VERIFY_UNSUPPORTED: strict standalone scalar only");
     resolve_and_validate_program(program);
     return program;
 }
