@@ -1893,13 +1893,13 @@ impl Parser {
 
     fn parse_cond_and(&mut self) -> R<Expr> {
         let mut links = 0;
-        let mut left = self.parse_equality()?;
+        let mut left = self.parse_logical_or()?;
         while *self.peek() == Tok::Comma {
             let pos = self.pos();
             self.advance();
             self.grow(1)?;
             links += 1;
-            let right = self.parse_equality()?;
+            let right = self.parse_logical_or()?;
             left = Expr {
                 kind: ExprKind::Binary(BinOp::And, Box::new(left), Box::new(right)),
                 pos,
@@ -1919,8 +1919,61 @@ impl Parser {
         r
     }
 
+    /// Short-circuit logical operators are distinct from comma/pipe condition
+    /// operators, which are eagerly evaluated. The lexer deliberately keeps
+    /// paired pipes as two tokens: initial || still starts a zero-arg lambda.
+    /// In infix position only, a pair is logical OR.
+    fn parse_logical_or(&mut self) -> R<Expr> {
+        let mut left = self.parse_logical_and()?;
+        let mut links = 0;
+        while *self.peek() == Tok::Pipe && *self.peek_at(1) == Tok::Pipe {
+            let pos = self.pos();
+            self.advance();
+            self.advance();
+            self.grow(1)?;
+            links += 1;
+            let right = self.parse_logical_and()?;
+            left = Expr {
+                kind: ExprKind::Ternary(
+                    Box::new(left),
+                    Box::new(Expr { kind: ExprKind::Bool(true), pos }),
+                    Box::new(right),
+                ),
+                pos,
+            };
+        }
+        self.height -= links;
+        Ok(left)
+    }
+
+    /// a && b lowers to a ? b : false. The normal typed ternary emitter
+    /// evaluates a exactly once and b only when a is true. No eager builtin
+    /// and no changed meaning for unary & (reserved ownership/borrow form).
+    fn parse_logical_and(&mut self) -> R<Expr> {
+        let mut left = self.parse_equality()?;
+        let mut links = 0;
+        while *self.peek() == Tok::Amp && *self.peek_at(1) == Tok::Amp {
+            let pos = self.pos();
+            self.advance();
+            self.advance();
+            self.grow(1)?;
+            links += 1;
+            let right = self.parse_equality()?;
+            left = Expr {
+                kind: ExprKind::Ternary(
+                    Box::new(left),
+                    Box::new(right),
+                    Box::new(Expr { kind: ExprKind::Bool(false), pos }),
+                ),
+                pos,
+            };
+        }
+        self.height -= links;
+        Ok(left)
+    }
+
     fn parse_ternary(&mut self) -> R<Expr> {
-        let mut c = self.parse_equality()?;
+        let mut c = self.parse_logical_or()?;
         // Functional pipeline: value |> f |> g(extra) lowers to g(f(value), extra).
         // Only ordinary named functions are admitted: no computed callees,
         // receiver calls or actor piping. This preserves argument evaluation
@@ -2084,7 +2137,7 @@ impl Parser {
         let op = match self.peek() {
             Tok::Minus => UnOp::Neg,
             Tok::Plus => UnOp::Plus,
-            Tok::Bang => UnOp::Not,
+            Tok::Bang | Tok::UnicodeNot => UnOp::Not,
             Tok::Amp => return Err(unsupported(pos, "borrow expressions")),
             Tok::PlusPlus | Tok::MinusMinus => {
                 return Err(Diagnostic::new(
@@ -2401,6 +2454,7 @@ fn describe(t: &Tok) -> String {
                 Tok::YieldStar => "yield*",
                 Tok::Slash => "/",
                 Tok::Bang => "!",
+                Tok::UnicodeNot => "¬",
                 Tok::Question => "?",
                 Tok::Pipe => "|",
                 Tok::PipeGt => "|>",
