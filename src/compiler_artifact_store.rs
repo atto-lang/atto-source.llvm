@@ -231,4 +231,72 @@ mod tests {
         drop(lock);store.publish(&KEY,&data,&SECRET).unwrap();
     }
 
+
+    // Fixture-only integration: compile a closed scalar source and reuse the
+    // exact authenticated native output after process restart. No production
+    // publisher or authority provider; fixture signing key never leaves tests.
+    const A:&str="pub fnc main(): int { return 41+1; }";
+    const B:&str="pub fnc main(): int { return 41+2; }";
+    const BAD:&str="pub fnc main(): int { return missing; }";
+    fn fixture_key(source:&str)->[u8;32]{
+        use crate::{sha256::hex_digest,compiler_cache_key as k};
+        // This test has no external source inputs. The executable is the
+        // compiler/emitter closure for this bounded fixture, not a production
+        // toolchain attestation; the native linker runs after artifact reuse.
+        static COMPILER:std::sync::OnceLock<String>=std::sync::OnceLock::new();
+        let compiler=COMPILER.get_or_init(||{
+            let mut bytes=Vec::new();
+            File::open("/proc/self/exe").unwrap().take(256*1024*1024+1).read_to_end(&mut bytes).unwrap();
+            assert!(bytes.len()<=256*1024*1024);
+            hex_digest(&bytes)
+        });
+        let digest=k::encode(&k::Input{stage:"llvm-ir",owner:"@test/native-cache",unit_kind:"source-unit",unit:"main.atto",
+            compiler,toolchain:&hex_digest(b"fixture: embedded emitter"),target:&hex_digest(b"linux-x86_64-host"),
+            configuration:&hex_digest(b"fixture: closed scalar default profile"),sources:&hex_digest(source.as_bytes()),
+            bindings:&hex_digest(b"no external imports"),generated:None,dependencies:&[]}).unwrap();
+        let mut key=[0u8;32];for(i,b)in key.iter_mut().enumerate(){*b=u8::from_str_radix(&digest[i*2..i*2+2],16).unwrap();}key
+    }
+    fn compile_fixture(source:&str)->Result<Vec<u8>,String>{
+        assert!([A,B,BAD].contains(&source));
+        crate::compile_ir(source).map(String::into_bytes)
+    }
+    fn fixture_build(store:&ArtifactStore,source:&str,cold:bool,compile:impl FnOnce(&str)->Result<Vec<u8>,String>)->Result<(Vec<u8>,bool),String>{
+        let key=fixture_key(source);
+        if !cold {if let Some(bytes)=store.load(&key,&SECRET).map_err(|e|e.to_string())?{return Ok((bytes,true));}}
+        let bytes=compile(source)?;
+        let envelope=receipt::seal(&key,&bytes,&SECRET).map_err(str::to_owned)?;
+        store.publish(&key,&envelope,&SECRET).map_err(|e|e.to_string())?;
+        Ok((bytes,false))
+    }
+    fn execute_native(root:&Path,bytes:&[u8],expected:i32){
+        let input=root.join("guest.ll");fs::write(&input,bytes).unwrap();let exe=root.join("native-guest");
+        assert!(Command::new("clang").arg(&input).arg("-o").arg(&exe).status().unwrap().success());
+        assert_eq!(Command::new(&exe).status().unwrap().code(),Some(expected));
+    }
+    #[test]
+    fn persistent_native_guest(){
+        let t=Temp::new();let store=ArtifactStore::open(&t.0).unwrap();
+        let (cold,hit)=fixture_build(&store,A,true,compile_fixture).unwrap();assert!(!hit);
+        assert_eq!(cold,compile_fixture(A).unwrap());execute_native(&t.0,&cold,42);
+        let status=Command::new(std::env::current_exe().unwrap()).args(["--exact","compiler_artifact_store::tests::persistent_native_guest_child","--nocapture"])
+            .env("ATTO_NATIVE_CACHE_CHILD",&t.0).status().unwrap();assert!(status.success());
+        let (edited,hit)=fixture_build(&store,B,false,compile_fixture).unwrap();assert!(!hit);
+        assert_eq!(edited,compile_fixture(B).unwrap());execute_native(&t.0,&edited,43);
+        let before=fs::read(t.0.join(slot(&fixture_key(B)))).unwrap();
+        assert!(fixture_build(&store,BAD,true,compile_fixture).is_err());
+        assert_eq!(before,fs::read(t.0.join(slot(&fixture_key(B)))).unwrap());
+        assert_eq!(fixture_build(&store,B,false,|_|panic!("unexpected recompile")).unwrap(),(edited,true));
+        let path=t.0.join(slot(&fixture_key(B)));let mut corrupt=before;corrupt[80]^=1;fs::write(path,corrupt).unwrap();
+        assert!(fixture_build(&store,B,false,|_|panic!("corruption must not compile fallback")).is_err());
+        println!("PERSISTENT_NATIVE_LLVM|cold=42|warm-child=42|edited=43|failed-edit-rollback|corruption-denied");
+    }
+    #[test]
+    fn persistent_native_guest_child(){
+        if let Some(root)=std::env::var_os("ATTO_NATIVE_CACHE_CHILD"){
+            let path=Path::new(&root);let store=ArtifactStore::open(path).unwrap();
+            let(bytes,hit)=fixture_build(&store,A,false,|_|panic!("child must not compile")).unwrap();
+            assert!(hit);execute_native(path,&bytes,42);
+            println!("PERSISTENT_NATIVE_CHILD|cache-hit-no-compile|guest=42");
+        }
+    }
 }
