@@ -44,7 +44,7 @@ static void eof_and_exhaustion(){
     auto f=std::make_shared<Future>();assert(f->resolve(1));
     Cursor short_batch(2,{f,f});round(short_batch);assert(short_batch.state()==State::Failed);
     try{std::rethrow_exception(short_batch.failure());assert(false);}
-    catch(const std::runtime_error& e){assert(std::string(e.what())=="SelectExhausted");}
+    catch(const oreslang::runtime::NativeSelectExhausted& e){assert(std::string(e.what())=="SelectExhausted");}
     try{(void)short_batch.result();assert(false);}catch(const std::logic_error&){}
     assert(f->pending_waiters()==0&&Cursor(0,{}).result().empty());
 }

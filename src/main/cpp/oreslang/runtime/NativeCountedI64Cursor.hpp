@@ -14,6 +14,11 @@
 
 namespace oreslang::runtime {
 
+class NativeSelectExhausted final : public std::runtime_error {
+public:
+    NativeSelectExhausted() : std::runtime_error("SelectExhausted") {}
+};
+
 // Trusted host-only scalar owner pump. No scheduler/actor/guest lowering.
 // Each round uses the existing arbiter and identity-fenced subscriptions.
 // Producer callbacks retain only a round-specific advisory atomic.
@@ -176,7 +181,7 @@ public:
                 if(!eof)values_.push_back(value);
                 advance(i,retire);
                 if(values_.size()==count_){live_.clear();state_=State::Success;}
-                else if(live_.empty())fail(std::make_exception_ptr(std::runtime_error("SelectExhausted")));
+                else if(live_.empty())fail(std::make_exception_ptr(NativeSelectExhausted()));
                 else state_=State::Ready;
                 return true;
             }
