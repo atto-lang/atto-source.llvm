@@ -2860,7 +2860,8 @@ private:
         if (suspends_actor) {
             if (!accept("fnc") && !accept("mtd"))
                 fail("ATTO_TASK_E_SUSPENDS_DECL: use 'suspends fnc' or 'suspends mtd'");
-        } else if (!accept("fnc") && !accept("method")) {
+        } else if (!accept("fnc")) {
+            if (token_.text == "method") fail("obsolete method introducer; use mtd");
             accept("mtd"); // optional synchronous actor method marker
         }
         if (at_unsupported_critical_mode()) {
@@ -3048,7 +3049,7 @@ private:
             if (!publicly_visible) accept("private");
             if (token_.text == "abstract")
                 fail("NATIVE_PRIVATE_ABSTRACT_UNSUPPORTED: abstract method slots cannot lower as scalar fields or methods; no IR emitted");
-            // 'mtd', legacy 'method' and legacy 'fnc' are contextual class
+            // 'mtd' and legacy 'fnc' are contextual class
             // method introducers only when followed by a callable name and
             // then '(' or '<'. A bare method literally named mtd() or
             // method() must retain its own selector and receiver ABI.
@@ -3071,6 +3072,7 @@ private:
                 if (name.kind == Kind::Identifier &&
                     (!reserved(name.text) || name.text == "pattern") &&
                     (after.text == "(" || after.text == "<")) {
+                    if (token_.text == "method") fail("obsolete method introducer; use mtd");
                     advance();
                     method_marker = true;
                 }
