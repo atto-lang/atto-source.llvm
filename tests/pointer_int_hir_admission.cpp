@@ -7,6 +7,7 @@
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <limits>
 #include <stdexcept>
 
 #ifdef NDEBUG
@@ -150,6 +151,50 @@ int main() {
     metadata.result->kind = Expr::Kind::SizeBytes;
     must_reject("metadata after close", [&] { verify_plan(metadata); });
     std::cout << "POINTER_HIR_ADVERSARIAL_REJECTIONS=14\n";
+
+    // The independently verified HIR arithmetic must agree at the signed
+    // boundaries and reject overflow even when supplied a fabricated annotation.
+    const auto hi = std::numeric_limits<std::int64_t>::max();
+    const auto lo = std::numeric_limits<std::int64_t>::min();
+    auto arithmetic = [](Expr::Kind kind, std::int64_t lhs, std::int64_t rhs,
+                         std::int64_t known) {
+        auto e = std::make_unique<Expr>();
+        e->kind = kind;
+        e->lhs = literal(lhs);
+        if (kind != Expr::Kind::Neg) e->rhs = literal(rhs);
+        e->known = known;
+        return e;
+    };
+    auto positive = [&](Expr::Kind kind, std::int64_t lhs, std::int64_t rhs,
+                        std::int64_t expected) {
+        auto candidate = plan();
+        candidate.result = arithmetic(kind, lhs, rhs, expected);
+        validate_ownership(candidate);
+        assert(candidate.ownership_admitted);
+        verify_plan(candidate);
+    };
+    auto overflow = [&](Expr::Kind kind, std::int64_t lhs, std::int64_t rhs) {
+        auto candidate = plan();
+        validate_ownership(candidate);
+        candidate.result = arithmetic(kind, lhs, rhs, 0);
+        bool rejected = false;
+        try { validate_ownership(candidate); }
+        catch (const std::runtime_error& error) {
+            rejected = std::string(error.what()).find("checked integer arithmetic overflow") != std::string::npos;
+        }
+        if (!rejected || candidate.ownership_admitted)
+            throw std::runtime_error("HIR checked arithmetic rejection missing");
+    };
+    positive(Expr::Kind::Add, hi - 1, 1, hi);
+    positive(Expr::Kind::Subtract, lo + 1, 1, lo);
+    positive(Expr::Kind::Multiply, lo, 1, lo);
+    positive(Expr::Kind::Neg, hi, 0, -hi);
+    overflow(Expr::Kind::Add, hi, 1);
+    overflow(Expr::Kind::Subtract, lo, 1);
+    overflow(Expr::Kind::Multiply, lo, -1);
+    overflow(Expr::Kind::Multiply, hi, 2);
+    overflow(Expr::Kind::Neg, lo, 0);
+    std::cout << "POINTER_HIR_CHECKED_ARITHMETIC=4_EXECUTED_5_REJECTED\n";
     // The local borrowed pointer form has separate authority and uses the
     // *same* independent verifier as the owning Pointer.alloc region.
     Plan local;
