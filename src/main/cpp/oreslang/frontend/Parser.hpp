@@ -51,7 +51,7 @@ struct Expression {
         LogicalAnd, LogicalOr, LogicalXor,
         Conditional, Cast,
         Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, DeepCopy, Take, Share, Borrow, BorrowMut, Field,
-        ShiftLeft, ShiftRight, ShiftUnsignedRight
+        ShiftLeft, ShiftRight, ShiftUnsignedRight, DivideQuantity, CheckedI32, CheckRefinement
     };
     Kind kind;
     std::size_t offset = 0;
@@ -586,6 +586,10 @@ struct InvertedSourceMain {
     std::vector<InvertedSourceOperation> operations;
 };
 
+struct VerifiedProtocol;
+struct VerifiedProtocolActor;
+struct VerifiedProtocolGuest;
+
 struct Program {
     // Host compilation authority, injected by the trusted CLI/loader only.
     // Source code cannot forge this bit; parsed programs default denied.
@@ -603,6 +607,9 @@ struct Program {
     std::string module;
     std::vector<ClassDecl> classes;
     std::vector<ActorDecl> actors;
+    std::vector<std::shared_ptr<const VerifiedProtocol>> protocols;
+    std::vector<std::shared_ptr<const VerifiedProtocolActor>> protocol_actors;
+    std::shared_ptr<const VerifiedProtocolGuest> protocol_guest;
     std::vector<Function> functions;
     std::vector<ModuleContract> contracts;
     std::vector<TypeOnlyDecl> type_only_declarations;
@@ -624,6 +631,12 @@ Program parse_program(std::string_view source, bool experimental_owned_int = fal
                       bool experimental_rt_scalar_loop = false,
                       bool experimental_pointer_int_aot = false,
                       int language_version = 0);
+
+// Standalone opt-in strict signed-i64 verified source; never ordinary fallback.
+Program parse_verified_strict_i64(std::string_view source, int language_version = 0);
+
+// Standalone host protocol artifact admission. Scalar main is optional.
+Program parse_verified_protocol_actor_library(std::string_view source, int language_version = 0);
 
 // Internal module-linking stages: syntax trees are NOT admitted for codegen.
 // resolve_and_validate_program must run after all module names are resolved.

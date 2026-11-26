@@ -147,9 +147,21 @@ void validate_native_scalar_types(const Program& program) {
                     fail(e.offset, "E_COPY_GRAPH_UNPROVEN: copy!! requires an int or bool value");
                 return operand;
             }
+            case E::CheckedI32:
+                require(expression(*e.left, locals), scalar(false), e.offset, "checked i32 requires int");
+                return scalar(false);
+            case E::CheckRefinement:
+                if (!e.left || e.right || e.arguments.size() != 2 || !e.arguments[0] || !e.arguments[1] ||
+                        e.arguments[0]->kind != E::Integer || e.arguments[1]->kind != E::Integer ||
+                        e.arguments[0]->integer > e.arguments[1]->integer)
+                    fail(e.offset, "invalid internal refinement bounds");
+                require(expression(*e.left, locals), scalar(false), e.offset, "checked refinement requires int");
+                return scalar(false);
             case E::Negate:
                 require(expression(*e.left, locals), scalar(false), e.offset, "unary - requires int");
                 return scalar(false);
+            case E::Abs:
+                break;
             case E::LogicalNot:
                 require(expression(*e.left, locals), scalar(true), e.offset, "! requires bool");
                 return scalar(true);
@@ -190,7 +202,8 @@ void validate_native_scalar_types(const Program& program) {
                 if (left.kind != Kind::Int && left.kind != Kind::String) fail(e.offset, "addition requires int or string");
                 return left;
             }
-            case E::Subtract: case E::Multiply: case E::Remainder: case E::Modulo: case E::BitXor:
+            case E::Subtract: case E::Multiply: case E::DivideQuantity:
+            case E::Remainder: case E::Modulo: case E::BitXor:
             case E::ShiftLeft: case E::ShiftRight: case E::ShiftUnsignedRight:
                 require(expression(*e.left, locals), scalar(false), e.offset, "arithmetic requires int");
                 require(expression(*e.right, locals), scalar(false), e.offset, "arithmetic requires int");

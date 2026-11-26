@@ -2877,6 +2877,24 @@ if(BUILD_TESTING)
         set_tests_properties(native_verified_namespace_real_parser_v2_host_only
             PROPERTIES TIMEOUT 30)
 
+        # Strict signed-i64 admission uses the real parser and checker.
+        add_executable(oreslang-native-strict-i64-verified-parser-test
+            tests/strict_i64_verified_parser_test.cpp
+            src/main/cpp/oreslang/frontend/Parser.cpp
+            src/main/cpp/oreslang/frontend/MethodResolver.cpp
+            src/main/cpp/oreslang/types/NativeScalarTypes.cpp
+            src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+        target_include_directories(oreslang-native-strict-i64-verified-parser-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+            "${LLVM_INCLUDE_DIRS}")
+        target_link_libraries(oreslang-native-strict-i64-verified-parser-test PRIVATE
+            OpenSSL::Crypto ${ORE_LLVM_LIBS})
+        target_compile_options(oreslang-native-strict-i64-verified-parser-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+        add_test(NAME native_strict_i64_verified_parser
+            COMMAND oreslang-native-strict-i64-verified-parser-test)
+        set_tests_properties(native_strict_i64_verified_parser PROPERTIES TIMEOUT 30)
+
         # Compiles the actual native Parser.cpp and applies the existing
         # ownership validator; the source spelling fixture is not AOT proof.
         add_executable(oreslang-native-ownership-bang-aliases-test

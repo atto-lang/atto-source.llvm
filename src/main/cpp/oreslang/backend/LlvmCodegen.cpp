@@ -474,6 +474,37 @@ llvm::Value* lower(const Expression& expr,
             }
             return storage.at(expr.left->name);
         }
+        case Expression::Kind::CheckedI32: {
+            auto* value = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            auto* narrowed = builder.CreateTrunc(value, builder.getInt32Ty(), "i32.narrowed");
+            auto* extended = builder.CreateSExt(narrowed, i64, "i32.extended");
+            auto* module = builder.GetInsertBlock()->getModule();
+            auto* parent = builder.GetInsertBlock()->getParent();
+            auto* invalid = llvm::BasicBlock::Create(builder.getContext(), "i32.range.invalid", parent);
+            auto* valid = llvm::BasicBlock::Create(builder.getContext(), "i32.range.valid", parent);
+            builder.CreateCondBr(builder.CreateICmpEQ(value, extended), valid, invalid);
+            builder.SetInsertPoint(invalid);
+            builder.CreateCall(native_trap(*module));
+            builder.CreateUnreachable();
+            builder.SetInsertPoint(valid);
+            return extended;
+        }
+        case Expression::Kind::CheckRefinement: {
+            auto* value = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            auto* minimum = llvm::ConstantInt::getSigned(i64, expr.arguments[0]->integer);
+            auto* maximum = llvm::ConstantInt::getSigned(i64, expr.arguments[1]->integer);
+            auto* below = builder.CreateICmpSLT(value, minimum, "refinement.below");
+            auto* above = builder.CreateICmpSGT(value, maximum, "refinement.above");
+            auto* parent = builder.GetInsertBlock()->getParent();
+            auto* invalid = llvm::BasicBlock::Create(builder.getContext(), "refinement.bounds.invalid", parent);
+            auto* valid = llvm::BasicBlock::Create(builder.getContext(), "refinement.bounds.valid", parent);
+            builder.CreateCondBr(builder.CreateOr(below, above), invalid, valid);
+            builder.SetInsertPoint(invalid);
+            builder.CreateCall(native_trap(*parent->getParent()));
+            builder.CreateUnreachable();
+            builder.SetInsertPoint(valid);
+            return value;
+        }
         case Expression::Kind::Negate: {
             auto* value = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
             return checked_signed_arithmetic(builder, llvm::Intrinsic::ssub_with_overflow,
@@ -544,6 +575,30 @@ llvm::Value* lower(const Expression& expr,
             llvm::Value* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
             return checked_signed_arithmetic(builder, llvm::Intrinsic::smul_with_overflow,
                 left, right, "mul");
+        }
+        case Expression::Kind::DivideQuantity: {
+            auto* left = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            auto* right = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            auto* module = builder.GetInsertBlock()->getModule();
+            auto* parent = builder.GetInsertBlock()->getParent();
+            auto* zero = llvm::BasicBlock::Create(builder.getContext(), "quantity.div.zero", parent);
+            auto* range = llvm::BasicBlock::Create(builder.getContext(), "quantity.div.range", parent);
+            auto* overflow = llvm::BasicBlock::Create(builder.getContext(), "quantity.div.overflow", parent);
+            auto* valid = llvm::BasicBlock::Create(builder.getContext(), "quantity.div.valid", parent);
+            builder.CreateCondBr(builder.CreateICmpEQ(right, llvm::ConstantInt::get(i64, 0)), zero, range);
+            builder.SetInsertPoint(zero);
+            builder.CreateCall(native_trap(*module));
+            builder.CreateUnreachable();
+            builder.SetInsertPoint(range);
+            auto* minimum = llvm::ConstantInt::get(i64, UINT64_C(1) << 63);
+            auto* minus_one = llvm::ConstantInt::getSigned(i64, -1);
+            auto* outside = builder.CreateAnd(builder.CreateICmpEQ(left, minimum), builder.CreateICmpEQ(right, minus_one));
+            builder.CreateCondBr(outside, overflow, valid);
+            builder.SetInsertPoint(overflow);
+            builder.CreateCall(native_trap(*module));
+            builder.CreateUnreachable();
+            builder.SetInsertPoint(valid);
+            return builder.CreateSDiv(left, right, "quantity.div");
         }
         case Expression::Kind::ShiftLeft:
         case Expression::Kind::ShiftRight:
@@ -850,7 +905,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                                   bool actor_region_v1,
                                   const std::vector<CheckedSourceRoutineV1>& checked_routines,
                                   const std::vector<CheckedLogSiteV1>& checked_sites,
-                                  bool tenant_vm_guest) {
+                                  bool tenant_vm_guest,
+                                  bool print_strict_i64) {
     for (const auto& fn : source.functions)
         for (const auto& binding : fn.locals)
             if (binding.native_box_i64 &&
@@ -1177,6 +1233,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         [](const Function& fn) { return fn.name == "main"; });
     const bool native_main = !wasm32_target && !cortex_m_target &&
         main_it != source.functions.end();
+    if (print_strict_i64 && (!native_main || main_it->returns_void ||
+            !main_it->parameters.empty() || !isolate_entry.empty() || actor_region_v1 ||
+            tenant_vm_guest || bounded_allocator_provider))
+        throw std::runtime_error("E_VERIFY_UNSUPPORTED: full-width result requires hosted scalar main");
     bool string_runtime = false, console_runtime = false, record_runtime = !source.sum_types.empty(), iteration_runtime = false;
     const NativeClassLayouts layouts(source);
     std::unordered_map<std::string, ClassDecl> flat_classes;
@@ -4008,7 +4068,23 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             : llvm::ConstantInt::getTrue(context);
         output_ok = builder.CreateAnd(output_ok, records_ok);
         output_ok = builder.CreateAnd(output_ok, tasks_ok);
-        if (main_it->returns_void) {
+        if (print_strict_i64) {
+            if (result->getType() != i64 || module.getNamedValue("printf"))
+                throw std::runtime_error("E_VERIFY_UNSUPPORTED: invalid strict result transport");
+            auto* publish = llvm::BasicBlock::Create(context, "strict.publish", host_main);
+            auto* failed = llvm::BasicBlock::Create(context, "strict.publish.error", host_main);
+            builder.CreateCondBr(output_ok, publish, failed);
+            builder.SetInsertPoint(failed);
+            builder.CreateRet(llvm::ConstantInt::get(i32, 1));
+            builder.SetInsertPoint(publish);
+            auto* fmt = builder.CreateGlobalStringPtr("%lld\n", "strict.i64.format");
+            auto print = module.getOrInsertFunction("printf",
+                llvm::FunctionType::get(i32, {fmt->getType()}, true));
+            auto* written = builder.CreateCall(print, {fmt, result});
+            builder.CreateRet(builder.CreateSelect(
+                builder.CreateICmpSGT(written, llvm::ConstantInt::get(i32, 0)),
+                llvm::ConstantInt::get(i32, 0), llvm::ConstantInt::get(i32, 1)));
+        } else if (main_it->returns_void) {
             builder.CreateRet(builder.CreateSelect(output_ok, llvm::ConstantInt::get(i32, 0), llvm::ConstantInt::get(i32, 1)));
         } else {
             llvm::Value* valid = builder.CreateICmpULE(
