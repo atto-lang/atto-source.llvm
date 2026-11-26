@@ -40,11 +40,15 @@ static std::string read_fixture(const std::string& root, const std::string& file
         {"borrow-mut-compatible-native.atto", "7c551be97b88204296f0c00000018dcd4798bd3a"},
         {"rt-borrow-mut-native.atto", "e7b2cb178c266262a94df18dd88c46ae9d32632b"},
         {"take-after-use-reject.atto", "7757036e704fc334842cac8254863139d85d2935"},
+        {"take-after-use-reject-separated.atto", "1891eff889230ed60ca4192fc90d2f9667b09c38"},
         {"borrow-escape-reject.atto", "0c5d993b9c95d586ac2cb4018ce0df24856a36ae"},
+        {"borrow-escape-reject-separated.atto", "80f73652483ab317d3ed271bcc5d7ddc5d318943"},
         {"share-class-reject.atto", "7dfd33777320170333551a6941ddff9828bfe349"},
+        {"share-class-reject-separated.atto", "27f4b834a51c781cf8310942273ed21325419b38"},
         {"copy-compact-native.atto", "7cb835795345423f606caeed9b8fd4beb1c0a976"},
         {"copy-spaced-native.atto", "911e84e65f1783e6ca61c544e3f5953d0deccd1a"},
         {"copy-deep-scalars-native.atto", "5209998955bc1b4fa7bd3ea21c4a708abde0f25f"},
+        {"copy-deep-scalars-native-separated.atto", "fb481b43c46e9bcec30eeb7d12e8eb07e48ab832"},
         {"copy-deep-string-reject.atto", "cf20161c12731e340b78bf94c90e1b77c21728ba"},
         {"take-native.atto", "c6983ffa37413732d359e87613a8ea79aa9dd591"},
         {"share-native.atto", "5a1ac6ab8a4c4cffba2e21eeff02f2dd75414c30"}
@@ -135,13 +139,22 @@ static void equivalent(std::string_view legacy, std::string_view spaced,
     const Expression& expected = parsed(legacy, expected_holder);
     if (expected.kind != kind || !expected.left)
         throw std::runtime_error("incorrect legacy ownership baseline");
-    for (const auto source : {spaced, compact}) {
+    for (const auto source : {spaced}) {
         oreslang::Program holder;
         const Expression& expr = parsed(source, holder);
         if (!same_operand_tree(&expected, &expr))
             throw std::runtime_error("ownership alias changed operand AST: " +
                                      std::string(source));
     }
+    try {
+        oreslang::Program holder;
+        (void)parsed(compact, holder);
+    } catch (const std::exception& error) {
+        if (std::string_view(error.what()).find("E_BANG_KEYWORD_WHITESPACE") != std::string_view::npos)
+            return;
+        throw;
+    }
+    throw std::runtime_error("compact ownership alias accepted: " + std::string(compact));
 }
 
 static void reject(std::string_view input) {
@@ -205,26 +218,26 @@ int main(int argc, char** argv) {
                              "borrow-mut-canonical-native.atto",
                              "borrow-mut-compatible-native.atto",
                              "rt-borrow-mut-native.atto",
-                             "take-after-use-reject.atto",
-                             "borrow-escape-reject.atto",
-                             "share-class-reject.atto",
+                             "take-after-use-reject-separated.atto",
+                             "borrow-escape-reject-separated.atto",
+                             "share-class-reject-separated.atto",
                              "copy-compact-native.atto",
                              "copy-spaced-native.atto",
-                             "copy-deep-scalars-native.atto",
+                             "copy-deep-scalars-native-separated.atto",
                              "copy-deep-string-reject.atto",
                              "take-native.atto", "share-native.atto"}) {
         (void)read_fixture(root, name);
     }
     equivalent("rt copy foo", "copy! foo", "copy!foo", Expression::Kind::Copy);
     equivalent("rt copy eqfoo", "copy! eqfoo", "copy!eqfoo", Expression::Kind::Copy);
-    for (const auto source : {"copy!! flag", "copy!!flag", "copy!!/* operand */flag"}) {
+    for (const auto source : {"copy!! flag", "copy!! /* operand */flag"}) {
         oreslang::Program holder;
         const auto& expr = parsed(source, holder);
         if (expr.kind != Expression::Kind::DeepCopy || !expr.left ||
                 expr.left->kind != Expression::Kind::Variable || expr.left->name != "flag")
             throw std::runtime_error("adjacent bangs must form a single deep copy");
     }
-    for (const auto source : {"copy! !true", "copy!/* separator */!true"}) {
+    for (const auto source : {"copy! !true", "copy! /* separator */!true"}) {
         oreslang::Program holder;
         const auto& expr = parsed(source, holder);
         if (expr.kind != Expression::Kind::Copy || !expr.left ||
@@ -276,7 +289,7 @@ int main(int argc, char** argv) {
                                      "mut borrow! mut foo",
                                      "rt mut borrow mut foo",
                                      "rt borrow mut mut foo"}) {
-        reject_with_diagnostic(invalid, "duplicate mutable borrow qualifier");
+        reject_with_diagnostic(invalid, invalid.find("!mut") != std::string_view::npos ? "E_BANG_KEYWORD_WHITESPACE" : "duplicate mutable borrow qualifier");
     }
     // Keep mutfoo an ordinary identifier: a separate mut keyword is required.
     equivalent("rt borrow mutfoo", "borrow! mutfoo", "borrow!mutfoo",
@@ -312,16 +325,16 @@ int main(int argc, char** argv) {
         if (program.functions.size() != 3)
             throw std::runtime_error("mutable borrow guest admission missing");
     }
-    semantic_reject(read_fixture(root, "take-after-use-reject.atto"), "moved");
-    semantic_reject(read_fixture(root, "borrow-escape-reject.atto"), "borrowed reference");
-    semantic_reject(read_fixture(root, "share-class-reject.atto"), "non-Copy");
+    semantic_reject(read_fixture(root, "take-after-use-reject-separated.atto"), "moved");
+    semantic_reject(read_fixture(root, "borrow-escape-reject-separated.atto"), "borrowed reference");
+    semantic_reject(read_fixture(root, "share-class-reject-separated.atto"), "non-Copy");
     semantic_reject(read_fixture(root, "copy-deep-string-reject.atto"), "E_COPY_GRAPH_UNPROVEN");
 
     // The native unary grammar is limited to 64 nested operands; aliases
     // must not bypass that pre-existing stack/complexity budget.
     {
         std::string deeply_nested;
-        for (int i = 0; i < 100; ++i) deeply_nested += "copy!";
+        for (int i = 0; i < 100; ++i) deeply_nested += "copy! ";
         deeply_nested += "41";
         try {
             oreslang::Program parsed_source;
@@ -338,7 +351,7 @@ int main(int argc, char** argv) {
     {
         oreslang::Program holder;
         const Expression& expr = parsed(
-            "/* outer /* take! foo */ tail /* share! foo */ */ copy!41", holder);
+            "/* outer /* take! foo */ tail /* share! foo */ */ copy! 41", holder);
         if (expr.kind != Expression::Kind::Copy)
             throw std::runtime_error("nested comment leaked an ownership token");
     }
@@ -350,9 +363,20 @@ int main(int argc, char** argv) {
         reject_with_diagnostic(excessive, "block comment nesting exceeds 128");
     }
 
+    for (std::string_view keyword : {"trap!","throw!","raise!","panic!","copy!","copy!!",
+            "take!","move!","borrow!","share!","pin!","drop!","pipe!","rpipe!","stop!","expand!"}) {
+        for (std::string_view tail : {"value","(42)","/*comment*/ value","","\xc2\xa0" "value"})
+            reject_with_diagnostic(std::string(keyword) + std::string(tail), "E_BANG_KEYWORD_WHITESPACE");
+    }
+    for (std::string_view gap : {" ","\t","\r","\n","\v","\f"}) {
+        oreslang::Program holder;
+        const auto& expr = parsed(std::string("copy!") + std::string(gap) + "41", holder);
+        if (expr.kind != Expression::Kind::Copy)
+            throw std::runtime_error("valid ASCII separator lost ownership AST");
+    }
     // A genuine native parser+ownership check, not a lexical-model-only test.
-    for (const auto source : {"copy!41", "copy! 41", "rt copy 41", "copy!! 41",
-                              "(copy!!true) ? 42 : 0"}) {
+    for (const auto source : {"copy! 41", "rt copy 41", "copy!! 41",
+                              "(copy!! true) ? 42 : 0"}) {
         const auto program = oreslang::parse_program(
             std::string("pub fnc main(): int { return ") + source + "; }");
         if (program.functions.empty() || !program.functions[0].result)

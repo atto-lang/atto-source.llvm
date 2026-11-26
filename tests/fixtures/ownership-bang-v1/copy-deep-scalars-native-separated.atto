@@ -1,0 +1,4 @@
+pub fnc main(): int {
+    const flag: bool = true;
+    return (copy!! flag && !(copy! !flag)) ? copy!! 42 : 0;
+}

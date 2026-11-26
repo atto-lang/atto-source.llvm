@@ -135,7 +135,7 @@ mod tests {
         let c=actor("consumer",Some("int"),None);
         let a=plan(vec![p.clone(),ch("channel"),c.clone()],Direction::Pipe).unwrap();
         let b=plan(vec![c,ch("channel"),p],Direction::Rpipe).unwrap();
-        let edges=|p: &Plan| p.edges.iter().map(|e| (&e.source,&e.sink,&e.payload))
+        let edges=|p: &Plan| p.edges.iter().map(|e| (e.source.clone(),e.sink.clone(),e.payload.clone()))
             .collect::<Vec<_>>();
         assert_eq!(edges(&a),edges(&b));
         assert_eq!(a.flow_indices,vec![0,1,2]);

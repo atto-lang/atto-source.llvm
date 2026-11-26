@@ -5871,12 +5871,12 @@ if(BUILD_TESTING)
     # existing compiler-owned contract harness / exact-tree CI configuration.
     oreslang_contract_test(native_ownership_bang_copy_compact_guest
         ownership-bang-v1/copy-compact-native.atto
-        --run 42 --clang "${ORE_CLANG}")
+        --diagnostic "E_BANG_KEYWORD_WHITESPACE")
     oreslang_contract_test(native_ownership_bang_copy_spaced_guest
         ownership-bang-v1/copy-spaced-native.atto
         --run 42 --clang "${ORE_CLANG}")
     oreslang_contract_test(native_ownership_bang_copy_deep_scalars_guest
-        ownership-bang-v1/copy-deep-scalars-native.atto
+        ownership-bang-v1/copy-deep-scalars-native-separated.atto
         --run 42 --clang "${ORE_CLANG}")
     oreslang_contract_test(native_ownership_bang_take_guest
         ownership-bang-v1/take-native.atto
@@ -5901,7 +5901,7 @@ if(BUILD_TESTING)
     foreach(mode IN ITEMS 0 2)
         oreslang_contract_test(native_ownership_bang_copy_compact_O${mode}
             ownership-bang-v1/copy-compact-native.atto
-            --run 42 --clang "${ORE_CLANG}" --opt-level "${mode}")
+            --diagnostic "E_BANG_KEYWORD_WHITESPACE")
         oreslang_contract_test(native_ownership_bang_copy_spaced_O${mode}
             ownership-bang-v1/copy-spaced-native.atto
             --run 42 --clang "${ORE_CLANG}" --opt-level "${mode}")
@@ -5933,13 +5933,13 @@ if(BUILD_TESTING)
         --clang "${ORE_CLANG}" --opt-level 1 --sanitizer-runtime-smoke)
     # Unsafe ownership sources must fail with compiler diagnostics and no IR.
     oreslang_contract_test(native_ownership_bang_use_after_move_reject
-        ownership-bang-v1/take-after-use-reject.atto
+        ownership-bang-v1/take-after-use-reject-separated.atto
         --diagnostic "use of explicitly moved int")
     oreslang_contract_test(native_ownership_bang_escaping_borrow_reject
-        ownership-bang-v1/borrow-escape-reject.atto
+        ownership-bang-v1/borrow-escape-reject-separated.atto
         --diagnostic "borrowed reference may only be passed")
     oreslang_contract_test(native_ownership_bang_share_class_reject
-        ownership-bang-v1/share-class-reject.atto
+        ownership-bang-v1/share-class-reject-separated.atto
         --diagnostic "class is non-Copy")
     oreslang_contract_test(native_ownership_bang_copy_deep_graph_reject
         ownership-bang-v1/copy-deep-string-reject.atto

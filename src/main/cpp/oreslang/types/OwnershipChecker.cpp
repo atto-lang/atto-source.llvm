@@ -549,6 +549,7 @@ void check_caught_throw_scalar_read(const Expression& expr, Locals& locals,
             return;
         }
         case Expression::Kind::Negate:
+        case Expression::Kind::Abs:
         case Expression::Kind::LogicalNot:
         case Expression::Kind::Cast:
             check_caught_throw_scalar_read(*expr.left, locals, functions);
