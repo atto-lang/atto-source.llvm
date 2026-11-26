@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <utility>
 
 namespace oreslang::pointer_int_aot {
 
@@ -71,6 +72,34 @@ inline void verify_plan(const Plan& plan) {
               (ch >= 'A' && ch <= 'Z') ||
               (ch >= '0' && ch <= '9') || ch == '_'))
             ownership_error("pointer owner contains invalid identifier character");
+    const auto valid_helper_id = [](const std::string& name) {
+        if (name.empty() || !((name.front() >= 'a' && name.front() <= 'z') ||
+                (name.front() >= 'A' && name.front() <= 'Z') || name.front() == '_')) return false;
+        for (unsigned char ch : name)
+            if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+                    (ch >= '0' && ch <= '9') || ch == '_')) return false;
+        return name != "main" && name != "Pointer" && name != "int";
+    };
+    if (!plan.readonly_helper.empty() || !plan.readonly_parameter.empty()) {
+        if (borrowed_local || !valid_helper_id(plan.readonly_helper) ||
+                !valid_helper_id(plan.readonly_parameter) ||
+                plan.readonly_helper == plan.owner ||
+                plan.readonly_helper == plan.readonly_parameter)
+            ownership_error("invalid readonly helper signature");
+    }
+    if (!plan.mutable_helper.empty() || !plan.mutable_parameter.empty()) {
+        if (borrowed_local || plan.mutable_helper == plan.readonly_helper ||
+                !valid_helper_id(plan.mutable_helper) || !valid_helper_id(plan.mutable_parameter) ||
+                plan.mutable_helper == plan.owner || plan.mutable_helper == plan.mutable_parameter)
+            ownership_error("invalid mutable helper signature");
+    } else if (plan.mutable_write != 0 || !plan.mutable_scalar_parameter.empty()) {
+        ownership_error("orphan mutable helper write");
+    }
+    if (!plan.mutable_scalar_parameter.empty() &&
+            (!valid_helper_id(plan.mutable_scalar_parameter) ||
+             plan.mutable_scalar_parameter == plan.mutable_parameter ||
+             plan.mutable_scalar_parameter == plan.mutable_helper || plan.mutable_write != 0))
+        ownership_error("invalid scalar helper formal");
     if (plan.steps.size() > 128 || !plan.result)
         ownership_error("invalid bounded pointer plan");
     std::array<bool, 16> initialized{};
@@ -83,16 +112,15 @@ inline void verify_plan(const Plan& plan) {
     bool live = true;
     std::size_t close_count = 0;
     std::size_t budget = 0;
+    bool scalar_call_argument = false;
 
-    auto checked = [](const __int128 val) -> std::int64_t {
-        if (val < std::numeric_limits<std::int64_t>::min() ||
-                val > std::numeric_limits<std::int64_t>::max())
-            ownership_error("checked integer arithmetic overflow");
-        return static_cast<std::int64_t>(val);
-    };
     auto eval = [&](auto&& self, const Expr& expr, unsigned depth) -> std::int64_t {
         if (depth > 64 || ++budget > 4096)
             ownership_error("expression depth/node budget exceeded");
+        if (scalar_call_argument && (expr.kind == Expr::Kind::Read ||
+                expr.kind == Expr::Kind::ReadonlyCall || expr.kind == Expr::Kind::Length ||
+                expr.kind == Expr::Kind::SizeBytes))
+            ownership_error("conflicting access during mutable loan");
         std::int64_t result = 0;
         switch (expr.kind) {
         case Expr::Kind::Literal:
@@ -118,23 +146,47 @@ inline void verify_plan(const Plan& plan) {
                 ownership_error("forged pointer read node");
             result = elements[expr.index];
             break;
+        case Expr::Kind::ReadonlyCall:
+            if (borrowed_local || !live || plan.count != 1 || !initialized[0] ||
+                    plan.readonly_helper.empty() || expr.name != plan.readonly_helper ||
+                    expr.index != 0 || expr.lhs || expr.rhs)
+                ownership_error("invalid readonly singleton call authority or shape");
+            result = elements[0];
+            break;
+        case Expr::Kind::Length:
+        case Expr::Kind::SizeBytes:
+            if (!live || borrowed_local || expr.index != 0 ||
+                    expr.lhs || expr.rhs || !expr.name.empty())
+                ownership_error("invalid pointer metadata authority or shape");
+            result = static_cast<std::int64_t>(plan.count *
+                (expr.kind == Expr::Kind::Length ? 1 : 8));
+            break;
         case Expr::Kind::Neg:
             if (!expr.lhs || expr.rhs)
                 ownership_error("malformed unary pointer expression");
-            result = checked(-static_cast<__int128>(self(self, *expr.lhs, depth + 1)));
+            if (__builtin_sub_overflow(std::int64_t{0}, self(self, *expr.lhs, depth + 1), &result))
+                ownership_error("checked integer arithmetic overflow");
             break;
         case Expr::Kind::Add:
         case Expr::Kind::Subtract:
         case Expr::Kind::Multiply: {
             if (!expr.lhs || !expr.rhs)
                 ownership_error("malformed arithmetic expression");
-            const __int128 left = self(self, *expr.lhs, depth + 1);
-            const __int128 right = self(self, *expr.rhs, depth + 1);
-            result = checked(expr.kind == Expr::Kind::Add ? left + right :
-                             expr.kind == Expr::Kind::Subtract ? left - right :
-                             left * right);
+            const std::int64_t left = self(self, *expr.lhs, depth + 1);
+            const std::int64_t right = self(self, *expr.rhs, depth + 1);
+            // Match the parser's checked arithmetic without nonstandard wide
+            // integer types or evaluating an overflowing signed operation.
+            const bool overflow = expr.kind == Expr::Kind::Add ?
+                __builtin_add_overflow(left, right, &result) :
+                expr.kind == Expr::Kind::Subtract ?
+                __builtin_sub_overflow(left, right, &result) :
+                __builtin_mul_overflow(left, right, &result);
+            if (overflow)
+                ownership_error("checked integer arithmetic overflow");
             break;
         }
+        default:
+            ownership_error("invalid pointer expression kind");
         }
         if (expr.known != result)
             ownership_error("parser HIR constant annotation disagrees with ownership semantics");
@@ -142,6 +194,8 @@ inline void verify_plan(const Plan& plan) {
     };
 
     for (const Step& step : plan.steps) {
+        if (step.kind != Step::Kind::Swap && step.second_index != 0)
+            ownership_error("unexpected second pointer index");
         switch (step.kind) {
         case Step::Kind::Write:
             if (borrowed_local)
@@ -151,9 +205,36 @@ inline void verify_plan(const Plan& plan) {
             elements[step.index] = eval(eval, *step.value, 0);
             initialized[step.index] = true;
             break;
+        case Step::Kind::Fill: {
+            if (borrowed_local || !live || !step.value || step.index != 0 || !step.name.empty())
+                ownership_error("invalid fill authority or shape");
+            const auto value = eval(eval, *step.value, 0);
+            for (std::size_t i = 0; i < plan.count; ++i) {
+                elements[i] = value;
+                initialized[i] = true;
+            }
+            break;
+        }
+        case Step::Kind::Swap:
+            if (borrowed_local || !live || step.value || !step.name.empty() ||
+                    step.index >= plan.count || step.second_index >= plan.count ||
+                    !initialized[step.index] || !initialized[step.second_index])
+                ownership_error("invalid swap authority, bounds or initialization");
+            std::swap(elements[step.index], elements[step.second_index]);
+            break;
+        case Step::Kind::MutableCall:
+            if (borrowed_local || !live || plan.count != 1 || plan.mutable_helper.empty() ||
+                    step.name != plan.mutable_helper || step.index != 0 ||
+                    static_cast<bool>(step.value) != !plan.mutable_scalar_parameter.empty())
+                ownership_error("invalid mutable singleton call authority or shape");
+            scalar_call_argument = true;
+            elements[0] = step.value ? eval(eval, *step.value, 0) : plan.mutable_write;
+            scalar_call_argument = false;
+            initialized[0] = true;
+            break;
         case Step::Kind::Scalar:
             if (step.name.empty() || step.name == plan.owner ||
-                    step.name == "Pointer" || step.name == "main" ||
+                    step.name == "Pointer" || step.name == "main" || step.name == plan.readonly_helper || step.name == plan.mutable_helper ||
                     (borrowed_local && step.name == plan.local_handle) ||
                     step.index != 0 || !step.value ||
                     immutable.count(step.name))
@@ -166,6 +247,8 @@ inline void verify_plan(const Plan& plan) {
             live = false;
             ++close_count;
             break;
+        default:
+            ownership_error("invalid pointer step kind");
         }
     }
     if (live || close_count != 1)
