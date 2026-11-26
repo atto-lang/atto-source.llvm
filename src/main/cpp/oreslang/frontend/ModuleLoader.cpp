@@ -182,7 +182,8 @@ private:
         // selected version across the resolved import graph.
         try { unit->program = parse_unresolved_program(
             text, owned, scalar_loop, false,
-            unit->compiler_owned_library ? 0 : language_version); }
+            unit->compiler_owned_library ? 0 : language_version,
+            /*relative_import_unit=*/index != 0); }
         catch (const std::exception& error) {
             // Preserve historical diagnostics for a standalone entry unit.
             if (!index) throw;
