@@ -88,7 +88,7 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
         if c == '\0' {
             return Err(Diagnostic::new(pos, "E_NUL", "NUL characters are not allowed in source"));
         }
-        if c == ' ' || c == '\t' || c == '\r' || c == '\n' {
+        if matches!(c, ' ' | '\t' | '\r' | '\n' | '\u{b}' | '\u{c}') {
             bump!();
             continue;
         }
@@ -129,6 +129,21 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
             while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
                 s.push(chars[i]);
                 bump!();
+            }
+            // Mandatory separator for complete Atto keyword suffixes.
+            // Keep != and exact !eq comparison token boundaries unchanged.
+            if matches!(s.as_str(), "trap" | "throw" | "raise" | "panic" | "copy"
+                | "take" | "move" | "borrow" | "share" | "pin" | "drop" | "pipe" | "rpipe" | "stop" | "expand")
+                && chars.get(i) == Some(&'!')
+                && chars.get(i + 1) != Some(&'=')
+                && !(chars.get(i + 1) == Some(&'e') && chars.get(i + 2) == Some(&'q')
+                    && chars.get(i + 3).map_or(true, |c| !c.is_alphanumeric() && *c != '_'))
+            {
+                let after = i + if s == "copy" && chars.get(i + 1) == Some(&'!') { 2 } else { 1 };
+                if !chars.get(after).is_some_and(|c| matches!(*c, ' ' | '\t' | '\r' | '\n' | '\u{b}' | '\u{c}')) {
+                    return Err(Diagnostic::new(pos, "E_BANG_KEYWORD_WHITESPACE",
+                        "whitespace required after bang keyword"));
+                }
             }
             // Generator delegation is a single contiguous lexical spelling.
             // Do not consume a separated star: `yield *value` is not `yield*`.
@@ -350,4 +365,20 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
         pos: Pos { line, col },
     });
     Ok(out)
+}
+
+#[cfg(test)]
+#[test]
+fn mandatory_bang_keyword_separator_rejects_compact_forms() {
+    for keyword in ["trap!", "throw!", "raise!", "panic!", "copy!", "copy!!",
+        "take!", "move!", "borrow!", "share!", "pin!", "drop!", "pipe!", "rpipe!", "stop!", "expand!"] {
+        for tail in ["value", "(42)", "/*comment*/ value", "", "\u{a0}value"] {
+            let source = format!("{keyword}{tail}");
+            let error = lex(&source).unwrap_err();
+            assert_eq!(error.code, "E_BANG_KEYWORD_WHITESPACE", "{source}: {error}");
+        }
+        for gap in [" ", "\t", "\n", "\r", "\u{b}", "\u{c}"] {
+            assert!(lex(&format!("{keyword}{gap}value")).is_ok(), "{keyword} {gap:?}");
+        }
+    }
 }

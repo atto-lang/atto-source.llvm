@@ -134,13 +134,22 @@ static void equivalent(std::string_view legacy, std::string_view spaced,
     const Expression& expected = parsed(legacy, expected_holder);
     if (expected.kind != kind || !expected.left)
         throw std::runtime_error("incorrect legacy ownership baseline");
-    for (const auto source : {spaced, compact}) {
+    for (const auto source : {spaced}) {
         oreslang::Program holder;
         const Expression& expr = parsed(source, holder);
         if (!same_operand_tree(&expected, &expr))
             throw std::runtime_error("ownership alias changed operand AST: " +
                                      std::string(source));
     }
+    try {
+        oreslang::Program holder;
+        (void)parsed(compact, holder);
+    } catch (const std::exception& error) {
+        if (std::string_view(error.what()).find("E_BANG_KEYWORD_WHITESPACE") != std::string_view::npos)
+            return;
+        throw;
+    }
+    throw std::runtime_error("compact ownership alias accepted: " + std::string(compact));
 }
 
 static void reject(std::string_view input) {
@@ -189,14 +198,14 @@ int main(int argc, char** argv) {
     }
     equivalent("rt copy foo", "copy! foo", "copy!foo", Expression::Kind::Copy);
     equivalent("rt copy eqfoo", "copy! eqfoo", "copy!eqfoo", Expression::Kind::Copy);
-    for (const auto source : {"copy!! flag", "copy!!flag", "copy!!/* operand */flag"}) {
+    for (const auto source : {"copy!! flag", "copy!! /* operand */flag"}) {
         oreslang::Program holder;
         const auto& expr = parsed(source, holder);
         if (expr.kind != Expression::Kind::DeepCopy || !expr.left ||
                 expr.left->kind != Expression::Kind::Variable || expr.left->name != "flag")
             throw std::runtime_error("adjacent bangs must form a single deep copy");
     }
-    for (const auto source : {"copy! !true", "copy!/* separator */!true"}) {
+    for (const auto source : {"copy! !true", "copy! /* separator */!true"}) {
         oreslang::Program holder;
         const auto& expr = parsed(source, holder);
         if (expr.kind != Expression::Kind::Copy || !expr.left ||
@@ -248,7 +257,7 @@ int main(int argc, char** argv) {
                                      "mut borrow! mut foo",
                                      "rt mut borrow mut foo",
                                      "rt borrow mut mut foo"}) {
-        reject_with_diagnostic(invalid, "duplicate mutable borrow qualifier");
+        reject_with_diagnostic(invalid, invalid.find("!mut") != std::string_view::npos ? "E_BANG_KEYWORD_WHITESPACE" : "duplicate mutable borrow qualifier");
     }
     // Keep mutfoo an ordinary identifier: a separate mut keyword is required.
     equivalent("rt borrow mutfoo", "borrow! mutfoo", "borrow!mutfoo",
@@ -293,7 +302,7 @@ int main(int argc, char** argv) {
     // must not bypass that pre-existing stack/complexity budget.
     {
         std::string deeply_nested;
-        for (int i = 0; i < 100; ++i) deeply_nested += "copy!";
+        for (int i = 0; i < 100; ++i) deeply_nested += "copy! ";
         deeply_nested += "41";
         try {
             oreslang::Program parsed_source;
@@ -310,7 +319,7 @@ int main(int argc, char** argv) {
     {
         oreslang::Program holder;
         const Expression& expr = parsed(
-            "/* outer /* take! foo */ tail /* share! foo */ */ copy!41", holder);
+            "/* outer /* take! foo */ tail /* share! foo */ */ copy! 41", holder);
         if (expr.kind != Expression::Kind::Copy)
             throw std::runtime_error("nested comment leaked an ownership token");
     }
@@ -322,9 +331,20 @@ int main(int argc, char** argv) {
         reject_with_diagnostic(excessive, "block comment nesting exceeds 128");
     }
 
+    for (std::string_view keyword : {"trap!","throw!","raise!","panic!","copy!","copy!!",
+            "take!","move!","borrow!","share!","pin!","drop!","pipe!","rpipe!","stop!","expand!"}) {
+        for (std::string_view tail : {"value","(42)","/*comment*/ value","","\xc2\xa0" "value"})
+            reject_with_diagnostic(std::string(keyword) + std::string(tail), "E_BANG_KEYWORD_WHITESPACE");
+    }
+    for (std::string_view gap : {" ","\t","\r","\n","\v","\f"}) {
+        oreslang::Program holder;
+        const auto& expr = parsed(std::string("copy!") + std::string(gap) + "41", holder);
+        if (expr.kind != Expression::Kind::Copy)
+            throw std::runtime_error("valid ASCII separator lost ownership AST");
+    }
     // A genuine native parser+ownership check, not a lexical-model-only test.
-    for (const auto source : {"copy!41", "copy! 41", "rt copy 41", "copy!! 41",
-                              "(copy!!true) ? 42 : 0"}) {
+    for (const auto source : {"copy! 41", "rt copy 41", "copy!! 41",
+                              "(copy!! true) ? 42 : 0"}) {
         const auto program = oreslang::parse_program(
             std::string("pub fnc main(): int { return ") + source + "; }");
         if (program.functions.empty() || !program.functions[0].result)

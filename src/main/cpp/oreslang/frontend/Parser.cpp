@@ -316,6 +316,20 @@ public:
                     at_ = end;
                 }
             }
+            // Atto keyword bangs require a separator after the complete suffix.
+            if ((first == "trap" || first == "throw" || first == "raise" || first == "panic" ||
+                 first == "copy" || first == "take" || first == "move" || first == "borrow" || first == "share" ||
+                 first == "pin" || first == "drop" || first == "pipe" || first == "rpipe" ||
+                 first == "stop" || first == "expand")
+                    && at_ < source_.size() && source_[at_] == '!'
+                    && source_.substr(at_, 2) != "!="
+                    && !(source_.substr(at_, 3) == "!eq"
+                         && (at_ + 3 == source_.size() || !identifier_part(source_[at_ + 3])))) {
+                const auto after = at_ + ((first == "copy" && source_.substr(at_, 2) == "!!") ? 2 : 1);
+                if (after >= source_.size() || std::string_view(" \t\r\n\v\f").find(source_[after]) == std::string_view::npos)
+                    throw std::runtime_error("E_BANG_KEYWORD_WHITESPACE: whitespace required after bang keyword at byte " +
+                                             std::to_string(start));
+            }
             // Treat contiguous trap! as the same checked Result operator as trap.
             // Do not consume the inequality operators != or !eq.
             if (first == "trap" && at_ < source_.size() && source_[at_] == '!'
