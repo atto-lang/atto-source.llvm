@@ -54,10 +54,10 @@ def extract(ir, name):
             require(rhs == 'alloca i64, align 8' and len(o) == 1 and o[0].get_constant_value() == 1)
             slots[i] = None
         elif op == 'store':
-            require(str(o[0].type) == 'i64' and o[1] in slots and slots[o[1]] is None and rhs.startswith('store i64 ') and str(i).endswith(', align 8'))
+            require(str(o[0].type) == 'i64' and o[1] in slots and slots[o[1]] is None and rhs.startswith('store i64 ') and rhs.endswith((', align 4', ', align 8')))
             slots[o[1]] = value(o[0])
         elif op == 'load':
-            require(str(i.type) == 'i64' and o[0] in slots and slots[o[0]] is not None and rhs.startswith('load i64, ') and str(i).endswith(', align 8'))
+            require(str(i.type) == 'i64' and o[0] in slots and slots[o[0]] is not None and rhs.startswith('load i64, ') and rhs.endswith((', align 4', ', align 8')))
             vals[i] = slots[o[0]]
         elif op == 'icmp':
             require(rhs.startswith('icmp eq i64 '))
