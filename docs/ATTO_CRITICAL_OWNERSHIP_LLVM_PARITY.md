@@ -1,7 +1,13 @@
 # AttoLang LLVM critical/ownership parity: exact-source admission and native scalar controls
 
 Status: **DRAFT / source changes authored; actual LLVM compiler and guest
-executions NOT_EXECUTED until stepful CI** (2026-11-03).
+executions NOT_EXECUTED until stepful CI** (updated 2026-11-06).
+
+This audit continuation is stacked on LLVM #1395 rather than rewriting its
+main-based compiler/parser patch. A conditional expression may read either
+source binding but cannot transfer ownership of its selected source slot;
+that requires branch-aware tracking. The single new negative test checks
+exactly this unsupported transfer, not general affine CFG soundness.
 
 This independent branch is built **directly on the current LLVM `main` tree**
 (`040058c1750a049be43949c41f61a87d028e6ddc`). The base already
@@ -31,7 +37,7 @@ standalone critical/suspending execution into LLVM. The native actor
 scheduler, scoped permits and protected-state guest heap still require
 independent typed LLVM lowering.
 
-## Sixteen independent CTest acceptance cases
+## Seventeen independent CTest acceptance cases
 
 | Kind | Cases | Actual capability tested |
 | --- | ---: | --- |
@@ -39,12 +45,13 @@ independent typed LLVM lowering.
 | Lexical trivia around conflicting modifiers | 2 | same semantic code; comment/newline cannot bypass admission |
 | Lone critical/suspends, and lone critical-read | 3 | correctly fail closed with distinct native unsupported diagnostics |
 | Non-Copy class / Array sharing | 2 | real ownership checker emits `E_SHARE_MOVE_ONLY` before codegen, with no IR on stdout |
+| Outer `rt take` over a conditional selection | 1 | `E_TAKE_UNTRACKED_SELECT` and zero native IR until source-place invalidation exists |
 | State-container protected heap | 1 | `STATE_CONTAINER_BACKEND_UNSUPPORTED` remains a hard backend denial |
 | Copyable `rt share`, `rt copy`, and `rt take` | 3 | production compiler generates LLVM IR and Clang-linked native executables exit 42 |
 
 **The three native execution tests are conditional on the discovered
 Clang toolchain.** The exact-head workflow installs Clang and requires all
-14 named tests to exist and execute. The shared `tests/contract.py` harness
+17 named tests to exist and execute. The shared `tests/contract.py` harness
 requires compiler exit code exactly 1 and expected stderr for negatives,
 with no stdout; for positives it requires real IR and a linked/started native
 process with the expected exit. No source-free scalar model substitutes for
@@ -55,6 +62,7 @@ these receipts.
 | Java/Graal semantic contract | LLVM status of this patch |
 | --- | --- |
 | `E_CRITICAL_SUSPENDS_DECL` | **Implemented in LLVM source**, execution pending |
+| `E_TAKE_UNTRACKED_SELECT` | **Implemented in this stacked LLVM source** for an outer `rt take` of a runtime-selected conditional. Branch evaluation cannot imply source-place invalidation; compilation fails before IR. Execution pending. |
 | `E_SHARE_MOVE_ONLY` | **Implemented in LLVM source** for non-Copy array/class and owned-field value aliases; native execution pending |
 | `E_CRITICAL_READ_MUTATION` | **NOT IMPLEMENTED** for protected LRU objects; native state containers fail closed before body lowering |
 | `E_STATE_BORROW_ESCAPE` | **NOT IMPLEMENTED** for protected LRU objects; no sealed-state lexical loan lowering |
@@ -78,12 +86,12 @@ From a source-authorized LLVM CI runner on the exact branch/head:
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
 cmake --build build --parallel 2 --target oreslang-llvmc
-ctest --test-dir build -R '^atto_(critical|suspends|protected|copyable)' \
+ctest --test-dir build -R '^atto_(critical|suspends|protected|copyable|take|share)' \
   --output-on-failure --timeout 180
 ```
 
 Record exact compiler/head Git commit and tree, compiler toolchain versions,
-real nonzero GitHub Actions job steps, CTest XML with 16 unique, non-skipped,
+real nonzero GitHub Actions job steps, CTest XML with 17 unique, non-skipped,
 passing tests, positive native exit 42, and negative stderr/exit evidence.
 The `.github/workflows/atto-critical-ownership-llvm-parity.yml` gate also
 requires a clean checkout before and after testing.

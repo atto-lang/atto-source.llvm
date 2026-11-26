@@ -1,4 +1,5 @@
 #include "oreslang/types/OwnershipChecker.hpp"
+#include "oreslang/types/NativeOwnershipJoin.hpp"
 #include "oreslang/types/NativeClassLayout.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/types/OwnershipCfg.hpp"
@@ -20,41 +21,9 @@ namespace {
 using Mode = Parameter::Mode;
 using Functions = std::unordered_map<std::string, const Function*>;
 
-struct LocalOwnership {
-    Mode mode = Mode::Value;
-    bool moved = false;
-    bool heap_owned = false; // Experimental region slots cannot transfer ownership yet.
-    bool int_array = false; // Non-copy lexical array; no borrows or escapes.
-    bool record_view = false; // readonly materialized value, not an incoming loan
-    bool mutable_owner = false; // lexical let mut or exclusive borrowed parameter
-    bool assignable = false; // lexical slot replacement, not referent mutation
-    std::size_t shared_loans = 0;
-    bool exclusive_loan = false;
-    std::string class_name;
-    std::unordered_set<std::string> mutable_paths;
-    std::unordered_map<std::string, std::string> subobjects;
-    std::unordered_set<std::string> class_fields;
-    std::unordered_set<std::string> class_array_fields;
-    std::unordered_set<std::string> final_fields;
-    std::unordered_set<std::string> public_fields;
-    // Primitive i64 class fields can be moved and later restored by a write.
-    std::unordered_set<std::string> moved_fields;
-};
-using Locals = std::unordered_map<std::string, LocalOwnership>;
-
-bool same_affine_state(const Locals& left, const Locals& right) {
-    if (left.size() != right.size()) return false;
-    for (const auto& item : left) {
-        const auto found = right.find(item.first);
-        if (found == right.end()) return false;
-        if (item.second.moved != found->second.moved ||
-                item.second.moved_fields != found->second.moved_fields ||
-                item.second.shared_loans != found->second.shared_loans ||
-                item.second.exclusive_loan != found->second.exclusive_loan)
-            return false;
-    }
-    return true;
-}
+using LocalOwnership = native_ownership::LocalOwnership;
+using Locals = native_ownership::Locals;
+using native_ownership::same_affine_state;
 
 [[noreturn]] void reject(const Expression& expr, const std::string& reason) {
     throw std::runtime_error(reason + " at byte " + std::to_string(expr.offset));
@@ -334,6 +303,15 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             check_value(*expr.left, locals, functions);
             return;
         case Expression::Kind::Take: {
+            // A ternary selects a source place at runtime. The native checker
+            // compares branch states but does not invalidate either selected
+            // binding when the outer Take wraps that expression. Do not turn
+            // a conditional copy into an apparent ownership transfer.
+            if (!expr.left)
+                reject(expr, "native rt take requires an operand");
+            if (expr.left->kind == Expression::Kind::Conditional)
+                reject(expr, "E_TAKE_UNTRACKED_SELECT: rt take of a conditional "
+                             "requires a tracked source place; bind the result first");
             // The bounded class subset has only trivially destructible i64
             // fields. Lowering a field take as a load is valid only because
             // checker state invalidates that place until an explicit write.

@@ -46,6 +46,17 @@ target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
 
 include(CTest)
 if(BUILD_TESTING)
+    # Source-shared compiler CFG join implementation: build and execute the
+    # actual production header rather than an independently rewritten model.
+    add_executable(oreslang-native-ownership-join-test
+        tests/native_ownership_join_test.cpp)
+    target_include_directories(oreslang-native-ownership-join-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-ownership-join-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror)
+    add_test(NAME native_ownership_affine_join_complete
+        COMMAND oreslang-native-ownership-join-test)
+
     # Compiler-level trait projection contract: closed-world HasFuture dispatch
     # for native ActorRef readiness and its one-shot Future<void> token.
     # Independently runnable without LLVM libraries or a guest scheduler.
@@ -1217,6 +1228,10 @@ if(BUILD_TESTING)
         atto-share-move-only-class.atto --diagnostic "E_SHARE_MOVE_ONLY")
     oreslang_contract_test(atto_protected_state_requires_typed_lowering
         atto-protected-state-unlowered.atto --diagnostic "STATE_CONTAINER_BACKEND_UNSUPPORTED")
+    # Outer rt take must not silently skip source-place invalidation when
+    # the operand is a runtime-selected conditional expression.
+    oreslang_contract_test(atto_take_conditional_untracked_rejected
+        atto-take-conditional-untracked.atto --diagnostic "E_TAKE_UNTRACKED_SELECT")
     # Copy scalars retain parity with Java rt share Copy semantics.
     # Require real compiler IR, Clang link and native process exit.
     if(ORE_CLANG)
