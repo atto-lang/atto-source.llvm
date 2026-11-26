@@ -212,7 +212,18 @@ int main() {
     must_reject("forged mutable signature", [&] { verify_plan(mut_call); });
     mut_call.mutable_parameter = "q";
     validate_ownership(mut_call);
-    std::cout << "POINTER_HIR_ADVERSARIAL_REJECTIONS=26\n";
+    mut_call.readonly_helper = "inspect";
+    mut_call.readonly_parameter = "q";
+    mut_call.steps[1].value->kind = Expr::Kind::ReadonlyCall;
+    mut_call.steps[1].value->name = "inspect";
+    validate_ownership(mut_call);
+    mut_call.readonly_helper = "update";
+    mut_call.steps[1].value->name = "update";
+    must_reject("conflicting readonly and mutable callee identities", [&] { verify_plan(mut_call); });
+    mut_call.readonly_helper = "inspect";
+    mut_call.steps[1].value->name = "inspect";
+    validate_ownership(mut_call);
+    std::cout << "POINTER_HIR_ADVERSARIAL_REJECTIONS=27\n";
 
     // The independently verified HIR arithmetic must agree at the signed
     // boundaries and reject overflow even when supplied a fabricated annotation.
