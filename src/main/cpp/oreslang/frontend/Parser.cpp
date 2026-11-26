@@ -6064,9 +6064,11 @@ private:
                 local.initializer = std::move(value.expression);
                 function.locals.push_back(std::move(local));
             }
-            if (!accept("return"))
-                fail("E_REFINEMENT_BODY: expected an explicit return after immutable bindings");
-            auto result = verified_expression(0);
+            auto result = [&]() {
+                if (strict_verified_) return strict_verified_return(0);
+                if (!accept("return")) fail("E_REFINEMENT_BODY: expected an explicit return after immutable bindings");
+                auto value = verified_expression(0); require(";"); return value;
+            }();
             declared_result.require(result.type(), "E_REFINEMENT_RETURN", "return from " + name);
             guaranteed_result.require(result.type(), "E_REFINEMENT_POSTCONDITION", "ensures of " + name);
             for (const auto index : signature.upper_parameters) {
@@ -6074,7 +6076,6 @@ private:
                 if (!result.upper_bounds.count(parameter) && !result.range.at_most(signature.parameters[index].range))
                     fail("E_REFINEMENT_POSTCONDITION: cannot prove result <= " + parameter);
             }
-            require(";");
             require("}");
             function.result = std::move(result.expression);
             program.functions.push_back(std::move(function));
@@ -6089,6 +6090,107 @@ private:
         } else if (!main_seen) {
             fail("E_REFINEMENT_EXPORT: verified source requires a public main");
         }
+    }
+
+    using StrictFacts = std::unordered_map<std::string, RefinedQuantity>;
+    struct StrictPredicate {
+        std::unique_ptr<Expression> expression;
+        StrictFacts yes, no;
+    };
+    static StrictFacts strict_join(const StrictFacts& a,const StrictFacts& b) {
+        auto out=a;
+        for(auto& [name,type]:out)type.range=type.range.join(b.at(name).range);
+        return out;
+    }
+    static VerifiedI64Range strict_restrict(VerifiedI64Range range, const std::string& op, std::int64_t n) {
+        try {return op=="neq"?range.excluding(n):range.constrain(op,n);}
+        catch(const std::runtime_error&) {return range;}
+    }
+    StrictPredicate strict_predicate(const StrictFacts& incoming, std::size_t depth) {
+        if(depth>16)fail("E_UNIT_LIMIT: strict condition depth");
+        verified_locals_=incoming;
+        const auto offset=token_.offset;
+        if(accept("!")){
+            auto p=strict_predicate(incoming,depth+1);
+            auto e=make_expression(Expression::Kind::LogicalNot,offset);
+            e->left=std::move(p.expression);
+            return {std::move(e),std::move(p.no),std::move(p.yes)};
+        }
+        if(accept("(")){
+            auto p=strict_or(incoming,depth+1);require(")");return p;
+        }
+        auto left=verified_expression(0);
+        std::string op(token_.text);
+        if(op=="==")op="eq";if(op=="!=")op="neq";
+        Expression::Kind kind;
+        std::string inverse;
+        if(op=="eq"){kind=Expression::Kind::Equal;inverse="neq";}
+        else if(op=="neq"){kind=Expression::Kind::NotEqual;inverse="eq";}
+        else if(op=="<"){kind=Expression::Kind::Less;inverse=">=";}
+        else if(op=="<="){kind=Expression::Kind::LessEqual;inverse=">";}
+        else if(op==">"){kind=Expression::Kind::Greater;inverse="<=";}
+        else if(op==">="){kind=Expression::Kind::GreaterEqual;inverse="<";}
+        else {fail("E_VERIFY_UNSUPPORTED: expected strict comparison"); throw std::logic_error("unreachable");}
+        advance();
+        auto right=verified_expression(0);left.unit.require_compatible(right.unit);
+        auto yes=incoming,no=incoming;
+        if(left.expression->kind==Expression::Kind::Variable && incoming.count(left.expression->name)
+            && right.range.minimum()==right.range.maximum()){
+            const auto& key=left.expression->name;
+            const auto range=incoming.at(key).range;
+            yes.at(key).range=strict_restrict(range,op,right.range.minimum());
+            no.at(key).range=strict_restrict(range,inverse,right.range.minimum());
+        }
+        auto e=make_expression(kind,offset);
+        e->left=std::move(left.expression);e->right=std::move(right.expression);
+        return {std::move(e),std::move(yes),std::move(no)};
+    }
+    StrictPredicate strict_and(const StrictFacts& incoming,std::size_t depth){
+        auto p=strict_predicate(incoming,depth);
+        std::size_t count=0;
+        while(accept("&&")){
+            if(++count>16)fail("E_UNIT_LIMIT: strict conjunction budget");
+            auto q=strict_predicate(p.yes,depth);
+            auto e=make_expression(Expression::Kind::LogicalAnd,token_.offset);
+            e->left=std::move(p.expression);e->right=std::move(q.expression);
+            p={std::move(e),std::move(q.yes),strict_join(p.no,q.no)};
+        }
+        return p;
+    }
+    StrictPredicate strict_or(const StrictFacts& incoming,std::size_t depth){
+        auto p=strict_and(incoming,depth);
+        std::size_t count=0;
+        while(accept("||")){
+            if(++count>16)fail("E_UNIT_LIMIT: strict disjunction budget");
+            auto q=strict_and(p.no,depth);
+            auto e=make_expression(Expression::Kind::LogicalOr,token_.offset);
+            e->left=std::move(p.expression);e->right=std::move(q.expression);
+            p={std::move(e),strict_join(p.yes,q.yes),std::move(q.no)};
+        }
+        return p;
+    }
+    QuantityTerm strict_verified_return(std::size_t depth){
+        if(depth>16)fail("E_UNIT_LIMIT: strict return depth");
+        const auto offset=token_.offset;
+        if(accept("if")){
+            const auto incoming=verified_locals_;
+            auto p=strict_or(incoming,0);
+            require("{");verified_locals_=p.yes;
+            auto yes=strict_verified_return(depth+1);require("}");
+            verified_locals_=p.no;
+            bool alternate=accept("else");if(alternate)require("{");
+            auto no=strict_verified_return(depth+1);if(alternate)require("}");
+            verified_locals_=incoming;
+            yes.unit.require_compatible(no.unit);
+            if(yes.i32!=no.i32)fail("E_VERIFY_UNSUPPORTED: mixed branch carriers");
+            std::unordered_set<std::string> bounds;
+            for(const auto& name:yes.upper_bounds)if(no.upper_bounds.count(name))bounds.insert(name);
+            auto e=make_expression(Expression::Kind::Conditional,offset);
+            e->condition=std::move(p.expression);e->when_true=std::move(yes.expression);e->when_false=std::move(no.expression);
+            return {std::move(e),std::move(yes.unit),std::max(yes.depth,no.depth)+1,yes.range.join(no.range),std::move(bounds),yes.i32};
+        }
+        if(!accept("return"))fail("E_VERIFY_UNSUPPORTED: strict returning branch requires return");
+        auto value=verified_expression(0);require(";");return value;
     }
 
     QuantityTerm verified_reference(std::size_t depth) {
@@ -6149,9 +6251,9 @@ private:
                 case Expression::Kind::Subtract: proven=fits(a-d)&&fits(b-c);break;
                 case Expression::Kind::Multiply: proven=fits(a*c)&&fits(a*d)&&fits(b*c)&&fits(b*d);break;
                 case Expression::Kind::DivideQuantity:
-                    proven=(right.range.minimum()>0||right.range.maximum()<0)
-                        && !(left.range.minimum()==std::numeric_limits<std::int64_t>::min()
-                            && right.range.minimum()<=-1&&right.range.maximum()>=-1);break;
+                    proven=!right.range.contains_value(0)
+                        && !(left.range.contains_value(std::numeric_limits<std::int64_t>::min())
+                            && right.range.contains_value(-1));break;
                 default:break;
             }
             if(!proven)fail("E_VERIFY_UNPROVEN: signed arithmetic may overflow or divide by zero");
