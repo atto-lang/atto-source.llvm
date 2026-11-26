@@ -1,0 +1,1 @@
+pub fnc main(): int { const key = "dynamic"; return Pair.of<int>(key, 42).second; }

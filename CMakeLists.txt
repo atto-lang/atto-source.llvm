@@ -6281,6 +6281,17 @@ if(BUILD_TESTING)
         oreslang_contract_test(native_pair_dynamic_projection_executes
             native-pair-dynamic-projection.ores --run 42 --clang "${ORE_CLANG}")
     endif()
+    # Nested scalar projection must retain the inner expression, while a
+    # dynamic string key remains fail-closed until owned Pair lowering exists.
+    oreslang_contract_test(native_pair_dynamic_key_failclosed
+        native-pair-dynamic-key-reject.atto --diagnostic "E_PAIR_KEY_TYPE")
+    oreslang_contract_test(native_pair_nested_projection_ir
+        native-pair-nested-projection.atto --ir "define i64 @__oreslang_guest_main")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_pair_nested_projection_executes
+            native-pair-nested-projection.atto --run 42 --clang "${ORE_CLANG}")
+        set_tests_properties(native_pair_nested_projection_executes PROPERTIES TIMEOUT 60)
+    endif()
     oreslang_contract_test(native_pair_integer_key_failclosed
         native-pair-integer-key-reject.ores --diagnostic "E_PAIR_KEY_TYPE")
     oreslang_contract_test(native_pair_generic_key_failclosed
