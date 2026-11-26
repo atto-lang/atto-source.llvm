@@ -1290,7 +1290,10 @@ void validate_i64_ownership(Program& program) {
                 // The lexical checker already requires an exact readonly
                 // scalar shape; materialize only its proven field places
                 // in the independent CFG, never arbitrary dotted names.
-                cfg.entry.emplace(name, state);
+                // Whole aggregate reads/escapes are denied by check_value.
+                // Do not also register an overlapping scalar root place.
+                if (owner.aggregate_type->fields.empty())
+                    throw std::runtime_error("AGGREGATE_CFG_EMPTY_SHAPE_UNVERIFIED");
                 for (const auto& field : owner.aggregate_type->fields) {
                     if (field.type != "int" && field.type != "bool")
                         throw std::runtime_error("AGGREGATE_NATIVE_FIELD_UNVERIFIED");
