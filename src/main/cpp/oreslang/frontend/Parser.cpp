@@ -6293,6 +6293,7 @@ private:
         std::unique_ptr<Expression> fallback;
         std::unordered_set<std::string> seen;
         std::string structural_field;
+        bool wildcard_fallback = false;
 
         while (token_.text != close) {
             if (arms.size() + (fallback ? 1u : 0u) >= 32)
@@ -6300,15 +6301,22 @@ private:
             // All three spellings designate one fallback, evaluated after concrete arms.
             const bool bare_default = accept("default");
             if (!bare_default) require("on");
-            if (bare_default || accept("default") || accept("_")) {
+            if (!bare_default && token_.text == "default")
+                fail("native value match fallback must use 'default ->' without 'on'");
+            const bool wildcard = !bare_default && accept("_");
+            if (bare_default || wildcard) {
                 if (fallback)
                     fail("native value match can contain only one default arm");
                 if (token_.text == "when" || token_.text == "as")
                     fail("native value match default arm cannot have a guard or binding");
                 require("->");
+                wildcard_fallback = wildcard;
                 fallback = arm_value();
                 continue;
             }
+            if (fallback)
+                fail(wildcard_fallback ? "native value match wildcard arm must be last"
+                                       : "native value match default arm must be last");
             if (token_.text == "structural" || token_.text == "struct")
                 fail("native structural match expression requires verified shape-pattern lowering");
             if (token_.text == "structural") {
@@ -6350,6 +6358,8 @@ private:
             });
         }
         require(close);
+        if (pipeline && arms.empty() && subject->kind == Expression::Kind::Variable)
+            fail("native pipeline match default-only local requires checked subject evaluation");
 
         // Bool true/false is statically exhaustive; other scalar matches need
         // an explicit wildcard so there is always an ARM_RESULT value.
