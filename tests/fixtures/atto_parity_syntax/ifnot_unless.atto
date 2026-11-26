@@ -14,11 +14,38 @@ fnc report(bool flag): void {
   return;
 }
 
+// Canonical suffix-do forms from atto-spec #250. Keep the legacy
+// then cases above as explicit migration coverage.
+fnc choose_suffix(bool flag): int {
+  ifnot flag do return 42; else return 9; fi
+  return 0;
+}
+
+fnc report_suffix(bool flag): void {
+  unless flag do
+    stdio.stdout.println("suffix-false");
+  else
+    stdio.stdout.println("suffix-true");
+  fi
+  return;
+}
+
 fnc main(): void {
   stdio.stdout.println(choose(false));
   stdio.stdout.println(choose(true));
   report(false);
   report(true);
+  stdio.stdout.println(choose_suffix(false));
+  stdio.stdout.println(choose_suffix(true));
+  report_suffix(false);
+  report_suffix(true);
+  if true do
+    unless true do
+      stdio.stdout.println("bad-suffix");
+    else
+      stdio.stdout.println("nested-suffix");
+    fi
+  fi
   unless false; then
     ifnot true then
       stdio.stdout.println("bad");

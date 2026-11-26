@@ -128,6 +128,17 @@ reject_case(unless_reject_integer
   "fnc main(): int { unless 1 then return 1; else return 0; fi }\n"
   "native if condition")
 
+# Canonical suffix-do statements must retain strict Boolean admission.
+reject_case(if_suffix_do_reject_integer
+  "fnc main(): int { if 1 do return 1; else return 0; fi }\n"
+  "native if condition")
+reject_case(ifnot_suffix_do_reject_integer
+  "fnc main(): int { ifnot 1 do return 1; else return 0; fi }\n"
+  "native if condition")
+reject_case(unless_suffix_do_reject_integer
+  "fnc main(): int { unless 1 do return 1; else return 0; fi }\n"
+  "native if condition")
+
 if(failures GREATER 0)
   message(FATAL_ERROR "atto parity syntax: ${failures} failure(s)")
 endif()
