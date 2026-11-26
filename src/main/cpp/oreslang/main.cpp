@@ -1,4 +1,5 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
+#include "oreslang/backend/DurableCounterV1Guest.hpp"
 #include "oreslang/backend/NativeSourceLogPathsV1.hpp"
 #include "oreslang/backend/ActorRegionV1Guest.hpp"
 #include "oreslang/backend/ActorRegionV2Guest.hpp"
@@ -539,6 +540,21 @@ static void require_actor_region_v1_aot_graph(const oreslang::Program& program) 
 }
 
 int main(int argc, char** argv) {
+    if (argc > 1 && std::string_view(argv[1]) == "--durable-counter-actor-v1") {
+        try {
+            if (argc != 3 || std::filesystem::path(argv[2]).extension() != ".atto")
+                throw std::invalid_argument("usage: --durable-counter-actor-v1 source.atto");
+            const auto text = read_regular_source(argv[2], 16384, "durable source exceeds limit");
+            const auto ir = oreslang::emit_durable_counter_v1_ir(text);
+            std::cout << ir;
+            std::cout.flush();
+            return std::cout ? 0 : 1;
+        } catch (const std::exception& e) {
+            print_safe_diagnostic(std::cerr,e.what(),512);
+            std::cerr << '\n';
+            return 2;
+        }
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--selftest-native-log-info-ir") {
         try {
             auto program = oreslang::parse_program(
