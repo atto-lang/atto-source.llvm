@@ -313,6 +313,14 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             if (expr.left->kind == Expression::Kind::Conditional)
                 reject(expr, "E_TAKE_UNTRACKED_SELECT: rt take of a conditional "
                              "requires a tracked source place; bind the result first");
+            // Literal Copy scalars have no source owner to invalidate.
+            // Preserve the existing native rt take literal contract without
+            // relaxing the tracked-place requirement for computed rvalues.
+            if (expr.left->kind == Expression::Kind::Integer ||
+                    expr.left->kind == Expression::Kind::Boolean) {
+                check_value(*expr.left, locals, functions);
+                return;
+            }
             // Other rvalues (arithmetic, calls, copy/share wrappers, unary
             // expressions and nested projections) likewise lack an exact
             // source-place invalidation in the stage-one native checker.
