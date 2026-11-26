@@ -1,0 +1,9 @@
+// Both suspends fnc and suspends mtd have the same lowering gate.
+define actor Worker as {
+  let total: int = 0;
+  pub ∂ mtd on_message(int n): int {
+    let Task<int> child = task { return 21 * 2; };
+    return await child;
+  }
+}
+pub fnc main(): int { return 0; }
