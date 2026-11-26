@@ -55,6 +55,19 @@ inline llvm::Function* native_intrinsic(llvm::Module& module,
 #endif
 }
 
+// LLVM 23 removed CreateGlobalStringPtr. With opaque pointers, the
+// address of the global array is also the address of its first byte.
+// Keep the legacy helper for typed-pointer LLVM releases.
+inline llvm::Constant* native_global_string_ptr(llvm::IRBuilder<>& builder,
+                                               llvm::StringRef bytes,
+                                               llvm::Twine name) {
+#if LLVM_VERSION_MAJOR >= 23
+    return builder.CreateGlobalString(bytes, name);
+#else
+    return builder.CreateGlobalStringPtr(bytes, name);
+#endif
+}
+
 inline llvm::Function* native_trap(llvm::Module& module) {
     return native_intrinsic(module, llvm::Intrinsic::trap);
 }
