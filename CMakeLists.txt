@@ -10240,3 +10240,12 @@ if(BUILD_TESTING)
     COMMAND oreslang-actor-slab-heap-golden-v2-test
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/actor_slab_heap_golden_v2.txt")
 endif()
+
+if(BUILD_TESTING AND TARGET oreslang-llvmc)
+  add_executable(oreslang-native-ownership-join-test tests/native_ownership_join_test.cpp)
+  target_include_directories(oreslang-native-ownership-join-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+  target_compile_options(oreslang-native-ownership-join-test PRIVATE
+    $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+  add_test(NAME native_ownership_affine_join_complete COMMAND oreslang-native-ownership-join-test)
+  set_tests_properties(native_ownership_affine_join_complete PROPERTIES TIMEOUT 30)
+endif()
