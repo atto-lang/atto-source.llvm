@@ -91,3 +91,15 @@ fn top_level_receiver_form_remains_syntax_only() {
         "receiver-form source must fail without an executable guest: {error}"
     );
 }
+
+#[test]
+fn obsolete_method_introducer_is_rejected_without_guest() {
+    for kind in ["class", "actor"] {
+        for name in ["answer", "method", "mtd"] {
+            let source = format!("define {kind} C as method {name}(): int {{ return 42; }} end pub fnc main(): int {{ return 0; }}");
+            let error = compile(&source).expect_err("obsolete method marker must reject");
+            assert_eq!(error.code, "E_SYNTAX");
+            assert!(error.to_string().contains("obsolete method introducer"), "{error}");
+        }
+    }
+}
