@@ -77,9 +77,24 @@ bool reserved_unsafe_stdlib_import(std::string_view path) {
                parts[offset] == "std" && parts[offset + 1] == "unsafe";
     };
     if (reserved(path)) return true;
-    const bool rooted = path.substr(0, 4) == "std/" ||
-                        path.substr(0, 9) == "ores.std/" ||
-                        path.substr(0, 9) == "atto.std/";
+    const auto first_slash = path.find('/');
+    const auto first = path.substr(0, first_slash);
+    std::vector<std::string_view> head;
+    for (std::size_t from = 0; from < first.size();) {
+        const auto end = first.find_first_of(".:", from);
+        const auto part = first.substr(from, end == std::string_view::npos
+            ? first.size() - from : end - from);
+        if (!part.empty()) head.push_back(part);
+        if (end == std::string_view::npos) break;
+        from = end + 1;
+    }
+    const bool vendor = !head.empty() && (head[0] == "atto" || head[0] == "ores");
+    const auto tail = first_slash == std::string_view::npos ? std::string_view{} : path.substr(first_slash + 1);
+    const auto second = tail.substr(0, tail.find('/'));
+    const std::size_t root_depth =
+        (head.size() == 1 && head[0] == "std") ||
+        (vendor && head.size() == 2 && head[1] == "std") ? 1 :
+        (vendor && head.size() == 1 && second == "std") ? 2 : 0;
     // Relative imports may canonicalize into the reserved stdlib namespace.
     if (path.find('/') == std::string_view::npos) return false;
     std::vector<std::string_view> segments;
@@ -88,7 +103,7 @@ bool reserved_unsafe_stdlib_import(std::string_view path) {
         const auto part = path.substr(from, slash == std::string_view::npos
                 ? path.size() - from : slash - from);
         if (part == "..") {
-            if (rooted && segments.size() <= 1) return true; // Root traversal is noncanonical.
+            if (root_depth != 0 && segments.size() <= root_depth) return true; // Root traversal is noncanonical.
             if (!segments.empty()) segments.pop_back();
         } else if (!part.empty() && part != ".") {
             segments.push_back(part);
