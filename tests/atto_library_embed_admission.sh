@@ -6,6 +6,7 @@ trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/stdlib/core" "$work/stdlib/alloc" "$work/stdlib/std" "$work/core"
 printf 'define module num as\nend\n' > "$work/stdlib/core/num.atto"
 cp "$work/stdlib/core/num.atto" "$work/stdlib/alloc/arena.atto"
+cp "$work/stdlib/core/num.atto" "$work/stdlib/std/path.atto"
 cp "$work/stdlib/core/num.atto" "$work/stdlib/std/path_posix.atto"
 cp "$work/stdlib/core/num.atto" "$work/stdlib/std/path_windows.atto"
 cp "$work/stdlib/core/num.atto" "$work/core/range.atto"
@@ -39,11 +40,14 @@ for bad in \
  'core num stdlib/core/num.atto unix' \
  'core num stdlib/core/num.atto any allocator' \
  $'core num stdlib/core/num.atto any\ncore num stdlib/core/num.atto any' \
- $'std path stdlib/std/path_posix.atto posix\nstd path stdlib/std/path_posix.atto any' \
+ $'std path stdlib/std/path_posix.atto posix\nstd path stdlib/std/path.atto any' \
  'core num stdlib/core/../core/num.atto any' \
  'core num stdlib/alloc/arena.atto any' \
  'core alias stdlib/core/alias.atto any' \
  "core $(printf 'a%.0s' {1..65}) stdlib/core/num.atto any"; do
  run reject "$bad"
 done
-echo 'Library embedding: positive manifest and eight fail-closed controls passed'
+# Both registrations are individually valid; ambiguity must fail in either order.
+run reject $'std path stdlib/std/path.atto any\nstd path stdlib/std/path_posix.atto posix'
+grep -q "overlapping unit std/path" "$work/log"
+echo 'Library embedding: positive manifest and nine fail-closed controls passed'
