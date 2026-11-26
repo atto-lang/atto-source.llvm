@@ -1286,7 +1286,18 @@ void validate_i64_ownership(Program& program) {
             state.possible = owner.moved ? ownership::kMoved : ownership::kOwned;
             state.shared_loans = static_cast<unsigned>(owner.shared_loans);
             state.exclusive_loan = owner.exclusive_loan;
-            if (owner.class_name.empty()) {
+            if (owner.aggregate_type) {
+                // The lexical checker already requires an exact readonly
+                // scalar shape; materialize only its proven field places
+                // in the independent CFG, never arbitrary dotted names.
+                cfg.entry.emplace(name, state);
+                for (const auto& field : owner.aggregate_type->fields) {
+                    if (field.type != "int" && field.type != "bool")
+                        throw std::runtime_error("AGGREGATE_NATIVE_FIELD_UNVERIFIED");
+                    if (!cfg.entry.emplace(name + "." + field.name, state).second)
+                        throw std::runtime_error("AGGREGATE_CFG_DUPLICATE_PLACE");
+                }
+            } else if (owner.class_name.empty()) {
                 cfg.entry.emplace(name, state);
             } else {
                 // A fieldless nominal object still owns identity/liveness.
