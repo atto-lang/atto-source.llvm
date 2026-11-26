@@ -27,7 +27,7 @@ struct Expr {
 };
 
 struct Step {
-    enum class Kind { Write, Scalar, Close, Fill, Swap };
+    enum class Kind { Write, Scalar, Close, Fill, Swap, MutableCall };
     Kind kind = Kind::Close;
     std::string name;
     std::size_t index = 0;
@@ -45,6 +45,9 @@ struct Plan {
     // A private helper has one proven readonly singleton read as its entire body.
     std::string readonly_helper;
     std::string readonly_parameter;
+    std::string mutable_helper;
+    std::string mutable_parameter;
+    std::int64_t mutable_write = 0;
     std::string owner;
     std::size_t count = 0;
     std::vector<Step> steps;

@@ -96,4 +96,20 @@ pub fn run(h: &mut Harness) {
     h.negative("borrow_helper_close",
         "fnc inspect(Pointer<int> q): int { q.close(); return 42; } pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(42); val int a = inspect(p); p.close(); return a; }", &flag, Some("expected"));
 
+    let mutable_helper = "fnc update(mut Pointer<int> q): void { q.write(42); }";
+    for (name, body, diagnostic) in [
+        ("mut_borrow_closed", "let mut Pointer<int> p = Pointer.alloc_value<int>(0); p.close(); update(mut p); return 0;", "unavailable owner"),
+        ("mut_borrow_wrong_owner", "let mut Pointer<int> p = Pointer.alloc_value<int>(0); update(mut other); p.close(); return 0;", "expected"),
+        ("mut_borrow_multi", "let mut Pointer<int> p = Pointer.alloc<int>(2); update(mut p); p.close(); return 0;", "singleton"),
+        ("mut_borrow_gap", "let mut Pointer<int> p = Pointer.alloc_value<int>(0); update(borrow ! mut p); p.close(); return 0;", "adjacent"),
+        ("mut_borrow_readonly", "let mut Pointer<int> p = Pointer.alloc_value<int>(0); update(p); p.close(); return 0;", "expected"),
+        ("mut_borrow_extra_argument", "let mut Pointer<int> p = Pointer.alloc_value<int>(0); update(mut p, mut p); p.close(); return 0;", "expected"),
+        ("mut_borrow_no_close", "let mut Pointer<int> p = Pointer.alloc_value<int>(0); update(mut p); return 0;", "close exactly once"),
+    ] {
+        let source = format!("{mutable_helper} pub fnc main(): int {{ {body} }}");
+        h.negative(name, &source, &flag, Some(diagnostic));
+    }
+    h.negative("mut_borrow_helper_close",
+        "fnc update(mut Pointer<int> q): void { q.close(); } pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(0); update(mut p); p.close(); return 0; }", &flag, Some("expected"));
+
 }

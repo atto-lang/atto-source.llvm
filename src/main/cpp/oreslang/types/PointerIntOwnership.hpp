@@ -87,6 +87,14 @@ inline void verify_plan(const Plan& plan) {
                 plan.readonly_helper == plan.readonly_parameter)
             ownership_error("invalid readonly helper signature");
     }
+    if (!plan.mutable_helper.empty() || !plan.mutable_parameter.empty()) {
+        if (borrowed_local || !plan.readonly_helper.empty() ||
+                !valid_helper_id(plan.mutable_helper) || !valid_helper_id(plan.mutable_parameter) ||
+                plan.mutable_helper == plan.owner || plan.mutable_helper == plan.mutable_parameter)
+            ownership_error("invalid mutable helper signature");
+    } else if (plan.mutable_write != 0) {
+        ownership_error("orphan mutable helper write");
+    }
     if (plan.steps.size() > 128 || !plan.result)
         ownership_error("invalid bounded pointer plan");
     std::array<bool, 16> initialized{};
@@ -204,9 +212,16 @@ inline void verify_plan(const Plan& plan) {
                 ownership_error("invalid swap authority, bounds or initialization");
             std::swap(elements[step.index], elements[step.second_index]);
             break;
+        case Step::Kind::MutableCall:
+            if (borrowed_local || !live || plan.count != 1 || plan.mutable_helper.empty() ||
+                    step.name != plan.mutable_helper || step.index != 0 || step.value)
+                ownership_error("invalid mutable singleton call authority or shape");
+            elements[0] = plan.mutable_write;
+            initialized[0] = true;
+            break;
         case Step::Kind::Scalar:
             if (step.name.empty() || step.name == plan.owner ||
-                    step.name == "Pointer" || step.name == "main" || step.name == plan.readonly_helper ||
+                    step.name == "Pointer" || step.name == "main" || step.name == plan.readonly_helper || step.name == plan.mutable_helper ||
                     (borrowed_local && step.name == plan.local_handle) ||
                     step.index != 0 || !step.value ||
                     immutable.count(step.name))

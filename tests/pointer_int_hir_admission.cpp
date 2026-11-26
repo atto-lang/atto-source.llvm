@@ -190,7 +190,29 @@ int main() {
     must_reject("forged readonly return annotation", [&] { verify_plan(call); });
     call.steps[1].value->known = 42;
     validate_ownership(call);
-    std::cout << "POINTER_HIR_ADVERSARIAL_REJECTIONS=22\n";
+    auto mut_call = plan();
+    mut_call.count = 1;
+    mut_call.mutable_helper = "update";
+    mut_call.mutable_parameter = "q";
+    mut_call.mutable_write = 42;
+    mut_call.steps[0].kind = Step::Kind::MutableCall;
+    mut_call.steps[0].name = "update";
+    mut_call.steps[0].value.reset();
+    validate_ownership(mut_call);
+    mut_call.steps[0].name = "unknown";
+    must_reject("forged mutable callee", [&] { verify_plan(mut_call); });
+    mut_call.steps[0].name = "update";
+    mut_call.count = 2;
+    must_reject("mutable call with wrong extent", [&] { verify_plan(mut_call); });
+    mut_call.count = 1;
+    mut_call.steps[0].value = literal(42);
+    must_reject("forged mutable call payload", [&] { verify_plan(mut_call); });
+    mut_call.steps[0].value.reset();
+    mut_call.mutable_parameter = "update";
+    must_reject("forged mutable signature", [&] { verify_plan(mut_call); });
+    mut_call.mutable_parameter = "q";
+    validate_ownership(mut_call);
+    std::cout << "POINTER_HIR_ADVERSARIAL_REJECTIONS=26\n";
 
     // The independently verified HIR arithmetic must agree at the signed
     // boundaries and reject overflow even when supplied a fabricated annotation.
