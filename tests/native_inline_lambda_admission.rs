@@ -77,12 +77,14 @@ fn main(){
         let cwd=dir.0.join(format!("overflow-{name}"));
         let r=compile(&compiler,&cwd,&format!("pub fnc main(): int {{ return {expr}; }}\n"));
         assert!(r.status.success(),"{name}: {:?}",r);
-        fs::write(cwd.join("guest.ll"),r.stdout).unwrap();
+        let ir=String::from_utf8(r.stdout).unwrap();
+        assert!(ir.contains("llvm.sadd.with.overflow.i64") && ir.contains("llvm.trap"),"missing checked overflow path");
+        fs::write(cwd.join("guest.ll"),ir).unwrap();
         for opt in ["-O0","-O2"] {
             let exe=cwd.join(format!("guest{opt}"));
             assert!(Command::new(&clang).arg(opt).arg(cwd.join("guest.ll")).arg("-o").arg(&exe).status().unwrap().success());
             let r=Command::new(exe).current_dir(&cwd).output().unwrap();
-            #[cfg(unix)] {use std::os::unix::process::ExitStatusExt; assert_eq!(r.status.signal(),Some(6),"checked overflow did not abort: {r:?}");}
+            #[cfg(unix)] {use std::os::unix::process::ExitStatusExt; assert_eq!(r.status.signal(),Some(4),"x86_64 llvm.trap must terminate with SIGILL: {r:?}");}
             assert!(!r.status.success()&&r.stdout.is_empty());
         }
     }
