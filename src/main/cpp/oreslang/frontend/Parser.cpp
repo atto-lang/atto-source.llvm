@@ -5967,6 +5967,22 @@ private:
         while (token_.kind != Kind::End) {
             if (program.functions.size() >= 64) fail("E_REFINEMENT_LIMIT: too many verified functions");
             if (main_seen) fail("E_REFINEMENT_SCOPE: main must be the final verified function");
+            struct AnnotationSpan { Lexer lexer; Token token; std::size_t previous_end; std::size_t end; bool requires_clause; };
+            std::vector<AnnotationSpan> annotations;
+            while (accept("@")) {
+                if(annotations.size()>=16)fail("E_REFINEMENT_CONTRACT: contract budget");
+                const bool requires_clause=accept("requires");
+                if(!requires_clause&&!accept("ensures"))fail("E_REFINEMENT_CONTRACT: unsupported annotation");
+                require("(");
+                AnnotationSpan span{lexer_,token_,last_token_end_,0,requires_clause};
+                std::size_t count=0;
+                while(token_.text!=")") {
+                    if(token_.kind==Kind::End||++count>32||token_.text=="("||token_.text=="{"||token_.text=="}"||token_.text==";"||token_.text=="@")
+                        fail("E_REFINEMENT_CONTRACT: invalid bounded annotation predicate");
+                    advance();
+                }
+                span.end=token_.offset;annotations.push_back(std::move(span));advance();
+            }
             const bool exported = accept("pub");
             if (!exported) accept("private");
             require("fnc");
@@ -6001,18 +6017,34 @@ private:
             if (main && (!function.parameters.empty() || !declared_result.unit.scalar()
                     || !declared_result.range.includes(VerifiedI64Range())))
                 fail("E_REFINEMENT_EXPORT: main must have signature () -> int");
-            while (accept("requires")) {
+            const auto contract_start = token_.offset;
+            std::size_t clause_count=annotations.size(), next_requires=0;
+            if(main&&clause_count)fail("E_REFINEMENT_CONTRACT: entrypoint annotations");
+            while(true) {
+                while(next_requires<annotations.size()&&!annotations[next_requires].requires_clause)++next_requires;
+                auto resume_lexer=lexer_;auto resume_token=token_;auto resume_end=last_token_end_;
+                const AnnotationSpan* span=next_requires<annotations.size()?&annotations[next_requires++]:nullptr;
+                if(span){lexer_=span->lexer;token_=span->token;last_token_end_=span->previous_end;}
+                else {if(!accept("requires"))break;if(++clause_count>16)fail("E_REFINEMENT_CONTRACT: contract budget");}
                 if (main) fail("E_REFINEMENT_EXPORT: main cannot require caller facts");
                 const auto parameter = identifier();
                 auto actual = verified_locals_.find(parameter);
                 if (actual == verified_locals_.end()) fail("E_REFINEMENT_NAME: requires must name a parameter");
-                actual->second = read_verified_bound(actual->second, read_quantity_comparison());
+                const auto comparison=accept("!=")?std::string("!="):read_quantity_comparison();
+                actual->second = read_verified_bound(actual->second, comparison);
+                if(span){if(token_.offset!=span->end)fail("E_REFINEMENT_CONTRACT: trailing annotation tokens");lexer_=resume_lexer;token_=resume_token;last_token_end_=resume_end;}
             }
             VerifiedFunction signature;
             signature.lowered_name = function.name;
             for (const auto& parameter : function.parameters)
                 signature.parameters.push_back(verified_locals_.at(parameter.name));
-            while (accept("ensures")) {
+            std::size_t next_ensures=0;
+            while(true) {
+                while(next_ensures<annotations.size()&&annotations[next_ensures].requires_clause)++next_ensures;
+                auto resume_lexer=lexer_;auto resume_token=token_;auto resume_end=last_token_end_;
+                const AnnotationSpan* span=next_ensures<annotations.size()?&annotations[next_ensures++]:nullptr;
+                if(span){lexer_=span->lexer;token_=span->token;last_token_end_=span->previous_end;}
+                else {if(!accept("ensures"))break;if(++clause_count>16)fail("E_REFINEMENT_CONTRACT: contract budget");}
                 require("result");
                 const auto op = read_quantity_comparison();
                 if (op == "<=" && token_.kind == Kind::Identifier) {
@@ -6027,9 +6059,23 @@ private:
                 } else {
                     guaranteed_result = read_verified_bound(std::move(guaranteed_result), op);
                 }
+                if(span){if(token_.offset!=span->end)fail("E_REFINEMENT_CONTRACT: trailing annotation tokens");lexer_=resume_lexer;token_=resume_token;last_token_end_=resume_end;}
             }
             signature.result = guaranteed_result;
-            require("{");
+            const bool contracted = !annotations.empty() || token_.offset != contract_start;
+            bool end_delimited = false;
+            if (!accept("{")) {
+                if (accept("::")) end_delimited = true;
+                else if (token_.text == "begin") {
+                    if (contracted && (last_token_end_ > token_.offset ||
+                        source_.substr(last_token_end_, token_.offset-last_token_end_).find('\n') == std::string_view::npos))
+                        fail("E_SYNTAX: contracted begin must start on a later line");
+                    advance();
+                    end_delimited = true;
+                } else fail("E_SYNTAX: expected verified callable body opener");
+            }
+            if (end_delimited && (token_.text == "begin" || token_.text == "::" || token_.text == "{"))
+                fail("E_SYNTAX: combined verified callable body openers");
             if (main && !program.protocol_actors.empty() && token_.text == "val") {
                 auto lookahead = lexer_;
                 if (lookahead.next().kind == Kind::Identifier && lookahead.next().text == "=" &&
@@ -6039,6 +6085,7 @@ private:
                         guaranteed_result.range.maximum() != declared_result.range.maximum() ||
                         !signature.upper_parameters.empty())
                         fail("E_PROTOCOL_GUEST: actor main requires a standalone uncontracted entrypoint");
+                    if (end_delimited) fail("E_PROTOCOL_GUEST: protocol guest still requires braces");
                     parse_protocol_guest(program);
                     return;
                 }
@@ -6145,7 +6192,7 @@ private:
                     }
                 }
                 function.result=strict_returns(declared_result,guaranteed_result,signature,function,name,0);
-                require("}");
+                if (!accept(end_delimited ? "end" : "}")) fail("E_SYNTAX: missing or mismatched verified callable closer");
             } else {
                 if (!accept("return"))
                     fail("E_REFINEMENT_BODY: expected an explicit return after immutable bindings");
@@ -6158,7 +6205,7 @@ private:
                         fail("E_REFINEMENT_POSTCONDITION: cannot prove result <= " + parameter);
                 }
                 require(";");
-                require("}");
+                if (!accept(end_delimited ? "end" : "}")) fail("E_SYNTAX: missing or mismatched verified callable closer");
                 function.result = std::move(result.expression);
             }
             program.functions.push_back(std::move(function));

@@ -32,6 +32,10 @@ int main() {
             "fnc f(int x) -> Bounded { return x as Bounded; } "+main_source("f(42)"),
             std::string("pub fnc main() -> int { val int x = 9223372036854775807+1; return 42; }")})
         reject(pre+body,"E_VERIFY_UNPROVEN:");
+    const std::string header="fnc f(int x) -> int requires x >= 1 requires x <= 42";
+    for(std::string_view body:{" { return 84/x; }","\nbegin return 84/x; end"," :: return 84/x; end","\n:: return 84/x; end"})
+        (void)parse_verified_strict_i64(pre+header+std::string(body)+" "+main_source("f(2)"));
+    reject(pre+header+" begin return 84/x; end "+main_source("f(2)"),"E_SYNTAX:");
     reject(main_source("42"),"E_VERIFY_UNSUPPORTED:");
     reject(pre+"type Narrow = i32 where self > 0; "+main_source("42"),"E_VERIFY_UNSUPPORTED:");
     for(std::string_view source:{"fnc f(int x) -> int { if x != 0 { return 42/x; } return 0; } pub fnc main() -> int { return f(1); }",
