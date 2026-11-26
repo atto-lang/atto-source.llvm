@@ -21,4 +21,11 @@ pub fn run(h: &mut Harness) {
         "pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(1); p.write_at(0, 21); val int first = p.read(); p.write(first * 2); val int answer = p.read_at(0); p.close(); return answer; }",
         &["--experimental-pointer-int-aot"], 42, true, None);
 
+    h.positive("pointer_initialized_singleton_42",
+        "pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(21 * 2); val int result = p.read(); p.close(); return result; }",
+        &["--experimental-pointer-int-aot"], 42, true, None);
+    h.positive("pointer_region_metadata_42",
+        "pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(4); val int count = p.len(); val int bytes = p.size_bytes(); p.close(); return count + bytes + 6; }",
+        &["--experimental-pointer-int-aot"], 42, true, None);
+
 }
