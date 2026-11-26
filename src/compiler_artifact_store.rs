@@ -301,6 +301,18 @@ mod tests {
         }
     }
 
+    // Concurrent test subprocess creation can transiently retain a forked
+    // descriptor until exec closes it. Retry only WouldBlock after the
+    // intentional lease is dropped; never count contention as rejection.
+    fn after_fork<T>(mut operation:impl FnMut()->io::Result<T>)->io::Result<T>{
+        for _ in 0..100{
+            match operation(){
+                Err(e) if e.kind()==io::ErrorKind::WouldBlock=>std::thread::sleep(std::time::Duration::from_millis(10)),
+                result=>return result,
+            }
+        }
+        operation()
+    }
     #[test]
     fn protected_authority_native_guest(){
         use crate::{compiler_cache_ledger as ledger,sha256::sha256};
@@ -325,18 +337,18 @@ mod tests {
         assert!(status.success());
         assert_eq!(authority.rotate("tenant/a",&old,SECRET,2,[7;32],&new).unwrap_err().kind(),io::ErrorKind::WouldBlock);
         drop(lease);
-        assert!(authority.rotate("tenant/a",&old,SECRET,1,[7;32],&new).is_err());
-        assert!(authority.rotate("tenant/a",&old,SECRET,2,[7;32],&[0;32]).is_err());
+        assert!(after_fork(||authority.rotate("tenant/a",&old,SECRET,1,[7;32],&new)).unwrap_err().kind()==io::ErrorKind::InvalidData);
+        assert!(after_fork(||authority.rotate("tenant/a",&old,SECRET,2,[7;32],&[0;32])).unwrap_err().kind()==io::ErrorKind::InvalidData);
         assert_eq!(fs::read(host.join("active")).unwrap(),old_record);
-        authority.rotate("tenant/a",&old,SECRET,2,[7;32],&new).unwrap();
-        assert!(authority.lease("tenant/a",&old,SECRET).is_err());
-        assert!(authority.lease("tenant/b",&new,[7;32]).is_err());
-        let next=authority.lease("tenant/a",&new,[7;32]).unwrap();
+        after_fork(||authority.rotate("tenant/a",&old,SECRET,2,[7;32],&new)).unwrap();
+        assert!(matches!(after_fork(||authority.lease("tenant/a",&old,SECRET)),Err(e) if e.kind()==io::ErrorKind::InvalidData));
+        assert!(matches!(after_fork(||authority.lease("tenant/b",&new,[7;32])),Err(e) if e.kind()==io::ErrorKind::InvalidData));
+        let next=after_fork(||authority.lease("tenant/a",&new,[7;32])).unwrap();
         assert!(store.load(&key,&next.secret()).is_err());
         drop(next);
         // A restored old record is not current authority.
         fs::write(host.join("active"),old_record).unwrap();
-        assert!(authority.lease("tenant/a",&new,[7;32]).is_err());
+        assert!(matches!(after_fork(||authority.lease("tenant/a",&new,[7;32])),Err(e) if e.kind()==io::ErrorKind::InvalidData));
         println!("NATIVE_CACHE_AUTHORITY|guest=42|lease-fences-rotation|revoked-receipt-denied|stale-record-denied");
     }
     #[test]
