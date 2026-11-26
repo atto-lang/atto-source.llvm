@@ -1,0 +1,16 @@
+pub fnc remainder(int a, int b): int {
+  return Integer.rem(a, b);
+}
+
+pub fnc modulo(int a, int b): int {
+  return Integer.mod(a, b);
+}
+
+pub fnc main(): int {
+  if remainder(-47, 5) neq -2 do return 1; fi
+  if modulo(-47, 5) neq 3 do return 2; fi
+  if modulo(-47, -5) neq 3 do return 3; fi
+  if remainder((-9223372036854775807 - 1), -1) neq 0 do return 4; fi
+  if modulo(-1, (-9223372036854775807 - 1)) neq 9223372036854775807 do return 5; fi
+  return 42;
+}
