@@ -6176,10 +6176,14 @@ private:
         auto e=make_expression(kind,at);e->left=std::move(l.expression);e->right=std::move(r.expression);
         return {std::move(e),std::move(yes),std::move(no)};
     }
+    struct StrictLoopExitContext {
+        std::unordered_map<std::string,RefinedQuantity> writes;
+        bool has_break=false;
+    };
     bool strict_statement_block(const RefinedQuantity& declared,const RefinedQuantity& guaranteed,
             const VerifiedFunction& signature,Function& function,const std::string& name,
             std::vector<Statement>& body,std::unordered_map<std::string,RefinedQuantity> mutable_types,
-            std::size_t depth,bool root=false) {
+            std::size_t depth,bool root=false,StrictLoopExitContext* active_loop=nullptr) {
         if(depth>16)fail("E_VERIFY_UNSUPPORTED: strict block depth");
         constexpr std::string_view prefix="__atto_strict_version_";
         bool returned=false;
@@ -6187,6 +6191,17 @@ private:
             if(returned)fail("E_VERIFY_UNSUPPORTED: statement after strict return");
             if(body.size()>=128)fail("E_REFINEMENT_LIMIT: strict statement budget");
             const auto at=token_.offset;
+            if(token_.text=="break"||token_.text=="continue"){
+                if(!active_loop)fail("E_VERIFY_UNSUPPORTED: loop exit outside strict while");
+                const bool breaking=accept("break");
+                if(!breaking)require("continue");
+                require(";");
+                if(breaking)active_loop->has_break=true;
+                else for(const auto& [key,invariant]:active_loop->writes)
+                    invariant.require(verified_locals_.at(key),"E_REFINEMENT_BINDING","continue backedge "+key);
+                Statement exit{};exit.kind=breaking?Statement::Kind::Break:Statement::Kind::Continue;exit.offset=at;
+                body.push_back(std::move(exit));returned=true;continue;
+            }
             if(accept("return")){
                 auto value=verified_expression(0);
                 declared.require(value.type(),"E_REFINEMENT_RETURN","return from "+name);
@@ -6226,14 +6241,18 @@ private:
                     invariant.require(header.at(key),"E_REFINEMENT_BINDING","loop entry "+key);
                     header.at(key)=invariant;verified_upper_bounds_.at(key).clear();
                 }
+                for(auto& [key,upper]:verified_upper_bounds_)
+                    for(const auto& written:writes)upper.erase(written);
                 const auto header_bounds=verified_upper_bounds_;
                 auto p=strict_condition(header,0);
                 require("{");verified_locals_=std::move(p.yes);
                 Statement loop{};loop.kind=Statement::Kind::Loop;loop.offset=at;
                 Statement guard{};guard.kind=Statement::Kind::Conditional;guard.offset=at;
                 guard.condition=std::move(p.test);
+                StrictLoopExitContext loop_exits;
+                for(const auto& key:writes)loop_exits.writes.emplace(key,mutable_types.at(key));
                 const bool terminal=strict_statement_block(declared,guaranteed,signature,function,name,
-                    guard.then_statements,mutable_types,depth+1);
+                    guard.then_statements,mutable_types,depth+1,false,&loop_exits);
                 require("}");
                 if(!terminal)for(const auto& key:writes)
                     mutable_types.at(key).require(verified_locals_.at(key),"E_REFINEMENT_BINDING","loop backedge "+key);
@@ -6241,7 +6260,7 @@ private:
                 guard.else_statements.push_back(std::move(exit));
                 loop.then_statements.push_back(std::move(guard));
                 body.push_back(std::move(loop));
-                verified_locals_=std::move(p.no);verified_upper_bounds_=header_bounds;strict_slots_=slots;
+                verified_locals_=loop_exits.has_break?header:std::move(p.no);verified_upper_bounds_=header_bounds;strict_slots_=slots;
                 continue;
             }
             if(accept("if")){
@@ -6251,7 +6270,7 @@ private:
                 Statement stmt{};stmt.kind=Statement::Kind::Conditional;stmt.offset=at;stmt.condition=std::move(p.test);
                 require("{");verified_locals_=std::move(p.yes);
                 const bool yr=strict_statement_block(declared,guaranteed,signature,function,name,
-                    stmt.then_statements,mutable_types,depth+1);
+                    stmt.then_statements,mutable_types,depth+1,false,active_loop);
                 require("}");
                 const auto yes=verified_locals_;const auto ybounds=verified_upper_bounds_;
                 verified_locals_=std::move(p.no);verified_upper_bounds_=bounds;strict_slots_=slots;
@@ -6259,7 +6278,7 @@ private:
                 if(accept("else")){
                     require("{");
                     nr=strict_statement_block(declared,guaranteed,signature,function,name,
-                        stmt.else_statements,mutable_types,depth+1);
+                        stmt.else_statements,mutable_types,depth+1,false,active_loop);
                     require("}");
                 }
                 const auto no=verified_locals_;const auto nbounds=verified_upper_bounds_;
