@@ -92,7 +92,11 @@ static void real_epoll_completion_resumes_only_after_retirement() {
 
     // Completion is not scheduler-visible while epoll still owns registration.
     assert(!continuation.notify_ready_after_retirement());
+    OresNativeExecutionHandle premature{};
+    assert(!continuation.try_resume({91, 7002}, &premature));
+    assert(!ores_native_store_handle_valid(premature));
     assert(stores.state(link) == ORES_CONTINUATION_PENDING);
+    assert(ores_native_execution_context_store_live(stores.executions) == 1);
 
     epoll.disarm();
     assert(epoll.retire());
@@ -100,9 +104,32 @@ static void real_epoll_completion_resumes_only_after_retirement() {
     assert(continuation.notify_ready_after_retirement());
     assert(stores.state(link) == ORES_CONTINUATION_READY);
 
+    // Readiness does not authorize a foreign runtime domain.
+    OresNativeExecutionHandle foreign{};
+    assert(!continuation.try_resume({92, 7002}, &foreign));
+    assert(!ores_native_store_handle_valid(foreign));
+    assert(stores.state(link) == ORES_CONTINUATION_READY);
+    assert(ores_native_execution_context_store_live(stores.executions) == 1);
+
     OresNativeExecutionHandle resumed{};
-    assert(continuation.try_resume({91, 7002}, &resumed));
+    OresNativeExecutionContext context{};
+    assert(continuation.try_resume({91, 7002}, &resumed, &context));
     assert(stores.state(link) == ORES_CONTINUATION_CLAIMED);
+    assert(context.id.runtime_domain == 91 && context.id.execution == 7002);
+    assert(context.allocation.kind == ORES_ALLOCATION_DOMAIN_ACTOR);
+    assert(context.allocation.domain == 91);
+    assert(context.allocation.owner == ticket.actor_id);
+    assert(context.allocation.generation == ticket.generation);
+    assert(context.parent_execution.slot == link.parent.slot);
+    assert(context.parent_execution.generation == link.parent.generation);
+    assert(!ores_native_store_handle_valid(context.continuation));
+    assert(ores_native_execution_context_store_live(stores.executions) == 2);
+
+    // A duplicate wake/resume must not create a second logical execution.
+    OresNativeExecutionHandle duplicate{};
+    assert(!continuation.try_resume({91, 7003}, &duplicate));
+    assert(!ores_native_store_handle_valid(duplicate));
+    assert(ores_native_execution_context_store_live(stores.executions) == 2);
     assert(continuation.finish_resume());
     assert(ores_native_execution_context_store_release(stores.executions, resumed));
     stores.release(link);
