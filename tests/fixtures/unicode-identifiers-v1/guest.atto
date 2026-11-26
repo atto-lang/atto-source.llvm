@@ -1,0 +1,7 @@
+pub fnc main(): int {
+  val Φ: int = 10;
+  val φ: int = 20;
+  val 数量: int = 30;
+  val 𠮷: int = 40;
+  return (¬false && ¬¬true && ¬(true && false)) ? Φ + φ + 数量 + 𠮷 : 0;
+}
