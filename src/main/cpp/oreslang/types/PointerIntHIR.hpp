@@ -17,7 +17,7 @@ struct Token {
 };
 
 struct Expr {
-    enum class Kind { Literal, Variable, Read, Neg, Add, Subtract, Multiply };
+    enum class Kind { Literal, Variable, Read, Neg, Add, Subtract, Multiply, Length, SizeBytes };
     Kind kind = Kind::Literal;
     std::int64_t known = 0;
     std::size_t index = 0;

@@ -112,6 +112,14 @@ inline void verify_plan(const Plan& plan) {
                 ownership_error("forged pointer read node");
             result = elements[expr.index];
             break;
+        case Expr::Kind::Length:
+        case Expr::Kind::SizeBytes:
+            if (!live || borrowed_local || expr.index != 0 ||
+                    expr.lhs || expr.rhs || !expr.name.empty())
+                ownership_error("invalid pointer metadata authority or shape");
+            result = static_cast<std::int64_t>(plan.count *
+                (expr.kind == Expr::Kind::Length ? 1 : 8));
+            break;
         case Expr::Kind::Neg:
             if (!expr.lhs || expr.rhs)
                 ownership_error("malformed unary pointer expression");

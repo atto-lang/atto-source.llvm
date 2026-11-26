@@ -61,6 +61,10 @@ inline std::string emit_verified_ir(const Plan& plan) {
             return scalar_values.at(expr.name);
         case Expr::Kind::Read:
             return builder.CreateLoad(i64, slot(expr.index), "pointer.read_at");
+        case Expr::Kind::Length:
+            return builder.getInt64(plan.count);
+        case Expr::Kind::SizeBytes:
+            return builder.getInt64(plan.count * 8);
         case Expr::Kind::Neg:
             return builder.CreateNeg(lower(*expr.lhs), "scalar.negate");
         case Expr::Kind::Add:

@@ -133,7 +133,24 @@ int main() {
     p.steps.erase(p.steps.begin());
     validate_ownership(p);
     verify_plan(p);
-    std::cout << "POINTER_HIR_ADVERSARIAL_REJECTIONS=11\n";
+    auto metadata = plan();
+    metadata.steps[1].value = literal(2);
+    metadata.steps[1].value->kind = Expr::Kind::Length;
+    metadata.result->known = 2;
+    validate_ownership(metadata);
+    metadata.steps[1].value->known = 3;
+    must_reject("incorrect typed length", [&] { verify_plan(metadata); });
+    metadata.steps[1].value->kind = Expr::Kind::SizeBytes;
+    metadata.steps[1].value->known = 16;
+    metadata.result->known = 16;
+    validate_ownership(metadata);
+    metadata.steps[1].value->index = 1;
+    must_reject("malformed metadata index", [&] { verify_plan(metadata); });
+    metadata.steps[1].value->index = 0;
+    metadata.result = literal(16);
+    metadata.result->kind = Expr::Kind::SizeBytes;
+    must_reject("metadata after close", [&] { verify_plan(metadata); });
+    std::cout << "POINTER_HIR_ADVERSARIAL_REJECTIONS=14\n";
 
     // The independently verified HIR arithmetic must agree at the signed
     // boundaries and reject overflow even when supplied a fabricated annotation.
