@@ -53,6 +53,14 @@ static void require_turn(OresActorArena* a, OresArenaTurn turn) {
         || turn.epoch != a->epoch || carrier_arena != a
         || carrier_epoch != turn.epoch) deny();
 }
+/* Retirement seals new access but cannot strand the exact native resources
+ * of a turn admitted BEFORE retirement. Only the restricted, preflighted
+ * compiler-owned drop batch is authorized to use this cleanup lease. */
+static void require_cleanup_turn(OresActorArena* a, OresArenaTurn turn) {
+    if (!a->active || turn.domain != a->domain
+        || turn.epoch != a->epoch || carrier_arena != a
+        || carrier_epoch != turn.epoch) deny();
+}
 static Slot* require_slot(OresActorArena* a, OresArenaHandle h) {
     if (h.domain != a->domain || h.index >= a->slots) deny();
     Slot* s = &a->meta[h.index];
@@ -350,6 +358,36 @@ int ores_actor_arena_unclaim_pages(OresActorArena* a, OresArenaTurn turn,
     }
     leave_lock(a);
     return 1;
+}
+
+/* Complete preflight under the existing arena lock: an invalid later owner
+ * must not leave a partially destroyed earlier owner. No malloc, guest
+ * callbacks, tracing or nested locks are allowed in this cleanup operation.
+ * The compiler admits only all-initialized, nonescaping lexical owners. */
+void ores_actor_arena_drop_owned_exact(OresActorArena* a, OresArenaTurn turn,
+                                       const OresArenaHandle* handles,
+                                       size_t count) {
+    enter_lock(a);
+    require_cleanup_turn(a, turn);
+    if (!handles || !count || count > ORES_ACTOR_ARENA_MAX_SCOPED_OWNERS ||
+        count > a->slots || a->free_count != a->slots - count) deny();
+    for (size_t i = 0; i < count; ++i) {
+        const OresArenaHandle h = handles[i];
+        const Slot* s = require_slot(a, h);
+        if (s->loans || s->page_claim || s->generation == UINT64_MAX) deny();
+        for (size_t j = 0; j < i; ++j)
+            if (handles[j].index == h.index) deny();
+    }
+    for (size_t i = 0; i < count; ++i) {
+        const OresArenaHandle h = handles[i];
+        Slot* s = &a->meta[h.index];
+        scrub(a->slab + (size_t)h.index * a->slot_bytes, a->slot_bytes);
+        s->length = 0;
+        s->live = 0;
+        ++s->generation;
+        a->free_slots[a->free_count++] = (size_t)h.index;
+    }
+    leave_lock(a);
 }
 
 void ores_actor_arena_drop(OresActorArena* a, OresArenaTurn turn, OresArenaHandle h) {

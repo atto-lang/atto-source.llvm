@@ -3,6 +3,7 @@
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/ChannelGuestGate.hpp"
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/types/CoreTypeRegistry.hpp"
 #include "oreslang/frontend/PointerIntSyntax.hpp"
 #include "oreslang/frontend/NativeTelemetryLiteralV1.hpp"
 #include "oreslang/types/NativeClassLayout.hpp"
@@ -42,7 +43,7 @@ struct Token {
 bool exceptional_control(std::string_view word) {
     return word == "throw" || word == "raise" || word == "panic" ||
            word == "recover" || word == "defer" || word == "try" ||
-           word == "catch" || word == "finally" || word == "trap";
+           word == "catch" || word == "finally" || word == "trap" || word == "trap!";
 }
 
 bool digit(char ch) { return ch >= '0' && ch <= '9'; }
@@ -314,6 +315,14 @@ public:
                         (source_[end] != '-' && !identifier_part(source_[end]))) {
                     at_ = end;
                 }
+            }
+            // Treat contiguous trap! as the same checked Result operator as trap.
+            // Do not consume the inequality operators != or !eq.
+            if (first == "trap" && at_ < source_.size() && source_[at_] == '!'
+                    && source_.substr(at_, 2) != "!="
+                    && !(source_.substr(at_, 3) == "!eq"
+                         && (at_ + 3 == source_.size() || !identifier_part(source_[at_ + 3])))) {
+                ++at_;
             }
             return {Kind::Identifier, source_.substr(start, at_ - start), start};
         }
@@ -1074,7 +1083,8 @@ public:
                     bool experimental_rt_scalar_loop,
                     bool verified_namespace_metadata_only = false,
                     std::size_t unsafe_base_offset = 0,
-                    bool experimental_pointer_int_aot = false, int language_version = 0)
+                    bool experimental_pointer_int_aot = false, int language_version = 0,
+                    bool relative_import_unit = false)
         : source_(source),
           lexer_(source, unsafe_base_offset, experimental_pointer_int_aot),
           token_(lexer_.next()),
@@ -1083,7 +1093,8 @@ public:
           experimental_rt_scalar_loop_(experimental_rt_scalar_loop),
           language_version_(language_version),
           verified_namespace_metadata_only_(verified_namespace_metadata_only),
-          experimental_pointer_int_aot_(experimental_pointer_int_aot) {
+          experimental_pointer_int_aot_(experimental_pointer_int_aot),
+          relative_import_unit_(relative_import_unit) {
         if (language_version_ < 0 || language_version_ > 2)
             throw std::runtime_error("E_LANGUAGE_VERSION: expected 1 or 2");
         if (!experimental_pointer_int_aot_) reject_unlowered_with_update();
@@ -1114,6 +1125,132 @@ public:
             program.pointer_int_plan = std::make_unique<pointer_int_aot::Plan>(
                 pointer_int_aot::Parser(std::move(tokens)).parse());
             return program;
+        }
+        // Initial bounded AOT slice: private file-header descriptors only.
+        // Conservatively reserve the native parser's recognized token spellings
+        // and Java's declaration-kind inventory. This is a local admission
+        // list, not a change to the general identifier grammar.
+        // These descriptors never become a runtime object or a new IR kind.
+        std::unordered_set<std::string> local_class_kinds;
+        std::unordered_map<std::string, std::size_t> provisional_kinds;
+        auto parse_kind_descriptor = [&]() {
+            const auto origin = token_.offset;
+            require("keyword");
+            static const std::unordered_set<std::string> reserved_kinds = {
+                "Actor", "ActorGroup", "ActorGroupJoinCapability", "ActorMaxThreads", "ActorRef", "Array",
+                "Box", "CExportU32", "Const", "Entry", "Error", "Future",
+                "GpuArray", "GpuReadBuffer", "GpuWriteBuffer", "HIGH", "Integer", "InvertedArray",
+                "Iterator", "LOW", "List", "MEDIUM", "Map", "Math",
+                "MaxActorThreads", "Option", "Pair", "Record", "Result", "SelectCase",
+                "SelectPlan", "Set", "String", "Syntax", "Task", "Tuple",
+                "Vector", "Xor", "_", "abstract", "activity", "actor",
+                "alias", "and", "annotation", "any", "array_commit_filled", "as",
+                "ashr", "async", "await", "bool", "borrow", "break",
+                "capability", "case", "catch", "class", "component", "conforms",
+                "console", "const", "constructor", "container", "continue", "contract",
+                "cooperate", "cpu", "critical", "declare", "default", "defer",
+                "define", "derive", "dimension", "do", "duplex", "elif",
+                "else", "end", "enum", "eq", "erase_swap", "event",
+                "export", "extends", "extension", "extern", "external", "f32",
+                "f64", "false", "fi", "final", "finally", "first",
+                "fnc", "for", "forward", "from", "function", "gen",
+                "generator", "get", "get_ready", "gpu", "grain", "guard",
+                "http", "i64", "if", "ifnot", "impl", "implements",
+                "import", "infer", "info", "int", "interface", "internal",
+                "inverted", "isoactor", "isolated", "kernel", "keyword", "launch",
+                "let", "log", "loop", "macro", "mailman", "main",
+                "match", "max", "maybe", "method", "min", "model",
+                "module", "mtd", "mut", "namespace", "nb", "neq",
+                "new", "of", "on", "over", "owned", "panic",
+                "panics", "pattern", "pipe", "pkg", "private", "protected",
+                "protocol", "proxy", "pub", "pure", "push", "quantum",
+                "queue", "quote", "raise", "raises", "readable", "readch",
+                "receive", "receives", "record", "recover", "requires", "return",
+                "routine", "rpipe", "rt", "scheduler", "select", "self",
+                "sends", "serial", "service", "set", "share", "shared",
+                "shared_bytes", "singleton", "sleep", "span", "spawn", "state",
+                "static", "std", "stdio", "stop", "string", "struct",
+                "structural", "supervisor", "suspend", "suspends", "switch", "take",
+                "task", "tcp", "telemetry", "then", "thread", "throw",
+                "throws", "trait", "transform", "trap", "true", "try",
+                "tuple", "type", "u64", "unit", "unknown", "unless",
+                "untrusted", "use", "using", "val", "virtual", "void",
+                "websocket", "when", "while", "with", "with_capacity", "workflow",
+                "writable", "writech", "ws", "yield"
+            };
+            if (token_.kind != Kind::Identifier || reserved(token_.text) ||
+                    reserved_kinds.count(std::string(token_.text)) || token_.text.size() > 128)
+                fail("NATIVE_KIND_NAME_UNSUPPORTED: reserved declaration kind or invalid identifier");
+            std::string name = identifier();
+            auto provisional = provisional_kinds.find(name);
+            if (provisional != provisional_kinds.end() && provisional->second == origin) {
+                provisional_kinds.erase(provisional);
+            } else {
+                if (local_class_kinds.size() >= 128)
+                    fail("NATIVE_KIND_BUDGET: at most 128 local descriptors");
+                if (!local_class_kinds.insert(name).second)
+                    fail("NATIVE_KIND_DUPLICATE: duplicate local descriptor");
+            }
+            if (token_.kind != Kind::Identifier) fail("NATIVE_KIND_HEADER_UNSUPPORTED: expected as token");
+            require("as");
+            if (token_.kind != Kind::Identifier || !accept("class"))
+                fail("NATIVE_KIND_BASE_UNSUPPORTED: ordinary class only");
+            if (token_.kind != Kind::Identifier || token_.text != "end")
+                fail("NATIVE_KIND_CONTRACT_UNSUPPORTED: typed interface/contract elaboration not yet lowered");
+            require("end");
+        };
+        // The copied scanner can find a candidate, but cannot grant scope.
+        // Only the actual root declaration parser confirms its byte origin.
+        auto is_local_kind = [&]() {
+            if (token_.kind != Kind::Identifier) return false;
+            std::string name(token_.text);
+            if (local_class_kinds.count(name)) return true;
+            if (reserved(token_.text) || name.size() > 128) return false;
+            Lexer scan = lexer_;
+            Token next = scan.next();
+            Token as = scan.next();
+            if (next.kind != Kind::Identifier || as.kind != Kind::Identifier || as.text != "as") return false;
+            Token previous = next;
+            for (Token candidate = scan.next(); candidate.kind != Kind::End; candidate = scan.next()) {
+                if (previous.kind == Kind::Identifier && previous.text == "define" &&
+                        candidate.kind == Kind::Identifier && candidate.text == "keyword") {
+                    Lexer look = scan;
+                    Token declared = look.next();
+                    Token as_token = look.next(), base = look.next(), end = look.next();
+                    if (declared.kind == Kind::Identifier && declared.text == name &&
+                            as_token.kind == Kind::Identifier && as_token.text == "as" &&
+                            base.kind == Kind::Identifier && base.text == "class" &&
+                            end.kind == Kind::Identifier && end.text == "end") {
+                        if (local_class_kinds.size() >= 128)
+                            fail("NATIVE_KIND_BUDGET: at most 128 local descriptors");
+                        local_class_kinds.insert(name);
+                        provisional_kinds.emplace(name, candidate.offset);
+                        return true;
+                    }
+                }
+                previous = candidate;
+            }
+            return false;
+        };
+        while (token_.text == "define" && peek_next().text == "keyword") {
+            advance();
+            parse_kind_descriptor();
+        }
+        if (!local_class_kinds.empty() &&
+                (token_.text == "namespace" || token_.text == "use" ||
+                 token_.text == "import" || token_.text == "export"))
+            fail("NATIVE_KIND_SCOPE_UNSUPPORTED: descriptors are file-local without imports or exports");
+
+        // A namespace is a file-header declaration, not an import or module
+        // wrapper. Parse it before any import/export; never let the imported
+        // dependency graph silently turn a late header into a valid header.
+        if (token_.text == "use" && peek_next().text == "namespace")
+            advance();
+        if (accept("namespace")) {
+            // The canonical core/types name is contextual in this header only.
+            if (token_.kind == Kind::Identifier && accept("types")) program.namespace_name = "types";
+            else program.namespace_name = identifier();
+            require(";");
         }
         while (token_.text == "import" || token_.text == "export") {
             if (token_.text == "export") { export_declaration(program); continue; }
@@ -1235,6 +1372,8 @@ public:
             if (!imported.selected_class) require("module");
             imported.selected_module = identifier();
             imported.local_name = accept("as") ? identifier() : imported.selected_module;
+            if (types::protected_core_identity(imported.local_name))
+                fail("E_PRELUDE_SPOOF: module import alias cannot replace compiler-owned core identity");
             if (!module_names_.insert(imported.local_name).second)
                 fail("duplicate imported module binding '" + imported.local_name + "'");
             require("from");
@@ -1260,13 +1399,11 @@ public:
             require(";");
             program.imports.push_back(std::move(imported));
         }
-        // Match Java: a contextual "use" in the source header selects the
-        // SAME flat namespace; it does not authorize cross-package binding.
-        if (token_.text == "use" && peek_next().text == "namespace")
-            advance();
-        if (accept("namespace")) {
-            program.namespace_name = identifier();
-            require(";");
+        if (token_.text == "namespace" ||
+            (token_.text == "use" && peek_next().text == "namespace")) {
+            if (!program.namespace_name.empty())
+                fail("NAMESPACE_DUPLICATE: only one file-level namespace header is permitted");
+            fail("NAMESPACE_HEADER_ORDER: namespace header must precede imports and declarations");
         }
         bool wrapped_module = false;
         if (token_.text == "import")
@@ -1372,12 +1509,27 @@ public:
             if ((token_.text == "http" && peek_next().text == "actor") ||
                 (token_.text == "serial" && peek_next().text == "http"))
                 fail("HTTP_ACTOR_BACKEND_UNSUPPORTED: native HTTP actor requires bounded request/message admission and physical shutdown lowering");
+            if (token_.text == "keyword") {
+                if (exported) fail("NATIVE_KIND_SCOPE_UNSUPPORTED: public descriptors require verified linker");
+                parse_kind_descriptor();
+                continue;
+            }
+            if (is_local_kind()) {
+                advance();
+                auto cls = class_declaration();
+                cls.exported = exported;
+                remember_class_scalar_fields(cls);
+                program.classes.push_back(std::move(cls));
+                break;
+            }
             if (exported && token_.text != "class") fail("native public module wrapper is not supported in the i64 subset");
             if (accept("serial")) {
                 require("actor");
                 fail("native serial actor requires shared HTTP/message lane lowering");
             }
             if (accept("module")) {
+                if (!local_class_kinds.empty())
+                    fail("NATIVE_KIND_SCOPE_UNSUPPORTED: custom declaration descriptors do not enter modules");
                 if (!defined_type_aliases_.empty() || !forwards_.empty())
                     fail("native module wrapper cannot import file-root forward aliases");
                 program.module = identifier();
@@ -1558,6 +1710,22 @@ public:
                 if ((token_.text == "http" && peek_next().text == "actor") ||
                     (token_.text == "serial" && peek_next().text == "http"))
                     fail("HTTP_ACTOR_BACKEND_UNSUPPORTED: native HTTP actor requires bounded request/message admission and physical shutdown lowering");
+                if (token_.text == "keyword") {
+                    if (wrapped_module || public_class)
+                        fail("NATIVE_KIND_SCOPE_UNSUPPORTED: descriptor requires private file root");
+                    parse_kind_descriptor();
+                    continue;
+                }
+                if (is_local_kind()) {
+                    if (wrapped_module)
+                        fail("NATIVE_KIND_SCOPE_UNSUPPORTED: custom declaration descriptors do not enter modules");
+                    advance();
+                    auto cls = class_declaration();
+                    cls.exported = public_class;
+                    remember_class_scalar_fields(cls);
+                    program.classes.push_back(std::move(cls));
+                    continue;
+                }
                 if (public_class && token_.text != "class") fail("native pub define currently supports only class declarations");
                 if (accept("serial")) {
                     require("actor");
@@ -1603,9 +1771,28 @@ public:
             // No imports, namespace cross-file linking, actors, closures or
             // source FFI can acquire identity/dispatch authority here.
             const bool checked_scalar_main = namespace_checked_scalar_main(program);
-            if (!checked_scalar_main)
+            // Only the existing explicit relative-file function linker may
+            // consume this contextual core/types source identity. The
+            // standalone parser and final resolver retain their existing gates.
+            const bool linked_types = relative_import_unit_ &&
+                program.namespace_name == "types" &&
+                program.module.empty() && program.imports.empty() &&
+                program.namespace_imports.empty() && program.exports.empty() &&
+                program.classes.empty() && program.actors.empty() &&
+                program.sum_types.empty() && program.contracts.empty() &&
+                program.conforms.empty() && program.type_only_declarations.empty() &&
+                program.type_constraint_descriptors.empty() &&
+                program.inverted_structs.empty() && !program.inverted_main &&
+                !program.pointer_int_plan && program.cooperative_loops.empty() &&
+                program.generators.empty() && !program.functions.empty();
+            if (!checked_scalar_main && !linked_types)
                 fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: only standalone checked literal-arithmetic i64 main is native-lowered; multi-file actor namespaces remain gated");
         }
+        if (!provisional_kinds.empty())
+            fail("NATIVE_KIND_FORWARD_NOT_ROOT: provisional descriptor was not confirmed at file root");
+        if (!local_class_kinds.empty() && (!program.namespace_name.empty() || wrapped_module ||
+                !program.imports.empty() || !program.namespace_imports.empty() || !program.exports.empty()))
+            fail("NATIVE_KIND_SCOPE_UNSUPPORTED: descriptor requires unwrapped file root");
         compile_type_constraint_descriptors(program);
         lower_extension_calls(program);
         resolve_alias_uses(program);
@@ -2025,6 +2212,8 @@ private:
                   "define model is a runtime type and value");
 
         decl.name = identifier();
+        if (types::protected_core_identity(decl.name))
+            fail("E_PRELUDE_SPOOF: type/trait declaration cannot replace compiler-owned core identity");
         if (native_ownership_intrinsic_name(decl.name))
             fail("NATIVE_OWNERSHIP_INTRINSIC_RESERVED: compiler-owned type cannot be redefined");
         if (decl.name == "String" || decl.name == "string" || callable_nominal_name(decl.name) || entry_builtin_name(decl.name))
@@ -2186,7 +2375,8 @@ private:
         const std::string name = identifier();
         if (token_.text == "<")
             fail("native generic type alias requires a verified monomorphization ABI");
-        if (name == "int" || name == "bool" || name == "string" ||
+        if (types::protected_core_identity(name) ||
+                name == "int" || name == "bool" || name == "string" ||
                 name == "String" || reserved(name) ||
                 callable_nominal_name(name) || entry_builtin_name(name) ||
                 native_ownership_intrinsic_name(name))
@@ -3097,6 +3287,8 @@ private:
             fail("expected gen* generator declaration");
         }
         generator.name = identifier();
+        if (types::protected_core_identity(generator.name))
+            fail("E_PRELUDE_SPOOF: generator cannot replace compiler-owned core identity");
         require("(");
         if (!accept(")"))
             fail("native sync generator v1 is zero-argument");
@@ -3403,6 +3595,8 @@ private:
             fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
         }
         value.name = owner.empty() ? identifier() : owner + "." + identifier();
+        if (types::protected_core_identity(value.name))
+            fail("E_PRELUDE_SPOOF: callable cannot replace compiler-owned core identity");
         if (native_reserved_io_callable_name(value.name))
             fail("native I/O callable name is compiler-owned until typed registry, "
                  "nonblocking transport and continuation lowering are available");
@@ -3909,7 +4103,7 @@ private:
         while (token_.text == "const" || token_.text == "val" || token_.text == "let" ||
                 token_.text == "int" || token_.text == "bool" ||
                 token_.text == "string" || token_.text == "String" ||
-                token_.text == "stdio" || array_effect_ahead()) {
+                token_.text == "mut" || token_.text == "stdio" || array_effect_ahead()) {
             if (native_box_local()) continue;
             // Typed Future<void> is admitted ONLY as a linear lexical alias
             // for one already-spawned ActorRef.get_ready() lifecycle promise.
@@ -3918,6 +4112,8 @@ private:
             if (source_task_local()) continue;
             if (source_future_pipeline_local()) continue;
             if (ready_future_local()) continue;
+            if (token_.text == "mut")
+                fail("E_MUT_QUALIFIER: bare mut requires an explicit const, val or let binding");
             LocalBinding binding;
             // A non-mut let Class is still not a const declaration.
             // This independent lexical proof prevents mutable/rebindable
@@ -3929,6 +4125,13 @@ private:
             if (token_.text == "const" && peek_next().text == "mut")
                 fail("E_CONST_MUT_UNSUPPORTED: scoped owned mutable value lowering is not yet implemented");
             Lexer sum_look = lexer_; auto sum_first = sum_look.next();
+            // The type-right spelling is an explicit constant, not a runtime
+            // val fallback: const name: int = e == const int name = e.
+            // Independent lookahead: sum_look stays at the first token for
+            // the let-mut and scalar-alias checks below.
+            const bool type_right_const = token_.text == "const" &&
+                    sum_first.kind == Kind::Identifier &&
+                    [&] { Lexer right = sum_look; return right.next().text == ":"; }();
             if (token_.text == "let" && sum_first.text == "mut") sum_first = sum_look.next();
             // Java: `val Count c = 42;` with `type Count = int;` is the same
             // scalar local as `val c: Count = 42;`. Only a declared scalar alias
@@ -3938,13 +4141,16 @@ private:
                     sum_first.kind == Kind::Identifier &&
                     scalar_alias_targets_.count(std::string(sum_first.text)) &&
                     sum_look.next().kind == Kind::Identifier;
-            if (alias_prefixed ||
-                    type_first_const ||
+            if (alias_prefixed || type_first_const || type_right_const ||
                     ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
                     (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "String" || sum_first.text == "string"))) {
                 const std::string mode = type_first_const ? "const" : std::string(token_.text);
                 if (!type_first_const) { advance(); if (mode == "let") accept("mut"); }
                 binding.owner_mutable = mode != "const"; binding.assignable = mode == "let";
+                if (type_right_const) {
+                    binding.name = identifier();
+                    require(":");
+                }
                 if (alias_prefixed) {
                     binding.pending_type_alias = std::string(token_.text);
                     advance();
@@ -3953,7 +4159,7 @@ private:
                     binding.scalar_type = accept("bool") ? ScalarType::Bool : (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
                     if (binding.scalar_type == ScalarType::I64) require("int");
                 }
-                binding.name = identifier();
+                if (!type_right_const) binding.name = identifier();
                 require("=");
                 // Lower a terminal unary `pending |> std.await` through
                 // the *same* checked Future/Task await slot and ownership
@@ -4725,14 +4931,14 @@ private:
             std::string structural_field;
 
             while (token_.text != "end") {
-                if (arms.size() >= 32)
+                if (arms.size() + (has_fallback ? 1u : 0u) >= 32)
                     fail("native procedural dispatch arm limit exceeded (32)");
 
                 if (is_match) {
-                    // Canonical AttoLang fallback has its own keyword.
-                    // Keep 'on _' source-compatible, but never accept
-                    // 'on default' or any pattern after a default.
-                    if (accept("default")) {
+                    // All three spellings designate one fallback, evaluated after concrete arms.
+                    const bool bare_default = accept("default");
+                    if (!bare_default) require("on");
+                    if (bare_default || accept("default") || accept("_")) {
                         if (has_fallback)
                             fail("native do match can contain only one default arm");
                         if (token_.text == "when" || token_.text == "as")
@@ -4740,17 +4946,10 @@ private:
                         require("->"); require("{");
                         fallback = branch_arm(false, false); require("}");
                         has_fallback = true;
-                        if (token_.text == "default")
-                            fail("native do match can contain only one default arm");
-                        if (token_.text != "end")
-                            fail("native do match default arm must be last");
                         continue;
                     }
-                    require("on");
                     if (token_.text == "structural" || token_.text == "struct")
                         fail("native structural match expression requires verified shape-pattern lowering");
-                    if (accept("default"))
-                        fail("native do match fallback must use 'default ->' without 'on'");
                     if (token_.text == "structural") {
                         auto field_test = checked_native_structural_field_test(*subject);
                         if (!structural_field.empty() &&
@@ -4774,16 +4973,6 @@ private:
                     }
                     if (token_.text == "~")
                         fail("native structural field pattern requires checked typed aggregate lowering");
-                    if (accept("_")) {
-                        if (has_fallback)
-                            fail("native do match can contain only one wildcard arm");
-                        require("->"); require("{");
-                        fallback = branch_arm(false, false); require("}");
-                        has_fallback = true;
-                        if (token_.text != "end")
-                            fail("native do match wildcard arm must be last");
-                        continue;
-                    }
                     auto constant = expression();
                     const std::string key = native_dispatch_constant_key(*constant);
                     if (key.empty())
@@ -4871,12 +5060,16 @@ private:
             scope.offset = token_.offset;
             require("using"); require("telemetry"); require(".");
             require("span"); require("(");
-            if (token_.kind != Kind::String)
-                fail("native using telemetry.span requires one literal operation name");
-            scope.telemetry_operation = string_literal(token_.text);
+            // Macro arguments are expanded by the ordinary expression parser
+            // before admission. Only a literal may reach the tracing ABI.
+            if (token_.kind != Kind::String && !macro_invocation_ahead())
+                fail("native using telemetry.span requires one compile-time string literal operation name");
+            auto operation = expression();
+            if (operation->kind != Expression::Kind::String)
+                fail("native using telemetry.span requires one compile-time string literal operation name");
+            scope.telemetry_operation = std::move(operation->name);
             if (!telemetry::valid_native_span_literal(scope.telemetry_operation))
                 fail("native telemetry span name requires 1..256 UTF-8 bytes without control characters");
-            advance();
             require(")"); require("as");
             scope.receiver = identifier();
             if (scope.receiver == "_" || active_trace_aliases.count(scope.receiver)
@@ -5555,10 +5748,24 @@ private:
 
         auto result = make_expression(Expression::Kind::Conditional, condition->offset);
         result->condition = std::move(condition);
-        result->when_true = conditional();
+        result->when_true = ternary_arm();
         require(":");
-        result->when_false = conditional();
+        result->when_false = ternary_arm();
         return result;
+    }
+
+    // A braced arm is never a bare Record or Map literal. Single explicit
+    // results use the existing typed branch/PHI lowering; no function return,
+    // closure, or new lexical lifetime is introduced.
+    std::unique_ptr<Expression> ternary_arm() {
+        if (!accept("{")) return conditional();
+        if (!accept("return") && !accept("^"))
+            fail("E_VALUE_ARM: ternary block requires explicit return or ^; lexical prefixes are not lowered");
+        auto value = expression();
+        accept(";");
+        if (!accept("}"))
+            fail("E_VALUE_ARM: single-result ternary block requires closing '}'");
+        return value;
     }
 
     std::unique_ptr<Expression> logical_or() {
@@ -5749,7 +5956,7 @@ private:
             ~DepthGuard() { --depth; }
         } depth_guard{expression_depth_};
 
-        if (token_.text == "trap") {
+        if (token_.text == "trap" || token_.text == "trap!") {
             const auto offset = token_.offset;
             advance();
             auto payload = unary(); // prefix precedence, evaluated once
@@ -5765,7 +5972,7 @@ private:
             return result;
         }
         // Preferred contextual ownership prefixes lower into the existing
-        // Copy/Take/Borrow/BorrowMut/Share expression kinds and checker.
+        // Copy/DeepCopy/Take/Borrow/BorrowMut/Share expression kinds and checker.
         // Only the verb must touch '!'; the operand may be separated by trivia.
         {
             bool mutable_borrow = token_.text == "mut";
@@ -5794,8 +6001,11 @@ private:
                 const Token marker = probe.next();
                 if (marker.text == "!" &&
                         marker.offset == token_.offset + token_.text.size()) {
+                    const bool deep_copy = operation == "copy" &&
+                            source_.substr(marker.offset, 2) == "!!";
                     advance();
                     require("!");
+                    if (deep_copy) require("!");
                     // Canonical mutable borrowing puts the qualifier after
                     // the attached bang: borrow! mut value.
                     const bool canonical_mutable_borrow =
@@ -5803,6 +6013,7 @@ private:
                     if (canonical_mutable_borrow && token_.text == "mut")
                         fail("duplicate mutable borrow qualifier");
                     auto result = make_expression(
+                        deep_copy ? Expression::Kind::DeepCopy :
                         operation == "copy" ? Expression::Kind::Copy :
                         operation == "take" ? Expression::Kind::Take :
                         operation == "share" ? Expression::Kind::Share :
@@ -6082,26 +6293,22 @@ private:
         std::string structural_field;
 
         while (token_.text != "end") {
-            if (arms.size() >= 32)
+            if (arms.size() + (fallback ? 1u : 0u) >= 32)
                 fail("native value match arm limit exceeded (32)");
-            if (accept("default")) {
+            // All three spellings designate one fallback, evaluated after concrete arms.
+            const bool bare_default = accept("default");
+            if (!bare_default) require("on");
+            if (bare_default || accept("default") || accept("_")) {
                 if (fallback)
                     fail("native value match can contain only one default arm");
                 if (token_.text == "when" || token_.text == "as")
                     fail("native value match default arm cannot have a guard or binding");
                 require("->");
                 fallback = dispatch_value_arm("native value match");
-                if (token_.text == "default")
-                    fail("native value match can contain only one default arm");
-                if (token_.text != "end")
-                    fail("native value match default arm must be last");
                 continue;
             }
-            require("on");
             if (token_.text == "structural" || token_.text == "struct")
                 fail("native structural match expression requires verified shape-pattern lowering");
-            if (accept("default"))
-                fail("native value match fallback must use 'default ->' without 'on'");
             if (token_.text == "structural") {
                 auto field_test = checked_native_structural_field_test(*subject);
                 if (!structural_field.empty() && structural_field != field_test.field) {
@@ -6125,15 +6332,6 @@ private:
             }
             if (token_.text == "~")
                 fail("native structural field pattern requires checked typed aggregate lowering");
-            if (accept("_")) {
-                if (fallback)
-                    fail("native value match can contain only one wildcard arm");
-                require("->");
-                fallback = dispatch_value_arm("native value match");
-                if (token_.text != "end")
-                    fail("native value match wildcard arm must be last");
-                continue;
-            }
             auto constant = expression();
             const std::string key = native_dispatch_constant_key(*constant);
             if (key.empty())
@@ -7064,6 +7262,10 @@ private:
         std::string name = identifier();
         if (native_ownership_intrinsic_name(name))
             fail("NATIVE_OWNERSHIP_INTRINSIC_RESERVED: compiler-owned nominal cannot be redefined");
+        if (name == "Option" || name == "Result")
+            fail("native sum type names are compiler-owned");
+        if (types::protected_core_identity(name))
+            fail("E_PRELUDE_SPOOF: nominal declaration cannot replace compiler-owned core identity");
         if (name == "pattern") fail("contextual pattern keyword cannot declare a native nominal type");
         if (name == "_") fail("wildcard '_' cannot be declared as a nominal type name");
         return name;
@@ -7381,6 +7583,7 @@ private:
             case Expression::Kind::Abs:
             case Expression::Kind::LogicalNot:
             case Expression::Kind::Copy:
+            case Expression::Kind::DeepCopy:
             case Expression::Kind::Take:
             case Expression::Kind::Share:
             case Expression::Kind::Borrow:
@@ -7650,6 +7853,15 @@ private:
             case Expression::Kind::BorrowMut:
                 return validate_scalar_expression(
                     *expr.left, variables, functions, depth + 1);
+            case Expression::Kind::DeepCopy: {
+                auto operand = validate_scalar_expression(
+                    *expr.left, variables, functions, depth + 1);
+                if (operand != ScalarType::I64 && operand != ScalarType::Bool)
+                    throw std::runtime_error(
+                        "E_COPY_GRAPH_UNPROVEN: copy!! requires an int or bool value at byte " +
+                        std::to_string(expr.offset));
+                return expr.resolved_type = operand;
+            }
             case Expression::Kind::Add: {
                 auto left = validate_scalar_expression(*expr.left, variables, functions, depth + 1);
                 auto right = validate_scalar_expression(*expr.right, variables, functions, depth + 1);
@@ -8627,7 +8839,7 @@ private:
             // binding must retain the nominal type and ownership contract.
             std::function<void(const Expression&, std::size_t)> check_inferred_scalar_shape;
             check_inferred_scalar_shape = [&](const Expression& expr, std::size_t depth) {
-                require_expression_depth(depth, expr.offset);
+                require_expression_depth(depth, expr);
                 using K = Expression::Kind;
                 if (expr.kind == K::SumConstruct || expr.kind == K::SumAccess ||
                         expr.kind == K::RecordConstruct || expr.kind == K::ArrayCall ||
@@ -8689,7 +8901,7 @@ private:
 
             std::function<void(const Expression&, std::size_t)> check_scalar_cast_sources;
             check_scalar_cast_sources = [&](const Expression& expr, std::size_t depth) {
-                require_expression_depth(depth, expr.offset);
+                require_expression_depth(depth, expr);
                 if (expr.kind == Expression::Kind::Cast)
                     check_inferred_scalar_shape(*expr.left, depth + 1);
                 auto child = [&](const std::unique_ptr<Expression>& value) {
@@ -8787,9 +8999,9 @@ private:
                     return;
                 }
                 if (stmt.kind == Statement::Kind::Loop) {
-                    TypeMap body = env;
+                    TypeMap body = env; AssignableMap body_assignable = assignable;
                     for (const auto& action : stmt.then_statements)
-                        check_statement_types(action, body);
+                        check_statement_types(action, body, body_assignable);
                     return;
                 }
                 if (stmt.kind == Statement::Kind::Break ||
@@ -9327,6 +9539,7 @@ private:
     // Restricted host-only AST pass, never set by the ordinary CLI parser.
     bool verified_namespace_metadata_only_ = false;
     bool experimental_pointer_int_aot_ = false;
+    bool relative_import_unit_ = false;
     // Type-only declarations retain source alias identity until checked
     // catalog validation and extension-call rewriting complete.
     std::unordered_map<std::string, std::string> scalar_alias_targets_;
@@ -9497,7 +9710,7 @@ void resolve_future_pipeline_contracts(Program& program) {
 // Lexer::next() excludes comments and quoted literals from this check.
 void reject_unlowered_mutex_constructor(std::string_view source,
                                        bool experimental_pointer_int_aot) {
-    Lexer scan(source, experimental_pointer_int_aot);
+    Lexer scan(source, /*unsafe_base_offset=*/0, experimental_pointer_int_aot);
     Token preceding{Kind::End, {}, 0};
     bool expect_angle = false;
     bool within_generic = false;
@@ -9549,11 +9762,12 @@ Program parse_verified_namespace_source_unresolved(
 
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int,
                       bool experimental_rt_scalar_loop, bool experimental_pointer_int_aot,
-                      int language_version) {
+                      int language_version, bool relative_import_unit) {
     reject_unlowered_mutex_constructor(source, experimental_pointer_int_aot);
     Program program = Parser(source, experimental_owned_int,
                              experimental_rt_scalar_loop, false, 0,
-                             experimental_pointer_int_aot, language_version).parse();
+                             experimental_pointer_int_aot, language_version,
+                             relative_import_unit).parse();
     if (experimental_rt_scalar_loop &&
             (program.functions.size() != 1 || !program.functions.front().scalar_while ||
              !program.classes.empty() || !program.actors.empty() ||

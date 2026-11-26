@@ -34,6 +34,30 @@ inline std::string emit_verified_ir(const Plan& plan) {
     auto* i64 = llvm::Type::getInt64Ty(context);
     auto* i32 = llvm::Type::getInt32Ty(context);
     auto* array = llvm::ArrayType::get(i64, plan.count);
+    // Closed readonly helper takes a real stack-region address, not a wrapper.
+    llvm::Function* readonly_helper = nullptr;
+    if (!plan.readonly_helper.empty()) {
+        auto* pointer_type = llvm::PointerType::getUnqual(context);
+        auto* helper_type = llvm::FunctionType::get(i64, {pointer_type}, false);
+        readonly_helper = llvm::Function::Create(helper_type, llvm::GlobalValue::InternalLinkage,
+            "atto.pointer.readonly.helper", module);
+        builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", readonly_helper));
+        builder.CreateRet(builder.CreateLoad(i64, readonly_helper->getArg(0), "borrowed.read"));
+    }
+    llvm::Function* mutable_helper = nullptr;
+    if (!plan.mutable_helper.empty()) {
+        auto* pointer_type = llvm::PointerType::getUnqual(context);
+        auto* helper_type = plan.mutable_scalar_parameter.empty() ?
+            llvm::FunctionType::get(builder.getVoidTy(), {pointer_type}, false) :
+            llvm::FunctionType::get(builder.getVoidTy(), {pointer_type, i64}, false);
+        mutable_helper = llvm::Function::Create(helper_type, llvm::GlobalValue::InternalLinkage,
+            "atto.pointer.mutable.helper", module);
+        builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", mutable_helper));
+        llvm::Value* value = plan.mutable_scalar_parameter.empty() ?
+            static_cast<llvm::Value*>(builder.getInt64(plan.mutable_write)) : mutable_helper->getArg(1);
+        builder.CreateStore(value, mutable_helper->getArg(0));
+        builder.CreateRetVoid();
+    }
     auto* main_type = llvm::FunctionType::get(i32, false);
     auto* main_fn = llvm::Function::Create(
         main_type, llvm::GlobalValue::ExternalLinkage, "main", module);
@@ -61,6 +85,12 @@ inline std::string emit_verified_ir(const Plan& plan) {
             return scalar_values.at(expr.name);
         case Expr::Kind::Read:
             return builder.CreateLoad(i64, slot(expr.index), "pointer.read_at");
+        case Expr::Kind::ReadonlyCall:
+            return builder.CreateCall(readonly_helper, {slot(0)}, "borrowed.call");
+        case Expr::Kind::Length:
+            return builder.getInt64(plan.count);
+        case Expr::Kind::SizeBytes:
+            return builder.getInt64(plan.count * 8);
         case Expr::Kind::Neg:
             return builder.CreateNeg(lower(*expr.lhs), "scalar.negate");
         case Expr::Kind::Add:
@@ -76,6 +106,23 @@ inline std::string emit_verified_ir(const Plan& plan) {
         switch (step.kind) {
         case Step::Kind::Write:
             builder.CreateStore(lower(*step.value), slot(step.index));
+            break;
+        case Step::Kind::Fill: {
+            auto* value = lower(*step.value);
+            for (std::size_t i = 0; i < plan.count; ++i)
+                builder.CreateStore(value, slot(i));
+            break;
+        }
+        case Step::Kind::Swap: {
+            auto* first = builder.CreateLoad(i64, slot(step.index), "pointer.swap.first");
+            auto* second = builder.CreateLoad(i64, slot(step.second_index), "pointer.swap.second");
+            builder.CreateStore(second, slot(step.index));
+            builder.CreateStore(first, slot(step.second_index));
+            break;
+        }
+        case Step::Kind::MutableCall:
+            if (step.value) builder.CreateCall(mutable_helper, {slot(0), lower(*step.value)});
+            else builder.CreateCall(mutable_helper, {slot(0)});
             break;
         case Step::Kind::Scalar:
             scalar_values.emplace(step.name, lower(*step.value));

@@ -56,6 +56,14 @@ uint64_t ores_actor_arena_claim_pages(OresActorArena*, OresArenaTurn,
 int ores_actor_arena_unclaim_pages(OresActorArena*, OresArenaTurn,
                                    const OresArenaHandle* pages,
                                    size_t count, uint64_t claim);
+/* Native compiler-only bounded lexical cleanup (one admitted turn). Before
+ * mutating any object, prove the exact live owner set, distinct generations,
+ * absence of outstanding loans/page claims and adequate free-stack capacity.
+ * Fails closed without partially dropping earlier owners. The array order is
+ * the compiler-verified reverse-ownership destruction order. */
+#define ORES_ACTOR_ARENA_MAX_SCOPED_OWNERS 8u
+void ores_actor_arena_drop_owned_exact(OresActorArena*, OresArenaTurn,
+                                       const OresArenaHandle*, size_t count);
 void ores_actor_arena_drop(OresActorArena*, OresArenaTurn, OresArenaHandle);
 OresArenaLoan ores_actor_arena_borrow(OresActorArena*, OresArenaTurn, OresArenaHandle);
 void ores_actor_arena_release(OresActorArena*, OresArenaLoan);

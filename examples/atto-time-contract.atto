@@ -1,0 +1,80 @@
+// Compiler-backed guest conformance fixture for native Atto std/time.
+// Run and verify TIME-PASS lines; file existence alone is not test evidence.
+import module time from "std/time";
+
+fnc check(bool condition, String name): void {
+  if !condition; do rt fail("TIME-FAIL|" + name); fi
+  stdio.println("TIME-PASS|" + name);
+}
+
+pub routine main(): void {
+  val zero = time.nanoseconds(0).expect("zero");
+  val one = time.seconds(1).expect("one");
+  val half = time.milliseconds(500).expect("half");
+  check(zero.is_zero(), "zero");
+  check(!half.is_zero(), "nonzero");
+  check(one.as_ns() == 1000000000, "seconds-exact");
+  check(half.as_ns() == 500000000, "millis-exact");
+  check(time.microseconds(1).expect("us").as_ns() == 1000, "micros-exact");
+  check(time.minutes(1).expect("min").as_ns() == 60000000000, "minutes-exact");
+  check(time.hours(1).expect("hour").as_ns() == 3600000000000, "hours-exact");
+  check(time.microseconds(1).expect("round").as_ms_floor() == 0, "floor-sub-ms");
+  check(time.microseconds(1).expect("round").as_ms_ceil() == 1, "ceil-sub-ms");
+  check(zero.as_ms_ceil() == 0, "ceil-zero");
+  check(time.milliseconds(-1).is_err(), "negative");
+  check(time.hours(2562048).is_err(), "hours-overflow");
+  check(time.milliseconds(9223372036855).is_err(), "millis-overflow");
+  check(one.checked_add(half).expect("add").as_ns() == 1500000000, "add");
+  check(one.checked_sub(half).expect("sub").as_ns() == 500000000, "sub");
+  check(half.checked_sub(one).is_err(), "underflow");
+  check(half.checked_mul(3).expect("mul").as_ns() == 1500000000, "multiply");
+  check(half.checked_mul(-1).is_err(), "negative-multiplier");
+
+  let mut manual = time.manual_clock(9, 1000000000);
+  check(manual.now().ticks_ns == 1000000000, "manual-initial");
+  check(manual.advance(time.milliseconds(500).expect("move")).expect("advance").ticks_ns == 1500000000, "manual-forward");
+  check(manual.advance(time.nanoseconds(0).expect("zero")).expect("still").ticks_ns == 1500000000, "manual-zero");
+  let mut at_limit = time.manual_clock(20, 9223372036854775807);
+  check(at_limit.advance(time.nanoseconds(1).expect("one ns")).is_err(), "manual-overflow");
+  check(at_limit.now().ticks_ns == 9223372036854775807, "manual-overflow-atomic");
+  val start = time.instant(9, 1000000000);
+  val later = time.instant(9, 1500000000);
+  val alien = time.instant(10, 1500000000);
+  check(later.duration_since(start).expect("elapsed").as_ns() == 500000000, "elapsed");
+  check(start.duration_since(later).is_err(), "clock-backwards");
+  check(later.duration_since(alien).is_err(), "clock-mismatch");
+  check(start.checked_add(half).expect("advance").ticks_ns == 1500000000, "advance");
+  val due = time.deadline_after(start, half).expect("deadline");
+  check(!due.expired(start).expect("not-due"), "not-early");
+  check(due.expired(later).expect("due"), "inclusive-due");
+  check(due.remaining(start).expect("remaining").as_ns() == 500000000, "remaining");
+  check(due.remaining(later).expect("late").as_ns() == 0, "remaining-zero");
+  check(due.expired(alien).is_err(), "deadline-domain");
+
+  let mut timer = time.one_shot(due);
+  check(timer.next_due().expect("timer due").ticks_ns == 1500000000, "timer-next-due");
+  check(!timer.poll(start).expect("before"), "timer-not-early");
+  check(timer.poll(later).expect("on-time"), "timer-fire");
+  check(!timer.poll(later).expect("again"), "timer-no-repeat");
+  check(timer.did_fire(), "timer-fired");
+  check(timer.next_due().is_err(), "timer-inactive-next-due");
+  check(!timer.cancel(), "timer-already-done");
+  let mut abandoned = time.one_shot(due);
+  check(abandoned.cancel(), "timer-cancel");
+  check(!abandoned.poll(later).expect("cancelled"), "timer-cancel-stops");
+
+  let mut every = time.interval(later, half);
+  check(every.next_due().expect("initial next").ticks_ns == 1500000000, "interval-first-due");
+  check(!every.poll(start).expect("early"), "interval-not-early");
+  check(every.poll(later).expect("first"), "interval-first");
+  check(every.next_due().expect("second due").ticks_ns == 2000000000, "interval-next-due");
+  check(!every.poll(later).expect("same"), "interval-no-repeat");
+  check(every.poll(time.instant(9, 2500000000)).expect("late"), "interval-coalesce");
+  check(every.cancel(), "interval-cancel");
+  check(every.next_due().is_err(), "interval-inactive-next-due");
+  check(!every.poll(time.instant(9, 3000000000)).expect("stop"), "interval-stopped");
+
+  check(time.deadline_after(time.instant(9, 9223372036854775807), one).is_err(), "deadline-overflow");
+  check(one.checked_mul(9223372036854775807).is_err(), "multiply-overflow");
+  stdio.println("TIME-CONTRACT-DONE");
+}

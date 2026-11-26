@@ -1,0 +1,30 @@
+name: LLVM-local Atto arena policy (source only)
+on:
+  pull_request:
+    paths:
+      - 'stdlib/policy/core/arena_limits.atto'
+      - 'stdlib/policy/alloc/arena_lifecycle.atto'
+      - 'stdlib/policy/alloc/scoped_arena.atto'
+      - 'stdlib/policy/std/arena_advice.atto'
+      - 'contracts/atto-llvm-arena-cleanup-v1.json'
+      - 'tests/test_atto_arena_source_v1.py'
+      - '.github/workflows/atto-arena-source-v1.yml'
+  push:
+    paths:
+      - 'stdlib/policy/core/arena_limits.atto'
+      - 'stdlib/policy/alloc/arena_lifecycle.atto'
+      - 'stdlib/policy/alloc/scoped_arena.atto'
+      - 'stdlib/policy/std/arena_advice.atto'
+      - 'contracts/atto-llvm-arena-cleanup-v1.json'
+      - 'tests/test_atto_arena_source_v1.py'
+      - '.github/workflows/atto-arena-source-v1.yml'
+permissions:
+  contents: read
+jobs:
+  arena-source-policy-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run independent source-byte and policy-oracle checks (NOT guest)
+        run: python3 -m unittest discover -s tests -p test_atto_arena_source_v1.py -v

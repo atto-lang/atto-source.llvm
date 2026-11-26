@@ -1,0 +1,30 @@
+// core/result: freestanding helpers over the compiler-provided Result<int,int>.
+define module result as
+
+  pub fnc is_ok(Result<int, int> value): bool {
+    return value.is_ok();
+  }
+
+  pub fnc is_err(Result<int, int> value): bool {
+    return value.is_err();
+  }
+
+  pub fnc unwrap_or(Result<int, int> value, int fallback): int {
+    return value.unwrap_or(fallback);
+  }
+
+  pub fnc ok(Result<int, int> value): Option<int> {
+    if value.is_ok(); do
+      return Some(value.unwrap_or(0));
+    fi
+    return None;
+  }
+
+  pub fnc or(Result<int, int> first, Result<int, int> second): Result<int, int> {
+    if first.is_ok(); do
+      return first;
+    fi
+    return second;
+  }
+
+end

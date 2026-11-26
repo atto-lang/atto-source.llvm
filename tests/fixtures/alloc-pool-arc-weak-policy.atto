@@ -1,0 +1,11 @@
+// Candidate native guest vector, NOT EXECUTED. Compiler must resolve
+// actual .atto modules from the exact pinned source and reject shadow copies.
+import module pool from "atto.alloc/pool";
+import module arc from "atto.alloc/arc";
+import module weak from "atto.alloc/weak";
+pub fnc main(): int {
+  if !pool.self_test() then return 1; fi
+  if !arc.self_test() then return 2; fi
+  if !weak.self_test() then return 3; fi
+  return 42;
+}

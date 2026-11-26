@@ -1,4 +1,6 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
+#include "oreslang/backend/DurableCounterV1Guest.hpp"
+#include "oreslang/backend/DurableScalarV1Guest.hpp"
 #include "oreslang/backend/NativeSourceLogPathsV1.hpp"
 #include "oreslang/backend/ActorRegionV1Guest.hpp"
 #include "oreslang/backend/ActorRegionV2Guest.hpp"
@@ -539,6 +541,21 @@ static void require_actor_region_v1_aot_graph(const oreslang::Program& program) 
 }
 
 int main(int argc, char** argv) {
+    if (argc > 1 && (std::string_view(argv[1]) == "--durable-counter-actor-v1" || std::string_view(argv[1]) == "--durable-scalar-codec-v1")) {
+        try {
+            if (argc != 3 || std::filesystem::path(argv[2]).extension() != ".atto")
+                throw std::invalid_argument(std::string("usage: ")+argv[1]+" source.atto");
+            const auto text = read_regular_source(argv[2], 16384, "durable source exceeds limit");
+            const auto ir = std::string_view(argv[1]) == "--durable-scalar-codec-v1" ? oreslang::emit_durable_scalar_v1_ir(text) : oreslang::emit_durable_counter_v1_ir(text);
+            std::cout << ir;
+            std::cout.flush();
+            return std::cout ? 0 : 1;
+        } catch (const std::exception& e) {
+            print_safe_diagnostic(std::cerr,e.what(),512);
+            std::cerr << '\n';
+            return 2;
+        }
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--selftest-native-log-info-ir") {
         try {
             auto program = oreslang::parse_program(
@@ -918,6 +935,19 @@ int main(int argc, char** argv) {
             if (arg == "--release") build_profile = BuildProfile::Release;
             else if (arg == "--strict-aot") build_profile = BuildProfile::StrictAot;
             else build_profile = BuildProfile::HardRt;
+        } else if (arg.rfind("--target-os=", 0) == 0) {
+            // Selects platform-variant library units such as std/path.
+            const std::string os = arg.substr(std::string_view("--target-os=").size());
+            if (os == "windows") {
+                oreslang::frontend::selected_library_target_os() =
+                    oreslang::frontend::LibraryTargetOs::Windows;
+            } else if (os == "linux" || os == "macos" || os == "posix" || os == "freebsd") {
+                oreslang::frontend::selected_library_target_os() =
+                    oreslang::frontend::LibraryTargetOs::Posix;
+            } else {
+                std::cerr << "unknown --target-os (expected linux|macos|freebsd|posix|windows)\n";
+                return 2;
+            }
         } else if (arg == "--freestanding") {
             if (freestanding) { std::cerr << "duplicate --freestanding\n"; return 2; }
             freestanding = true;

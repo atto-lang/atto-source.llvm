@@ -1,0 +1,10 @@
+// Native compiler must reject overlapping shared/exclusive loan authority.
+// A compiler-owned core/cell predicate must not grant an actual mutable loan.
+import module cell from "core/cell";
+fnc join(borrow int left, borrow mut int right): int {
+  return left + right;
+}
+fnc invoke(int owner): int {
+  return join(rt borrow owner, rt mut borrow owner);
+}
+pub fnc main(): int { return invoke(42); }

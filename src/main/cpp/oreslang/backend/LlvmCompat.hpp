@@ -1,5 +1,5 @@
 #pragma once
-// LLVM 19-23 abstraction for pointer and lifetime intrinsics.
+// LLVM 14-23 compatibility for native pointers, lifetimes, and intrinsics.
 // The language/ABI does not depend on which LLVM API spells these operations.
 #include <cstdint>
 #include "llvm/ADT/ArrayRef.h"
