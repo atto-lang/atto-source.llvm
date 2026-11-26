@@ -118,13 +118,18 @@ int main() {
         r.kernel.parameters.clear();
         r.arguments.clear();
         int count=1+static_cast<int>(rng()%48);
+        r.arguments.reserve(static_cast<std::size_t>(count));
+        r.kernel.parameters.reserve(static_cast<std::size_t>(count));
         for (int j=0;j<count;++j) {
             std::string id="allocation-"+std::to_string(rng()%4);
             auto off=static_cast<std::int64_t>(4*(rng()%232));
             auto len=static_cast<std::int64_t>(4*(1+rng()%16));
             bool write=rng()%3==0;
             r.kernel.parameters.push_back(write?Parameter::WriteF32:Parameter::ReadF32);
-            r.arguments.push_back(buffer(id,1,off,len,write?Access::Write:Access::Read));
+            // Construct the selected variant alternative in place; avoid a
+            // moved temporary variant in the optimized GCC 13 test build.
+            r.arguments.emplace_back(std::in_place_type<BufferView>,
+                buffer(id,1,off,len,write?Access::Write:Access::Read));
         }
         r.max_referenced_bytes=1024*48;
         bool expected=independent_alias_oracle(r.arguments);
