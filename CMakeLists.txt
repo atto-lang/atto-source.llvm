@@ -4268,6 +4268,12 @@ if(BUILD_TESTING AND ORE_CLANG)
             DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/audit_no_gc_ir.rs"
             VERBATIM)
         add_custom_target(oreslang-no-gc-ir-audit-build ALL DEPENDS "${ORE_NO_GC_IR_AUDIT}")
+        # Focused builds must produce the same audit tool as full builds.
+        if(TARGET oreslang-native-class-string-parity-build)
+            add_dependencies(oreslang-native-class-string-parity-build oreslang-no-gc-ir-audit-build)
+            set_tests_properties(native_class_string_parity_release native_class_string_parity_sanitizer
+                PROPERTIES ENVIRONMENT "ORES_NO_GC_IR_AUDIT=${ORE_NO_GC_IR_AUDIT}")
+        endif()
         add_custom_command(
             OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit-tests"
             COMMAND "${ORE_NO_GC_RUSTC}" --edition=2021 -D warnings --test
