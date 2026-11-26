@@ -1,0 +1,4 @@
+pub fnc main(): int {
+  val Result<int, Error> wrapped = trap! (Integer.mod(-47, -5) + 39);
+  return wrapped.is_ok() ? wrapped.unwrap_or(0) : 0;
+}
