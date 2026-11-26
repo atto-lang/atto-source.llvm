@@ -65,3 +65,14 @@ for f in void-value-negative.atto void-return-negative.atto bool-truthiness-nega
   echo "CORE_TYPES_LLVM_COMPILE_REJECTED=$f"
 done
 echo "CORE_TYPES_LLVM_GUEST=6_EXECUTED_8_REJECTED"
+
+# The contextual namespace name must not authorize standalone library helpers
+# or become an ordinary callable identifier. Both must fail before IR.
+for source in 'use namespace types; pub fnc helper() -> int { return 42; }' 'pub fnc types() -> int { return 42; } pub fnc main() -> int { return 0; }'; do
+  printf '%s\n' "$source" > "$work/contextual-negative.atto"
+  if "$compiler" --target=host "$work/contextual-negative.atto" > "$work/contextual-negative.ll" 2> "$work/contextual-negative.err"; then
+    fail "contextual types escaped its admission boundary"
+  fi
+  [[ ! -s "$work/contextual-negative.ll" && -s "$work/contextual-negative.err" ]] || fail "contextual rejection did not fail before IR"
+done
+echo 'CORE_TYPES_LLVM_CONTEXTUAL_REJECTIONS=PASS'

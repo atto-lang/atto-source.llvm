@@ -29,6 +29,7 @@ private:
     struct Waiter {
         std::uint64_t id = 0;
         bool active = false;
+        bool retain_terminal = false;
         std::function<void(const Subscription&)> notify;
     };
     struct State {
@@ -77,8 +78,25 @@ public:
 
     NativeSelectableI64Future() : state_(std::make_shared<State>()) {}
 
+    // Copyable Future handles alias the same producer state.
+    bool valid_source() const noexcept { return bool(state_); }
+    bool same_source(const NativeSelectableI64Future& other) const noexcept {
+        return state_ == other.state_;
+    }
+
     template <class Callback>
     Subscription subscribe_ready(Callback&& callback) {
+        return subscribe_ready_impl(std::forward<Callback>(callback), false);
+    }
+
+    template <class Callback>
+    Subscription subscribe_ready_advisory(Callback&& callback) {
+        return subscribe_ready_impl(std::forward<Callback>(callback), true);
+    }
+
+private:
+    template <class Callback>
+    Subscription subscribe_ready_impl(Callback&& callback, bool retain_terminal) {
         std::function<void(const Subscription&)> fn(
             std::forward<Callback>(callback));
         if (!fn) throw std::invalid_argument("future callback is empty");
@@ -102,6 +120,7 @@ public:
             // subscription admission is failure-atomic and cannot consume an
             // unusable slot.
             w.notify = fn;
+            w.retain_terminal = retain_terminal;
             w.id = id;
             w.active = true;
             ++state_->next_id;
@@ -114,7 +133,7 @@ public:
                 // A terminal Future has no later readiness transition. If the
                 // callback observed readiness without consuming the waiter,
                 // retire it now rather than leaving a permanently inert slot.
-                (void)sub.close();
+                if (!retain_terminal) (void)sub.close();
             } catch (...) {
                 (void)sub.close();
                 throw;
@@ -123,6 +142,7 @@ public:
         return sub;
     }
 
+public:
     bool try_commit(const Subscription& sub, Result& result) {
         std::lock_guard<std::mutex> guard(state_->mutex);
         result = {};
@@ -179,6 +199,7 @@ private:
                   std::exception_ptr failure) {
         std::array<std::function<void(const Subscription&)>, MaxWaiters> fns{};
         std::array<Subscription, MaxWaiters> subs{};
+        std::array<bool, MaxWaiters> retain_terminal{};
         std::size_t count = 0;
         {
             std::lock_guard<std::mutex> guard(state_->mutex);
@@ -188,6 +209,7 @@ private:
                 if (!w.active || !w.notify) continue;
                 fns[count] = w.notify;
                 subs[count] = Subscription(state_, i, w.id);
+                retain_terminal[count] = w.retain_terminal;
                 ++count;
             }
             state_->status = status;
@@ -204,7 +226,7 @@ private:
                 // arbiter, or merely observe readiness. In the observation
                 // case there can never be another readiness edge, so retire
                 // the exact waiter after this one notification.
-                (void)subs[i].close();
+                if (!retain_terminal[i]) (void)subs[i].close();
             } catch (...) {
                 // A failed terminal callback is also one-shot and must not
                 // strand an inert waiter.
