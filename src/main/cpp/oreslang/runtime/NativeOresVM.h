@@ -281,7 +281,8 @@ void ores_native_vm_nio_cancel_bootstrap(OresNativeVM* vm);
 int ores_native_vm_attach_nio(OresNativeVM* vm, void* backend,
                               OresNativeVMNioDestroy destroy);
 /* Nonblocking trusted-host pin. Every successful acquisition requires one
- * release, including when VM retirement begins during an operation.
+ * release on the acquiring host thread, including during VM retirement.
+ * At most 16 distinct VMs may be borrowed per host thread; nested pins count separately.
  * External callers must fence new API entry before freeing the VM object.
  */
 void* ores_native_vm_nio_acquire(OresNativeVM* vm);
@@ -289,7 +290,8 @@ void ores_native_vm_nio_release(OresNativeVM* vm, void* backend);
 
 /* No new admissions after retire. Existing mail/control drains before destroy.
  * The caller MUST fence all producer/API calls before close and MUST NOT call
- * close from a carrier callback. Returns 0 if a carrier calls close (VM remains
+ * close from a carrier callback or while owning a NIO pin/reservation.
+ * Returns 0 on such a self-owned close attempt (VM remains
  * retired, and an external host must retry); 1 after complete destruction.
  * No forceful termination of an uncooperative guest callback is attempted.
  */
