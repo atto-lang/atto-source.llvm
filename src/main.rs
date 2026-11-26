@@ -5,6 +5,7 @@ use std::io::{Read as IoRead, Write as IoWrite};
 use std::process::{Command, Stdio};
 
 mod target_native;
+mod namespace_provider;
 
 use atto_compiler::ast::{BinOp, Type};
 use atto_compiler::check::{self, Import, TExpr, TFunc, TProgram, TStmt, TE};
@@ -627,6 +628,10 @@ pub fn compile_ir(source: &str) -> Result<String, String> {
 }
 
 fn compile_ir_with_profile(source: &str, profile: LibraryProfile) -> Result<String, String> {
+    compile_ir_entry(source,profile,false)
+}
+
+fn compile_ir_entry(source: &str, profile: LibraryProfile, provider_entry: bool) -> Result<String, String> {
     if source.len() > atto_compiler::SOURCE_CAP {
         return Err("E_SOURCE_LIMIT: native Atto input exceeds 64 KiB".into());
     }
@@ -784,6 +789,13 @@ fn compile_ir_with_profile(source: &str, profile: LibraryProfile) -> Result<Stri
         }
         out.push_str("recv_invalid:\n  call void @llvm.trap()\n  unreachable\n}\n");
     }
+    if provider_entry {
+        if profile != LibraryProfile::FreestandingCore || native_actor_mode {
+            return Err("E_NAMESPACE_PROFILE: provider entry requires freestanding scalar profile".into());
+        }
+        let _=writeln!(out,"define i64 @atto_namespace_provider() {{\nentry:\n  %answer = call i64 @atto_func_{}()\n  ret i64 %answer\n}}\n",typed.main);
+        return Ok(out);
+    }
     let finish = if native_actor_mode { "  call void @atto_actor_finish()\n" }
         else { "" };
     let _ = writeln!(out,
@@ -899,6 +911,16 @@ fn validate_native_artifact(path: &std::path::Path) -> Result<(), String> {
 
 fn cli() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let [mode,namespace,symbol]=args.as_slice(){
+        if mode=="--emit-namespace-provider-ir"{
+            let mut bytes=Vec::new();
+            std::io::stdin().lock().take(4097).read_to_end(&mut bytes).map_err(|e|e.to_string())?;
+            if bytes.len()>4096{return Err("E_NAMESPACE_PROFILE: source budget".into());}
+            let source=std::str::from_utf8(&bytes).map_err(|_|"invalid UTF-8")?;
+            let ir=namespace_provider::compile(source,namespace,symbol)?;
+            return std::io::stdout().lock().write_all(ir.as_bytes()).map_err(|e|e.to_string());
+        }
+    }
     let (src, out, emit_only, profile) = match args.as_slice() {
         [src, flag, out] if flag == "-o" => (src, out, false, LibraryProfile::Hosted),
         [src, flag, out, mode] if flag == "-o" && mode == "--emit-llvm" =>
