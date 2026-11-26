@@ -38,15 +38,58 @@ public:
 
     Plan parse() {
         Plan plan;
+        while (take("fnc")) {
+            const auto helper = identifier();
+            need("("); const bool mut = take("mut");
+            need("Pointer"); need("<"); need("int"); need(">");
+            const auto parameter = identifier();
+            if (mut && take(",")) {
+                need("int"); plan.mutable_scalar_parameter = identifier();
+                if (plan.mutable_scalar_parameter == parameter || plan.mutable_scalar_parameter == helper)
+                    reject("duplicate mutable helper formal", token().offset);
+            }
+            need(")"); need(":");
+            if (helper == "main" || helper == "Pointer" || helper == parameter)
+                reject("invalid pointer helper identity", token().offset);
+            if (helper == readonly_helper_ || helper == mutable_helper_ ||
+                    (mut ? !mutable_helper_.empty() : !readonly_helper_.empty()))
+                reject("duplicate or excess pointer helper", token().offset);
+            if (mut) {
+                plan.mutable_helper = mutable_helper_ = helper;
+                plan.mutable_parameter = parameter;
+                need("void"); need("{"); need(parameter); need("."); need("write"); need("(");
+                // Closed helper: one constant Copy-i64 write; no other effect.
+                if (!plan.mutable_scalar_parameter.empty()) {
+                    need(plan.mutable_scalar_parameter);
+                } else {
+                const auto at = token().offset;
+                const bool negative = take("-");
+                const auto magnitude = unsigned_literal();
+                const auto max = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+                if (magnitude > max + (negative ? 1u : 0u))
+                    reject("mutable helper literal overflow", at);
+                plan.mutable_write = magnitude == max + 1u ? std::numeric_limits<std::int64_t>::min() :
+                    (negative ? -static_cast<std::int64_t>(magnitude) : static_cast<std::int64_t>(magnitude));
+                }
+                need(")"); need(";"); need("}");
+            } else {
+                plan.readonly_helper = readonly_helper_ = helper;
+                plan.readonly_parameter = parameter;
+                need("int"); need("{"); need("return");
+                need(parameter); need("."); need("read"); need("("); need(")");
+                need(";"); need("}");
+            }
+        }
         need("pub"); need("fnc"); need("main"); need("("); need(")");
         need(":"); need("int"); need("{");
         // Use the canonical lexer for both owning and local-ref modes.
         if (token().text == "let" && at_ + 1 < tokens_.size() &&
                 tokens_[at_ + 1].text != "mut")
-            return parse_local();
+            return readonly_helper_.empty() && mutable_helper_.empty() ? parse_local() :
+                throw std::runtime_error("Pointer<int> pointer helpers require owned region");
         need("let"); need("mut"); need("Pointer"); need("<"); need("int"); need(">");
         plan.owner = identifier();
-        if (plan.owner == "Pointer" || plan.owner == "main" || plan.owner == "int")
+        if (plan.owner == "Pointer" || plan.owner == "main" || plan.owner == "int" || plan.owner == readonly_helper_ || plan.owner == mutable_helper_)
             reject("reserved pointer owner", token().offset);
         owner_ = plan.owner;
         need("="); need("Pointer"); need(".");
@@ -79,12 +122,36 @@ public:
                 need("int");
                 step.name = identifier();
                 if (step.name == owner_ || step.name == "main" || step.name == "Pointer" ||
-                        known_locals_.count(step.name))
+                        known_locals_.count(step.name) || step.name == readonly_helper_ || step.name == mutable_helper_)
                     reject("duplicate or reserved immutable scalar", token().offset);
                 need("=");
                 step.value = expression();
                 need(";");
                 known_locals_.emplace(step.name, step.value->known);
+            } else if (!mutable_helper_.empty() && take(mutable_helper_)) {
+                if (!live_) reject("mutable borrow of unavailable owner", token().offset);
+                need("(");
+                if (token().text == "borrow") {
+                    const auto begin = token().offset;
+                    need("borrow");
+                    if (token().text != "!" || token().offset != begin + 6)
+                        reject("borrow! must be adjacent", token().offset);
+                    need("!");
+                }
+                need("mut"); need(owner_);
+                if (!plan.mutable_scalar_parameter.empty()) {
+                    need(",");
+                    // The owner has been lent; scalar operands cannot access it.
+                    scalar_call_argument_ = true;
+                    step.value = expression();
+                    scalar_call_argument_ = false;
+                }
+                need(")"); need(";");
+                if (count_ != 1) reject("mutable helper requires singleton allocation", token().offset);
+                step.kind = Step::Kind::MutableCall;
+                step.name = mutable_helper_;
+                initialized_[0] = true;
+                contents_[0] = step.value ? step.value->known : plan.mutable_write;
             } else {
                 need(owner_);
                 need(".");
@@ -229,6 +296,9 @@ private:
     std::vector<Token> tokens_;
     std::size_t at_ = 0;
     std::string owner_;
+    std::string readonly_helper_;
+    std::string mutable_helper_;
+    bool scalar_call_argument_ = false;
     std::size_t count_ = 0;
     bool live_ = true;
     bool initializing_owner_ = false;
@@ -285,6 +355,7 @@ private:
         const std::size_t offset = token().offset;
         const auto name = identifier();
         if (name == owner_) {
+            if (scalar_call_argument_) reject("conflicting access during mutable loan", offset);
             if (initializing_owner_) reject("pointer owner unavailable during initializer", offset);
             if (!live_) reject("read after close or pointer escape", offset);
             if (!take(".")) reject("Pointer<int> owner cannot escape as a scalar or handle", offset);
@@ -309,6 +380,26 @@ private:
             expr->kind = Expr::Kind::Read;
             expr->index = index;
             expr->known = contents_[index];
+            return expr;
+        }
+        if (!readonly_helper_.empty() && name == readonly_helper_) {
+            if (scalar_call_argument_) reject("conflicting access during mutable loan", offset);
+            if (initializing_owner_ || !live_) reject("borrow of unavailable owner", offset);
+            need("(");
+            if (token().text == "borrow") {
+                const auto begin = token().offset;
+                need("borrow");
+                if (token().text != "!" || token().offset != begin + 6)
+                    reject("borrow! must be adjacent", token().offset);
+                need("!");
+            }
+            need(owner_); need(")");
+            if (count_ != 1) reject("readonly helper requires singleton allocation", offset);
+            if (!initialized_[0]) reject("borrow of uninitialized pointer element", offset);
+            auto expr = std::make_unique<Expr>();
+            expr->kind = Expr::Kind::ReadonlyCall;
+            expr->name = readonly_helper_;
+            expr->known = contents_[0];
             return expr;
         }
         const auto it = known_locals_.find(name);
