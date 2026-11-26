@@ -1248,7 +1248,7 @@ public:
             advance();
         if (accept("namespace")) {
             // The canonical core/types name is contextual in this header only.
-            if (accept("types")) program.namespace_name = "types";
+            if (token_.kind == Kind::Identifier && accept("types")) program.namespace_name = "types";
             else program.namespace_name = identifier();
             require(";");
         }
