@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - scripts/compile-aot.sh
+      - scripts/link-scalar-object.sh
       - scripts/audit_no_gc_ir.rs
       - scripts/audit-aot-linked-image.sh
       - tests/test-aot-linked-image-audit.sh
@@ -17,6 +18,7 @@ on:
   push:
     paths:
       - scripts/compile-aot.sh
+      - scripts/link-scalar-object.sh
       - scripts/audit_no_gc_ir.rs
       - scripts/audit-aot-linked-image.sh
       - tests/test-aot-linked-image-audit.sh
@@ -132,6 +134,35 @@ jobs:
           bash -n scripts/test-compile-aot-guest-parity.sh
           bash scripts/test-compile-aot-guest-parity.sh | tee "$RUNNER_TEMP/atto-llvm-guest-receipts.txt"
           grep -Fqx "ATTO_LLVM_GUEST_MATRIX_PASS|head=$EXPECTED_HEAD|fixtures=2|executions=4|negative_no_artifact=2|synthetic_ir=NO" "$RUNNER_TEMP/atto-llvm-guest-receipts.txt"
+      - name: Execute actual Atto compiler through separate native object pipeline
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          ORESLANG_LLVMC: ${{ runner.temp }}/atto-llvm-compiler/oreslang-llvmc
+          ORES_NO_GC_IR_AUDIT: ${{ runner.temp }}/atto-llvm-compiler/oreslang-no-gc-ir-audit
+          CLANG: /usr/bin/clang-19
+          ORESLANG_AOT_OBJECT_PIPELINE: separate
+          ORESLANG_AOT_LTO: 'off'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          src=contracts/atto-parity-v1/add.atto
+          test "$(git hash-object "$src")" = "$(git rev-parse "HEAD:$src")"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          for opt in 0 2; do
+            ORESLANG_LLVM_AOT_OPT_LEVEL="$opt" bash scripts/compile-aot.sh "$src" "$tmp/object-$opt" --link=static
+            rc=0
+            timeout --signal=TERM 15s "$tmp/object-$opt" || rc=$?
+            test "$rc" = 42
+            printf 'ATTO_LLVM_SEPARATE_OBJECT_GUEST_PASS|head=%s|tree=%s|O%s|exit=42|source_blob=%s|compiler_sha256=%s|binary_sha256=%s\n' "$EXPECTED_HEAD" "$(git rev-parse 'HEAD^{tree}')" "$opt" "$(git hash-object "$src")" "$(sha256sum "$ORESLANG_LLVMC" | cut -d' ' -f1)" "$(sha256sum "$tmp/object-$opt" | cut -d' ' -f1)"
+          done
+          printf 'pub fnc main(): int { return 40 + ; }\n' > "$tmp/invalid.atto"
+          for opt in 0 2; do
+            if ORESLANG_LLVM_AOT_OPT_LEVEL="$opt" bash scripts/compile-aot.sh "$tmp/invalid.atto" "$tmp/invalid-$opt" --link=static; then exit 1; fi
+            test ! -e "$tmp/invalid-$opt"
+          done
+          echo 'ATTO_LLVM_SEPARATE_OBJECT_GUEST_MATRIX=2_EXECUTED_2_REJECTED'
       - name: Execute real checked-dispatch native guest O0/O2 matrix
         env:
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
