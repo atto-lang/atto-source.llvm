@@ -118,7 +118,21 @@ int main() {
     assert(!p.ownership_admitted);
     validate_ownership(p);
     assert(p.ownership_admitted);
-    std::cout << "POINTER_HIR_ADVERSARIAL_REJECTIONS=9\n";
+    p.steps[0].value = literal(0);
+    p.steps[0].value->kind = static_cast<Expr::Kind>(-1);
+    must_reject("invalid expression kind", [&] { validate_ownership(p); });
+    assert(!p.ownership_admitted);
+    p.steps[0].value = literal(42);
+    validate_ownership(p);
+    Step invalid;
+    invalid.kind = static_cast<Step::Kind>(-1);
+    p.steps.insert(p.steps.begin(), std::move(invalid));
+    must_reject("invalid step kind", [&] { validate_ownership(p); });
+    assert(!p.ownership_admitted);
+    p.steps.erase(p.steps.begin());
+    validate_ownership(p);
+    verify_plan(p);
+    std::cout << "POINTER_HIR_ADVERSARIAL_REJECTIONS=11\n";
     // The local borrowed pointer form has separate authority and uses the
     // *same* independent verifier as the owning Pointer.alloc region.
     Plan local;
