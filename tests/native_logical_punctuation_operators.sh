@@ -151,8 +151,8 @@ for name in xor-eager-trap and-reached-rhs-trap or-reached-rhs-trap; do
     timeout 40s "$clang" "-O$opt" -x ir "$ir" -o "$binary"
     status=0
     timeout 20s "$binary" >"$tmp/$name-O$opt.stdout" 2>"$tmp/$name-O$opt.stderr" || status=$?
-    if (( status <= 128 || status == 124 || status == 125 || status == 126 || status == 127 )); then
-      echo "expected native guest trap for $name at O$opt; got status=$status" >&2
+    if [[ "$status" -ne $((128 + $(kill -l ILL))) && "$status" -ne $((128 + $(kill -l TRAP))) ]]; then
+      echo "expected LLVM trap (SIGILL or SIGTRAP) for $name at O$opt; got status=$status" >&2
       exit 1
     fi
     if [[ -s "$tmp/$name-O$opt.stdout" ]]; then
