@@ -541,11 +541,12 @@ static void require_actor_region_v1_aot_graph(const oreslang::Program& program) 
 int main(int argc, char** argv) {
 #ifdef ATTO_TEST_INTERFACE_CONSUMER
     // Test-only fixed metadata. Production builds have no such CLI mode.
-    if (argc==3 && std::string_view(argv[1])=="--selftest-interface-consumer") {
+    if ((argc==3 && std::string_view(argv[1])=="--selftest-interface-consumer") ||
+        (argc==4 && std::string_view(argv[1])=="--selftest-interface-provider")) {
         try {
             using namespace oreslang::package_interface;
             const std::string mode=argv[2];
-            auto fixture=[](const std::string& name,const std::string& signature) {
+            auto fixture=[](const std::string& name,const std::string& signature,const std::string& release="1") {
                 std::vector<std::uint8_t> bytes={'O','R','E','S','I',0,1};
                 auto str=[&](const std::string& v){
                     const auto n=static_cast<std::uint32_t>(v.size());
@@ -556,10 +557,30 @@ int main(int argc, char** argv) {
                 bytes.insert(bytes.end(),{0,0,0,2});
                 str(name);bytes.push_back(0);str(name);str("");
                 str(name);bytes.push_back(1);str("value");str(signature);
-                DependencyPin pin{name,"fixture/"+name+"@1","atto-llvm-1","llvm-aot-v1",
+                DependencyPin pin{name,"fixture/"+name+"@"+release,"atto-llvm-1","llvm-aot-v1",
                     "ownership-strict-v1",{{name,sha256(bytes)}}};
                 return admit(pin,{{name,bytes}});
             };
+            if(argc==4) {
+                if(mode!="cart1"&&mode!="cart2"&&mode!="tax1"&&mode!="stale"&&mode!="signature")
+                    throw std::runtime_error("invalid provider fixture mode");
+                const std::string module=mode=="tax1"?"tax":"cart";
+                const std::string release=mode=="cart2"?"2":"1";
+                const std::string digest=mode=="cart2"?
+                    "3a9d01af5bc8e28d52eda9d078ea5332ab51e74fc926509d5b48b69244771cf9":
+                    mode=="tax1"?"e3e4ff40c5186d4fa954d5365822da31ace6ded224eb699eb983cff787cc672b":
+                    "fc0daa1f1811debe52a4caca93b91b0d4fd2a1b86f2a9a82c2e827220475e3c7";
+                const auto proof=fixture(module,mode=="signature"?"():bool":"():int",release);
+                const ScalarLogicalSlotPin slot{"fixture/app",module,
+                    "fixture/"+module+"@"+(mode=="stale"?"2":release),
+                    "atto-llvm-1","ownership-strict-v1"};
+                const auto identity=capture_source_identity(argv[3],65536,"provider fixture source exceeds limit");
+                const auto bytes=read_regular_source(argv[3],65536,"provider fixture source exceeds limit",nullptr,&identity);
+                require_valid_source_utf8(bytes);
+                std::cout<<oreslang::emit_verified_scalar_namespace_provider(
+                    bytes,digest,{proof,slot,module},module,"value");
+                return 0;
+            }
             auto cart=fixture("cart",mode=="signature"?"():bool":"():int");
             auto tax=fixture("tax","():int");
             ScalarLogicalSlotPin cart_slot{"fixture/app","cart",
