@@ -56,11 +56,12 @@ for opt in 0 2; do
   printf 'pub fnc main(): int { return 42; }\n' > "$w/main.atto"
   bash "$driver" "$w/main.atto" "$w/default"
   bash "$driver" "$w/main.atto" "$w/static" --link=static
-  for exe in default static; do
+  ORESLANG_AOT_OBJECT_PIPELINE=separate ORESLANG_AOT_LTO=off bash "$driver" "$w/main.atto" "$w/object-static" --link=static
+  for exe in default static object-static; do
     code=0; "$w/$exe" || code=$?
     [[ "$code" == 42 ]]
   done
-  echo 'PASS actual LLVM compiler native guest default and explicit static return 42'
+  echo 'PASS actual LLVM compiler native guest default, explicit static and separate object return 42'
 else
   echo 'RECEIPT actual_guest=NOT_EXECUTED'
 fi
@@ -73,6 +74,21 @@ fi
     echo "PASS synthetic IR final-link flags and native execution opt=$opt lto=$lto"
   done
 done
+# Run the same synthetic input through the actual two-stage object pipeline.
+for opt in 0 2; do
+  ORESLANG_LLVMC="$w/ir-producer" ORES_NO_GC_IR_AUDIT="$w/auditor" \
+    CLANG="$w/clang-wrapper" ORESLANG_AOT_LTO=off ORESLANG_AOT_OBJECT_PIPELINE=separate \
+    ORESLANG_LLVM_AOT_OPT_LEVEL="$opt" bash "$driver" "$w/stub.atto" "$w/separate" --link=static
+  grep -Fxq -- -c "$LINK_ARGS"
+  code=0; "$w/separate" || code=$?
+  [[ "$code" == 42 ]]
+  echo "PASS synthetic IR separate object pipeline opt=$opt"
+done
+code=0
+ORESLANG_AOT_LTO=full ORESLANG_AOT_OBJECT_PIPELINE=separate \
+  bash "$driver" "$w/stub.atto" "$w/unsupported" --link=static 2>"$w/error" || code=$?
+[[ "$code" == 64 && ! -e "$w/unsupported" ]]
+grep -Fq 'E_OBJECT_PIPELINE_UNSUPPORTED:' "$w/error"
 # Fail closed on output symlinks, dangling symlinks, FIFOs and directories.
 ln -s "$w/native" "$w/symlink"
 ln -s "$w/nonexistent" "$w/dangling"
