@@ -74,8 +74,8 @@ typedef struct {
 typedef void (*OresNativeActorPanicFn)(
     void* ctx, size_t parent_actor, OresNativeActorTerminalFailure failure);
 /* Explicit *native host* actor lifecycle, not compiler-lowered source spawn.
- * Spawning activates exactly one preallocated actor slot; no ambient cross-
- * actor mutable references, host heap allocation, or slot reincarnation.
+ * Spawning activates one preallocated actor slot; reuse requires the separate
+ * trusted leaf reclamation gate. No ambient cross-actor mutable references.
  */
 /* Trusted host-only pre-admission wiring. Must be called before the first
  * actor message/carrier starts. Gate outlives this scheduler and is released
@@ -88,6 +88,11 @@ int ores_native_actor_scheduler_configure_turn_gate(
 void ores_native_actor_scheduler_signal_turn_gate(OresNativeActorScheduler* scheduler);
 OresNativeActorRef ores_native_actor_scheduler_spawn(
     OresNativeActorScheduler* scheduler, size_t actor_slot);
+/* VM-internal trusted host gate: exact retired supervised leaf, acknowledged
+ * terminal CONTROL, no physical work/loans/waiters. Caller must authenticate
+ * external finalization and serialize registration. No TASK/WAKE support. */
+int ores_native_actor_scheduler_reclaim_supervised_leaf_v1(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
 /* Send succeeds only after atomic admission to a live, generation-matched
  * actor mailbox. It does NOT promise execution or successful processing.
  * No guest callback, blocking wait, or memory allocation occurs here.
