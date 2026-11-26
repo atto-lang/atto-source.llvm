@@ -465,6 +465,13 @@ impl Emit<'_> {
                     BinOp::Div => unreachable!("division not admitted by checker"),
                 }
             }
+            TExpr::InlineTask { body, value } => {
+                // Same guest logical task and stack: no TaskSpawn, Future or join.
+                self.stmts(body);
+                if let Some(value) = value {
+                    self.expr(value);
+                }
+            }
             TExpr::Ternary(c, a, b) => {
                 self.expr(c);
                 self.open(0x04, vt(v.ty).expect("ternary value type"), Frame::Other);
