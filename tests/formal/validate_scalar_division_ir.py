@@ -1,13 +1,14 @@
 """Experimental unoptimized scalar division IR validator; requires llvmlite.
 Produces SMT-LIB, not a proof receipt. Only the named function is modeled.
 """
+import re
 import sys
 from pathlib import Path
 from llvmlite import binding as llvm
 
 
 def extract(ir, name):
-    if len(ir) > 262144:
+    if len(ir.encode('utf-8')) > 262144:
         raise ValueError('IR exceeds verifier input budget')
     module = llvm.parse_assembly(ir)
     module.verify()
@@ -19,6 +20,20 @@ def extract(ir, name):
             raise ValueError('unsupported scalar division IR')
     require(str(fn.global_value_type) == 'i64 (i64, i64)' and len(blocks) == 3)
     require(not list(fn.attributes) and all(not list(a.attributes) for a in args))
+    # Only the plain C-convention scalar function header is in scope.
+    ident = r'[-a-zA-Z$._0-9]+'
+    require(re.fullmatch(ident, name) is not None)
+    require(re.fullmatch(r'define (?:internal )?i64 @' + re.escape(name)
+                         + r'\(i64 %' + ident + r', i64 %' + ident + r'\) \{',
+                         str(fn).splitlines()[0]) is not None)
+    def syntax(i):
+        # Inspect the opcode RHS, never search arbitrary SSA identifiers.
+        text = str(i).strip()
+        if text.startswith('%'):
+            match = re.fullmatch(r'%' + ident + r' = (.+)', text)
+            require(match is not None)
+            return match.group(1)
+        return text
     require(all('!' not in str(i) for block in blocks for i in block.instructions))
     vals = dict(zip(args, ['a', 'b']))
     slots = {}
@@ -27,27 +42,32 @@ def extract(ir, name):
             return vals[v]
         require(v.is_constant and str(v.type) == 'i64' and v.value_kind.name == 'constant_int')
         return '(_ bv%d 64)' % v.get_constant_value()
+    def expression(operator, *parts):
+        # Bound intermediate expansion before concatenation, even for shared SSA DAGs.
+        require(sum(map(len, parts)) + len(operator) + len(parts) + 2 <= 16384)
+        return '(' + operator + ' ' + ' '.join(parts) + ')'
     def evaluate(i):
         op = i.opcode
+        rhs = syntax(i)
         o = list(i.operands)
         if op == 'alloca':
-            require(str(i).endswith('alloca i64, align 8') and len(o) == 1 and o[0].get_constant_value() == 1)
+            require(rhs == 'alloca i64, align 8' and len(o) == 1 and o[0].get_constant_value() == 1)
             slots[i] = None
         elif op == 'store':
-            require(str(o[0].type) == 'i64' and o[1] in slots and slots[o[1]] is None and str(i).lstrip().startswith('store i64 ') and str(i).endswith(', align 8'))
+            require(str(o[0].type) == 'i64' and o[1] in slots and slots[o[1]] is None and rhs.startswith('store i64 ') and str(i).endswith(', align 8'))
             slots[o[1]] = value(o[0])
         elif op == 'load':
-            require(str(i.type) == 'i64' and o[0] in slots and slots[o[0]] is not None and 'load i64, ' in str(i) and str(i).endswith(', align 8'))
+            require(str(i.type) == 'i64' and o[0] in slots and slots[o[0]] is not None and rhs.startswith('load i64, ') and str(i).endswith(', align 8'))
             vals[i] = slots[o[0]]
         elif op == 'icmp':
-            require('icmp eq i64 ' in str(i))
-            vals[i] = f'(= {value(o[0])} {value(o[1])})'
+            require(rhs.startswith('icmp eq i64 '))
+            vals[i] = expression('=', value(o[0]), value(o[1]))
         elif op in ('and', 'or'):
-            require(str(i.type) == 'i1' and f'{op} i1 ' in str(i))
-            vals[i] = f'({op} {value(o[0])} {value(o[1])})'
+            require(str(i.type) == 'i1' and rhs.startswith(f'{op} i1 '))
+            vals[i] = expression(op, value(o[0]), value(o[1]))
         elif op == 'select':
-            require(str(i.type) == 'i64' and 'select i1 ' in str(i))
-            vals[i] = f'(ite {value(o[0])} {value(o[1])} {value(o[2])})'
+            require(str(i.type) == 'i64' and rhs.startswith('select i1 '))
+            vals[i] = expression('ite', value(o[0]), value(o[1]), value(o[2]))
         else:
             raise ValueError('unsupported instruction: ' + op)
     entry = list(blocks[0].instructions)
@@ -71,7 +91,7 @@ def extract(ir, name):
         require(i.opcode in ('icmp', 'and', 'or', 'select'))
         evaluate(i)
     division = list(ok[-2].operands)
-    require('sdiv i64 ' in str(ok[-2]) and value(division[0]) == 'a' and list(ok[-1].operands) == [ok[-2]])
+    require(syntax(ok[-2]).startswith('sdiv i64 ') and value(division[0]) == 'a' and list(ok[-1].operands) == [ok[-2]])
     divisor = value(division[1])
     return f'''(set-logic QF_BV)
 (set-option :timeout 10000)
@@ -90,4 +110,8 @@ def extract(ir, name):
 if __name__ == '__main__':
     if len(sys.argv) != 3:
         raise SystemExit('usage: validate.py input.ll exact_function_symbol')
-    print(extract(Path(sys.argv[1]).read_text(), sys.argv[2]), end='')
+    with Path(sys.argv[1]).open('rb') as source:
+        data = source.read(262145)
+    if len(data) > 262144:
+        raise SystemExit('IR exceeds verifier input budget')
+    print(extract(data.decode('utf-8'), sys.argv[2]), end='')
