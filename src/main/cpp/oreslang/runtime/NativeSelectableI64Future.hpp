@@ -79,6 +79,7 @@ public:
     NativeSelectableI64Future() : state_(std::make_shared<State>()) {}
 
     // Copyable Future handles alias the same producer state.
+    bool valid_source() const noexcept { return bool(state_); }
     bool same_source(const NativeSelectableI64Future& other) const noexcept {
         return state_ == other.state_;
     }

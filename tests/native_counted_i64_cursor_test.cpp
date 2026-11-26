@@ -58,6 +58,10 @@ static void rollback_and_owner(){
     assert(foreign&&p.cancel()&&a->pending_readers()==0);
     {Cursor abandoned(1,{a});abandoned.begin_round();assert(a->pending_readers()==1);}
     assert(a->pending_readers()==0);
+    auto f=std::make_shared<Future>();
+    Future moved(std::move(*f));
+    try{Cursor invalid(1,{f});assert(false);}catch(const std::invalid_argument&){}
+    assert(moved.pending_waiters()==0);
 }
 static void producer_close_while_waiting(){
     auto a=std::make_shared<Channel>(),b=std::make_shared<Channel>();

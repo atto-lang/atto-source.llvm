@@ -93,9 +93,13 @@ public:
         if(count>1024)throw std::invalid_argument("SelectCountInvalid");
         if(!count){state_=State::Success;return;}
         if(sources.empty()||sources.size()>MaxCases)throw std::invalid_argument("counted source count");
-        for(const auto& source:sources)
+        for(const auto& source:sources) {
             if(!std::visit([](const auto& s){return bool(s);},source))
                 throw std::invalid_argument("null counted source");
+            if(auto future=std::get_if<std::shared_ptr<Future>>(&source);
+                    future && !(*future)->valid_source())
+                throw std::invalid_argument("moved-from counted Future");
+        }
         live_=sources;values_.reserve(count);
     }
     NativeCountedI64Cursor(const NativeCountedI64Cursor&)=delete;
