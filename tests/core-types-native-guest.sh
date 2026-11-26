@@ -17,7 +17,7 @@ work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
 for positive_fixture in edge-positive.atto edge-matrix-positive.atto bool-call-composition-positive.atto; do
   "$compiler" --target=host "$fixtures/$positive_fixture" > "$work/positive.ll" 2> "$work/compiler.err" ||
-    fail "$positive_fixture: real compiler could not link core/types"
+    { cat "$work/compiler.err" >&2; fail "$positive_fixture: real compiler could not link core/types"; }
   [[ -s "$work/positive.ll" ]] || fail "$positive_fixture: compiler produced no IR"
   grep -Fq '@main(' "$work/positive.ll" || fail "$positive_fixture: no compiled main in IR"
   for opt in 0 2; do
