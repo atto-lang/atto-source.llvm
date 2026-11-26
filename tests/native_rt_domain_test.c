@@ -11,7 +11,9 @@
  *   - stop() drains forwarded mail that handlers sent while draining.
  */
 #if defined(__linux__)
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #endif
 #define _POSIX_C_SOURCE 200809L
 #include "oreslang/runtime/NativeRtDomain.h"
