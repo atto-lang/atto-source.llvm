@@ -6312,6 +6312,7 @@ private:
         std::unordered_set<std::string> seen;
         std::string structural_field;
         bool wildcard_fallback = false;
+        bool exhaustive_type_fallback = false;
 
         while (token_.text != close) {
             if (arms.size() + (fallback ? 1u : 0u) >= 32)
@@ -6319,10 +6320,14 @@ private:
             // All three spellings designate one fallback, evaluated after concrete arms.
             const bool bare_default = accept("default");
             if (!bare_default && token_.text != "is") require("on");
-            if (!bare_default && token_.text == "default")
+            // Keep established ordinary value-match fallback spelling and
+            // precedence. The restricted new pipeline profile keeps its
+            // explicitly tested final-fallback syntax.
+            if (pipeline && !bare_default && token_.text == "default")
                 fail("native value match fallback must use 'default ->' without 'on'");
-            const bool wildcard = !bare_default && accept("_");
-            if (bare_default || wildcard) {
+            const bool on_default = !bare_default && accept("default");
+            const bool wildcard = !bare_default && !on_default && accept("_");
+            if (bare_default || on_default || wildcard) {
                 if (fallback)
                     fail("native value match can contain only one default arm");
                 if (token_.text == "when" || token_.text == "as")
@@ -6332,7 +6337,7 @@ private:
                 fallback = arm_value();
                 continue;
             }
-            if (fallback)
+            if (fallback && (pipeline || exhaustive_type_fallback || token_.text == "is"))
                 fail(wildcard_fallback ? "native value match wildcard arm must be last"
                                        : "native value match default arm must be last");
             if (accept("is")) {
@@ -6348,6 +6353,7 @@ private:
                 // The statically proven type exhausts all remaining values.
                 // Prior literal tests retain source priority.
                 wildcard_fallback = true;
+                exhaustive_type_fallback = true;
                 fallback = arm_value();
                 continue;
             }
