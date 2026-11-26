@@ -2441,11 +2441,26 @@ impl<'a> FnCx<'a> {
                 }
                 if a.ty == Type::Int && b.ty == Type::Int {
                     if *op == BinOp::Div {
-                        return Err(Diagnostic::new(
-                            pos,
-                            "E_UNSUPPORTED",
-                            "'/' on two ints is not admitted: whether int / int yields float or int is undecided (spec S-25); write a float operand, e.g. 7.0 / 2",
-                        ));
+                        // Signed quotient truncates toward zero. Admit only
+                        // divisions proved incapable of a division-specific
+                        // ordinary error until typed error edges are available.
+                        let literal = |v: &TE| match &v.e {
+                            TExpr::I64(n) => Some(*n),
+                            TExpr::Neg(inner) => match &inner.e {
+                                TExpr::I64(n) => n.checked_neg(),
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+                        let safe = match literal(&b) {
+                            Some(0) | None => false,
+                            Some(-1) => literal(&a).is_some_and(|n| n != i64::MIN),
+                            Some(_) => true,
+                        };
+                        if !safe {
+                            return Err(Diagnostic::new(pos, "E_UNSUPPORTED",
+                                "checked integer division requires a proven nonzero divisor and no MIN/-1 overflow, or typed ordinary-error lowering"));
+                        }
                     }
                 } else {
                     // Java binary numeric promotion: an int operand widens to float.
@@ -2471,8 +2486,7 @@ impl<'a> FnCx<'a> {
                 }
             }
             let ty = match op {
-                BinOp::Add | BinOp::Sub | BinOp::Mul => Type::Int,
-                BinOp::Div => unreachable!("int / int rejected above"),
+                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => Type::Int,
                 BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => Type::Bool,
                 BinOp::Eq | BinOp::Ne => {
                     if a.ty != b.ty {

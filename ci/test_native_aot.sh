@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export CARGO_NET_OFFLINE=true
-test "$(git hash-object frontend/src/check.rs)" = "96978d25b1f32b6be3c0810662ad60228f59ed7a"
+test "$(git hash-object frontend/src/check.rs)" = "52a347f275792373540183678ae733adead3ec9a"
 test "$(git hash-object frontend/src/parser.rs)" = "58e7ef5349b19d001906a3a062bdc4f3b2b0d856"
 test "$(git hash-object frontend/src/lexer.rs)" = "63585d3a81e004746146e81a602e18021bd01d4a"
 
@@ -216,5 +216,6 @@ fi
 echo "PASS atomic output, failure preservation, and cleanup"
 
 bash ci/test_guard_dual_form_native.sh
+bash ci/test_safe_signed_division_native.sh
 
 echo "PASS LLVM_NATIVE_AOT_SCALAR_GUEST cases=$total toolchain=clang no_guest_vm=1 zero_gc_scalar=1"
