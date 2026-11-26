@@ -632,6 +632,9 @@ Program parse_program(std::string_view source, bool experimental_owned_int = fal
                       bool experimental_pointer_int_aot = false,
                       int language_version = 0);
 
+// Standalone opt-in strict signed-i64 verified source; never ordinary fallback.
+Program parse_verified_strict_i64(std::string_view source, int language_version = 0);
+
 // Standalone host protocol artifact admission. Scalar main is optional.
 Program parse_verified_protocol_actor_library(std::string_view source, int language_version = 0);
 
