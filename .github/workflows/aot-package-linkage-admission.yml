@@ -1,0 +1,28 @@
+name: LLVM AOT package linkage admission (host driver)
+on:
+  pull_request:
+    paths:
+      - 'scripts/compile-aot.sh'
+      - 'tests/aot_package_linkage_admission.sh'
+      - '.github/workflows/aot-package-linkage-admission.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  driver:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact source and execute negative admission
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          git rev-parse HEAD HEAD^{tree}
+          bash -n scripts/compile-aot.sh tests/aot_package_linkage_admission.sh
+          bash tests/aot_package_linkage_admission.sh
