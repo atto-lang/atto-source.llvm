@@ -88,6 +88,27 @@ ATTO
 run_ok brace-two-tests 7 <<'ATTO'
 pub fnc main(): int { guard true, false { return 7; } return 42; }
 ATTO
+run_ok explicit-lazy-operators 42 <<'ATTO'
+fnc overflow_if_called(int value): bool { return value + 1 > 0; }
+fnc and_case(bool a): bool { return a && overflow_if_called(9223372036854775807); }
+fnc or_case(bool a): bool { return a || overflow_if_called(9223372036854775807); }
+pub fnc main(): int {
+  guard !and_case(false), or_case(true), true || false && false { return 7; }
+  return 42;
+}
+ATTO
+run_ok mixed-explicit-guard 42 <<'ATTO'
+pub fnc main(): int {
+  guard true, false || true, true && true else return 7; end
+  return 42;
+}
+ATTO
+run_reject nonbool-lazy-and E_TYPE <<'ATTO'
+pub fnc main(): int { guard false && 42 { return 7; } return 42; }
+ATTO
+run_reject nonbool-lazy-or E_TYPE <<'ATTO'
+pub fnc main(): int { guard true || 42 else return 7; end return 42; }
+ATTO
 run_reject brace-fallthrough E_GUARD <<'ATTO'
 pub fnc main(): int { guard true { val x = 1; } return 42; }
 ATTO
@@ -115,6 +136,6 @@ ATTO
 run_reject keyword-missing-end "" <<'ATTO'
 pub fnc main(): int { guard true else return 7; fi return 42; }
 ATTO
-test "$accepted" -eq 9
-test "$rejected" -eq 9
+test "$accepted" -eq 11
+test "$rejected" -eq 11
 echo "GUARD_DUAL_FORM_NATIVE_AOT accepted=$accepted rejected=$rejected real_compiler=yes compiled_guest=yes"

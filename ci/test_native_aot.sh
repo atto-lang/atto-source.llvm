@@ -4,8 +4,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export CARGO_NET_OFFLINE=true
 test "$(git hash-object frontend/src/check.rs)" = "fc8806e97d94f408fd145f48b73ab33324dae2fa"
-test "$(git hash-object frontend/src/parser.rs)" = "5c38eae45452aee597885a38af8903b54f1f4e37"
-test "$(git hash-object frontend/src/lexer.rs)" = "23f8fe950b47627110cf3265b771398bb46213e3"
+test "$(git hash-object frontend/src/parser.rs)" = "cd198a0876d150bd712178a4c176fd6f82a7c943"
+test "$(git hash-object frontend/src/lexer.rs)" = "a8d32dff48970132b83e70a7704624b31679843a"
 
 cargo test --offline
 cargo build --offline --release --bin atto-llvm

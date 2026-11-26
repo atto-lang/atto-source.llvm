@@ -1766,7 +1766,7 @@ impl Parser {
     }
 
     /// `condition = condition_and { "|" condition_and } ;
-    ///  condition_and = equality { "," equality } ;`
+    ///  condition_and = logical_or { "," logical_or } ;`
     fn parse_cond(&mut self) -> R<Expr> {
         self.cond += 1;
         let r = (|| {
@@ -1792,13 +1792,13 @@ impl Parser {
 
     fn parse_cond_and(&mut self) -> R<Expr> {
         let mut links = 0;
-        let mut left = self.parse_equality()?;
+        let mut left = self.parse_logical_or()?;
         while *self.peek() == Tok::Comma {
             let pos = self.pos();
             self.advance();
             self.grow(1)?;
             links += 1;
-            let right = self.parse_equality()?;
+            let right = self.parse_logical_or()?;
             left = Expr {
                 kind: ExprKind::Binary(BinOp::And, Box::new(left), Box::new(right)),
                 pos,
@@ -1819,7 +1819,7 @@ impl Parser {
     }
 
     fn parse_ternary(&mut self) -> R<Expr> {
-        let mut c = self.parse_equality()?;
+        let mut c = self.parse_logical_or()?;
         // Functional pipeline: value |> f |> g(extra) lowers to g(f(value), extra).
         // Only ordinary named functions are admitted: no computed callees,
         // receiver calls or actor piping. This preserves argument evaluation
@@ -1867,6 +1867,47 @@ impl Parser {
             _ => {}
         }
         Ok(c)
+    }
+
+    // Explicit Boolean operators work in ordinary expressions as well as guards.
+    // Lower directly to a typed lazy conditional, not eager scalar bitwise IR.
+    // The Boolean literal arm forces both operands to be Bool in the checker.
+    fn parse_logical_or(&mut self) -> R<Expr> {
+        let mut links = 0;
+        let mut left = self.parse_logical_and()?;
+        while *self.peek() == Tok::PipePipe {
+            let pos = self.pos();
+            self.advance();
+            self.grow(1)?;
+            links += 1;
+            let right = self.parse_logical_and()?;
+            left = Expr {
+                kind: ExprKind::Ternary(Box::new(left),
+                    Box::new(Expr { kind: ExprKind::Bool(true), pos }), Box::new(right)),
+                pos,
+            };
+        }
+        self.height -= links;
+        Ok(left)
+    }
+
+    fn parse_logical_and(&mut self) -> R<Expr> {
+        let mut links = 0;
+        let mut left = self.parse_equality()?;
+        while *self.peek() == Tok::AmpAmp {
+            let pos = self.pos();
+            self.advance();
+            self.grow(1)?;
+            links += 1;
+            let right = self.parse_equality()?;
+            left = Expr {
+                kind: ExprKind::Ternary(Box::new(left), Box::new(right),
+                    Box::new(Expr { kind: ExprKind::Bool(false), pos })),
+                pos,
+            };
+        }
+        self.height -= links;
+        Ok(left)
     }
 
     fn parse_equality(&mut self) -> R<Expr> {
@@ -2302,7 +2343,9 @@ fn describe(t: &Tok) -> String {
                 Tok::Question => "?",
                 Tok::Pipe => "|",
                 Tok::PipeGt => "|>",
+                Tok::PipePipe => "||",
                 Tok::Amp => "&",
+                Tok::AmpAmp => "&&",
                 Tok::At => "@",
                 _ => "?",
             };
