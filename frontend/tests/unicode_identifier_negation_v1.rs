@@ -24,11 +24,11 @@ fn unicode_guest_compiles_and_not_lowers_like_bang() {
 #[test]
 fn rejects_invalid_negation_and_hidden_bidi() {
     for source in [
-        "pub fnc main(): bool { return ¬1; }",
+        "pub fnc main(): int { if ¬1 then return 42; else return 0; fi }",
         "pub fnc main(): int { return 未定義; }",
-        "pub fnc main(bool b): bool { return b¬; }",
-        "pub fnc main(bool b): bool { return b ¬eq true; }",
-        "pub fnc main(bool b): bool { return b ¬= true; }",
+        "pub fnc main(): int { val b = true; if b¬ then return 42; else return 0; fi }",
+        "pub fnc main(): int { val b = true; if b ¬eq true then return 42; else return 0; fi }",
+        "pub fnc main(): int { val b = true; if b ¬= true then return 42; else return 0; fi }",
     ] {
         assert!(compile(source).is_err(), "{source}");
     }
@@ -40,11 +40,18 @@ fn rejects_invalid_negation_and_hidden_bidi() {
 #[test]
 fn canonical_punctuation_checks_both_operands_and_preserves_precedence() {
     for source in [
-        "pub fnc main(): bool { return false && 1; }",
-        "pub fnc main(): bool { return true || 1; }",
-        "pub fnc main(): bool { return 1 && true; }",
-        "pub fnc main(): bool { return false && unknown; }",
+        "pub fnc main(): int { if false && 1 then return 42; else return 0; fi }",
+        "pub fnc main(): int { if true || 1 then return 42; else return 0; fi }",
+        "pub fnc main(): int { if 1 && true then return 42; else return 0; fi }",
+        "pub fnc main(): int { if false && unknown then return 42; else return 0; fi }",
     ] { assert!(compile(source).is_err(), "{source}"); }
     let source = "pub fnc main(): int { return (false || true && ¬false) ? 42 : 0; }";
     assert!(compile(source).is_ok());
+}
+
+#[test]
+fn invalid_unicode_not_has_real_type_diagnostic() {
+    for source in ["pub fnc main(): int { if ¬1 then return 42; else return 0; fi }", "pub fnc main(): int { if false && ¬1 then return 42; else return 0; fi }"] {
+        assert_eq!(compile(source).unwrap_err().code, "E_TYPE");
+    }
 }
