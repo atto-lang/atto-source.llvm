@@ -1809,6 +1809,10 @@ public:
                  !program.classes.empty() || !program.module.empty())) {
             fail("first AOT continuation slice requires exactly one standalone suspend function");
         }
+        if (boolean_alias_used_ && (boolean_nominal_seen_ || program.module == "boolean" ||
+                defined_type_aliases_.count("boolean") || forwards_.count("boolean") ||
+                !program.imports.empty() || !program.namespace_imports.empty()))
+            fail("E_TYPE_ALIAS_SHADOWED: boolean requires unambiguous standalone scalar type resolution");
         program.sum_types = std::move(sum_types_);
         return program;
     }
@@ -1908,6 +1912,7 @@ private:
         decl.exported = exported;
         decl.offset = token_.offset;
         decl.name = identifier();
+        if (decl.name == "boolean") boolean_nominal_seen_ = true;
         if (!inverted_struct_names_.insert(decl.name).second)
             fail("duplicate inverted struct declaration");
         require("as");
@@ -2194,6 +2199,7 @@ private:
                   "define model is a runtime type and value");
 
         decl.name = identifier();
+        if (decl.name == "boolean") boolean_nominal_seen_ = true;
         if (types::protected_core_identity(decl.name))
             fail("E_PRELUDE_SPOOF: type/trait declaration cannot replace compiler-owned core identity");
         if (native_ownership_intrinsic_name(decl.name))
@@ -3588,6 +3594,7 @@ private:
             do {
                 GenericParameter slot;
                 slot.name = identifier();
+                if (slot.name == "boolean") boolean_nominal_seen_ = true;
                 if (slot.name == "_" || slot.name.rfind("$", 0) == 0)
                     fail("invalid generic parameter name");
                 for (const auto& prior : value.generic_parameters)
@@ -3691,7 +3698,7 @@ private:
                 }
                 if (accept("int")) {
                     parameter.scalar_type = ScalarType::I64;
-                } else if (accept("bool")) {
+                } else if (accept_boolean_type()) {
                     parameter.scalar_type = ScalarType::Bool;
                 } else if (accept("string") || accept("String")) {
                     parameter.scalar_type = ScalarType::String;
@@ -3735,7 +3742,7 @@ private:
         if (!value.returns_void) {
             if (accept("int")) {
                 value.return_type = ScalarType::I64;
-            } else if (accept("bool")) {
+            } else if (accept_boolean_type()) {
                 value.return_type = ScalarType::Bool;
             } else if (accept("string") || accept("String")) {
                 value.return_type = ScalarType::String;
@@ -4125,7 +4132,8 @@ private:
                     sum_look.next().kind == Kind::Identifier;
             if (alias_prefixed || type_first_const || type_right_const ||
                     ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
-                    (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "String" || sum_first.text == "string"))) {
+                    (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "String" || sum_first.text == "string" ||
+                     (sum_first.text == "boolean" && sum_look.next().kind == Kind::Identifier)))) {
                 const std::string mode = type_first_const ? "const" : std::string(token_.text);
                 if (!type_first_const) { advance(); if (mode == "let") accept("mut"); }
                 binding.owner_mutable = mode != "const"; binding.assignable = mode == "let";
@@ -4138,7 +4146,7 @@ private:
                     advance();
                     binding.scalar_type = resolve_scalar_alias(binding.pending_type_alias);
                 } else {
-                    binding.scalar_type = accept("bool") ? ScalarType::Bool : (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
+                    binding.scalar_type = accept_boolean_type() ? ScalarType::Bool : (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
                     if (binding.scalar_type == ScalarType::I64) require("int");
                 }
                 if (!type_right_const) binding.name = identifier();
@@ -4439,7 +4447,7 @@ private:
                         binding.heap_owned = experimental_owned_int_ && accept("owned");
                         if (accept("int")) {
                             binding.scalar_type = ScalarType::I64;
-                        } else if (accept("bool")) {
+                        } else if (accept_boolean_type()) {
                             if (binding.heap_owned)
                                 fail("native owned bool region lowering is not admitted");
                             binding.scalar_type = ScalarType::Bool;
@@ -5820,7 +5828,7 @@ private:
                     fail("native as? requires Option<T> checked-cast lowering");
                 auto cast = make_expression(Expression::Kind::Cast, offset);
                 if (accept("int")) cast->cast_target = ScalarType::I64;
-                else if (accept("bool")) cast->cast_target = ScalarType::Bool;
+                else if (accept_boolean_type()) cast->cast_target = ScalarType::Bool;
                 else if (accept("string") || accept("String"))
                     cast->cast_target = ScalarType::String;
                 else if (token_.kind == Kind::Identifier &&
@@ -7137,6 +7145,16 @@ private:
         return true;
     }
 
+    // Contextual alias: consume only an unqualified type token, not an identifier
+    // in expression position. Ambiguous declarations are checked before IR.
+    bool accept_boolean_type() {
+        if (accept("bool")) return true;
+        if (token_.text != "boolean" || peek_next().text == ".") return false;
+        boolean_alias_used_ = true;
+        advance();
+        return true;
+    }
+
     // Keyword-delimited `if` header after the condition, matching the Java
     // reference: the `;` is optional, `then` is canonical and `do` is the
     // deprecated spelling. Returns false when the caller must parse a `{` block.
@@ -7242,6 +7260,7 @@ private:
         // '_' is reserved for wildcard/inference-hole use, never a
         // stable runtime nominal identity or module contract name.
         std::string name = identifier();
+        if (name == "boolean") boolean_nominal_seen_ = true;
         if (native_ownership_intrinsic_name(name))
             fail("NATIVE_OWNERSHIP_INTRINSIC_RESERVED: compiler-owned nominal cannot be redefined");
         if (name == "Option" || name == "Result")
@@ -9523,6 +9542,8 @@ private:
     bool experimental_pointer_int_aot_ = false;
     // Type-only declarations retain source alias identity until checked
     // catalog validation and extension-call rewriting complete.
+    bool boolean_alias_used_ = false;
+    bool boolean_nominal_seen_ = false;
     std::unordered_map<std::string, std::string> scalar_alias_targets_;
     std::unordered_set<std::string> type_only_nominals_;
     std::unordered_set<std::string> constrained_aliases_;
