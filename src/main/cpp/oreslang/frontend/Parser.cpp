@@ -492,7 +492,10 @@ public:
         // rejects them before IR exactly like any other unexpected symbol.
         // '^' is the caret return marker. '&' stays an unsupported token:
         // there is no address-of, and the lexer rejects it before parsing.
-        if (std::string_view("(){}[],:;+-*/%=.<>@?!^").find(ch) != std::string_view::npos) {
+        // Single pipe is a token for explicit unsupported actor union diagnostics.
+        // This does not admit union lowering or scalar bitwise OR; longest-match
+        // pipeline and Boolean operators have already been handled above.
+        if (std::string_view("(){}[],:;+-*/%=.<>@?!^|").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }

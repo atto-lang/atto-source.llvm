@@ -7,7 +7,7 @@
 
 using oreslang::parse_program;
 #define check(condition) do { if (!(condition)) { \
-    std::fprintf(stderr, "actor admission failure line %d: %s\\n", __LINE__, #condition); \
+    std::fprintf(stderr, "actor admission failure line %d: %s\n", __LINE__, #condition); \
     std::abort(); } } while (false)
 
 static constexpr std::string_view valid_actor = R"(
@@ -63,6 +63,10 @@ int main() {
     denied(changed_header("Worker receives String as"),
            "NATIVE_ACTOR_RECEIVES_TYPE_UNSUPPORTED");
     denied(changed_header("Worker receives int | String as"),
+           "NATIVE_ACTOR_RECEIVES_UNION_UNSUPPORTED");
+    denied(changed_header("Worker receives int|int as"),
+           "NATIVE_ACTOR_RECEIVES_UNION_UNSUPPORTED");
+    denied(changed_header("Worker receives int /* separator */ | int as"),
            "NATIVE_ACTOR_RECEIVES_UNION_UNSUPPORTED");
     denied(changed_header("Worker receives int receives int as"),
            "NATIVE_ACTOR_RECEIVES_DUPLICATE");
