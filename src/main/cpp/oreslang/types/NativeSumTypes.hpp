@@ -1,4 +1,5 @@
 #pragma once
+#include "oreslang/types/NativeNumericErrorAbi.hpp"
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/types/FunctorTypeRules.hpp"
@@ -333,6 +334,16 @@ inline void resolve_native_sums(Program& program) {
                         "native Array.get_copy result requires Option<int>, no implicit conversion");
                 e.sum_type = sum;
                 return {ScalarType::I64, sum};
+            }
+            if (types::native_error_projection(e.name)) {
+                if (e.kind != E::SumAccess || !e.arguments.empty() ||
+                        !e.argument_names.empty() || owner.sum != "Result<int,Error>" ||
+                        !types::native_numeric_error_type(types::native_error_projection_type(e.name)) ||
+                        !native_sum(program, owner.sum).trap_error)
+                    throw std::runtime_error("native numeric Error projection requires nominal Result<int,Error>");
+                e.sum_type = owner.sum;
+                e.resolved_type = ScalarType::Bool;
+                return {ScalarType::Bool};
             }
             if (!owner.sum.empty()) {
                 const NativeSumType type = native_sum(program, owner.sum);

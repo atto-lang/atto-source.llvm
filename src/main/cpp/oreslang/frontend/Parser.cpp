@@ -1,3 +1,4 @@
+#include "oreslang/types/NativeNumericErrorAbi.hpp"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/SHA256.h"
 #include "oreslang/frontend/CallableSelector.hpp"
@@ -5798,6 +5799,25 @@ private:
     std::unique_ptr<Expression> comparison() {
         auto left = shift(); // main: shifts bind tighter than comparison and cast
         while (true) {
+            // Closed nominal Error observation, not a general Error object ABI.
+            // Fuse only the Java spelling: result.unwrap_err() is type E.
+            if (token_.text == "is") {
+                const auto offset = token_.offset;
+                advance();
+                require("type");
+                const std::string name = identifier();
+                if (!types::native_numeric_error_type(name) ||
+                        left->kind != Expression::Kind::ArrayCall ||
+                        left->name != "unwrap_err" || !left->left ||
+                        !left->arguments.empty() || !left->argument_names.empty())
+                    fail("native is type requires a checked numeric Result.unwrap_err() projection");
+                auto projection = make_expression(Expression::Kind::SumAccess, offset);
+                projection->name = std::string(types::native_error_projection_prefix) + name;
+                projection->left = std::move(left->left);
+                projection->resolved_type = ScalarType::Bool;
+                left = std::move(projection);
+                continue;
+            }
             // Match Java comparison precedence. A checked scalar identity cast
             // is a proof, never a numeric/string conversion or a bitcast.
             if (token_.text == "as") {
@@ -7233,6 +7253,8 @@ private:
             fail("NATIVE_OWNERSHIP_INTRINSIC_RESERVED: compiler-owned nominal cannot be redefined");
         if (name == "Option" || name == "Result")
             fail("native sum type names are compiler-owned");
+        if (types::native_numeric_error_type(name))
+            fail("native numeric Error identities are compiler-owned");
         if (types::protected_core_identity(name))
             fail("E_PRELUDE_SPOOF: nominal declaration cannot replace compiler-owned core identity");
         if (name == "pattern") fail("contextual pattern keyword cannot declare a native nominal type");

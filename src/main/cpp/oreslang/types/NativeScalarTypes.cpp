@@ -1,3 +1,4 @@
+#include "oreslang/types/NativeNumericErrorAbi.hpp"
 #include "oreslang/types/NativeScalarTypes.hpp"
 #include "oreslang/types/NativeClassLayout.hpp"
 #include "oreslang/types/NativeSumTypes.hpp"
@@ -112,6 +113,13 @@ void validate_native_scalar_types(const Program& program) {
                 require(expression(*e.left, locals), {Kind::Sum, e.sum_type}, e.offset, "sum receiver type");
                 const auto& type = native_sum(program, e.sum_type);
                 const bool option = type.kind == NativeSumType::Kind::Option;
+                if (types::native_error_projection(e.name)) {
+                    if (option || !type.trap_error || e.sum_type != "Result<int,Error>" ||
+                            !e.arguments.empty() || !e.argument_names.empty() ||
+                            !types::native_numeric_error_type(types::native_error_projection_type(e.name)))
+                        fail(e.offset, "native numeric Error projection requires nominal Result<int,Error>");
+                    return scalar(true);
+                }
                 const bool query = option ? e.name == "is_some" || e.name == "is_none" : e.name == "is_ok" || e.name == "is_err";
                 const bool with_argument = e.name == "unwrap_or" || e.name == "expect";
                 if ((!query && e.name != "unwrap" && e.name != "unwrap_or" && e.name != "expect") || e.arguments.size() != (with_argument ? 1u : 0u))
