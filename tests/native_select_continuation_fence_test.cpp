@@ -284,7 +284,48 @@ static void execution_raii_retirement_is_exactly_once() {
     assert(fence.generation() == 2);
 }
 
+static void mixed_pending_execution_churn() {
+    using Fence = NativeSelectContinuationFence<64>;
+    Fence fence;
+    std::array<Fence::Ticket, 96> prior{};
+    for (int round = 0; round < 256; ++round) {
+        std::array<Fence::Ticket, 64> pending{};
+        std::array<Fence::Execution, 32> leases{};
+        for (auto& ticket : pending)
+            ticket = fence.register_continuation(fence.generation());
+        for (std::size_t i = 0; i < leases.size(); ++i) {
+            leases[i] = fence.try_claim(pending[i]);
+            assert(leases[i].valid());
+        }
+        assert(fence.executing() == 32 && fence.pending_tickets() == 32);
+        bool exhausted = false;
+        try { (void)fence.register_continuation(fence.generation()); }
+        catch (const std::overflow_error&) { exhausted = true; }
+        assert(exhausted);
+        assert(!fence.advance(fence.generation()));
+        for (const auto& stale : prior) {
+            assert(!fence.try_claim(stale).valid());
+            assert(!stale.close());
+        }
+        for (std::size_t i = 32; i < pending.size(); ++i)
+            assert(pending[i].close());
+        for (std::size_t i = 0; i < pending.size(); ++i)
+            prior[i] = pending[i];
+        for (std::size_t i = 64; i < prior.size(); ++i)
+            prior[i] = fence.register_continuation(fence.generation());
+        for (auto& lease : leases) {
+            assert(lease.close());
+            assert(!lease.close());
+        }
+        assert(fence.executing() == 0 && fence.pending_tickets() == 32);
+        assert(fence.advance(fence.generation()));
+        assert(fence.pending_tickets() == 0);
+    }
+    assert(fence.close() && fence.retirement_ready());
+}
+
 int main() {
+    mixed_pending_execution_churn();
     claim_holds_generation_until_physical_retirement();
     stale_and_foreign_tickets_fail_closed();
     physical_capacity_includes_claimed_execution();
