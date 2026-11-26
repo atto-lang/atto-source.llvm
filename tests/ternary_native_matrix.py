@@ -40,6 +40,8 @@ PAIR = (
 
 POSITIVE = dict(PORTABLE_POSITIVE)
 POSITIVE.update({
+    "explicit-return-caret-arms": ("pub fnc main(): int { let int answer = true ? { return 40; } : { ^ 7; }; return answer + 2; }", 42),
+    "explicit-false-arm": ("pub fnc main(): int { return false ? 7 : { ^ 42; }; }", 42),
     "parenthesized-condition": ("""
 pub fnc main(): int {
   return ((20 + 1 == 21)) ? 42 : 7;
@@ -91,6 +93,10 @@ pub fnc main(): int {
 
 
 NEGATIVE = {
+    "reject-empty-arm": ("pub fnc main(): int { return true ? {} : 7; }", "E_VALUE_ARM"),
+    "reject-bare-record-arm": ("pub fnc main(): int { return true ? {status: 42} : 7; }", "E_VALUE_ARM"),
+    "reject-implicit-tail-arm": ("pub fnc main(): int { return false ? 7 : {42}; }", "E_VALUE_ARM"),
+    "reject-unsupported-prefix": ("pub fnc main(): int { return true ? { const x: int = 42; return x; } : 7; }", "E_VALUE_ARM"),
     "reject-int-truthiness": (
         PORTABLE_REJECT["reject_integer_truthiness"]["source"],
         "ternary condition requires bool, got int",
