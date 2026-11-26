@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - 'scripts/compile-aot.sh'
+      - 'scripts/link-scalar-object.sh'
       - 'tests/aot_package_linkage_admission.sh'
       - '.github/workflows/aot-package-linkage-admission.yml'
   workflow_dispatch:
@@ -26,5 +27,5 @@ jobs:
           git rev-parse HEAD HEAD^{tree}
           clang --version
           ld.lld --version
-          bash -n scripts/compile-aot.sh tests/aot_package_linkage_admission.sh
+          bash -n scripts/compile-aot.sh scripts/link-scalar-object.sh tests/aot_package_linkage_admission.sh
           bash tests/aot_package_linkage_admission.sh
