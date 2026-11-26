@@ -105,13 +105,32 @@ public:
                     need(")"); need(";");
                     initialized_[step.index] = true;
                     contents_[step.index] = step.value->known;
+                } else if (take("fill")) {
+                    if (!live_) reject("fill after close", token().offset);
+                    step.kind = Step::Kind::Fill;
+                    need("("); step.value = expression(); need(")"); need(";");
+                    // Evaluate before touching any cell, including the source cell.
+                    const auto value = step.value->known;
+                    for (std::size_t i = 0; i < count_; ++i) {
+                        contents_[i] = value;
+                        initialized_[i] = true;
+                    }
+                } else if (take("swap_at")) {
+                    if (!live_) reject("swap after close", token().offset);
+                    step.kind = Step::Kind::Swap;
+                    need("("); step.index = index_literal(0, count_ - 1);
+                    need(","); step.second_index = index_literal(0, count_ - 1);
+                    need(")"); need(";");
+                    if (!initialized_[step.index] || !initialized_[step.second_index])
+                        reject("swap requires two initialized elements", token().offset);
+                    std::swap(contents_[step.index], contents_[step.second_index]);
                 } else if (take("close")) {
                     if (!live_) reject("double close", token().offset);
                     step.kind = Step::Kind::Close;
                     need("("); need(")"); need(";");
                     live_ = false;
                 } else {
-                    reject("only write(value), write_at(index,value) or close() are pointer effects", token().offset);
+                    reject("unsupported pointer effect in bounded scalar profile", token().offset);
                 }
             }
             plan.steps.push_back(std::move(step));

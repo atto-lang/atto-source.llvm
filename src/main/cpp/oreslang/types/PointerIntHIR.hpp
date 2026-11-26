@@ -27,11 +27,12 @@ struct Expr {
 };
 
 struct Step {
-    enum class Kind { Write, Scalar, Close };
+    enum class Kind { Write, Scalar, Close, Fill, Swap };
     Kind kind = Kind::Close;
     std::string name;
     std::size_t index = 0;
     std::unique_ptr<Expr> value;
+    std::size_t second_index = 0; // only Swap may use this field
 };
 
 struct Plan {
