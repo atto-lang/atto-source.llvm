@@ -35,6 +35,15 @@ std::string emit_verified_scalar_namespace_consumer(
     std::string_view admitted_consumer_source,
     const std::vector<VerifiedScalarNamespaceBinding>& bindings);
 
+// Independently approved source digest and interface release are both required.
+// This produces IR only, not a signed or admitted native object.
+std::string emit_verified_scalar_namespace_provider(
+    std::string_view admitted_provider_source,
+    std::string_view expected_source_sha256,
+    const VerifiedScalarNamespaceBinding& binding,
+    std::string_view namespace_name,
+    std::string_view function_name);
+
 // Opt-in scalar-only continuation IR; external host owns and pins frame storage.
 std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop);
 
