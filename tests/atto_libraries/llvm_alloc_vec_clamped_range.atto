@@ -1,0 +1,14 @@
+// expect-exit: 42
+import module vec from "atto.alloc/vec";
+import module num from "atto.core/num";
+pub fnc main(): int {
+  val int upper = num.max_value();
+  val int lower = num.min_value();
+  val int a = vec.sum_range(upper, 0);
+  val int b = vec.sum_range(upper, 0 - 1);
+  val int c = vec.sum_range(upper, 1) - upper;
+  val int d = vec.sum_range(lower, 1) - lower;
+  val int e = vec.sum_range(1, 100);
+  val int f = vec.sum_range(2, 3);
+  return a + b + c + d + e + f - 3;
+}
