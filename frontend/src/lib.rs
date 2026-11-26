@@ -16,6 +16,7 @@ pub mod generator_cfg;
 pub mod generator_frame;
 pub mod lexer;
 pub mod parser;
+mod struct_value_guest;
 pub mod target_syntax;
 pub mod target_typed;
 pub mod wasm;
@@ -63,10 +64,22 @@ pub fn compile(source: &str) -> Result<Vec<u8>, Diagnostic> {
                     if let Some(start) = pending_struct.take() {
                         if matches!(toks.get(i+1).map(|t| &t.tok),
                             Some(lexer::Tok::Ident(w)) if w == "with") {
-                            let parsed = parser::Parser::new(toks[start..].to_vec())
-                                .parse_struct_with_target()?;
-                            return Err(Diagnostic::new(parsed.pos, "E_UNSUPPORTED",
-                                "attached struct parsed; checked value ABI and initialization proof required before emission"));
+                            if start != 0 {
+                                return Err(Diagnostic::new(toks[start].pos, "E_UNSUPPORTED",
+                                    "attached struct execution is restricted to one standalone file-local declaration"));
+                            }
+                            let program = struct_value_guest::lower(toks.clone())?;
+                            let typed = check::check(&program)?;
+                            if typed.heap || typed.strings || !typed.actors.is_empty() {
+                                return Err(Diagnostic::new(toks[start].pos, "E_UNSUPPORTED",
+                                    "scalar struct lowering must not allocate a class, heap, string or actor"));
+                            }
+                            let bytes = wasm::emit(&typed);
+                            if bytes.len() > wasm::MAX_OUTPUT {
+                                return Err(Diagnostic::new(toks[start].pos, "E_OUTPUT_LIMIT",
+                                    "generated module exceeds 1 MiB"));
+                            }
+                            return Ok(bytes);
                         }
                     }
                 }
