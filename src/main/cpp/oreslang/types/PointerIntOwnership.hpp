@@ -135,6 +135,8 @@ inline void verify_plan(const Plan& plan) {
                              left * right);
             break;
         }
+        default:
+            ownership_error("invalid pointer expression kind");
         }
         if (expr.known != result)
             ownership_error("parser HIR constant annotation disagrees with ownership semantics");
@@ -166,6 +168,8 @@ inline void verify_plan(const Plan& plan) {
             live = false;
             ++close_count;
             break;
+        default:
+            ownership_error("invalid pointer step kind");
         }
     }
     if (live || close_count != 1)
