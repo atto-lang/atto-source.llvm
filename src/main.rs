@@ -964,6 +964,8 @@ fn cli() -> Result<(), String> {
 mod sha256;
 mod compiler_cache_key;
 mod compiler_artifact_receipt;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod compiler_artifact_store;
 fn main() {
     if let Err(e) = cli() {
         eprintln!("{e}");
