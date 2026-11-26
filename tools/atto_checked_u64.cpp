@@ -167,9 +167,42 @@ public:
             out += "declare { i64, i1 } " + intrinsic + "(i64, i64)\n";
             out += "define internal i64 @checked_" + s + "(i64 %a, i64 %b) {\nentry:\n  %r = call { i64, i1 } " + intrinsic + "(i64 %a, i64 %b)\n  %bad = extractvalue { i64, i1 } %r, 1\n  br i1 %bad, label %overflow, label %ok\noverflow:\n  call void @llvm.trap()\n  unreachable\nok:\n  %v = extractvalue { i64, i1 } %r, 0\n  ret i64 %v\n}\n";
         }
-        // Avoid a freestanding wasm32 __multi3 dependency at -O0. The
-        // divide-before-multiply guard is unsigned and never divides by zero.
-        out += "define internal i64 @checked_mul(i64 %a, i64 %b) {\nentry:\n  %zero = icmp eq i64 %b, 0\n  br i1 %zero, label %ok, label %guard\nguard:\n  %limit = udiv i64 -1, %b\n  %bad = icmp ugt i64 %a, %limit\n  br i1 %bad, label %overflow, label %ok\noverflow:\n  call void @llvm.trap()\n  unreachable\nok:\n  %v = mul i64 %a, %b\n  ret i64 %v\n}\n";
+        // Multiply 32-bit limbs: no wide division or wide multiply helper.
+        // Each partial product fits in 64 bits. Reject any carry above bit 63.
+        out += R"(define internal i64 @checked_mul(i64 %a, i64 %b) {
+entry:
+  %al = and i64 %a, 4294967295
+  %bl = and i64 %b, 4294967295
+  %ah = lshr i64 %a, 32
+  %bh = lshr i64 %b, 32
+  %an = icmp ne i64 %ah, 0
+  %bn = icmp ne i64 %bh, 0
+  %both = and i1 %an, %bn
+  br i1 %both, label %overflow, label %partial
+partial:
+  %lo = mul i64 %al, %bl
+  %cross1 = mul i64 %ah, %bl
+  %cross2 = mul i64 %al, %bh
+  %bad1 = icmp ugt i64 %cross1, 4294967295
+  %bad2 = icmp ugt i64 %cross2, 4294967295
+  %badcross = or i1 %bad1, %bad2
+  br i1 %badcross, label %overflow, label %carry
+carry:
+  %lohi = lshr i64 %lo, 32
+  %cross = add i64 %cross1, %cross2
+  %hi = add i64 %cross, %lohi
+  %badhi = icmp ugt i64 %hi, 4294967295
+  br i1 %badhi, label %overflow, label %ok
+overflow:
+  call void @llvm.trap()
+  unreachable
+ok:
+  %low = and i64 %lo, 4294967295
+  %upper = shl i64 %hi, 32
+  %v = or i64 %upper, %low
+  ret i64 %v
+}
+)";
         for (std::size_t i = 0; i < funcs.size(); ++i) {
             const auto& f = funcs[i]; out += "define internal i64 @f" + std::to_string(i) + "(";
             for (std::size_t p = 0; p < f.params.size(); ++p) out += (p ? ", i64 %p" : "i64 %p") + std::to_string(p);
