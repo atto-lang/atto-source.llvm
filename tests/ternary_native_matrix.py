@@ -40,7 +40,7 @@ PAIR = (
 
 POSITIVE = dict(PORTABLE_POSITIVE)
 POSITIVE.update({
-    "explicit-return-caret-arms": ("pub fnc main(): int { const answer: int = true ? { return 40; } : { ^ 7; }; return answer + 2; }", 42),
+    "explicit-return-caret-arms": ("pub fnc main(): int { let int answer = true ? { return 40; } : { ^ 7; }; return answer + 2; }", 42),
     "explicit-false-arm": ("pub fnc main(): int { return false ? 7 : { ^ 42; }; }", 42),
     "parenthesized-condition": ("""
 pub fnc main(): int {
