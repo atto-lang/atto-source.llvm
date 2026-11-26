@@ -199,3 +199,15 @@ test("portable contract identity is pinned independently of backend-local source
   assert.equal(blob, "d6c42ddc36c1f404e7b8a6c0f2b65cfd637bd23b",
     "portable fixture drift requires coordinated cross-backend review");
 });
+
+test("histogram snapshot has one explicit detachment boundary (source only)", () => {
+  const m = modules.metrics;
+  const start = m.indexOf("pub snapshot(): HistogramSnapshot");
+  assert.ok(start >= 0);
+  const snapshot = m.slice(start, m.indexOf("  pub fnc counter(", start));
+  assert.ok(snapshot.includes("new HistogramSnapshot(self.thresholds, self.counts,"));
+  assert.ok(!snapshot.includes("new Array<int>()"));
+  assert.ok(m.includes("self.finite_bounds = detached_bounds;"));
+  assert.ok(m.includes("self.per_bucket = detached_counts;"));
+  // Compiler ownership and actual allocation counts are separate guest gates.
+});
