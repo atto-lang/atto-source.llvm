@@ -1,0 +1,15 @@
+fnc seed(): int {
+    stdio.println(1);
+    return 5;
+}
+fnc twice(int n): int { return n * 2; }
+fnc cleanup(int n): void {
+    stdio.println(n);
+    return;
+}
+pub fnc main(): int {
+    defer seed() |> twice |> (|int x| -> || -> { cleanup(x); });
+    defer 7 |> (|int x| -> || -> { cleanup(x); });
+    stdio.println(2);
+    return 42;
+}
