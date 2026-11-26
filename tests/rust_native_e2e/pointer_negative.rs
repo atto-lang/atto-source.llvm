@@ -61,4 +61,17 @@ pub fn run(h: &mut Harness) {
         &src("  p.write(0, 42);\n  p.close();", "0", 1),
         &flag, Some("expected"));
 
+    h.negative("pointer_metadata_after_close",
+        &src("  p.close();\n  val int first = p.len();", "first", 1),
+        &flag, Some("read after close"));
+    h.negative("pointer_size_wrong_arity",
+        &src("  val int first = p.size_bytes(0);\n  p.close();", "first", 1),
+        &flag, Some("expected"));
+    h.negative("pointer_initializer_self_reference",
+        "pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(p.len()); p.close(); return 0; }",
+        &flag, Some("owner unavailable during initializer"));
+    h.negative("pointer_initializer_overflow",
+        "pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(9223372036854775807 + 1); p.close(); return 0; }",
+        &flag, Some("overflow"));
+
 }
