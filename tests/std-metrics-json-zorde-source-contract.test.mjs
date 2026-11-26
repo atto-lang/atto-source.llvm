@@ -2,6 +2,7 @@
 // Run: node --test tests/std-metrics-json-zorde-source-contract.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -187,4 +188,14 @@ test("bootstrap envelope vectors and bounded metric aggregation (reference only)
   assert.deepEqual({ accepted, rejected, sum, bucket_counts: counts }, {
     accepted: h.accepted, rejected: h.rejected, sum: h.sum, bucket_counts: h.bucket_counts
   });
+});
+
+test("portable contract identity is pinned independently of backend-local source", () => {
+  const bytes = readFileSync(path.join(repo, "contracts/std-metrics-json-zorde-source-v1.json"));
+  const blob = createHash("sha1")
+    .update("blob " + bytes.length + "\0")
+    .update(bytes)
+    .digest("hex");
+  assert.equal(blob, "d6c42ddc36c1f404e7b8a6c0f2b65cfd637bd23b",
+    "portable fixture drift requires coordinated cross-backend review");
 });
