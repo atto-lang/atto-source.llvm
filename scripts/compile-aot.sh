@@ -48,7 +48,7 @@ case "$aot_admission" in
 esac
 output_dir="$(cd "$(dirname "$2")" && pwd -P)"
 output_file="$output_dir/$(basename "$2")"
-[[ ! -d "$output_file" ]] || { echo 'Output must be a file, not a directory.' >&2; exit 64; }
+[[ ! -L "$output_file" && ( ! -e "$output_file" || -f "$output_file" ) ]] || { echo 'E_ARTIFACT_PUBLICATION: output must be absent or a regular non-symlink file.' >&2; exit 64; }
 [[ "$source_file" != "$output_file" ]] || { echo 'Source and executable paths must differ.' >&2; exit 64; }
 [[ -x "$compiler" ]] || { echo 'Build oreslang-llvmc first or set ORESLANG_LLVMC.' >&2; exit 69; }
 auditor="${ORES_NO_GC_IR_AUDIT:-$root/build/oreslang-no-gc-ir-audit}"
@@ -161,10 +161,10 @@ if [[ "$aot_admission" != off ]] && (( ${#runtime_sources[@]} > 0 )); then
   exit 65
 fi
 if (( ${#runtime_sources[@]} )); then
-  "$clang" "-O${opt_level}" -x ir "$work/program.ll" -x c -std=c11 \
+  "$clang" "-O${opt_level}" "${lto_flags[@]}" -x ir "$work/program.ll" -x c -std=c11 \
     -I "$root/src/main/cpp" "${runtime_sources[@]}" -pthread -o "$work/program"
 else
-  "$clang" "-O${opt_level}" -x ir "$work/program.ll" -o "$work/program"
+  "$clang" "-O${opt_level}" "${lto_flags[@]}" -x ir "$work/program.ll" -o "$work/program"
 fi
 # This is a Linux ELF *known collector/linkage* screen, not a proof of
 # process-wide zero GC. It must run before publishing the executable so
@@ -305,6 +305,18 @@ case "$(uname -s)" in
     exit 69
     ;;
 esac
+# Recheck after compiler/linker execution. In particular, mv must not
+# interpret a newly created directory (or directory symlink) as a target.
+# This driver assumes a trusted output parent, not an adversarial directory.
+[[ ! -L "$output_file" && ( ! -e "$output_file" || -f "$output_file" ) ]] || {
+  echo 'E_ARTIFACT_PUBLICATION: destination changed to nonregular file.' >&2
+  exit 65
+}
+if [[ "$output_file" -ef "$source_file" || "$output_file" -ef "$compiler" ||
+      "$output_file" -ef "$clang_path" || "$output_file" -ef "$auditor" ]]; then
+  echo 'E_ARTIFACT_PUBLICATION: destination aliases a protected input.' >&2
+  exit 65
+fi
 mv -f -- "$work/program" "$output_file"
 printf 'Native executable: %s\n' "$output_file"
 
