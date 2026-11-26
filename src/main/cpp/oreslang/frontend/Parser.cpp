@@ -316,6 +316,18 @@ public:
                     at_ = end;
                 }
             }
+            // New move! spelling is canonical only with a complete separator.
+            // Existing legacy take!/copy! fixtures retain their historical
+            // admission until the dedicated whitespace migration lands.
+            if (first == "move" && at_ < source_.size() && source_[at_] == '!'
+                    && source_.substr(at_, 2) != "!="
+                    && !(source_.substr(at_, 3) == "!eq"
+                         && (at_ + 3 == source_.size() || !identifier_part(source_[at_ + 3])))
+                    && (at_ + 1 == source_.size() ||
+                        std::string_view(" \t\r\n\v\f").find(source_[at_ + 1]) == std::string_view::npos)) {
+                throw std::runtime_error("E_BANG_KEYWORD_WHITESPACE: whitespace required after move! at byte "
+                                         + std::to_string(start));
+            }
             return {Kind::Identifier, source_.substr(start, at_ - start), start};
         }
         if (ch == '"' || ch == '\'') {
@@ -5818,7 +5830,7 @@ private:
                         return result;
                     }
                 }
-            } else if (operation == "copy" || operation == "take" ||
+            } else if (operation == "copy" || operation == "take" || operation == "move" ||
                        operation == "borrow" || operation == "share") {
                 const Token marker = probe.next();
                 if (marker.text == "!" &&
@@ -5837,7 +5849,7 @@ private:
                     auto result = make_expression(
                         deep_copy ? Expression::Kind::DeepCopy :
                         operation == "copy" ? Expression::Kind::Copy :
-                        operation == "take" ? Expression::Kind::Take :
+                        (operation == "take" || operation == "move") ? Expression::Kind::Take :
                         operation == "share" ? Expression::Kind::Share :
                         canonical_mutable_borrow ? Expression::Kind::BorrowMut :
                         Expression::Kind::Borrow, start);
