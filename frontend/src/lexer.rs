@@ -126,6 +126,11 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
         if out.len() >= MAX_TOKENS {
             return Err(Diagnostic::new(pos, "E_SOURCE_LIMIT", "too many tokens"));
         }
+        if matches!(c, '⧖' | '∂') {
+            bump!();
+            out.push(Token { tok: Tok::Ident("suspends".to_owned()), pos });
+            continue;
+        }
         if c.is_alphabetic() || c == '_' {
             let mut s = String::new();
             while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
@@ -138,7 +143,7 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
                 bump!();
                 Tok::YieldStar
             } else {
-                Tok::Ident(s)
+                Tok::Ident(if s == "susp" { "suspends".to_owned() } else { s })
             };
             out.push(Token { tok, pos });
             continue;
