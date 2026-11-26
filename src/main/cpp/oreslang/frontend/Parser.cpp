@@ -57,7 +57,7 @@ bool reserved(std::string_view name) {
         "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
         "while", "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
-        "default", "eq", "neq", "nb", "select", "readch", "writech",
+        "default", "eq", "neq", "and", "or", "nb", "select", "readch", "writech",
         "cb", "shared", "untrusted", "type", "types", "typeof",
         "interface", "trait", "struct", "impl", "abstract", "void",
         "static", "pub", "private", "return", "defer", "throw", "raise",
@@ -158,6 +158,14 @@ public:
             at_ += 2;
             return {Kind::Symbol, source_.substr(start, 2), start};
         }
+        // Logical symbolic operators are atomic. Their word aliases are
+        // ordinary reserved tokens and reach the same AST kinds below.
+        if (source_.substr(at_, 2) == "&&" ||
+                source_.substr(at_, 2) == "||" ||
+                source_.substr(at_, 2) == "^^") {
+            at_ += 2;
+            return {Kind::Symbol, source_.substr(start, 2), start};
+        }
         // Contiguous '==' is one token, matching the Java/Graal lexer.
         if (source_.substr(at_, 2) == "==") {
             at_ += 2;
@@ -209,6 +217,17 @@ bool native_pure_scalar_tree(const Expression& expr) {
     return false;
 }
 
+std::string_view boolean_intrinsic_member(std::string_view name) {
+    if (name == "And" || name == "BooleanOps.And") return "And";
+    if (name == "Or" || name == "BooleanOps.Or") return "Or";
+    if (name == "Xor" || name == "BooleanOps.Xor") return "Xor";
+    return {};
+}
+
+bool boolean_intrinsic_name(std::string_view name) {
+    return !boolean_intrinsic_member(name).empty();
+}
+
 class Parser {
 public:
     explicit Parser(std::string_view source, bool experimental_owned_int,
@@ -234,6 +253,7 @@ public:
             }
             if (accept("module")) {
                 program.module = identifier();
+                current_module_ = program.module;
                 accept("as");
                 wrapped_module = true;
             } else {
@@ -541,7 +561,13 @@ private:
                     parameter.mode = accept("mut") ? Parameter::Mode::BorrowMut
                                                     : Parameter::Mode::Borrow;
                 }
-                if (!accept("int")) parameter.class_name = identifier();
+                if (accept("bool")) {
+                    if (parameter.mode != Parameter::Mode::Value)
+                        fail("native bool parameters do not support borrow modes");
+                    parameter.boolean = true;
+                } else if (!accept("int")) {
+                    parameter.class_name = identifier();
+                }
                 parameter.name = identifier();
                 value.parameters.push_back(std::move(parameter));
             } while (accept(","));
@@ -1103,7 +1129,44 @@ private:
         return value;
     }
 
-    std::unique_ptr<Expression> expression() { return additive(); }
+    std::unique_ptr<Expression> expression() { return logical_or(); }
+
+    std::unique_ptr<Expression> logical_or() {
+        auto left = logical_xor();
+        while (token_.text == "or" || token_.text == "||") {
+            const auto offset = token_.offset;
+            advance();
+            auto expr = make_expression(Expression::Kind::LogicalOr, offset);
+            expr->left = std::move(left);
+            expr->right = logical_xor();
+            left = std::move(expr);
+        }
+        return left;
+    }
+
+    std::unique_ptr<Expression> logical_xor() {
+        auto left = logical_and();
+        // Canonical ^^ is signed-i64 XOR, not Boolean XOR. This older
+        // stacked Boolean compiler has no verified integer-XOR lowering.
+        // Never publish the old i1 operator under the current spelling.
+        if (token_.text == "^^") {
+            fail("E_INTEGER_XOR_UNSUPPORTED: ^^ requires native signed-i64 lowering; use Xor for bool");
+        }
+        return left;
+    }
+
+    std::unique_ptr<Expression> logical_and() {
+        auto left = additive();
+        while (token_.text == "and" || token_.text == "&&") {
+            const auto offset = token_.offset;
+            advance();
+            auto expr = make_expression(Expression::Kind::LogicalAnd, offset);
+            expr->left = std::move(left);
+            expr->right = additive();
+            left = std::move(expr);
+        }
+        return left;
+    }
 
     std::unique_ptr<Expression> additive() {
         auto left = product();
@@ -1245,7 +1308,42 @@ private:
         while (token_.text == "." || token_.text == "::") {
             const bool double_colon = accept("::");
             if (!double_colon) require(".");
-            if (expr->kind == Expression::Kind::Variable && expr->name == "Assert") {
+            if (expr->kind == Expression::Kind::Variable && expr->name == "BooleanOps") {
+                if (double_colon)
+                    fail("native BooleanOps qualification uses '.'");
+                const bool source_module = current_module_ == "BooleanOps";
+                const std::string member = identifier();
+                if (!source_module && !boolean_intrinsic_name(member))
+                    fail("unknown native BooleanOps member '" + member + "'");
+                if (!accept("("))
+                    fail("native BooleanOps member must be called, not read as a value");
+                auto call = make_expression(Expression::Kind::Call, offset);
+                call->name = "BooleanOps." + member;
+                bool named_seen = false;
+                std::unordered_set<std::string> labels;
+                if (!accept(")")) {
+                    do {
+                        if (named_argument_ahead()) {
+                            if (!source_module)
+                                fail("native Boolean intrinsics do not accept named arguments");
+                            std::string label = identifier();
+                            require(":");
+                            if (!labels.insert(label).second)
+                                fail("duplicate named argument '" + label + "'");
+                            named_seen = true;
+                            call->argument_names.push_back(std::move(label));
+                        } else {
+                            if (named_seen)
+                                fail("positional argument cannot follow named argument");
+                            call->argument_names.emplace_back();
+                        }
+                        call->arguments.push_back(expression());
+                    } while (accept(","));
+                    require(")");
+                }
+                expr = std::move(call);
+                break;
+            } else if (expr->kind == Expression::Kind::Variable && expr->name == "Assert") {
                 if (!has_assert_import_) fail("unbound native Assert module alias");
                 if (token_.kind != Kind::Identifier &&
                     token_.text != "true" && token_.text != "false")
@@ -1401,7 +1499,28 @@ private:
                     validate_expression(*arg, parameters, functions);
                 return;
             case Expression::Kind::Call: {
-                const auto found = functions.find(expr.name);
+                if (expr.name.rfind("BooleanOps.", 0) == 0 &&
+                        bool_parameters.count("BooleanOps") != 0)
+                    throw std::runtime_error(
+                        "native BooleanOps builtin namespace is shadowed by a bool parameter");
+                const auto family = functions.find(expr.name);
+                if (boolean_intrinsic_name(expr.name) && family == functions.end()) {
+                    if (!expr.argument_names.empty() &&
+                            std::any_of(expr.argument_names.begin(), expr.argument_names.end(),
+                                [](const std::string& label) { return !label.empty(); }))
+                        throw std::runtime_error(
+                            "native Boolean intrinsics do not accept named arguments");
+                    if (boolean_intrinsic_member(expr.name) == "Xor" && expr.arguments.size() != 2)
+                        throw std::runtime_error(
+                            "native Xor expects exactly two scalar bool arguments");
+                    if (boolean_intrinsic_member(expr.name) != "Xor" && expr.arguments.size() < 2)
+                        throw std::runtime_error(
+                            "native And/Or aggregate reducers are unsupported; use scalar bool arguments");
+                    for (const auto& arg : expr.arguments)
+                        validate_expression(*arg, parameters, functions);
+                    return;
+                }
+                const auto found = family;
                 if (found == functions.end() ||
                     found->second.count(expr.arguments.size()) == 0) {
                     throw std::runtime_error("unknown function or wrong call arity '"
@@ -1451,11 +1570,121 @@ private:
             case Expression::Kind::Add:
             case Expression::Kind::Subtract:
             case Expression::Kind::Multiply:
+            case Expression::Kind::LogicalAnd:
+            case Expression::Kind::LogicalOr:
+            case Expression::Kind::LogicalXor:
+                if (!expr.left || !expr.right)
+                    throw std::runtime_error("invalid binary expression AST");
                 validate_expression(*expr.left, parameters, functions);
                 validate_expression(*expr.right, parameters, functions);
                 return;
         }
         throw std::runtime_error("internal invalid expression kind");
+    }
+
+    static void validate_bool_expression(
+            const Expression& expr,
+            const std::unordered_set<std::string>& bool_parameters,
+            const std::unordered_map<std::string,
+                std::unordered_map<std::size_t, const Function*>>& functions) {
+        switch (expr.kind) {
+            case Expression::Kind::Boolean:
+                if ((expr.integer != 0 && expr.integer != 1) ||
+                        !expr.name.empty() || expr.left || expr.right ||
+                        !expr.arguments.empty() || !expr.argument_names.empty())
+                    throw std::runtime_error(
+                        "unverified native bool literal AST at byte " +
+                        std::to_string(expr.offset));
+                return;
+            case Expression::Kind::Variable:
+                if (!expr.left && !expr.right && expr.arguments.empty() &&
+                        expr.argument_names.empty() &&
+                        bool_parameters.count(expr.name) != 0)
+                    return;
+                throw std::runtime_error(
+                    "native bool expression requires a bool parameter at byte " +
+                    std::to_string(expr.offset));
+            case Expression::Kind::LogicalAnd:
+            case Expression::Kind::LogicalOr:
+            case Expression::Kind::LogicalXor:
+                if (!expr.left || !expr.right || expr.integer != 0 ||
+                        !expr.name.empty() || !expr.arguments.empty() ||
+                        !expr.argument_names.empty())
+                    throw std::runtime_error(
+                        "unverified native logical bool AST at byte " +
+                        std::to_string(expr.offset));
+                validate_bool_expression(*expr.left, bool_parameters, functions);
+                validate_bool_expression(*expr.right, bool_parameters, functions);
+                return;
+            case Expression::Kind::Call: {
+                const auto family = functions.find(expr.name);
+                if (boolean_intrinsic_name(expr.name) && family == functions.end()) {
+                    if (!expr.argument_names.empty() &&
+                            std::any_of(expr.argument_names.begin(), expr.argument_names.end(),
+                                [](const std::string& label) { return !label.empty(); }))
+                        throw std::runtime_error(
+                            "native Boolean intrinsics do not accept named arguments");
+                    if (boolean_intrinsic_member(expr.name) == "Xor" && expr.arguments.size() != 2)
+                        throw std::runtime_error(
+                            "native Xor expects exactly two scalar bool arguments");
+                    if (boolean_intrinsic_member(expr.name) != "Xor" && expr.arguments.size() < 2)
+                        throw std::runtime_error(
+                            "native And/Or aggregate reducers are unsupported; use scalar bool arguments");
+                    for (const auto& arg : expr.arguments)
+                        validate_bool_expression(*arg, bool_parameters, functions);
+                    return;
+                }
+                if (family == functions.end() ||
+                        family->second.count(expr.arguments.size()) == 0)
+                    throw std::runtime_error(
+                        "unknown bool function or wrong arity '" + expr.name + "'");
+                const Function* target = family->second.at(expr.arguments.size());
+                if (!target->returns_bool)
+                    throw std::runtime_error(
+                        "int/void call cannot be used as native bool expression");
+                for (const auto& param : target->parameters)
+                    if (!param.boolean || param.mode != Parameter::Mode::Value ||
+                            !param.class_name.empty())
+                        throw std::runtime_error(
+                            "native bool calls require by-value bool parameters");
+                if (!expr.argument_names.empty() &&
+                        expr.argument_names.size() != expr.arguments.size())
+                    throw std::runtime_error("invalid named bool call argument layout");
+                std::vector<bool> bound(target->parameters.size(), false);
+                std::size_t positional = 0;
+                bool named_seen = false;
+                for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
+                    const std::string label = expr.argument_names.empty()
+                        ? std::string{} : expr.argument_names[i];
+                    std::size_t slot = positional;
+                    if (!label.empty()) {
+                        named_seen = true;
+                        slot = 0;
+                        while (slot < target->parameters.size() &&
+                                target->parameters[slot].name != label) ++slot;
+                        if (slot == target->parameters.size())
+                            throw std::runtime_error(
+                                "unknown named bool argument '" + label + "'");
+                    } else {
+                        if (named_seen)
+                            throw std::runtime_error(
+                                "positional bool argument after named argument");
+                        ++positional;
+                    }
+                    if (slot >= bound.size() || bound[slot])
+                        throw std::runtime_error(
+                            "duplicate bool parameter binding");
+                    bound[slot] = true;
+                    validate_bool_expression(
+                        *expr.arguments[i], bool_parameters, functions);
+                }
+                return;
+            }
+            default:
+                throw std::runtime_error(
+                    "native bool result contains non-bool value or effect at byte " +
+                    std::to_string(expr.offset));
+        }
     }
 
     static bool contains_callable_invocation(const Expression* expr) {
@@ -1571,33 +1800,50 @@ private:
                 throw std::runtime_error("duplicate class declaration '" + cls.name + "'");
         }
         std::unordered_map<std::string, std::unordered_map<std::size_t, std::vector<std::string>>> functions;
+        std::unordered_map<std::string,
+            std::unordered_map<std::size_t, const Function*>> typed_functions;
         for (const auto& fn : program.functions) {
             validate_declared_effects(fn, program);
-            // A bool is an LLVM i1, never a disguised i64. Keep initial
-            // import-free admission strictly literal, side-effect free and
-            // independent of cleanup/continuation/ownership lifetimes.
+            // The initial native bool ABI is deliberately pure: by-value i1
+            // parameters and bool-returning calls are allowed, but bool locals,
+            // ownership, effects, cleanup and suspension remain fail-closed.
             if (fn.returns_bool) {
                 if (fn.name == "main")
                     throw std::runtime_error("native bool main violates process exit ABI");
-                if (!fn.result ||
-                    (fn.result->kind != Expression::Kind::Boolean &&
-                     !( !program.imports.empty() &&
-                        fn.result->kind == Expression::Kind::ModuleCall)))
-                    throw std::runtime_error("native bool result requires typed bool expression");
-                if (fn.result->kind == Expression::Kind::Boolean &&
-                    fn.result->integer != 0 && fn.result->integer != 1)
-                    throw std::runtime_error("native bool literal must be canonical 0 or 1");
-                if (fn.result->kind == Expression::Kind::Boolean &&
-                    (!fn.parameters.empty() || !fn.locals.empty() ||
-                     !fn.statements.empty() || !fn.early_returns.empty() ||
-                     !fn.actor_spawns.empty() || !fn.actor_actions.empty() ||
-                     !fn.actor_sends.empty() || !fn.actor_stops.empty() ||
-                     !fn.actor_field_writes.empty() || fn.caught_throw_value ||
-                     !fn.caught_throw_defers.empty() || !fn.catch_binding.empty() ||
-                     fn.scalar_while || fn.has_declared_effects))
-                    throw std::runtime_error("native bool literal AOT requires pure zero-argument function");
-            } else if (fn.result && fn.result->kind == Expression::Kind::Boolean) {
-                throw std::runtime_error("native int return cannot return bool");
+                if (!fn.result)
+                    throw std::runtime_error("native bool function requires a result");
+                const bool imported_bool =
+                    !program.imports.empty() &&
+                    fn.result->kind == Expression::Kind::ModuleCall;
+                for (const auto& param : fn.parameters)
+                    if (!param.boolean || param.mode != Parameter::Mode::Value ||
+                            !param.class_name.empty())
+                        throw std::runtime_error(
+                            "native bool functions currently require only by-value bool parameters");
+                if (!fn.locals.empty() || !fn.statements.empty() ||
+                     !fn.early_returns.empty() || !fn.actor_spawns.empty() ||
+                     !fn.actor_actions.empty() || !fn.actor_sends.empty() ||
+                     !fn.actor_stops.empty() || !fn.actor_field_writes.empty() ||
+                     fn.caught_throw_value || !fn.caught_throw_defers.empty() ||
+                     !fn.catch_binding.empty() || fn.scalar_while ||
+                     fn.has_declared_effects || fn.declared_effects.bits != 0)
+                    throw std::runtime_error(
+                        "native bool AOT currently requires a pure expression body");
+                if (imported_bool && !fn.parameters.empty())
+                    throw std::runtime_error(
+                        "imported native bool boundary remains zero-argument");
+            } else {
+                for (const auto& param : fn.parameters)
+                    if (param.boolean)
+                        throw std::runtime_error(
+                            "native bool parameters require a bool-returning pure function");
+                if (fn.result &&
+                        (fn.result->kind == Expression::Kind::Boolean ||
+                         fn.result->kind == Expression::Kind::LogicalAnd ||
+                         fn.result->kind == Expression::Kind::LogicalOr ||
+                         fn.result->kind == Expression::Kind::LogicalXor)) {
+                    throw std::runtime_error("native int return cannot return bool");
+                }
             }
             // Compiler-owned ABI imports and generated exports may be
             // inserted before source function definitions. LLVM silently
@@ -1642,6 +1888,7 @@ private:
                     + std::to_string(fn.parameters.size()) +
                     "; parameter and return types do not select overloads at byte " +
                     std::to_string(fn.offset));
+            typed_functions[fn.name].emplace(fn.parameters.size(), &fn);
             std::unordered_set<std::string> params;
             for (const auto& param : fn.parameters) {
                 if (!params.insert(param.name).second) {
@@ -1650,6 +1897,42 @@ private:
                 }
             }
         }
+        // A real source module named BooleanOps shadows the trusted qualified
+        // builtin namespace just like Java. The restricted native frontend has
+        // one wrapped source module, so publish qualified aliases only for that
+        // exact module after the whole function table is known.
+        if (program.module == "BooleanOps") {
+            std::vector<std::string> source_names;
+            source_names.reserve(program.functions.size());
+            for (const auto& fn : program.functions) source_names.push_back(fn.name);
+            std::sort(source_names.begin(), source_names.end());
+            source_names.erase(
+                std::unique(source_names.begin(), source_names.end()),
+                source_names.end());
+            for (const auto& member : source_names) {
+                const auto labels = functions.find(member);
+                if (labels != functions.end())
+                    functions.emplace("BooleanOps." + member, labels->second);
+                const auto typed = typed_functions.find(member);
+                if (typed != typed_functions.end())
+                    typed_functions.emplace("BooleanOps." + member, typed->second);
+            }
+        }
+
+        // Resolve the pure bool call graph only after every source function
+        // family is indexed. This preserves Java's rule that any user-defined
+        // And/Or/Xor family shadows the builtin intrinsic name, including a
+        // real wrapped module named BooleanOps.
+        for (const auto& fn : program.functions) {
+            if (!fn.returns_bool || !fn.result ||
+                    fn.result->kind == Expression::Kind::ModuleCall)
+                continue;
+            std::unordered_set<std::string> bool_parameters;
+            for (const auto& param : fn.parameters)
+                bool_parameters.insert(param.name);
+            validate_bool_expression(*fn.result, bool_parameters, typed_functions);
+        }
+
         std::unordered_map<std::string, const ActorDecl*> actor_types;
         for (const auto& actor : program.actors) {
             if (!actor_types.emplace(actor.name, &actor).second || classes.count(actor.name)
@@ -1832,6 +2115,7 @@ private:
     Lexer lexer_;
     Token token_;
     bool experimental_owned_int_;
+    std::string current_module_;
     bool has_assert_import_ = false;
     bool experimental_rt_scalar_loop_;
 };

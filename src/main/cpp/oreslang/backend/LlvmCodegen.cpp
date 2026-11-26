@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -30,6 +31,17 @@ namespace {
 
 std::string field_key(const std::string& receiver, const std::string& field) {
     return receiver + "." + field;
+}
+
+std::string_view boolean_intrinsic_member(std::string_view name) {
+    if (name == "And" || name == "BooleanOps.And") return "And";
+    if (name == "Or" || name == "BooleanOps.Or") return "Or";
+    if (name == "Xor" || name == "BooleanOps.Xor") return "Xor";
+    return {};
+}
+
+bool boolean_intrinsic_name(std::string_view name) {
+    return !boolean_intrinsic_member(name).empty();
 }
 
 // Owned i64 parameters receive stack slots so the only permitted loans can
@@ -220,6 +232,9 @@ llvm::Value* lower(const Expression& expr,
             return builder.CreateMul(left, right, "mul");
         }
         case Expression::Kind::Boolean:
+        case Expression::Kind::LogicalAnd:
+        case Expression::Kind::LogicalOr:
+        case Expression::Kind::LogicalXor:
             // i1 values may only be lowered by verified typed bool returns,
             // never by the generic native i64 expression code generator.
             throw std::runtime_error("typed bool cannot be lowered as native i64");
@@ -229,7 +244,15 @@ llvm::Value* lower(const Expression& expr,
             throw std::runtime_error(
                 "native Assert module call awaits typed source-owned linking");
         case Expression::Kind::Call: {
-            llvm::Function* callee = functions.at(native_function_slot(expr.name, expr.arguments.size()));
+            const auto found =
+                functions.find(native_function_slot(expr.name, expr.arguments.size()));
+            if (found == functions.end()) {
+                if (boolean_intrinsic_name(expr.name))
+                    throw std::runtime_error(
+                        "typed bool intrinsic cannot be lowered as native i64");
+                throw std::runtime_error("unresolved native i64 call during lowering");
+            }
+            llvm::Function* callee = found->second;
             if (callee->getReturnType()->isIntegerTy(1))
                 throw std::runtime_error("typed bool call requires bool-aware expression lowering");
             if (callee->arg_size() != expr.arguments.size()) {
@@ -280,6 +303,246 @@ llvm::Value* lower(const Expression& expr,
         }
     }
     throw std::runtime_error("invalid expression kind while lowering LLVM IR");
+}
+
+// Lower a verified pure bool graph directly to LLVM i1. AND/OR are
+// control flow, not eager bitwise operations: their remaining operands must
+// not execute after a decisive value. XOR is eager and evaluates both
+// operands exactly once in lexical source order.
+llvm::Value* lower_bool(
+        const Expression& expr,
+        llvm::IRBuilder<>& builder,
+        const std::unordered_map<std::string, llvm::Value*>& values,
+        const std::unordered_map<std::string, llvm::Function*>& functions,
+        const std::unordered_set<std::string>& shadowed_intrinsics);
+
+llvm::Value* lower_short_circuit_args(
+        const std::vector<std::unique_ptr<Expression>>& arguments,
+        std::size_t index,
+        bool is_and,
+        llvm::IRBuilder<>& builder,
+        const std::unordered_map<std::string, llvm::Value*>& values,
+        const std::unordered_map<std::string, llvm::Function*>& functions,
+        const std::unordered_set<std::string>& shadowed_intrinsics) {
+    if (index >= arguments.size())
+        throw std::runtime_error("empty native short-circuit argument sequence");
+    if (index + 1 == arguments.size())
+        return lower_bool(
+            *arguments[index], builder, values, functions, shadowed_intrinsics);
+
+    llvm::Value* left = lower_bool(
+        *arguments[index], builder, values, functions, shadowed_intrinsics);
+    if (!left->getType()->isIntegerTy(1))
+        throw std::runtime_error("native logical operand did not lower to i1");
+
+    llvm::BasicBlock* left_end = builder.GetInsertBlock();
+    llvm::Function* function = left_end->getParent();
+    llvm::BasicBlock* rhs_block = llvm::BasicBlock::Create(
+        builder.getContext(), "bool.rhs", function);
+    llvm::BasicBlock* merge_block = llvm::BasicBlock::Create(
+        builder.getContext(), "bool.merge", function);
+    if (is_and)
+        builder.CreateCondBr(left, rhs_block, merge_block);
+    else
+        builder.CreateCondBr(left, merge_block, rhs_block);
+
+    builder.SetInsertPoint(rhs_block);
+    llvm::Value* right = lower_short_circuit_args(
+        arguments, index + 1, is_and, builder, values, functions,
+        shadowed_intrinsics);
+    if (!right->getType()->isIntegerTy(1))
+        throw std::runtime_error("native logical rhs did not lower to i1");
+    llvm::BasicBlock* rhs_end = builder.GetInsertBlock();
+    if (rhs_end->getTerminator())
+        throw std::runtime_error("logical rhs unexpectedly terminated control flow");
+    builder.CreateBr(merge_block);
+
+    builder.SetInsertPoint(merge_block);
+    llvm::PHINode* result = builder.CreatePHI(
+        builder.getInt1Ty(), 2, is_and ? "bool.and" : "bool.or");
+    result->addIncoming(is_and ? builder.getFalse() : builder.getTrue(), left_end);
+    result->addIncoming(right, rhs_end);
+    return result;
+}
+
+llvm::Value* lower_bool(
+        const Expression& expr,
+        llvm::IRBuilder<>& builder,
+        const std::unordered_map<std::string, llvm::Value*>& values,
+        const std::unordered_map<std::string, llvm::Function*>& functions,
+        const std::unordered_set<std::string>& shadowed_intrinsics) {
+    switch (expr.kind) {
+        case Expression::Kind::Boolean:
+            if ((expr.integer != 0 && expr.integer != 1) ||
+                    !expr.name.empty() || expr.left || expr.right ||
+                    !expr.arguments.empty() || !expr.argument_names.empty())
+                throw std::runtime_error("unverified native bool literal AST");
+            return builder.getInt1(expr.integer == 1);
+        case Expression::Kind::Variable: {
+            if (expr.left || expr.right || expr.integer != 0 ||
+                    !expr.arguments.empty() || !expr.argument_names.empty())
+                throw std::runtime_error("unverified native bool variable AST");
+            const auto found = values.find(expr.name);
+            if (found == values.end() || !found->second->getType()->isIntegerTy(1))
+                throw std::runtime_error(
+                    "native bool variable is not a verified i1 parameter");
+            return found->second;
+        }
+        case Expression::Kind::LogicalXor: {
+            if (!expr.left || !expr.right || expr.integer != 0 ||
+                    !expr.name.empty() || !expr.arguments.empty() ||
+                    !expr.argument_names.empty())
+                throw std::runtime_error("unverified native logical xor AST");
+            llvm::Value* left = lower_bool(
+                *expr.left, builder, values, functions, shadowed_intrinsics);
+            llvm::Value* right = lower_bool(
+                *expr.right, builder, values, functions, shadowed_intrinsics);
+            if (!left->getType()->isIntegerTy(1) ||
+                    !right->getType()->isIntegerTy(1))
+                throw std::runtime_error("native xor operands must lower to i1");
+            return builder.CreateXor(left, right, "bool.xor");
+        }
+        case Expression::Kind::LogicalAnd:
+        case Expression::Kind::LogicalOr: {
+            if (!expr.left || !expr.right || expr.integer != 0 ||
+                    !expr.name.empty() || !expr.arguments.empty() ||
+                    !expr.argument_names.empty())
+                throw std::runtime_error("unverified native short-circuit bool AST");
+            // Lower the binary node with the same short-circuit CFG
+            // semantics used by the variadic intrinsic below.
+            llvm::Value* left = lower_bool(
+                *expr.left, builder, values, functions, shadowed_intrinsics);
+            llvm::BasicBlock* left_end = builder.GetInsertBlock();
+            llvm::Function* function = left_end->getParent();
+            llvm::BasicBlock* rhs_block = llvm::BasicBlock::Create(
+                builder.getContext(), "bool.rhs", function);
+            llvm::BasicBlock* merge_block = llvm::BasicBlock::Create(
+                builder.getContext(), "bool.merge", function);
+            const bool is_and = expr.kind == Expression::Kind::LogicalAnd;
+            if (is_and)
+                builder.CreateCondBr(left, rhs_block, merge_block);
+            else
+                builder.CreateCondBr(left, merge_block, rhs_block);
+
+            builder.SetInsertPoint(rhs_block);
+            llvm::Value* right = lower_bool(
+                *expr.right, builder, values, functions, shadowed_intrinsics);
+            llvm::BasicBlock* rhs_end = builder.GetInsertBlock();
+            if (rhs_end->getTerminator())
+                throw std::runtime_error(
+                    "logical rhs unexpectedly terminated control flow");
+            builder.CreateBr(merge_block);
+
+            builder.SetInsertPoint(merge_block);
+            llvm::PHINode* result = builder.CreatePHI(
+                builder.getInt1Ty(), 2, is_and ? "bool.and" : "bool.or");
+            result->addIncoming(
+                is_and ? builder.getFalse() : builder.getTrue(), left_end);
+            result->addIncoming(right, rhs_end);
+            return result;
+        }
+        case Expression::Kind::Call: {
+            const bool intrinsic =
+                boolean_intrinsic_name(expr.name) &&
+                shadowed_intrinsics.count(expr.name) == 0;
+            if (intrinsic) {
+                if (!expr.argument_names.empty() &&
+                        std::any_of(
+                            expr.argument_names.begin(),
+                            expr.argument_names.end(),
+                            [](const std::string& label) {
+                                return !label.empty();
+                            }))
+                    throw std::runtime_error(
+                        "native Boolean intrinsics do not accept named arguments");
+                if (boolean_intrinsic_member(expr.name) == "Xor") {
+                    if (expr.arguments.size() != 2)
+                        throw std::runtime_error(
+                            "native Xor expects exactly two scalar bool arguments");
+                    llvm::Value* left = lower_bool(
+                        *expr.arguments[0], builder, values, functions,
+                        shadowed_intrinsics);
+                    llvm::Value* right = lower_bool(
+                        *expr.arguments[1], builder, values, functions,
+                        shadowed_intrinsics);
+                    if (!left->getType()->isIntegerTy(1) ||
+                            !right->getType()->isIntegerTy(1))
+                        throw std::runtime_error(
+                            "native Xor intrinsic operands must lower to i1");
+                    return builder.CreateXor(left, right, "bool.xor.intrinsic");
+                }
+                if (expr.arguments.size() < 2)
+                    throw std::runtime_error(
+                        "native And/Or aggregate reducers are unsupported");
+                return lower_short_circuit_args(
+                    expr.arguments, 0, boolean_intrinsic_member(expr.name) == "And", builder, values,
+                    functions, shadowed_intrinsics);
+            }
+
+            const auto found =
+                functions.find(native_function_slot(expr.name, expr.arguments.size()));
+            if (found == functions.end())
+                throw std::runtime_error(
+                    "unknown native bool function or wrong call arity");
+            llvm::Function* callee = found->second;
+            if (!callee->getReturnType()->isIntegerTy(1))
+                throw std::runtime_error(
+                    "native bool expression called a non-bool function");
+            if (callee->arg_size() != expr.arguments.size())
+                throw std::runtime_error("native bool call argument count mismatch");
+            for (const auto& formal : callee->args())
+                if (!formal.getType()->isIntegerTy(1))
+                    throw std::runtime_error(
+                        "native bool calls require i1 formal parameters");
+
+            if (!expr.argument_names.empty() &&
+                    expr.argument_names.size() != expr.arguments.size())
+                throw std::runtime_error("invalid native bool call label layout");
+            std::vector<llvm::Value*> ordered(expr.arguments.size(), nullptr);
+            std::vector<bool> filled(expr.arguments.size(), false);
+            std::size_t positional = 0;
+            bool named_seen = false;
+            for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
+                const std::string label = expr.argument_names.empty()
+                    ? std::string{} : expr.argument_names[i];
+                std::size_t target;
+                if (!label.empty()) {
+                    named_seen = true;
+                    target = 0;
+                    bool matched = false;
+                    for (const auto& formal : callee->args()) {
+                        if (formal.getName().str() == label) {
+                            matched = true;
+                            break;
+                        }
+                        ++target;
+                    }
+                    if (!matched)
+                        throw std::runtime_error(
+                            "unknown native named bool argument '" + label + "'");
+                } else {
+                    if (named_seen)
+                        throw std::runtime_error(
+                            "native positional bool argument after named argument");
+                    target = positional++;
+                }
+                if (target >= ordered.size() || filled[target])
+                    throw std::runtime_error(
+                        "duplicate native named bool call binding");
+                filled[target] = true;
+                ordered[target] = lower_bool(
+                    *expr.arguments[i], builder, values, functions,
+                    shadowed_intrinsics);
+                if (!ordered[target]->getType()->isIntegerTy(1))
+                    throw std::runtime_error(
+                        "native bool call argument did not lower to i1");
+            }
+            return builder.CreateCall(callee, ordered, "bool.call");
+        }
+        default:
+            throw std::runtime_error(
+                "native bool result contains non-bool value, call or effect");
+    }
 }
 
 } // namespace
@@ -631,11 +894,19 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         field_indices.emplace(cls.name, std::move(indices));
     }
 
-    // Exact by-value i64 / borrowed-i64-pointer argument types for all
-    // same-module functions; no unsound conversion to i64 is permitted.
-    // Unique free functions retain their ABI symbol, overloaded families use arity slots.
+    // Exact i1/i64/borrowed-i64-pointer argument types for all same-module
+    // functions; no implicit bool<->int conversion is permitted. Any source
+    // family named And/Or/Xor shadows the compiler intrinsic, matching Java.
     std::unordered_map<std::string, std::size_t> family_sizes;
-    for (const auto& fn : source.functions) ++family_sizes[fn.name];
+    std::unordered_set<std::string> shadowed_intrinsics;
+    for (const auto& fn : source.functions) {
+        ++family_sizes[fn.name];
+        if (fn.name == "And" || fn.name == "Or" || fn.name == "Xor") {
+            shadowed_intrinsics.insert(fn.name);
+            if (source.module == "BooleanOps")
+                shadowed_intrinsics.insert("BooleanOps." + fn.name);
+        }
+    }
     std::unordered_set<std::string> emitted_slots;
     for (const auto& fn : source.functions) {
         // Linker-owned names were already checked before all lowering paths.
@@ -657,10 +928,22 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
         if (module.getNamedValue(symbol))
             throw std::runtime_error("native LLVM symbol collision '" + symbol + "'");
         std::vector<llvm::Type*> argument_types;
-        for (const auto& param : fn.parameters)
-            argument_types.push_back(param.class_name.empty()
-                ? (param.mode == Parameter::Mode::Value ? i64 : loan_ptr)
-                : class_types.at(param.class_name)->getPointerTo());
+        for (const auto& param : fn.parameters) {
+            if (param.boolean) {
+                if (!fn.returns_bool || param.mode != Parameter::Mode::Value ||
+                        !param.class_name.empty())
+                    throw std::runtime_error(
+                        "unverified native bool parameter ABI");
+                argument_types.push_back(llvm::Type::getInt1Ty(context));
+            } else {
+                if (fn.returns_bool)
+                    throw std::runtime_error(
+                        "native bool functions require only bool parameters");
+                argument_types.push_back(param.class_name.empty()
+                    ? (param.mode == Parameter::Mode::Value ? i64 : loan_ptr)
+                    : class_types.at(param.class_name)->getPointerTo());
+            }
+        }
         llvm::FunctionType* signature = llvm::FunctionType::get(
             fn.returns_void ? llvm::Type::getVoidTy(context) :
             (fn.returns_bool ? llvm::Type::getInt1Ty(context) : i64),
@@ -675,31 +958,49 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target) {
             formal.setName(fn.parameters[label_index++].name);
         if (!declarations.emplace(slot, declaration).second)
             throw std::runtime_error("duplicate native function declaration slot");
+        if (source.module == "BooleanOps") {
+            const std::string qualified_slot =
+                native_function_slot("BooleanOps." + fn.name, fn.parameters.size());
+            if (!declarations.emplace(qualified_slot, declaration).second)
+                throw std::runtime_error(
+                    "duplicate qualified BooleanOps function declaration slot");
+        }
     }
     for (const auto& fn : source.functions) {
         llvm::Function* function = declarations.at(native_function_slot(fn.name, fn.parameters.size()));
         llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", function);
         llvm::IRBuilder<> builder(entry);
         if (fn.returns_bool) {
-            // Strictly pure, zero-argument source Boolean literal slice:
-            // no integer coercion, host callbacks, heap or GC allocation.
-            // All other typed bool forms remain parser-gated, and imported
-            // std/assert stays rejected before LLVM module creation.
-            if (!fn.result || fn.result->kind != Expression::Kind::Boolean ||
-                    !fn.parameters.empty() || !fn.locals.empty() ||
+            // Pure Boolean expression graphs lower entirely through i1. Bool
+            // locals/ownership/effects remain gated, but by-value bool params,
+            // same-module bool calls and compiler intrinsics are now native.
+            if (!fn.result || !fn.locals.empty() ||
                     !fn.statements.empty() || !fn.early_returns.empty() ||
                     !fn.actor_spawns.empty() || !fn.actor_actions.empty() ||
                     !fn.actor_sends.empty() || !fn.actor_stops.empty() ||
                     !fn.actor_field_writes.empty() || fn.caught_throw_value ||
                     !fn.caught_throw_defers.empty() || !fn.catch_binding.empty() ||
                     fn.scalar_while || fn.has_declared_effects ||
-                    fn.declared_effects.bits != 0 ||
-                    !fn.result->name.empty() || fn.result->left || fn.result->right ||
-                    !fn.result->arguments.empty() ||
-                    !fn.result->argument_names.empty() ||
-                    (fn.result->integer != 0 && fn.result->integer != 1))
-                throw std::runtime_error("unverified typed bool native result lowering");
-            builder.CreateRet(builder.getInt1(fn.result->integer == 1));
+                    fn.declared_effects.bits != 0)
+                throw std::runtime_error(
+                    "unverified typed bool native result lowering");
+
+            std::unordered_map<std::string, llvm::Value*> bool_values;
+            std::size_t bool_index = 0;
+            for (auto& arg : function->args()) {
+                const Parameter& param = fn.parameters.at(bool_index++);
+                if (!param.boolean || param.mode != Parameter::Mode::Value ||
+                        !param.class_name.empty() ||
+                        !arg.getType()->isIntegerTy(1))
+                    throw std::runtime_error(
+                        "unverified native bool parameter lowering");
+                if (!bool_values.emplace(param.name, &arg).second)
+                    throw std::runtime_error(
+                        "duplicate native bool parameter lowering");
+            }
+            builder.CreateRet(lower_bool(
+                *fn.result, builder, bool_values, declarations,
+                shadowed_intrinsics));
             continue;
         }
         std::unordered_map<std::string, llvm::Value*> storage;

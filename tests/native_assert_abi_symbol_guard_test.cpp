@@ -63,7 +63,7 @@ int main() {
     {
         auto source = program("boolean_noncanonical", true);
         source.functions.front().result->integer = 2;
-        rejected(source, "unverified typed bool native result lowering");
+        rejected(source, "unverified native bool literal AST");
     }
 
     // Parser and emitter must agree on the *whole* native linker namespace.
@@ -153,23 +153,156 @@ int main() {
     {
         auto source = program("boolean_hidden_operand", true);
         source.functions.front().result->left = std::make_unique<Expression>();
-        rejected(source, "unverified typed bool native result lowering");
+        rejected(source, "unverified native bool literal AST");
     }
     {
         auto source = program("boolean_hidden_arguments", true);
         source.functions.front().result->arguments.push_back(
             std::make_unique<Expression>());
-        rejected(source, "unverified typed bool native result lowering");
+        rejected(source, "unverified native bool literal AST");
     }
     {
         auto source = program("boolean_hidden_labels", true);
         source.functions.front().result->argument_names.push_back("hidden");
-        rejected(source, "unverified typed bool native result lowering");
+        rejected(source, "unverified native bool literal AST");
     }
     {
         auto source = program("boolean_hidden_name", true);
         source.functions.front().result->name = "hidden";
-        rejected(source, "unverified typed bool native result lowering");
+        rejected(source, "unverified native bool literal AST");
+    }
+
+    // Constructed logical trees must obey the same closed shape as parsed
+    // source. A valid AND reaches real short-circuit CFG; malformed children
+    // or hidden call metadata are rejected before LLVM can discard them.
+    {
+        auto source = program("boolean_logical_and", true);
+        auto left = std::make_unique<Expression>();
+        left->kind = Expression::Kind::Boolean;
+        left->integer = 1;
+        auto right = std::make_unique<Expression>();
+        right->kind = Expression::Kind::Boolean;
+        right->integer = 0;
+        auto logical = std::make_unique<Expression>();
+        logical->kind = Expression::Kind::LogicalAnd;
+        logical->left = std::move(left);
+        logical->right = std::move(right);
+        source.functions.front().result = std::move(logical);
+        const auto ir = oreslang::emit_verified_llvm_ir(source);
+        if (ir.find("phi i1") == std::string::npos ||
+                ir.find("br i1") == std::string::npos)
+            throw std::runtime_error("valid logical AND did not lower to i1 CFG");
+    }
+    {
+        auto source = program("boolean_logical_hidden_call", true);
+        auto logical = std::make_unique<Expression>();
+        logical->kind = Expression::Kind::LogicalOr;
+        logical->left = std::make_unique<Expression>();
+        logical->left->kind = Expression::Kind::Boolean;
+        logical->right = std::make_unique<Expression>();
+        logical->right->kind = Expression::Kind::Boolean;
+        logical->arguments.push_back(std::make_unique<Expression>());
+        source.functions.front().result = std::move(logical);
+        rejected(source, "unverified native short-circuit bool AST");
+    }
+
+    // Bool parameters are an exact i1 ABI. Constructed Programs bypass
+    // parser/type admission, so the backend must independently reject bool
+    // flags on an i64 function and prove valid i1 variables/intrinsics.
+    {
+        auto source = program("boolean_param_identity", true);
+        oreslang::Parameter param;
+        param.name = "value";
+        param.boolean = true;
+        source.functions.front().parameters.push_back(std::move(param));
+        source.functions.front().result->kind = Expression::Kind::Variable;
+        source.functions.front().result->integer = 0;
+        source.functions.front().result->name = "value";
+        const auto ir = oreslang::emit_verified_llvm_ir(source);
+        if (ir.find("define i1 @boolean_param_identity(i1 %value)") ==
+                std::string::npos)
+            throw std::runtime_error("valid bool parameter did not lower to i1");
+    }
+    {
+        auto source = program("forged_int_bool_parameter", false);
+        oreslang::Parameter param;
+        param.name = "value";
+        param.boolean = true;
+        source.functions.front().parameters.push_back(std::move(param));
+        rejected(source, "unverified native bool parameter ABI");
+    }
+    {
+        auto source = program("boolean_intrinsic_ast", true);
+        for (const char* name : {"a", "b", "c"}) {
+            oreslang::Parameter param;
+            param.name = name;
+            param.boolean = true;
+            source.functions.front().parameters.push_back(std::move(param));
+        }
+        auto call = std::make_unique<Expression>();
+        call->kind = Expression::Kind::Call;
+        call->name = "And";
+        for (const char* name : {"a", "b", "c"}) {
+            auto argument = std::make_unique<Expression>();
+            argument->kind = Expression::Kind::Variable;
+            argument->name = name;
+            call->arguments.push_back(std::move(argument));
+            call->argument_names.emplace_back();
+        }
+        source.functions.front().result = std::move(call);
+        const auto ir = oreslang::emit_verified_llvm_ir(source);
+        if (ir.find("phi i1") == std::string::npos ||
+                ir.find("br i1") == std::string::npos)
+            throw std::runtime_error(
+                "valid variadic And AST did not lower to short-circuit i1 CFG");
+    }
+    {
+        auto source = program("boolean_qualified_intrinsic_ast", true);
+        for (const char* name : {"a", "b", "c"}) {
+            oreslang::Parameter param;
+            param.name = name;
+            param.boolean = true;
+            source.functions.front().parameters.push_back(std::move(param));
+        }
+        auto call = std::make_unique<Expression>();
+        call->kind = Expression::Kind::Call;
+        call->name = "BooleanOps.And";
+        for (const char* name : {"a", "b", "c"}) {
+            auto argument = std::make_unique<Expression>();
+            argument->kind = Expression::Kind::Variable;
+            argument->name = name;
+            call->arguments.push_back(std::move(argument));
+            call->argument_names.emplace_back();
+        }
+        source.functions.front().result = std::move(call);
+        const auto ir = oreslang::emit_verified_llvm_ir(source);
+        if (ir.find("phi i1") == std::string::npos ||
+                ir.find("br i1") == std::string::npos)
+            throw std::runtime_error(
+                "valid qualified BooleanOps.And AST did not lower to short-circuit i1 CFG");
+    }
+    {
+        auto source = program("boolean_intrinsic_named_ast", true);
+        oreslang::Parameter left;
+        left.name = "left";
+        left.boolean = true;
+        source.functions.front().parameters.push_back(std::move(left));
+        oreslang::Parameter right;
+        right.name = "right";
+        right.boolean = true;
+        source.functions.front().parameters.push_back(std::move(right));
+        auto call = std::make_unique<Expression>();
+        call->kind = Expression::Kind::Call;
+        call->name = "Xor";
+        for (const char* name : {"left", "right"}) {
+            auto argument = std::make_unique<Expression>();
+            argument->kind = Expression::Kind::Variable;
+            argument->name = name;
+            call->arguments.push_back(std::move(argument));
+            call->argument_names.push_back(name);
+        }
+        source.functions.front().result = std::move(call);
+        rejected(source, "native Boolean intrinsics do not accept named arguments");
     }
 
     // Shape-check the separate scalar-loop fast path, which returns before

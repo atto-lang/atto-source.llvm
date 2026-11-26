@@ -1,10 +1,96 @@
-// Initial native typed Boolean source slice: zero args, pure literal returns.
-// No imported std/assert/Option/GC/actor functionality is inferred.
+// Native typed Boolean source slice: literals, i1 parameters, calls and
+// scalar compiler intrinsics. No bool locals, imported stdlib, ownership,
+// suspension, actor state or host callbacks are admitted here.
 define module BoolProbe as
     pub fnc yes(): bool {
         return true;
     }
     pub fnc no(): bool {
         return false;
+    }
+    pub fnc and_word(): bool {
+        return true and false;
+    }
+    pub fnc and_symbol(): bool {
+        return true && true;
+    }
+    pub fnc or_word(): bool {
+        return false or true;
+    }
+    pub fnc or_symbol(): bool {
+        return false || false;
+    }
+    pub fnc xor_named_literal(): bool {
+        return Xor(true, false);
+    }
+    pub fnc nested(): bool {
+        return false or true and Xor(true, false);
+    }
+
+    pub fnc and_args(bool a, bool b): bool {
+        return a and b;
+    }
+    pub fnc or_args(bool a, bool b): bool {
+        return a || b;
+    }
+    pub fnc xor_args(bool a, bool b): bool {
+        return Xor(a, b);
+    }
+
+    pub fnc builtin_and(bool a, bool b, bool c): bool {
+        return And(a, b, c);
+    }
+    pub fnc builtin_or(bool a, bool b, bool c): bool {
+        return Or(a, b, c);
+    }
+    pub fnc builtin_xor(bool a, bool b): bool {
+        return Xor(a, b);
+    }
+    pub fnc qualified_and(bool a, bool b, bool c): bool {
+        return BooleanOps.And(a, b, c);
+    }
+    pub fnc qualified_or(bool a, bool b, bool c): bool {
+        return BooleanOps.Or(a, b, c);
+    }
+    pub fnc qualified_xor(bool a, bool b): bool {
+        return BooleanOps.Xor(a, b);
+    }
+
+    pub fnc forward(bool a, bool b): bool {
+        return and_args(a, b);
+    }
+    pub fnc named_forward(bool a, bool b): bool {
+        return and_args(b: b, a: a);
+    }
+    pub fnc compose(bool a, bool b, bool c): bool {
+        return Or(And(a, b), Xor(b, c));
+    }
+    pub fnc builtin_and8(
+            bool a, bool b, bool c, bool d,
+            bool e, bool f, bool g, bool h): bool {
+        return And(a, b, c, d, e, f, g, h);
+    }
+    pub fnc builtin_or8(
+            bool a, bool b, bool c, bool d,
+            bool e, bool f, bool g, bool h): bool {
+        return Or(a, b, c, d, e, f, g, h);
+    }
+    pub fnc precedence_probe(): bool {
+        return true or false and false;
+    }
+    pub fnc left_bool(bool value): bool {
+        return value;
+    }
+    pub fnc right_bool(bool value): bool {
+        return value;
+    }
+    pub fnc lazy_and_call(bool left, bool right): bool {
+        return And(left, right_bool(right));
+    }
+    pub fnc lazy_or_call(bool left, bool right): bool {
+        return Or(left, right_bool(right));
+    }
+    pub fnc eager_xor_calls(bool left, bool right): bool {
+        return Xor(left_bool(left), right_bool(right));
     }
 end

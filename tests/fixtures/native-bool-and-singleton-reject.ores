@@ -1,0 +1,3 @@
+fnc bad(bool a): bool {
+    return And(a);
+}

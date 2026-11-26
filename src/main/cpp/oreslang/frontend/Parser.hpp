@@ -10,9 +10,10 @@
 
 namespace oreslang {
 
-// Deliberately restricted, typed-i64 expression AST. Not the full Java Ast.Program.
+// Deliberately restricted native scalar expression AST (i64 + pure i1).
+// This is not the full Java Ast.Program and does not imply bool local storage.
 struct Expression {
-    enum class Kind { Integer, Boolean, Variable, Negate, Add, Subtract, Multiply, Call, ModuleCall, ArrayCall, Copy, Take, Share, Borrow, BorrowMut, Field };
+    enum class Kind { Integer, Boolean, LogicalAnd, LogicalOr, LogicalXor, Variable, Negate, Add, Subtract, Multiply, Call, ModuleCall, ArrayCall, Copy, Take, Share, Borrow, BorrowMut, Field };
     Kind kind;
     std::size_t offset = 0;
     std::int64_t integer = 0; // Boolean kind stores canonical 0 or 1
@@ -26,8 +27,11 @@ struct Expression {
 struct Parameter {
     enum class Mode { Value, Borrow, BorrowMut };
     std::string name;
-    std::string class_name; // empty means primitive i64
+    std::string class_name; // nonempty means native class pointer
     Mode mode = Mode::Value;
+    // Keep this after the legacy fields so existing aggregate initializers
+    // {name, class_name, mode} retain their exact positional meaning.
+    bool boolean = false;   // primitive LLVM i1; otherwise primitive i64
 };
 
 // Immutable, lexical i64 slot with initializer-before-publication semantics.
