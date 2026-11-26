@@ -1,0 +1,61 @@
+name: Native scalar rebind and SSA evidence
+on:
+  pull_request:
+    paths:
+      - 'src/main.rs'
+      - 'frontend/src/parser.rs'
+      - 'frontend/src/check.rs'
+      - '.github/workflows/native-rebind-ssa.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-rebind:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact checkout
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
+          test "$(git write-tree)" = "$(git rev-parse HEAD^{tree})"
+          git rev-parse HEAD HEAD^{tree}
+          git ls-tree HEAD frontend/src/parser.rs frontend/src/check.rs src/main.rs
+          rustc --version
+          clang --version
+      - name: Compiler tests and build
+        run: |
+          cargo test --offline --locked parameter_rebind_tests
+          cargo build --offline --locked --release --bin atto-llvm
+      - name: Execute actual native guests
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          printf '%s\n' 'fnc id(int n): int { return n; } pub fnc main(): int { return id(42); }' > "$work/fixed.atto"
+          printf '%s\n' 'fnc id(rebind int n): int { return n; } pub fnc main(): int { return id(42); }' > "$work/marked.atto"
+          printf '%s\n' 'fnc bump(rebind int n): int { n = n + 2; return n; } pub fnc main(): int { val int n = 20; return bump(n) + n; }' > "$work/rebound.atto"
+          printf '%s\n' 'fnc bump(int n): int { n = n + 2; return n; } pub fnc main(): int { return bump(40); }' > "$work/reject.atto"
+          for name in fixed marked rebound; do
+            target/release/atto-llvm "$work/$name.atto" -o "$work/$name.ll" --emit-llvm
+            for opt in 0 2; do
+              clang -x ir -O"$opt" -o "$work/$name-$opt" "$work/$name.ll"
+              status=0
+              timeout 10s "$work/$name-$opt" || status=$?
+              test "$status" = 42
+            done
+          done
+          cmp "$work/fixed.ll" "$work/marked.ll"
+          grep -q 'ret i64 %arg0' "$work/fixed.ll"
+          if grep -q 'alloca' "$work/fixed.ll"; then exit 1; fi
+          if target/release/atto-llvm "$work/reject.atto" -o "$work/reject.ll" --emit-llvm >"$work/reject.log" 2>&1; then exit 1; fi
+          grep -q E_IMMUTABLE "$work/reject.log"
+          test ! -e "$work/reject.ll"
+          sha256sum "$work/"*.ll
