@@ -6204,6 +6204,46 @@ private:
                 }
                 returned=true;continue;
             }
+            if(accept("while")){
+                auto scan=lexer_;auto tok=token_;
+                while(tok.kind!=Kind::End&&tok.text!="{")tok=scan.next();
+                if(tok.kind==Kind::End)fail("E_VERIFY_UNSUPPORTED: loop block required");
+                unsigned nesting=1;std::unordered_set<std::string> writes;
+                tok=scan.next();
+                while(nesting&&tok.kind!=Kind::End){
+                    auto next=scan.next();
+                    if(tok.text=="{")++nesting;
+                    else if(tok.text=="}")--nesting;
+                    else if(tok.kind==Kind::Identifier&&next.text=="="&&mutable_types.count(std::string(tok.text)))
+                        writes.emplace(tok.text);
+                    tok=next;
+                }
+                if(nesting)fail("E_VERIFY_UNSUPPORTED: unterminated loop");
+                auto header=verified_locals_;
+                const auto slots=strict_slots_;
+                for(const auto& key:writes){
+                    const auto& invariant=mutable_types.at(key);
+                    invariant.require(header.at(key),"E_REFINEMENT_BINDING","loop entry "+key);
+                    header.at(key)=invariant;verified_upper_bounds_.at(key).clear();
+                }
+                const auto header_bounds=verified_upper_bounds_;
+                auto p=strict_condition(header,0);
+                require("{");verified_locals_=std::move(p.yes);
+                Statement loop{};loop.kind=Statement::Kind::Loop;loop.offset=at;
+                Statement guard{};guard.kind=Statement::Kind::Conditional;guard.offset=at;
+                guard.condition=std::move(p.test);
+                const bool terminal=strict_statement_block(declared,guaranteed,signature,function,name,
+                    guard.then_statements,mutable_types,depth+1);
+                require("}");
+                if(!terminal)for(const auto& key:writes)
+                    mutable_types.at(key).require(verified_locals_.at(key),"E_REFINEMENT_BINDING","loop backedge "+key);
+                Statement exit{};exit.kind=Statement::Kind::Break;exit.offset=at;
+                guard.else_statements.push_back(std::move(exit));
+                loop.then_statements.push_back(std::move(guard));
+                body.push_back(std::move(loop));
+                verified_locals_=std::move(p.no);verified_upper_bounds_=header_bounds;strict_slots_=slots;
+                continue;
+            }
             if(accept("if")){
                 const auto incoming=verified_locals_;const auto bounds=verified_upper_bounds_;
                 const auto slots=strict_slots_;
