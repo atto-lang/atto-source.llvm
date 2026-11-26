@@ -1539,6 +1539,12 @@ public:
                 program.classes.push_back(std::move(cls));
                 break;
             }
+            // define [pub] fnc/routine is a callable declaration, not a
+            // public module wrapper. Reuse the normal checked callable path.
+            if (token_.text == "fnc" || token_.text == "routine") {
+                program.functions.push_back(function({}, exported));
+                continue;
+            }
             if (exported && token_.text != "class") fail("native public module wrapper is not supported in the i64 subset");
             if (accept("serial")) {
                 require("actor");
@@ -1741,6 +1747,10 @@ public:
                     cls.exported = public_class;
                     remember_class_scalar_fields(cls);
                     program.classes.push_back(std::move(cls));
+                    continue;
+                }
+                if (token_.text == "fnc" || token_.text == "routine") {
+                    program.functions.push_back(function({}, public_class));
                     continue;
                 }
                 if (public_class && token_.text != "class") fail("native pub define currently supports only class declarations");
@@ -3560,7 +3570,13 @@ private:
             value.name = extension_function_name(
                 extension_receiver_alias_, extension_method_name_);
         } else {
-            value.exported = owner.empty() ? accept("pub") : visible;
+            if (owner.empty()) {
+                const bool inline_public = accept("pub");
+                if (visible && inline_public) fail("duplicate pub modifier");
+                value.exported = visible || inline_public;
+            } else {
+                value.exported = visible;
+            }
         const bool source_async = owner.empty() && accept("async");
         // A foreign declaration has no Atto body. Never treat its source
         // spelling as a freely chosen native linker symbol.
