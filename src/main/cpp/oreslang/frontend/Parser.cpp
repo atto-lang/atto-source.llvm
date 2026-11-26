@@ -208,7 +208,7 @@ bool reserved(std::string_view name) {
         "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
         "while", "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
-        "default", "eq", "neq", "Xor", "nb", "select", "readch", "writech",
+        "default", "eq", "neq", "And", "Or", "Xor", "nb", "select", "readch", "writech",
         "cb", "shared", "untrusted", "type", "types", "typeof",
         "interface", "trait", "struct", "impl", "abstract", "void", "Iterator", "AsyncIterator",
         "static", "pub", "private", "return", "defer", "throw", "raise",
@@ -6926,16 +6926,47 @@ private:
             field->name = identifier();
             return field;
         }
-        // Boolean xor is the builtin Xor(a, b); both arguments are always evaluated.
-        if (token_.kind == Kind::Identifier && token_.text == "Xor" && peek_next().text == "(") {
+        // Restricted native core gates. Until resolved intrinsic shadowing is
+        // implemented these spellings are reserved, not arbitrary user calls.
+        if (token_.kind == Kind::Identifier &&
+                (token_.text == "And" || token_.text == "Or" || token_.text == "Xor") &&
+                peek_next().text == "(") {
+            const auto name = token_.text;
+            const auto kind = name == "And" ? Expression::Kind::LogicalAnd :
+                name == "Or" ? Expression::Kind::LogicalOr : Expression::Kind::LogicalXor;
             advance();
             require("(");
-            auto call = make_expression(Expression::Kind::LogicalXor, offset);
-            call->left = expression();
-            require(",");
-            call->right = expression();
+            const bool pack = accept("[");
+            std::vector<std::unique_ptr<Expression>> operands;
+            if (!(pack ? token_.text == "]" : token_.text == ")")) {
+                do {
+                    if (operands.size() >= 32)
+                        fail("native Boolean reduction exceeds 32 operands");
+                    auto item = expression();
+                    // Only effect-free Boolean literals are admitted in this
+                    // pack slice; never turn effectful array construction lazy.
+                    if (pack && item->kind != Expression::Kind::Boolean)
+                        fail("native Boolean array pack requires literal bool elements; general array reduction unsupported");
+                    operands.push_back(std::move(item));
+                } while (accept(","));
+            }
+            if (pack) require("]");
             require(")");
-            return call;
+            if (!pack && operands.size() < 2)
+                fail("native Boolean reduction requires at least two scalar operands");
+            if (operands.empty()) {
+                auto identity = make_expression(Expression::Kind::Boolean, offset);
+                identity->boolean = name == "And";
+                return identity;
+            }
+            auto result = std::move(operands.front());
+            for (std::size_t i = 1; i < operands.size(); ++i) {
+                auto call = make_expression(kind, offset);
+                call->left = std::move(result);
+                call->right = std::move(operands[i]);
+                result = std::move(call);
+            }
+            return result;
         }
         // Named integer operations remain available; % is not source arithmetic.
         // A user module named Integer keeps its ordinary qualified calls.
