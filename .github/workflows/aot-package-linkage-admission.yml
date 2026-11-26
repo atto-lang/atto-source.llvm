@@ -27,5 +27,5 @@ jobs:
           git rev-parse HEAD HEAD^{tree}
           clang --version
           ld.lld --version
-          bash -n scripts/compile-aot.sh scripts/link-scalar-object.sh tests/aot_package_linkage_admission.sh
+          for script in scripts/compile-aot.sh scripts/link-scalar-object.sh tests/aot_package_linkage_admission.sh; do bash -n "$script"; done
           bash tests/aot_package_linkage_admission.sh
