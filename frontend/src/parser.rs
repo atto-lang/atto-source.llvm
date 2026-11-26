@@ -670,7 +670,16 @@ impl Parser {
             out.constructors.push((public, Constructor { pos, params, body }));
         } else if self.eat_word("mtd") {
             let prefixed = if self.return_first_marker_here() {
-                let ty = self.parse_type()?;
+                // The bounded profile accepts scalar return types only.
+                // Consume the scalar token before the contextual <- marker,
+                // without letting the generic-type suffix parser see '<'.
+                let ty = match self.word_at(0) {
+                    Some("int") => Type::Int,
+                    Some("bool" | "boolean") => Type::Bool,
+                    Some("void") => Type::Void,
+                    _ => return Err(unsupported(self.pos(), "non-scalar attached method return type")),
+                };
+                self.advance();
                 self.consume_return_first_marker()?;
                 Some(ty)
             } else { None };
