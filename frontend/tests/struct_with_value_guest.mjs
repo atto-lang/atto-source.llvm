@@ -45,7 +45,15 @@ const overloadMain = `pub fnc main(): int {
     stdio.println(q.pick(p.sum()));
     return 0;
 }`;
+const branching = decl.replace('self.x = x; self.y = y;', 'if x > 0 { self.x = x; } else { self.x = 0 - x; } fi self.y = self.x + y;');
+const nestedBranching = decl.replace('self.x = x; self.y = y;', 'if x > 0 { if y > 0 { self.x = x; } else { self.x = y; } fi } else { self.x = 0; } fi self.y = self.x + y;');
+const skippedTrap = decl.replace('self.x = x; self.y = y;', 'if x > 0 { self.x = x; } else { self.x = 9223372036854775807 + (y + 1); } fi self.y = y;');
 const positives = [
+    ['constructor-branch-true', branching + '\n' + main, '40\n300\nfalse\n'],
+    ['constructor-branch-false', branching + '\n' + main.replace('10, 20', '-10, 20'), '40\n300\nfalse\n'],
+    ['constructor-nested-branch', nestedBranching + '\n' + main.replace('10, 20', '10, -2'), '-6\n8\nfalse\n'],
+    ['constructor-untaken-trap', skippedTrap + '\n' + main.replace('10, 20', '10, 0'), '10\n0\nfalse\n'],
+
     ['same-arity-overloads', overloaded + '\n' + overloadMain, '21\n10\n31\n'],
     ['exact-overload-expression-types', overloaded + '\n' + overloadMain.replace('Point(enabled, 20)', 'Point(1 == 1, 20)').replace('q.pick(p.sum())', 'q.pick(p.sum() + 1)'), '21\n10\n32\n'],
 
@@ -64,6 +72,13 @@ const negatives = [
     ['copy-marker-forgery', decl + '\n' + main.replace('    stdio.println(p.sum());', '    let q = $struct_copy_operand(p);\n    stdio.println(q.sum());')],
     ['copy-expression-tail', decl + '\n' + main.replace('    stdio.println(p.sum());', '    let q = copy! p + 1;\n    stdio.println(q.sum());')],
     ['copy-non-struct', decl + '\n' + main.replace('    stdio.println(p.sum());', '    let x = 7;\n    let q = copy! x;\n    stdio.println(q);')],
+
+
+    ['constructor-missing-branch-field', branching.replace('else { self.x = 0 - x; }', 'else {}') + '\n' + main],
+    ['constructor-branch-read-before-init', branching.replace('self.x = 0 - x;', 'self.x = self.y;') + '\n' + main],
+    ['constructor-branch-double-init', branching.replace('self.y = self.x + y;', 'self.x = x; self.y = y;') + '\n' + main],
+    ['constructor-nonbool-condition', branching.replace('if x > 0', 'if x') + '\n' + main],
+    ['constructor-missing-else', branching.replace('else { self.x = 0 - x; }', '') + '\n' + main],
 
     ['overload-no-exact-constructor', overloaded + '\n' + overloadMain.replace('Point(enabled, 20)', 'Point(enabled, true)')],
     ['overload-no-exact-method', overloaded + '\n' + overloadMain.replace('q.pick(p.sum())', 'q.pick("bad")')],
@@ -88,6 +103,8 @@ const negatives = [
     ['wrong-receiver', decl + '\n' + main.replace('p.sum()', '10.sum()')],
     ['duplicate-method', decl.replace('int <- product()', 'int <- sum()') + '\n' + main],
 ];
+const fixtureIds = [...positives, ...negatives].map(([id]) => id);
+assert.equal(new Set(fixtureIds).size, fixtureIds.length, 'duplicate guest fixture ID');
 const attoc = process.env.ATTOC || './target/debug/attoc';
 const work = await mkdtemp(join(tmpdir(), 'atto-struct-value-'));
 async function build(name, source) {
