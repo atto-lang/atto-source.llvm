@@ -5981,6 +5981,7 @@ private:
             function.native_internal = !exported;
             verified_locals_.clear();
             verified_upper_bounds_.clear();
+            strict_slots_.clear();
             require("(");
             if (token_.text != ")") {
                 do {
@@ -6043,7 +6044,8 @@ private:
                     return;
                 }
             }
-            while (accept("val")) {
+            if(strict_i64_)strict_bindings(function);
+            while (!strict_i64_ && accept("val")) {
                 if (function.locals.size() >= 128) fail("E_REFINEMENT_LIMIT: too many immutable bindings");
                 LocalBinding local;
                 local.offset = token_.offset;
@@ -6098,6 +6100,61 @@ private:
         }
     }
 
+    void strict_bindings(Function& function) {
+        std::unordered_map<std::string,RefinedQuantity> mutable_types;
+        constexpr std::string_view version_prefix="__atto_strict_version_";
+        // Internal version identities must be legal ownership CFG place names.
+        for(const auto& [name,fact]:verified_locals_){
+            (void)fact;
+            if(name.compare(0,version_prefix.size(),version_prefix)==0)fail("E_VERIFY_UNSUPPORTED: reserved strict version identifier");
+        }
+        for(;;) {
+            const bool immutable=accept("val");
+            const bool mut=!immutable&&accept("let");
+            if(!immutable&&!mut) {
+                if(token_.kind!=Kind::Identifier||peek_next().text!="=")break;
+                const auto name=identifier();
+                const auto found=mutable_types.find(name);
+                if(found==mutable_types.end())fail("E_VERIFY_UNSUPPORTED: assignment requires mutable scalar");
+                require("=");
+                auto value=verified_expression(0);require(";");
+                found->second.require(value.type(),"E_REFINEMENT_BINDING","assignment "+name);
+                if(function.locals.size()>=128)fail("E_REFINEMENT_LIMIT: too many strict versions");
+                LocalBinding local;
+                local.offset=token_.offset;
+                local.name=std::string(version_prefix)+std::to_string(function.locals.size());
+                local.initializer=std::move(value.expression);
+                strict_slots_[name]=local.name;
+                verified_locals_.at(name)=RefinedQuantity{found->second.unit,value.range,found->second.i32};
+                verified_upper_bounds_.at(name)=std::move(value.upper_bounds);
+                function.locals.push_back(std::move(local));
+                continue;
+            }
+            if(function.locals.size()>=128)fail("E_REFINEMENT_LIMIT: too many strict versions");
+            LocalBinding local;
+            local.offset=token_.offset;
+            RefinedQuantity type;
+            const bool inferred=peek_next().text=="=";
+            if(peek_next().text==":"){
+                local.name=identifier();require(":");type=read_refined_type();
+            }else if(inferred){
+                if(mut)fail("E_VERIFY_UNSUPPORTED: mutable binding requires explicit type");
+                local.name=identifier();
+            }else{
+                type=read_refined_type();local.name=identifier();
+            }
+            require("=");auto value=verified_expression(0);require(";");
+            if(local.name.compare(0,version_prefix.size(),version_prefix)==0)fail("E_VERIFY_UNSUPPORTED: reserved strict version identifier");
+            if(inferred)type=value.type();
+            type.require(value.type(),"E_REFINEMENT_BINDING","binding "+local.name);
+            if(!verified_locals_.emplace(local.name,RefinedQuantity{type.unit,value.range,type.i32}).second)
+                fail("E_REFINEMENT_DUPLICATE: duplicate strict binding");
+            verified_upper_bounds_.emplace(local.name,std::move(value.upper_bounds));
+            if(mut)mutable_types.emplace(local.name,type);
+            local.initializer=std::move(value.expression);
+            function.locals.push_back(std::move(local));
+        }
+    }
     using StrictFacts=std::unordered_map<std::string,RefinedQuantity>;
     struct StrictEdges {
         std::unique_ptr<Expression> test;
@@ -6157,9 +6214,11 @@ private:
         else fail("E_VERIFY_UNSUPPORTED: strict comparison required");
         auto r=verified_expression(0);l.unit.require_compatible(r.unit);
         auto yes=facts,no=facts;
-        if(l.expression->kind==Expression::Kind::Variable && facts.count(l.expression->name) &&
+        std::string fact_name=l.expression->name;
+        for(const auto& [source,slot]:strict_slots_)if(slot==fact_name){fact_name=source;break;}
+        if(l.expression->kind==Expression::Kind::Variable && facts.count(fact_name) &&
            r.range.minimum()==r.range.maximum()) {
-            auto name=l.expression->name;auto n=r.range.minimum();
+            auto name=fact_name;auto n=r.range.minimum();
             yes.at(name).range=facts.at(name).range.restrict(op,n);
             no.at(name).range=facts.at(name).range.restrict(inverse,n);
         }
@@ -6203,7 +6262,8 @@ private:
             auto found = verified_locals_.find(name);
             if (found == verified_locals_.end()) fail("E_REFINEMENT_NAME: unknown immutable value '" + name + "'");
             auto value = make_expression(Expression::Kind::Variable, offset);
-            value->name = name;
+            const auto slot=strict_slots_.find(name);
+            value->name = slot==strict_slots_.end()?name:slot->second;
             return {std::move(value), found->second.unit, 0, found->second.range,
                     verified_upper_bounds_.at(name), found->second.i32};
         }
@@ -10347,6 +10407,7 @@ private:
     std::unordered_map<std::string, std::unordered_set<std::string>> verified_upper_bounds_;
     std::unordered_map<std::string, VerifiedFunction> verified_functions_;
     bool verified_callable_ = false;
+    std::unordered_map<std::string,std::string> strict_slots_;
     bool strict_i64_ = false;
     std::string_view source_;
     Lexer lexer_;
