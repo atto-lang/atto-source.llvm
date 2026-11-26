@@ -17,6 +17,8 @@ class VerifiedI64Range {
     static constexpr auto Min = std::numeric_limits<std::int64_t>::min();
     static constexpr auto Max = std::numeric_limits<std::int64_t>::max();
     types::NativeI64Interval bounds_;
+    unsigned exclusions_ = 0;
+    static unsigned bit(std::int64_t n) { return n == 0 ? 1u : n == -1 ? 2u : 0u; }
 
     static types::NativeI64Interval checked_bounds(std::int64_t low, std::int64_t high) {
         if (low > high) throw std::runtime_error("E_REFINEMENT_EMPTY: contradictory interval");
@@ -35,10 +37,33 @@ class VerifiedI64Range {
     }
 
 public:
-    VerifiedI64Range(std::int64_t low = Min, std::int64_t high = Max) : bounds_(checked_bounds(low, high)) {}
-
+    VerifiedI64Range(std::int64_t low = Min, std::int64_t high = Max, unsigned exclusions = 0)
+        : bounds_(checked_bounds(low, high)), exclusions_(exclusions) {
+        while (bounds_.minimum <= bounds_.maximum && (exclusions_ & bit(bounds_.minimum))) ++bounds_.minimum;
+        while (bounds_.minimum <= bounds_.maximum && (exclusions_ & bit(bounds_.maximum))) --bounds_.maximum;
+        if (bounds_.minimum > bounds_.maximum) throw std::runtime_error("E_REFINEMENT_EMPTY: contradictory interval");
+        if (bounds_.minimum > 0 || bounds_.maximum < 0) exclusions_ &= ~1u;
+        if (bounds_.minimum > -1 || bounds_.maximum < -1) exclusions_ &= ~2u;
+    }
+    bool contains_value(std::int64_t value) const {
+        return minimum() <= value && value <= maximum() && !(exclusions_ & bit(value));
+    }
+    VerifiedI64Range excluding(std::int64_t value) const {
+        if (!contains_value(value)) return *this;
+        if (minimum() == maximum()) throw std::runtime_error("E_REFINEMENT_EMPTY: contradictory interval");
+        if (minimum() == value) return {value+1, maximum(), exclusions_};
+        if (maximum() == value) return {minimum(), value-1, exclusions_};
+        return {minimum(), maximum(), exclusions_ | bit(value)};
+    }
+    VerifiedI64Range join(const VerifiedI64Range& other) const {
+        unsigned mask = (!contains_value(0) && !other.contains_value(0) ? 1u : 0u)
+                      | (!contains_value(-1) && !other.contains_value(-1) ? 2u : 0u);
+        return {std::min(minimum(),other.minimum()),std::max(maximum(),other.maximum()),mask};
+    }
     bool includes(const VerifiedI64Range& actual) const {
-        return actual.bounds_.entails(bounds_);
+        return actual.bounds_.entails(bounds_) &&
+            (!actual.contains_value(0) || contains_value(0)) &&
+            (!actual.contains_value(-1) || contains_value(-1));
     }
 
     std::int64_t minimum() const { return bounds_.minimum; }
@@ -60,11 +85,11 @@ public:
     }
 
     VerifiedI64Range constrain(std::string_view op, std::int64_t bound) const {
-        if (op == "eq") return {std::max(bounds_.minimum, bound), std::min(bounds_.maximum, bound)};
+        if (op == "eq") return {std::max(bounds_.minimum, bound), std::min(bounds_.maximum, bound), exclusions_};
         if (op == "<=") return {bounds_.minimum, std::min(bounds_.maximum, bound)};
-        if (op == ">=") return {std::max(bounds_.minimum, bound), bounds_.maximum};
-        if (op == "<" && bound != Min) return {bounds_.minimum, std::min(bounds_.maximum, bound - 1)};
-        if (op == ">" && bound != Max) return {std::max(bounds_.minimum, bound + 1), bounds_.maximum};
+        if (op == ">=") return {std::max(bounds_.minimum, bound), bounds_.maximum, exclusions_};
+        if (op == "<" && bound != Min) return {bounds_.minimum, std::min(bounds_.maximum, bound - 1), exclusions_};
+        if (op == ">" && bound != Max) return {std::max(bounds_.minimum, bound + 1), bounds_.maximum, exclusions_};
         if (op == "<" || op == ">")
             throw std::runtime_error("E_REFINEMENT_EMPTY: contradictory interval");
         throw std::runtime_error("E_REFINEMENT_PREDICATE: expected an interval comparison");
