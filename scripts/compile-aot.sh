@@ -6,7 +6,7 @@ set -euo pipefail
 # Existing path links the admitted guest IR into one executable. Package
 # linkage is independent of system libc/host-runtime linkage and AOT LTO.
 # Do not silently treat dynamic/hybrid as this existing static guest path.
-case "${3:---link=static}" in
+case "${3---link=static}" in
   --link=static) ;;
   --link=dynamic|--link=hybrid)
     echo 'E_LINK_MODE_UNSUPPORTED: separate precompiled package ABI not admitted by this driver' >&2
