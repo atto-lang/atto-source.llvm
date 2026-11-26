@@ -4200,6 +4200,7 @@ std::string emit_verified_scalar_namespace_consumer(
     std::unordered_map<std::string,const VerifiedScalarNamespaceBinding*> aliases;
     std::unordered_set<std::string> used_aliases, symbols;
     std::unordered_set<const VerifiedScalarNamespaceBinding*> selected_bindings;
+    std::map<std::string,std::string> symbol_owners;
     for (const auto& imp : program.namespace_imports) {
         const VerifiedScalarNamespaceBinding* selected=nullptr;
         for (const auto& b:bindings)
@@ -4232,6 +4233,9 @@ std::string emit_verified_scalar_namespace_consumer(
             [&](const auto& i){return i.local_name==alias;});
         const auto symbol=package_interface::stable_scalar_link_symbol(
             binding.interface,binding.slot,imp->namespace_name,binding.module,e.name.substr(dot+1));
+        const auto owner=symbol_owners.emplace(symbol,alias);
+        if(!owner.second && owner.first->second!=alias)
+            throw std::runtime_error("duplicate logical interface slot");
         used_aliases.insert(alias);
         e.name=symbol;
         if(symbols.insert(symbol).second){
