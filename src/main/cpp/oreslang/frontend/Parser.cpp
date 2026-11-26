@@ -264,6 +264,13 @@ public:
         }
         const std::size_t start = at_;
         const char ch = source_[at_];
+        // Exact non-letter UTF-8 aliases share the existing suspension
+        // effect and native admission gates. Never rewrite source trivia.
+        if (source_.substr(at_, 3) == "\xE2\xA7\x96" ||
+                source_.substr(at_, 3) == "\xE2\x88\x82") {
+            at_ += 3;
+            return {Kind::Identifier, "suspends", start};
+        }
         if (identifier_start(ch)) {
             ++at_;
             while (at_ < source_.size() && identifier_part(source_[at_])) ++at_;
@@ -274,6 +281,8 @@ public:
             // Existing nb-select recognition is intentionally unchanged
             // until native select lowering supports that grammar.
             const auto first = source_.substr(start, at_ - start);
+            if (first == "susp")
+                return {Kind::Identifier, "suspends", start};
             // Channel<int> has a distinct result/EOF/cancellation/ownership
             // representation. Reject the exact nominal type before any
             // scalar i64 LLVM lowering can reinterpret it as integers or
