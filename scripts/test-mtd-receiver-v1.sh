@@ -33,6 +33,7 @@ for guest in positive-local-class.atto positive-two-actors-forward.atto; do
     runtime=(-x c -std=c11 -I "$repo_root/src/main/cpp"
       "$rt/ActorOwnedI64Heap.c" "$rt/NativeActorScheduler.c" "$rt/NativeOresVM.c"
       "$rt/NativeActorFuture.c" "$rt/SourceActorBootstrap.c"
+      "$rt/NativeActorLogicalFramesV1.c"
       "$rt/NativeExecutionContextStore.c" "$rt/NativeContinuationStore.c"
       "$rt/NativeAwaitTraceBridge.c" "$rt/NativeLogicalTrace.c" -pthread)
   fi

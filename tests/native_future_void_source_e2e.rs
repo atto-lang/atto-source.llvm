@@ -104,6 +104,7 @@ fn main() {
         for module in [
             "ActorOwnedI64Heap.c", "NativeActorScheduler.c", "NativeOresVM.c",
             "NativeActorFuture.c", "SourceActorBootstrap.c",
+            "NativeActorLogicalFramesV1.c",
             "NativeExecutionContextStore.c", "NativeContinuationStore.c",
             "NativeAwaitTraceBridge.c", "NativeLogicalTrace.c",
         ] {
