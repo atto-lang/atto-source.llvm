@@ -44,6 +44,16 @@ inline std::string emit_verified_ir(const Plan& plan) {
         builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", readonly_helper));
         builder.CreateRet(builder.CreateLoad(i64, readonly_helper->getArg(0), "borrowed.read"));
     }
+    llvm::Function* mutable_helper = nullptr;
+    if (!plan.mutable_helper.empty()) {
+        auto* pointer_type = llvm::PointerType::getUnqual(context);
+        auto* helper_type = llvm::FunctionType::get(builder.getVoidTy(), {pointer_type}, false);
+        mutable_helper = llvm::Function::Create(helper_type, llvm::GlobalValue::InternalLinkage,
+            "atto.pointer.mutable.helper", module);
+        builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", mutable_helper));
+        builder.CreateStore(builder.getInt64(plan.mutable_write), mutable_helper->getArg(0));
+        builder.CreateRetVoid();
+    }
     auto* main_type = llvm::FunctionType::get(i32, false);
     auto* main_fn = llvm::Function::Create(
         main_type, llvm::GlobalValue::ExternalLinkage, "main", module);
@@ -106,6 +116,9 @@ inline std::string emit_verified_ir(const Plan& plan) {
             builder.CreateStore(first, slot(step.second_index));
             break;
         }
+        case Step::Kind::MutableCall:
+            builder.CreateCall(mutable_helper, {slot(0)});
+            break;
         case Step::Kind::Scalar:
             scalar_values.emplace(step.name, lower(*step.value));
             break;
