@@ -1,5 +1,6 @@
 #pragma once
 #include "oreslang/frontend/NativeOresiV1Admission.hpp"
+#include "oreslang/frontend/NativeScalarElfAdmission.hpp"
 #include <utility>
 
 namespace oreslang::package_interface {
@@ -60,6 +61,7 @@ inline VerifiedNativeScalarObject admit_native_scalar_object(
     if(bytes.empty() || bytes.size()>16u*1024u*1024u ||
         sha256(bytes)!=pin.expected_object_sha256)
         detail::reject("native object bytes digest mismatch");
+    elf_scalar_detail::verify(bytes,symbol);
     return VerifiedNativeScalarObject(proof.package_instance_id(),symbol,
         pin.expected_source_sha256,pin.expected_object_sha256,
         pin.target_triple,pin.optimization_profile,std::move(bytes));
