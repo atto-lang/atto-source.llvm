@@ -181,4 +181,61 @@ for name in reject-int-and reject-int-or reject-int-xor reject-int-and-dead-rhs 
     exit 1
   fi
 done
+# Compound XOR is restricted to writable integer locals.
+cat >"$tmp/compound-xor.atto" <<'ATTO'
+fnc rhs(): int {
+  stdio.stdout.println(3);
+  return 10;
+}
+pub fnc main(): int {
+  let int x = 12;
+  x ^^= rhs();
+  let int edge = -9223372036854775807 - 1;
+  edge ^^= -1;
+  let int high = edge;
+  edge ^^= -1;
+  let int low = edge;
+  edge ^^= edge;
+  return (x eq 6 && high eq 9223372036854775807 &&
+          low eq (-9223372036854775807 - 1) && edge eq 0) ? 42 : 7;
+}
+ATTO
+timeout 40s "$compiler" --target=host "$tmp/compound-xor.atto" >"$tmp/compound-xor.ll"
+test -s "$tmp/compound-xor.ll"
+printf '3\n' >"$tmp/compound-xor.expected"
+for opt in 0 2; do
+  binary="$tmp/compound-xor-O$opt"
+  timeout 40s "$clang" "-O$opt" -x ir "$tmp/compound-xor.ll" -x c -std=c11 \
+    -I "$root/src/main/cpp" "$string_runtime" -pthread -o "$binary"
+  status=0
+  timeout 20s "$binary" 2>"$tmp/compound-xor-O$opt.stderr" |
+    cat >"$tmp/compound-xor-O$opt.stdout" || status=$?
+  if [[ "$status" -ne 42 ]] || ! cmp -s "$tmp/compound-xor.expected" "$tmp/compound-xor-O$opt.stdout"; then
+    echo "compound XOR boundary or exactly-once RHS failure at O$opt: status=$status" >&2
+    exit 1
+  fi
+done
+
+negative_index=0
+for body in 'val int x = 12; x ^^= 10; return x;' \
+            'let int x = 12; x ^^= true; return x;' \
+            'let bool x = true; x ^^= false; return 0;' \
+            'let int x = 12; x ^^= 1.5; return x;' \
+            'let int x = 12; x ^= 10; return x;' \
+            'let int x = 12; x ^^ = 10; return x;' \
+            'let int x = 12; x ^ ^= 10; return x;' \
+            'let int x = 12; x ^/*gap*/^= 10; return x;' \
+            'let int x = 12; x ^^/*gap*/= 10; return x;'; do
+  negative_index=$((negative_index + 1))
+  printf 'pub fnc main(): int { %s }\n' "$body" >"$tmp/compound-reject.atto"
+  status=0
+  timeout 40s "$compiler" --target=host "$tmp/compound-reject.atto" \
+    >"$tmp/compound-reject.ll" 2>"$tmp/compound-reject.stderr" || status=$?
+  if [[ "$status" -ne 1 || -s "$tmp/compound-reject.ll" || ! -s "$tmp/compound-reject.stderr" ]]; then
+    echo "compound XOR negative $negative_index did not produce a clean source rejection: status=$status" >&2
+    exit 1
+  fi
+done
+echo "ATTO_COMPOUND_XOR_NATIVE_O0_O2_PASS negatives=$negative_index"
+
 echo "logical punctuation: native O0/O2 + short-circuit/trap execution + compile negatives passed"
