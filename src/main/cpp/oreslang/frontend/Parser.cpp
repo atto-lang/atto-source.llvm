@@ -6042,6 +6042,8 @@ private:
                     end_delimited = true;
                 } else fail("E_SYNTAX: expected verified callable body opener");
             }
+            if (end_delimited && (token_.text == "begin" || token_.text == "::" || token_.text == "{"))
+                fail("E_SYNTAX: combined verified callable body openers");
             if (main && !program.protocol_actors.empty() && token_.text == "val") {
                 auto lookahead = lexer_;
                 if (lookahead.next().kind == Kind::Identifier && lookahead.next().text == "=" &&
@@ -6158,7 +6160,7 @@ private:
                     }
                 }
                 function.result=strict_returns(declared_result,guaranteed_result,signature,function,name,0);
-                require(end_delimited ? "end" : "}");
+                if (!accept(end_delimited ? "end" : "}")) fail("E_SYNTAX: missing or mismatched verified callable closer");
             } else {
                 if (!accept("return"))
                     fail("E_REFINEMENT_BODY: expected an explicit return after immutable bindings");
@@ -6171,7 +6173,7 @@ private:
                         fail("E_REFINEMENT_POSTCONDITION: cannot prove result <= " + parameter);
                 }
                 require(";");
-                require(end_delimited ? "end" : "}");
+                if (!accept(end_delimited ? "end" : "}")) fail("E_SYNTAX: missing or mismatched verified callable closer");
                 function.result = std::move(result.expression);
             }
             program.functions.push_back(std::move(function));
