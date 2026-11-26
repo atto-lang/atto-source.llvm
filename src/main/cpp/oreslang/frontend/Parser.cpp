@@ -228,7 +228,7 @@ public:
             }
             // Atto keyword bangs require a separator after the complete suffix.
             if ((first == "trap" || first == "throw" || first == "raise" || first == "panic" ||
-                 first == "copy" || first == "take" || first == "borrow" || first == "share" ||
+                 first == "copy" || first == "take" || first == "move" || first == "borrow" || first == "share" ||
                  first == "pin" || first == "drop" || first == "pipe" || first == "rpipe" ||
                  first == "stop" || first == "expand")
                     && at_ < source_.size() && source_[at_] == '!'
