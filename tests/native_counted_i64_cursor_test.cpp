@@ -71,4 +71,29 @@ static void producer_close_while_waiting(){
     round(c);assert(c.result()[0]==42);
     assert(a->pending_readers()==0&&b->pending_readers()==0);
 }
-int main(){exact();mixed();wake_and_cancel();eof_and_exhaustion();rollback_and_owner();producer_close_while_waiting();std::cout<<"NATIVE_COUNTED_I64_CURSOR_PASS\n";}
+static void mixed_projections(){
+    auto a=std::make_shared<Channel>(),b=std::make_shared<Channel>();
+    auto f=std::make_shared<Future>();auto alias=std::make_shared<Future>(*f);
+    assert(a->try_write(1)&&a->try_write(4)&&b->try_write(3)&&f->resolve(2));
+    Cursor c(4,{a,f,b,a,alias},true,{
+        [](auto v){return v+10;},[](auto v){return v+20;},
+        [](auto v){return v+30;},[](auto v){return v+40;},
+        [](auto)->std::int64_t{throw std::logic_error("retired alias projected");}
+    });
+    for(int i=0;i<4;++i)round(c);
+    assert((c.result()==std::vector<std::int64_t>{11,22,33,44}));
+    assert(a->pending_readers()+b->pending_readers()+f->pending_waiters()==0);
+    try{Cursor bad(1,{a,b},true,{[](auto v){return v;}});assert(false);}
+    catch(const std::invalid_argument&){}
+    try{Cursor bad(1,{a},true,{Cursor::Projection{}});assert(false);}
+    catch(const std::invalid_argument&){}
+    assert(Cursor(0,{},true,{Cursor::Projection{}}).result().empty());
+    assert(a->pending_readers()==0);
+    assert(a->try_write(10)&&a->try_write(20));
+    Cursor failure(2,{a},true,{[](auto)->std::int64_t{throw std::runtime_error("projection failed");}});
+    failure.begin_round();
+    try{(void)failure.pump();assert(false);}catch(const std::runtime_error& e){assert(std::string(e.what())=="projection failed");}
+    assert(failure.state()==State::Failed&&a->pending_readers()==0&&a->try_read().value()==20);
+    try{(void)failure.result();assert(false);}catch(const std::logic_error&){}
+}
+int main(){exact();mixed();mixed_projections();wake_and_cancel();eof_and_exhaustion();rollback_and_owner();producer_close_while_waiting();std::cout<<"NATIVE_COUNTED_I64_CURSOR_PASS\n";}
