@@ -48,10 +48,6 @@ bool exceptional_control(std::string_view word) {
 }
 
 bool digit(char ch) { return ch >= '0' && ch <= '9'; }
-bool identifier_start(char ch) {
-    return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_';
-}
-bool identifier_part(char ch) { return identifier_start(ch) || digit(ch); }
 bool identifier_part_at(std::string_view text, std::size_t offset) {
     const auto scalar = frontend::unicode_at(text, offset);
     return scalar.width != 0 && frontend::portable_name_part(scalar.value);
@@ -161,10 +157,6 @@ std::size_t template_interpolation_close(std::string_view source, std::size_t fr
     std::size_t at = from;
     while (at < source.size()) {
         const char ch = source[at];
-        if (scalar.width && scalar.value == 0xacu) {
-            at_ += scalar.width;
-            return {Kind::Symbol, source_.substr(start, scalar.width), start};
-        }
         if (ch == '"' || ch == '\'') {
             at = skip_template_quoted(source, at + 1, ch, origin);
         } else if (static_cast<unsigned char>(ch) == 0x60) {
@@ -343,6 +335,10 @@ public:
                 ++at_;
             }
             return {Kind::Identifier, source_.substr(start, at_ - start), start};
+        }
+        if (scalar.width && scalar.value == 0xacu) {
+            at_ += scalar.width;
+            return {Kind::Symbol, source_.substr(start, scalar.width), start};
         }
         if (ch == '"' || ch == '\'') {
             const char quote = ch;
