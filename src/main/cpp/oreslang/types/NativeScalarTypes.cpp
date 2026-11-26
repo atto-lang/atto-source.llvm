@@ -337,6 +337,25 @@ void validate_native_scalar_types(const Program& program) {
             require(expression(*field.initializer, fields), scalar(false), field.offset, "actor initializer requires int");
             fields.emplace(field.name, scalar(false));
         }
+        if (actor.suspending_task) {
+            const auto& task = *actor.suspending_task;
+            const auto& method = actor.on_message;
+            if (!task.producer_result || method.parameters.size() != 1 ||
+                    task.captured_parameter != method.parameters.front().name ||
+                    !method.locals.empty() || !method.actor_field_writes.empty())
+                fail(task.offset, "native actor Task<int> frame shape/provenance invalid");
+            // The producer receives only the copied parameter, never the actor
+            // fields or the not-yet-published await result.
+            Locals capture;
+            capture.emplace(task.captured_parameter,
+                            parameter_type(method.parameters.front()));
+            require(expression(*task.producer_result, capture), scalar(false),
+                    task.offset, "native actor Task<int> producer requires int");
+            if (task.awaited_result_name == task.captured_parameter ||
+                    task.awaited_result_name == task.task_name ||
+                    !fields.emplace(task.awaited_result_name, scalar(false)).second)
+                fail(task.offset, "native actor await result shadows live state");
+        }
         function(actor.on_message, std::move(fields));
     }
 }
