@@ -2,6 +2,8 @@
 #include "oreslang/runtime/NativeSelectAbi.h"
 #include <cassert>
 #include <cstdint>
+#include <atomic>
+#include <thread>
 
 struct ReadCase {
     OresNativeSelect2* select = nullptr;
@@ -307,6 +309,46 @@ static void ready_now_closed_empty_commits_eof() {
     ores_native_select2_destroy(select);
 }
 
+// A foreign producer may capture a readiness callback just as the owner
+// closes the temporary subscription. No late commit may consume the value
+// or modify the caller's result after the bridge returns.
+static void ready_now_racing_producer_never_commits_after_return() {
+    for (int iteration = 0; iteration < 512; ++iteration) {
+        auto* select = ores_native_select2_open();
+        auto* channel = ores_native_i64_channel1_open();
+        assert(select && channel);
+        assert(ores_native_select2_register(select,0)==1);
+        std::atomic<bool> start{false};
+        std::thread producer([&] {
+            while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+            int written = -1;
+            assert(ores_native_i64_channel1_try_write(channel,42,&written)==1);
+            assert(written==ORES_NATIVE_I64_WRITE_WRITTEN);
+        });
+        int status=-1;
+        int64_t value=-1;
+        start.store(true,std::memory_order_release);
+        int won=ores_native_select2_read_i64_ready_now(select,0,channel,&status,&value);
+        assert(won==0 || won==1);
+        const int returned_status=status;
+        const int64_t returned_value=value;
+        producer.join();
+        assert(status==returned_status && value==returned_value);
+        if(won==0) {
+            assert(ores_native_select2_winner(select)==-1);
+            assert(ores_native_i64_channel1_try_read(channel,&status,&value)==1);
+            assert(status==ORES_NATIVE_I64_READ_VALUE && value==42);
+        } else {
+            assert(status==ORES_NATIVE_I64_READ_VALUE && value==42);
+            assert(ores_native_select2_winner(select)==0);
+            assert(ores_native_i64_channel1_try_read(channel,&status,&value)==1);
+            assert(status==ORES_NATIVE_I64_READ_WOULD_BLOCK);
+        }
+        ores_native_i64_channel1_destroy(channel);
+        ores_native_select2_destroy(select);
+    }
+}
+
 int main() {
     direct_close_and_eof();
     losing_read_does_not_consume();
@@ -316,5 +358,6 @@ int main() {
     ready_now_empty_probe_leaves_no_waiter();
     ready_now_losing_probe_does_not_consume();
     ready_now_closed_empty_commits_eof();
+    ready_now_racing_producer_never_commits_after_return();
     return 0;
 }
