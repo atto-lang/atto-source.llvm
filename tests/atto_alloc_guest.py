@@ -138,14 +138,14 @@ def main() -> None:
         attacks = {
             "slab": '''import module slab from "./slab";
 pub fnc main(): int {
-  let mut slab.Slab s = slab.new_slab(17, 1);
+  let mut slab.Slab s = take! slab.new_slab(17, 1);
   let slab.Handle h = s.insert(5).unwrap();
   let slab.OwnerToken stolen = h.owner_token;
   return 0;
 }''',
             "actor_heap": '''import module actor_heap from "./actor_heap";
 pub fnc main(): int {
-  let mut actor_heap.ActorHeap h = actor_heap.new_actor_heap(19, 8, 3);
+  let mut actor_heap.ActorHeap h = take! actor_heap.new_actor_heap(19, 8, 3);
   let actor_heap.HeapHandle a = h.allocate(1).unwrap();
   let actor_heap.OwnerToken stolen = a.owner_token;
   return 0;
