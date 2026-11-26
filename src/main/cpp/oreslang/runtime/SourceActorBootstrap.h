@@ -8,7 +8,8 @@ extern "C" {
 #endif
 /* Restricted compiler-generated source-actor bootstrap: a pointer to the
  * generated constructor and fixed number of actor-owned i64 fields.
- * Returns an opaque host-owned ref; it is not a guest scalar/capability.
+ * Returns an opaque monotonic native identity transported in the pointer ABI;
+ * it is never a dereferenceable address or a guest scalar/FFI capability.
  * Source stop is only permitted from trusted zero-argument main.
  */
 typedef void (*OresSourceActorInit)(OresActorI64Heap*, uint64_t, uint64_t);
@@ -42,8 +43,8 @@ typedef struct {
     int stop_requested;
 } OresSourceActorMessageReceipt;
 
-/* Caller must keep the opaque SourceActor ref alive through this call.
- * These are trusted runtime diagnostics, not a guest-writable capability.
+/* Observations resolve under the registry mutex, including retained failure
+ * metadata. A stale identity with no record returns 0. Trusted diagnostics,
  */
 int oreslang_source_actor_message_receipt(
     void* actor, OresSourceActorMessageReceipt* out);
@@ -142,7 +143,8 @@ int64_t oreslang_source_actor_await_ready(
     uint64_t source_token);
 
 /* Host/runtime projection of the same readiness observer. Returns READY or
- * TERMINATED_BEFORE_READY; the continuation runs only on READY. The compiler
+ * TERMINATED_BEFORE_READY, or -1 for an unknown/retiring identity;
+ * the continuation runs only on READY. The compiler
  * wrapper above remains fail-closed until typed ActorTerminated propagation is
  * lowered for source await. */
 int oreslang_source_actor_await_ready_checked(
