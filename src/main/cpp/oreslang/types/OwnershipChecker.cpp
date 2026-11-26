@@ -282,8 +282,17 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             // A value-level share is legal for scalar Copy values only.
             // Keep class/array ownership nominal: do not manufacture a
             // second mutable owner by lowering Share as a scalar no-op.
-            if (expr.left && expr.left->kind == Expression::Kind::Variable) {
+            if (!expr.left)
+                reject(expr, "E_SHARE_BORROW: rt share requires a value operand");
+            if (expr.left->kind == Expression::Kind::Variable) {
                 const auto& source = local(*expr.left, locals);
+                // A named borrowed parameter is a loan, not a transferable
+                // owner. Even a primitive i64's copyability does not confer
+                // Share authority on the borrowed capability. Explicitly
+                // snapshot the scalar into an owned binding first.
+                if (source.mode != Mode::Value)
+                    reject(expr, "E_SHARE_BORROW: rt share cannot upgrade a "
+                                 "borrowed parameter to shared ownership");
                 if (source.int_array || !source.class_name.empty())
                     reject(expr, "E_SHARE_MOVE_ONLY: rt share cannot alias a non-Copy array or class owner");
             } else if (expr.left && expr.left->kind == Expression::Kind::Field &&
