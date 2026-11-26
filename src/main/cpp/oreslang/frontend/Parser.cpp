@@ -324,6 +324,17 @@ public:
                     && !(source_.substr(at_, 3) == "!eq"
                          && (at_ + 3 == source_.size() || !identifier_part(source_[at_ + 3])))) {
                 ++at_;
+                // A canonical AttoLang bang keyword is contiguous internally
+                // but MUST have ASCII whitespace immediately after the suffix.
+                // Comments alone, punctuation and NBSP are not separators.
+                const bool separated = at_ < source_.size() &&
+                        (source_[at_] == ' ' || source_[at_] == '\t' ||
+                         source_[at_] == '\n' || source_[at_] == '\r' ||
+                         source_[at_] == '\v' || source_[at_] == '\f');
+                if (!separated)
+                    throw std::runtime_error(
+                            "E_BANG_KEYWORD_WHITESPACE: whitespace required after trap! at byte " +
+                            std::to_string(start));
             }
             return {Kind::Identifier, source_.substr(start, at_ - start), start};
         }

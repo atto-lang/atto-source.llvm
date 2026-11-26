@@ -16,7 +16,7 @@ endif()
 if(NOT DEFINED ORES_TRAP_CASE)
     set(ORES_TRAP_CASE "scalar")
 endif()
-if(NOT ORES_TRAP_CASE MATCHES "^(scalar|ok|err|nested|arithmetic_add|arithmetic_sub|arithmetic_mul|arithmetic_neg|arithmetic_nested_overflow|arithmetic_rem_zero|arithmetic_mod_zero|arithmetic_rem_signed|arithmetic_mod_signed|arithmetic_rem_min|arithmetic_mod_min|arithmetic_div_zero|arithmetic_div_overflow|arithmetic_div_signed|arithmetic_div_precedence|numeric_error_identity)$")
+if(NOT ORES_TRAP_CASE MATCHES "^(scalar|ok|err|nested|whitespace|arithmetic_add|arithmetic_sub|arithmetic_mul|arithmetic_neg|arithmetic_nested_overflow|arithmetic_rem_zero|arithmetic_mod_zero|arithmetic_rem_signed|arithmetic_mod_signed|arithmetic_rem_min|arithmetic_mod_min|arithmetic_div_zero|arithmetic_div_overflow|arithmetic_div_signed|arithmetic_div_precedence|numeric_error_identity)$")
     message(FATAL_ERROR "unknown native trap test case")
 endif()
 # Check the actual compiler output for the stable nominal arithmetic ID.

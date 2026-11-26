@@ -1824,6 +1824,26 @@ if(BUILD_TESTING)
             -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/trap_int_native_aot_execution.cmake")
     set_tests_properties(native_trap_int_aot_guest_O0_O2 PROPERTIES TIMEOUT 300)
 
+    # Canonical bang-suffix whitespace is exercised by the real native
+    # compiler, no-GC IR auditor, Clang O0/O2, and actual exit 42.
+    add_test(NAME native_trap_bang_whitespace_guest_O0_O2
+        COMMAND "${CMAKE_COMMAND}"
+            "-DORES_TRAP_LLVM_CLI=$<TARGET_FILE:oreslang-llvmc>"
+            "-DORES_TRAP_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/trap-int-native42-bang-whitespace.atto"
+            "-DORES_TRAP_AOT_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/scripts/compile-aot.sh"
+            "-DORES_TRAP_AUDITOR=${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit"
+            "-DORES_TRAP_CLANG=clang"
+            "-DORES_TRAP_CASE=whitespace"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/trap_int_native_aot_execution.cmake")
+    set_tests_properties(native_trap_bang_whitespace_guest_O0_O2 PROPERTIES TIMEOUT 300)
+
+    # Fail closed before any LLVM IR publication for missing separators.
+    add_test(NAME native_trap_bang_whitespace_source_gate
+        COMMAND "${CMAKE_COMMAND}"
+            "-DORES_TRAP_LLVM_CLI=$<TARGET_FILE:oreslang-llvmc>"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/trap_bang_whitespace_native_source_gate.cmake")
+    set_tests_properties(native_trap_bang_whitespace_source_gate PROPERTIES TIMEOUT 120)
+
     # Idempotent scalar Result references: real AOT + no-GC audit + guest
     # exit at both optimization levels, without creating a second sum record.
     foreach(case IN ITEMS ok err nested)
