@@ -6350,6 +6350,8 @@ private:
             advance();
             auto term = quantity_atom(depth + 1);
             if (!term.i32) {
+                if (strict_verified_ && term.range.minimum() == std::numeric_limits<std::int64_t>::min())
+                    fail("E_VERIFY_UNPROVEN: negation may overflow signed i64");
                 auto negated = make_expression(Expression::Kind::Negate, start.offset);
                 negated->left = std::move(term.expression);
                 return {std::move(negated), std::move(term.unit), term.depth + 1,
