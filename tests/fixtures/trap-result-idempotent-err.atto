@@ -1,0 +1,8 @@
+fnc unchanged(Result<int,int> value): Result<int,int> {
+    return trap! value;
+}
+pub fnc main(): int {
+    val Result<int,int> original = Err(7);
+    val Result<int,int> preserved = unchanged(original);
+    return preserved.is_err() ? 42 : 0;
+}
