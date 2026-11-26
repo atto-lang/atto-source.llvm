@@ -28,6 +28,8 @@ struct FunctionEmitter<'a> {
     terminated: bool,
     block_name: String,
     slots: Vec<Type>,
+    // Parameters with no typed writes remain incoming SSA values.
+    direct_params: Vec<bool>,
 }
 
 impl<'a> FunctionEmitter<'a> {
@@ -40,10 +42,37 @@ impl<'a> FunctionEmitter<'a> {
             }
         }
         scalar_type(func.ret)?;
+        let mut direct_params = vec![true; func.params.len()];
+        Self::scan_parameter_writes(&func.body, &mut direct_params);
         Ok(Self {
             program, func, out: String::new(), counter: 0,
-            terminated: false, block_name: String::new(), slots,
+            terminated: false, block_name: String::new(), slots, direct_params,
         })
+    }
+
+    // Keep the admission conservative: unknown statement forms force
+    // memory-backed parameters, even though the current emitter rejects them.
+    fn scan_parameter_writes(body: &[TStmt], direct: &mut [bool]) {
+        for stmt in body {
+            match stmt {
+                TStmt::Set(slot, _) => {
+                    if let Some(value) = direct.get_mut(*slot as usize) {
+                        *value = false;
+                    }
+                }
+                TStmt::Block(nested) => Self::scan_parameter_writes(nested, direct),
+                TStmt::If(arms, fallback) => {
+                    for (_, nested) in arms {
+                        Self::scan_parameter_writes(nested, direct);
+                    }
+                    if let Some(nested) = fallback {
+                        Self::scan_parameter_writes(nested, direct);
+                    }
+                }
+                TStmt::GlobalSet(_, _) | TStmt::Expr(_) | TStmt::Return(_) => {}
+                _ => direct.fill(false),
+            }
+        }
     }
 
     fn id(&mut self, prefix: &str) -> String {
@@ -106,6 +135,9 @@ impl<'a> FunctionEmitter<'a> {
             TExpr::Local(slot) => {
                 let idx = *slot as usize;
                 let ty = scalar_type(*self.slots.get(idx).ok_or("E_INTERNAL: bad local slot")?)?;
+                if self.direct_params.get(idx) == Some(&true) {
+                    return Ok(format!("%arg{idx}"));
+                }
                 let tmp = self.id("v");
                 self.instr(format!("%{tmp} = load {ty}, ptr %local{idx}"));
                 Ok(format!("%{tmp}"))
@@ -304,6 +336,9 @@ impl<'a> FunctionEmitter<'a> {
             TStmt::Set(slot, value) => {
                 let idx = *slot as usize;
                 let ty = scalar_type(*self.slots.get(idx).ok_or("E_INTERNAL: bad set slot")?)?;
+                if self.direct_params.get(idx) == Some(&true) {
+                    return Err("E_INTERNAL: write to SSA-only parameter".into());
+                }
                 let x = self.expr(value)?;
                 self.instr(format!("store {ty} {x}, ptr %local{idx}"));
             }
@@ -382,6 +417,9 @@ impl<'a> FunctionEmitter<'a> {
         self.label("entry");
         let all_slots = self.slots.clone();
         for (idx, ty) in all_slots.into_iter().enumerate() {
+            if self.direct_params.get(idx) == Some(&true) {
+                continue;
+            }
             let llty = scalar_type(ty)?;
             self.instr(format!("%local{idx} = alloca {llty}"));
             if idx < self.func.params.len() {
