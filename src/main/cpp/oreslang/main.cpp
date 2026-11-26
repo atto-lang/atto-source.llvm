@@ -540,6 +540,30 @@ static void require_actor_region_v1_aot_graph(const oreslang::Program& program) 
 }
 
 int main(int argc, char** argv) {
+    // Separate opt-in mode: exact single-source admission, no ordinary
+    // parser fallback, no partial IR on rejected proof.
+    if (argc >= 2 && std::string_view(argv[1]) == "--verify=strict") {
+        if (argc != 3) {
+            std::cerr << "E_VERIFY_UNSUPPORTED: strict mode needs one source path\n";
+            return 1;
+        }
+        try {
+            const std::filesystem::path strict_path(argv[2]);
+            constexpr std::size_t cap = 8u * 1024u * 1024u;
+            const auto identity = capture_source_identity(strict_path,cap,"strict source exceeds limit");
+            SourceIdentity actual;
+            const auto text = read_regular_source(strict_path,cap,"strict source exceeds limit",&actual,&identity);
+            require_valid_source_utf8(text);
+            auto program=oreslang::parse_verified_strict_i64(text);
+            const auto ir=oreslang::emit_verified_llvm_ir(program);
+            std::cout << ir;
+            return 0;
+        } catch (const std::exception& error) {
+            std::cerr << "oreslang-llvmc: " << error.what() << '\n';
+            return 1;
+        }
+    }
+
     if (argc == 2 && std::string_view(argv[1]) == "--selftest-native-log-info-ir") {
         try {
             auto program = oreslang::parse_program(
