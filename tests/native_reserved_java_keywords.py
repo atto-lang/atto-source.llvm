@@ -278,10 +278,16 @@ SAFE_CASES = {
 
 
 def main():
-    if len(sys.argv) != 2:
-        raise ValueError("expected compiler executable argument")
+    if len(sys.argv) not in (2, 3) or (len(sys.argv) == 3 and sys.argv[2] != "--unsafe-only"):
+        raise ValueError("expected compiler executable argument and optional --unsafe-only")
+    unsafe_only = len(sys.argv) == 3
+    selected = {name: row for name, row in CASES.items()
+                if not unsafe_only or name.startswith("unsafe-") or name in (
+                    "native-block-comment-overdepth", "native-template-comment-overdepth")}
+    if unsafe_only and (len(selected) < 40 or len(SAFE_CASES) < 3):
+        raise AssertionError("unsafe admission corpus is incomplete")
     with tempfile.TemporaryDirectory(prefix="oreslang-native-keywords-") as tmp:
-        for name, (source, diagnostic) in CASES.items():
+        for name, (source, diagnostic) in selected.items():
             fixture = pathlib.Path(tmp) / (name + ".ores")
             fixture.write_text(source + "\n", encoding="utf-8")
             result = subprocess.run(
@@ -322,6 +328,10 @@ def main():
                     f"returncode={result.returncode}, "
                     f"stdout={result.stdout!r}, stderr={result.stderr!r}"
                 )
+
+        if unsafe_only:
+            print(f"UNSAFE_G0_COMPILER_PASS rejects={len(selected)} controls={len(SAFE_CASES)}")
+            return
 
         contract = pathlib.Path(__file__).resolve().parents[1] / (
             "contracts/v2/cpu-gpu-task-unsupported-v2.json")
