@@ -642,6 +642,20 @@ if(ATTO_ACTOR_LOGICAL_FRAMES_HOST_ONLY)
     add_test(NAME native_source_actor_restart_budget_exhausted_host
         COMMAND atto-native-source-actor-restart-host-test --exhaust)
     set_tests_properties(native_source_actor_restart_budget_exhausted_host PROPERTIES TIMEOUT 30)
+    add_test(NAME native_source_actor_last_capacity_denial_host
+        COMMAND atto-native-source-actor-restart-host-test --capacity)
+    set_tests_properties(native_source_actor_last_capacity_denial_host PROPERTIES TIMEOUT 60)
+    add_executable(atto-native-source-recovery-lease-test
+        tests/source_recovery_lease_v1_test.c)
+    target_include_directories(atto-native-source-recovery-lease-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    set_target_properties(atto-native-source-recovery-lease-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+    target_compile_options(atto-native-source-recovery-lease-test PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    add_test(NAME native_source_recovery_lease_host
+        COMMAND atto-native-source-recovery-lease-test)
+    set_tests_properties(native_source_recovery_lease_host PROPERTIES TIMEOUT 30)
     return()
 endif()
 

@@ -50,11 +50,46 @@ static int64_t actor_b(OresActorI64Heap* h, uint64_t d, uint64_t e, int64_t msg)
     atomic_fetch_add(&b_forty_two, 1);
     return value;
 }
+static void check_last_actor_capacity_denial(void) {
+    /* Keep A alive while all other physical slots become lifetime-spent.
+     * No sibling remains when A's frame quota fails. The root must decline
+     * replacement, yet recovery must read that decision before teardown. */
+    void* a = oreslang_source_actor_spawn_supervised_budgeted(
+        initialize, actor_a, 1, 16, 1, 1);
+    CHECK(a);
+    for (unsigned i = 0; i < 62; ++i) {
+        void* filler = oreslang_source_actor_spawn(initialize, actor_b, 1);
+        CHECK(filler && filler != a);
+        oreslang_source_actor_stop(filler);
+    }
+    CHECK(oreslang_source_actor_try_send(a, 7));
+    CHECK(oreslang_source_actor_flush_blocking(a));
+    CHECK(oreslang_source_actor_try_send(a, 8));
+    CHECK(oreslang_source_actor_flush_blocking(a));
+    CHECK(!oreslang_source_actor_recover_blocking(a));
+    /* Recovery consumed A; do not dereference the old raw pointer. */
+    CHECK(oreslang_source_actor_test_terminal_notices() == 63);
+    CHECK(oreslang_source_actor_test_panic_notices() == 1);
+    CHECK(oreslang_source_actor_test_stopped_notices() == 62);
+    CHECK(oreslang_source_actor_test_last_panic_code() == ORES_SOURCE_ACTOR_FAILURE_FRAME);
+    /* A fresh group must start with fresh capacity after the denied decision. */
+    void* b = oreslang_source_actor_spawn(initialize, actor_b, 1);
+    CHECK(b);
+    CHECK(oreslang_source_actor_try_send(b, 42));
+    CHECK(oreslang_source_actor_flush_blocking(b));
+    oreslang_source_actor_stop(b);
+    CHECK(atomic_load(&b_forty_two) == 1);
+    CHECK(oreslang_source_actor_test_terminal_notices() == 1);
+    puts("SOURCE_ACTOR_LAST_CAPACITY_DENIAL_PASS consumed=1 fresh_group=1 B=42");
+}
+
 int main(int argc, char** argv) {
     const int exhaust_restart = argc == 2 && strcmp(argv[1], "--exhaust") == 0;
-    CHECK(argc == 1 || exhaust_restart);
+    const int capacity_denial = argc == 2 && strcmp(argv[1], "--capacity") == 0;
+    CHECK(argc == 1 || exhaust_restart || capacity_denial);
     atomic_init(&a_seven, 0); atomic_init(&a_nine, 0);
     atomic_init(&b_forty_two, 0);
+    if (capacity_denial) { check_last_actor_capacity_denial(); return 0; }
     void* a = oreslang_source_actor_spawn_supervised_budgeted(
         initialize, actor_a, 1, 16, 1, 1);
     void* b = oreslang_source_actor_spawn(initialize, actor_b, 1);
