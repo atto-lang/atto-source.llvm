@@ -212,6 +212,16 @@ int main(int argc, char** argv) {
             throw std::runtime_error("atomic !eq inequality parsed as ownership");
     }
     equivalent("rt take foo", "take! foo", "take!foo", Expression::Kind::Take);
+    equivalent("rt take foo", "move! foo", "move! (foo)", Expression::Kind::Take);
+    for (const auto bad : {"move!foo", "move!(foo)", "move!! foo", "move!/*comment*/ foo"})
+        reject_with_diagnostic(bad, "E_BANG_KEYWORD_WHITESPACE");
+    reject("move ! foo");
+    {
+        oreslang::Program holder;
+        const auto& bare = parsed("move", holder);
+        if (bare.kind != Expression::Kind::Variable || bare.name != "move")
+            throw std::runtime_error("bare move identifier was reserved");
+    }
     equivalent("rt borrow foo", "borrow! foo", "borrow!foo", Expression::Kind::Borrow);
     // mutfoo is an identifier; only a standalone mut keyword grants an exclusive loan.
     equivalent("rt borrow mutfoo", "borrow! mutfoo", "borrow!mutfoo",
@@ -285,6 +295,16 @@ int main(int argc, char** argv) {
             throw std::runtime_error("mutable borrow guest admission missing");
     }
     semantic_reject(read_fixture(root, "take-after-use-reject.atto"), "moved");
+    {
+        std::string moved = read_fixture(root, "take-after-use-reject.atto");
+        const auto take = moved.find("take!");
+        if (take == std::string::npos) throw std::runtime_error("missing transfer control");
+        moved.replace(take, 5, "move! ");
+        semantic_reject(moved, "moved");
+    }
+    (void)oreslang::parse_program(
+        "pub fnc main(): int { let int value = 42; let int result = move! value; return result; }");
+
     semantic_reject(read_fixture(root, "borrow-escape-reject.atto"), "borrowed reference");
     semantic_reject(read_fixture(root, "share-class-reject.atto"), "non-Copy");
     semantic_reject(read_fixture(root, "copy-deep-string-reject.atto"), "E_COPY_GRAPH_UNPROVEN");
