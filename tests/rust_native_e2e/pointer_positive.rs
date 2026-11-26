@@ -44,4 +44,11 @@ pub fn run(h: &mut Harness) {
         "pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(42); p.swap_at(0, 0); val int a = p.read(); p.close(); return a; }",
         &["--experimental-pointer-int-aot"], 42, true, None);
 
+    h.positive("pointer_readonly_implicit_42",
+        "fnc inspect(Pointer<int> q): int { return q.read(); } pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(13); val int a = inspect(p); p.write(29); val int b = inspect(p); p.close(); return a + b; }",
+        &["--experimental-pointer-int-aot"], 42, true, None);
+    h.positive("pointer_readonly_explicit_42",
+        "fnc inspect(Pointer<int> q): int { return q.read(); } pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(13); val int a = inspect(borrow! p); p.write(29); val int b = inspect(borrow! p); p.close(); return a + b; }",
+        &["--experimental-pointer-int-aot"], 42, true, None);
+
 }

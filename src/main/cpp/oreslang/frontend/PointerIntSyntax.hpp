@@ -38,15 +38,28 @@ public:
 
     Plan parse() {
         Plan plan;
+        if (take("fnc")) {
+            plan.readonly_helper = identifier();
+            need("("); need("Pointer"); need("<"); need("int"); need(">");
+            plan.readonly_parameter = identifier();
+            need(")"); need(":"); need("int"); need("{"); need("return");
+            need(plan.readonly_parameter); need("."); need("read"); need("("); need(")");
+            need(";"); need("}");
+            if (plan.readonly_helper == "main" || plan.readonly_helper == "Pointer" ||
+                    plan.readonly_parameter == plan.readonly_helper)
+                reject("invalid readonly helper identity", token().offset);
+            readonly_helper_ = plan.readonly_helper;
+        }
         need("pub"); need("fnc"); need("main"); need("("); need(")");
         need(":"); need("int"); need("{");
         // Use the canonical lexer for both owning and local-ref modes.
         if (token().text == "let" && at_ + 1 < tokens_.size() &&
                 tokens_[at_ + 1].text != "mut")
-            return parse_local();
+            return readonly_helper_.empty() ? parse_local() :
+                throw std::runtime_error("Pointer<int> readonly helper requires owned region");
         need("let"); need("mut"); need("Pointer"); need("<"); need("int"); need(">");
         plan.owner = identifier();
-        if (plan.owner == "Pointer" || plan.owner == "main" || plan.owner == "int")
+        if (plan.owner == "Pointer" || plan.owner == "main" || plan.owner == "int" || plan.owner == readonly_helper_)
             reject("reserved pointer owner", token().offset);
         owner_ = plan.owner;
         need("="); need("Pointer"); need(".");
@@ -79,7 +92,7 @@ public:
                 need("int");
                 step.name = identifier();
                 if (step.name == owner_ || step.name == "main" || step.name == "Pointer" ||
-                        known_locals_.count(step.name))
+                        known_locals_.count(step.name) || step.name == readonly_helper_)
                     reject("duplicate or reserved immutable scalar", token().offset);
                 need("=");
                 step.value = expression();
@@ -229,6 +242,7 @@ private:
     std::vector<Token> tokens_;
     std::size_t at_ = 0;
     std::string owner_;
+    std::string readonly_helper_;
     std::size_t count_ = 0;
     bool live_ = true;
     bool initializing_owner_ = false;
@@ -309,6 +323,25 @@ private:
             expr->kind = Expr::Kind::Read;
             expr->index = index;
             expr->known = contents_[index];
+            return expr;
+        }
+        if (!readonly_helper_.empty() && name == readonly_helper_) {
+            if (initializing_owner_ || !live_) reject("borrow of unavailable owner", offset);
+            need("(");
+            if (token().text == "borrow") {
+                const auto begin = token().offset;
+                need("borrow");
+                if (token().text != "!" || token().offset != begin + 6)
+                    reject("borrow! must be adjacent", token().offset);
+                need("!");
+            }
+            need(owner_); need(")");
+            if (count_ != 1) reject("readonly helper requires singleton allocation", offset);
+            if (!initialized_[0]) reject("borrow of uninitialized pointer element", offset);
+            auto expr = std::make_unique<Expr>();
+            expr->kind = Expr::Kind::ReadonlyCall;
+            expr->name = readonly_helper_;
+            expr->known = contents_[0];
             return expr;
         }
         const auto it = known_locals_.find(name);

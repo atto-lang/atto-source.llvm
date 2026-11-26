@@ -17,7 +17,7 @@ struct Token {
 };
 
 struct Expr {
-    enum class Kind { Literal, Variable, Read, Neg, Add, Subtract, Multiply, Length, SizeBytes };
+    enum class Kind { Literal, Variable, Read, Neg, Add, Subtract, Multiply, Length, SizeBytes, ReadonlyCall };
     Kind kind = Kind::Literal;
     std::int64_t known = 0;
     std::size_t index = 0;
@@ -42,6 +42,9 @@ struct Plan {
     // obtains the rights of an owning Pointer.alloc region.
     std::string local_handle;
     std::int64_t local_initial = 0;
+    // A private helper has one proven readonly singleton read as its entire body.
+    std::string readonly_helper;
+    std::string readonly_parameter;
     std::string owner;
     std::size_t count = 0;
     std::vector<Step> steps;

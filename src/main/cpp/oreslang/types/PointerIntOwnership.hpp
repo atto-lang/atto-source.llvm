@@ -72,6 +72,21 @@ inline void verify_plan(const Plan& plan) {
               (ch >= 'A' && ch <= 'Z') ||
               (ch >= '0' && ch <= '9') || ch == '_'))
             ownership_error("pointer owner contains invalid identifier character");
+    const auto valid_helper_id = [](const std::string& name) {
+        if (name.empty() || !((name.front() >= 'a' && name.front() <= 'z') ||
+                (name.front() >= 'A' && name.front() <= 'Z') || name.front() == '_')) return false;
+        for (unsigned char ch : name)
+            if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+                    (ch >= '0' && ch <= '9') || ch == '_')) return false;
+        return name != "main" && name != "Pointer" && name != "int";
+    };
+    if (!plan.readonly_helper.empty() || !plan.readonly_parameter.empty()) {
+        if (borrowed_local || !valid_helper_id(plan.readonly_helper) ||
+                !valid_helper_id(plan.readonly_parameter) ||
+                plan.readonly_helper == plan.owner ||
+                plan.readonly_helper == plan.readonly_parameter)
+            ownership_error("invalid readonly helper signature");
+    }
     if (plan.steps.size() > 128 || !plan.result)
         ownership_error("invalid bounded pointer plan");
     std::array<bool, 16> initialized{};
@@ -112,6 +127,13 @@ inline void verify_plan(const Plan& plan) {
             if (expr.lhs || expr.rhs || !expr.name.empty())
                 ownership_error("forged pointer read node");
             result = elements[expr.index];
+            break;
+        case Expr::Kind::ReadonlyCall:
+            if (borrowed_local || !live || plan.count != 1 || !initialized[0] ||
+                    plan.readonly_helper.empty() || expr.name != plan.readonly_helper ||
+                    expr.index != 0 || expr.lhs || expr.rhs)
+                ownership_error("invalid readonly singleton call authority or shape");
+            result = elements[0];
             break;
         case Expr::Kind::Length:
         case Expr::Kind::SizeBytes:
@@ -184,7 +206,7 @@ inline void verify_plan(const Plan& plan) {
             break;
         case Step::Kind::Scalar:
             if (step.name.empty() || step.name == plan.owner ||
-                    step.name == "Pointer" || step.name == "main" ||
+                    step.name == "Pointer" || step.name == "main" || step.name == plan.readonly_helper ||
                     (borrowed_local && step.name == plan.local_handle) ||
                     step.index != 0 || !step.value ||
                     immutable.count(step.name))

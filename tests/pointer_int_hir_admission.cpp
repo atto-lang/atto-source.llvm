@@ -170,7 +170,27 @@ int main() {
     must_reject("malformed swap payload", [&] { verify_plan(region); });
     region.steps[1].value.reset();
     validate_ownership(region);
-    std::cout << "POINTER_HIR_ADVERSARIAL_REJECTIONS=18\n";
+    auto call = plan();
+    call.count = 1;
+    call.readonly_helper = "inspect";
+    call.readonly_parameter = "q";
+    call.steps[1].value->kind = Expr::Kind::ReadonlyCall;
+    call.steps[1].value->name = "inspect";
+    validate_ownership(call);
+    call.steps[1].value->name = "unknown";
+    must_reject("forged borrowed callee", [&] { verify_plan(call); });
+    call.steps[1].value->name = "inspect";
+    call.count = 2;
+    must_reject("borrowed call with wrong extent", [&] { verify_plan(call); });
+    call.count = 1;
+    call.readonly_parameter = "inspect";
+    must_reject("forged helper signature", [&] { verify_plan(call); });
+    call.readonly_parameter = "q";
+    call.steps[1].value->known = 41;
+    must_reject("forged readonly return annotation", [&] { verify_plan(call); });
+    call.steps[1].value->known = 42;
+    validate_ownership(call);
+    std::cout << "POINTER_HIR_ADVERSARIAL_REJECTIONS=22\n";
 
     // The independently verified HIR arithmetic must agree at the signed
     // boundaries and reject overflow even when supplied a fabricated annotation.
