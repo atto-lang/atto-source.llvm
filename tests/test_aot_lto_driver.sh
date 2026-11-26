@@ -49,11 +49,13 @@ printf 'previous executable\n' >"$work/app"
 # Baseline must not request LTO.
 : >"$MOCK_CLANG_LOG"
 ORESLANG_AOT_LTO=off bash "$root/scripts/compile-aot.sh" "$work/input.ores" "$work/app"
-! grep -q -- '-flto' "$MOCK_CLANG_LOG"
-! grep -q -- '-flto' "$MOCK_FINAL_LOG"
+if grep -q -- '-flto' "$MOCK_CLANG_LOG" || grep -q -- '-flto' "$MOCK_FINAL_LOG"; then
+  echo 'baseline unexpectedly enabled LTO' >&2; exit 1
+fi
 # Full and Thin modes run an executable two-unit LLVM IR canary plus final IR link.
 for mode in full thin; do
   : >"$MOCK_CLANG_LOG"
+  rm -f "$MOCK_FINAL_LOG"
   ORESLANG_AOT_LTO="$mode" bash "$root/scripts/compile-aot.sh" "$work/input.ores" "$work/app"
   if [[ "$mode" == full ]]; then
     grep -qx -- '-flto' "$MOCK_FINAL_LOG"
