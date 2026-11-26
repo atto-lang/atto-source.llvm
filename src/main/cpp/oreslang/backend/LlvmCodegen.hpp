@@ -20,7 +20,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target = fa
                                   bool actor_region_v1 = false,
                                   const std::vector<CheckedSourceRoutineV1>& checked_routines = {},
                                   const std::vector<CheckedLogSiteV1>& checked_sites = {},
-                                  bool tenant_vm_guest = false);
+                                  bool tenant_vm_guest = false,
+                                  bool print_strict_i64 = false);
 
 // Opt-in scalar-only continuation IR; external host owns and pins frame storage.
 std::string emit_scalar_while_frame_llvm_ir(const ScalarWhileLoop& loop);
