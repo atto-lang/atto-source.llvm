@@ -612,6 +612,16 @@ fn link_registered_http_import(
     Ok((application_tokens, Some(library)))
 }
 
+// Explicit bounded native IR session. No persistent authority or partial IR claim.
+#[derive(Default)]
+struct IncrementalSession { prior:Option<(String,LibraryProfile,String)> }
+impl IncrementalSession {
+    fn build(&mut self,source:&str,profile:LibraryProfile,cold:bool)->Result<(String,bool),String>{
+        if !cold {if let Some((old,p,ir))=&self.prior {if old==source&&*p==profile{return Ok((ir.clone(),true));}}}
+        let ir=compile_ir_with_profile(source,profile)?;
+        self.prior=Some((source.to_owned(),profile,ir.clone()));Ok((ir,false))
+    }
+}
 pub fn compile_ir(source: &str) -> Result<String, String> {
     compile_ir_with_profile(source, LibraryProfile::Hosted)
 }
@@ -961,6 +971,20 @@ fn main() {
 mod tests {
     use super::*;
 
+    #[test]
+    fn incremental_native_ir_session_executes_clean_and_edited_artifacts(){
+        let a="pub fnc main(): int { return 41+1; }";let b="pub fnc main(): int { return 41+2; }";
+        let mut s=IncrementalSession::default();
+        let (cold,hit)=s.build(a,LibraryProfile::Hosted,true).unwrap();assert!(!hit);assert_eq!(cold,compile_ir(a).unwrap());
+        let (warm,hit)=s.build(a,LibraryProfile::Hosted,false).unwrap();assert!(hit);assert_eq!(warm,cold);
+        let (edit,hit)=s.build(b,LibraryProfile::Hosted,false).unwrap();assert!(!hit);assert_eq!(edit,compile_ir(b).unwrap());
+        let bad="pub fnc main(): int { return missing; }";assert_eq!(s.build(bad,LibraryProfile::Hosted,false).unwrap_err(),compile_ir(bad).unwrap_err());
+        assert_eq!(s.build(b,LibraryProfile::Hosted,false).unwrap(),(edit.clone(),true));
+        assert!(!s.build(b,LibraryProfile::FreestandingCore,false).unwrap().1);
+        let dir=std::env::temp_dir().join(format!("atto-llvm-incremental-{}",std::process::id()));std::fs::create_dir(&dir).unwrap();
+        for (ir,expected) in [(cold,42),(warm,42),(edit,43)]{let src=dir.join("guest.ll");let exe=dir.join("guest");std::fs::write(&src,ir).unwrap();assert!(std::process::Command::new("clang").arg(&src).arg("-o").arg(&exe).status().unwrap().success());assert_eq!(std::process::Command::new(&exe).status().unwrap().code(),Some(expected));}
+        std::fs::remove_dir_all(dir).unwrap();println!("INCREMENTAL_LLVM|native-guest=42/43|profile-fenced|rollback");
+    }
     #[test]
     fn compiled_http_namespace_imports_real_backend_owned_ast() {
         let source = include_str!("../tests/http_stdlib/namespace_import_canary.atto");
