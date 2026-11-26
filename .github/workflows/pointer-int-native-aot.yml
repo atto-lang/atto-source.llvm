@@ -50,14 +50,14 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           test "$(git hash-object src/main/cpp/oreslang/frontend/Parser.cpp)" = d98605299097d661fcd11a5d2f92033cd04de6e8
-          test "$(git hash-object src/main/cpp/oreslang/frontend/PointerIntSyntax.hpp)" = 7d61104df2129a2510a2d614ed4174503a8511cd
+          test "$(git hash-object src/main/cpp/oreslang/frontend/PointerIntSyntax.hpp)" = 63921f51d49d4f5b8779b7833ff1a5ad066ba456
           test "$(git hash-object src/main/cpp/oreslang/types/PointerIntHIR.hpp)" = 3ecee944fb0cb5b3139950d431ba78a09907a219
           test "$(git hash-object src/main/cpp/oreslang/types/PointerIntOwnership.hpp)" = 591ea792e175f34ea0819cfc2d59ee7b069df7ca
           test "$(git hash-object src/main/cpp/oreslang/backend/PointerIntCodegen.hpp)" = 9ccf8cafcddc4f659461830c995a210df502751e
           test "$(git hash-object tests/pointer_int_hir_admission.cpp)" = 1f1c7fadf8c3adaba5c12299fa9a1b5fc9870ade
           test ! -e src/main/cpp/oreslang/frontend/PointerIntAot.hpp
           test "$(git hash-object tests/pointer_int_native_e2e.py)" = e9f104ba81e6bcc4e4e88f088cebd24e1ebba0a7
-          test "$(git hash-object src/main/cpp/oreslang/main.cpp)" = 67c389cb898c74121fa145bc144e74b29f7dd388
+          test "$(git hash-object src/main/cpp/oreslang/main.cpp)" = cd0a3501a3f6a06b537a005e04e3287ea7c5f32b
           git rev-parse HEAD HEAD^{tree}
           git status --porcelain
       - name: Install LLVM18 and Clang18 real native toolchain

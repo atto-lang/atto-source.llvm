@@ -39,4 +39,26 @@ pub fn run(h: &mut Harness) {
     h.negative("pointer_rejects_unary_address",
         &src("  p.write_at(0, 1);\n  val int first = &p;\n  p.close();", "first", 4),
         &flag, Some("unsupported oreslang token"));
+    h.negative("pointer_singleton_read_multi",
+        &src("  p.write_at(0, 42);\n  val int first = p.read();\n  p.close();", "first", 2),
+        &flag, Some("read requires singleton allocation"));
+    h.negative("pointer_singleton_write_multi",
+        &src("  p.write(42);\n  p.close();", "0", 2),
+        &flag, Some("write requires singleton allocation"));
+    h.negative("pointer_singleton_read_uninitialized",
+        &src("  val int first = p.read();\n  p.close();", "first", 1),
+        &flag, Some("uninitialized"));
+    h.negative("pointer_singleton_read_closed",
+        &src("  p.write(42);\n  p.close();\n  val int first = p.read();", "first", 1),
+        &flag, Some("read after close"));
+    h.negative("pointer_singleton_write_closed",
+        &src("  p.close();\n  p.write(42);", "0", 1),
+        &flag, Some("write after close"));
+    h.negative("pointer_singleton_read_wrong_arity",
+        &src("  p.write(42);\n  val int first = p.read(0);\n  p.close();", "first", 1),
+        &flag, Some("expected"));
+    h.negative("pointer_singleton_write_wrong_arity",
+        &src("  p.write(0, 42);\n  p.close();", "0", 1),
+        &flag, Some("expected"));
+
 }

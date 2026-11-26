@@ -20,4 +20,11 @@ pub fn run(h: &mut Harness) {
     h.positive("pointer_drop_0",
         "pub fnc main(): int {\n  let mut Pointer<int> p = Pointer.alloc<int>(1);\n  p.close();\n  return 0;\n}\n",
         &["--experimental-pointer-int-aot"], 0, true, None);
+    h.positive("pointer_singleton_methods_42",
+        "pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(1); p.write(21); val int first = p.read(); p.write(first * 2); val int answer = p.read(); p.close(); return answer; }",
+        &["--experimental-pointer-int-aot"], 42, true, None);
+    h.positive("pointer_singleton_mixed_indexed_42",
+        "pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc<int>(1); p.write_at(0, 21); val int first = p.read(); p.write(first * 2); val int answer = p.read_at(0); p.close(); return answer; }",
+        &["--experimental-pointer-int-aot"], 42, true, None);
+
 }
