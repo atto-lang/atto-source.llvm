@@ -53,6 +53,8 @@ pub enum Tok {
     Pipe,
     PipeGt,
     Amp,
+    LogicalAnd,
+    LogicalOr,
     /// Contextual return alias at the beginning of a statement.
     Caret,
     At,
@@ -331,7 +333,9 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
             }
             ('?', _) => (Tok::Question, 1),
             ('|', Some('>')) => (Tok::PipeGt, 2),
+            ('|', Some('|')) => (Tok::LogicalOr, 2),
             ('|', _) => (Tok::Pipe, 1),
+            ('&', Some('&')) => (Tok::LogicalAnd, 2),
             ('&', _) => (Tok::Amp, 1),
             ('^', _) => (Tok::Caret, 1),
             ('@', _) => (Tok::At, 1),
