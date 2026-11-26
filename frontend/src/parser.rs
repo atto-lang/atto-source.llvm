@@ -1923,10 +1923,18 @@ impl Parser {
     /// operators, which are eagerly evaluated. The lexer deliberately keeps
     /// paired pipes as two tokens: initial || still starts a zero-arg lambda.
     /// In infix position only, a pair is logical OR.
+    fn adjacent_operator_pair(&self, token: Tok) -> bool {
+        let Some(next) = self.toks.get(self.i + 1) else { return false; };
+        let current = &self.toks[self.i];
+        current.tok == token && next.tok == token
+            && current.pos.line == next.pos.line
+            && current.pos.col.checked_add(1) == Some(next.pos.col)
+    }
+
     fn parse_logical_or(&mut self) -> R<Expr> {
         let mut left = self.parse_logical_and()?;
         let mut links = 0;
-        while *self.peek() == Tok::Pipe && *self.peek_at(1) == Tok::Pipe {
+        while self.adjacent_operator_pair(Tok::Pipe) {
             let pos = self.pos();
             self.advance();
             self.advance();
@@ -1952,7 +1960,7 @@ impl Parser {
     fn parse_logical_and(&mut self) -> R<Expr> {
         let mut left = self.parse_equality()?;
         let mut links = 0;
-        while *self.peek() == Tok::Amp && *self.peek_at(1) == Tok::Amp {
+        while self.adjacent_operator_pair(Tok::Amp) {
             let pos = self.pos();
             self.advance();
             self.advance();
