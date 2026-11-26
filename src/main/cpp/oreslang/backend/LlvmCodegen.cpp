@@ -1,3 +1,5 @@
+#include "oreslang/types/NativeNumericErrorAbi.hpp"
+#include <limits>
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/backend/PointerIntCodegen.hpp"
 #include "oreslang/backend/NativeFlatClasses.hpp"
@@ -176,13 +178,31 @@ llvm::Value* lower_trapped_i64(const Expression& e, llvm::IRBuilder<>& builder,
         return llvm::ConstantInt::getSigned(i64, e.integer);
     const bool negate = e.kind == K::Negate;
     const bool remainder = e.kind == K::Remainder || e.kind == K::Modulo;
-    if (!negate && !remainder && e.kind != K::Add && e.kind != K::Subtract && e.kind != K::Multiply)
+    const bool division = e.kind == K::Divide;
+    if (!negate && !remainder && !division && e.kind != K::Add && e.kind != K::Subtract && e.kind != K::Multiply)
         throw std::runtime_error("unproved arithmetic operand in native trap");
     if (!e.left || (!negate && !e.right))
         throw std::runtime_error("incomplete native trap arithmetic");
     auto* lhs = negate ? llvm::ConstantInt::get(i64, 0)
                        : lower_trapped_i64(*e.left, builder, i64, failure, zero_divisor);
     auto* rhs = lower_trapped_i64(negate ? *e.left : *e.right, builder, i64, failure, zero_divisor);
+    if (division) {
+        auto* function = builder.GetInsertBlock()->getParent();
+        auto* nonzero = llvm::BasicBlock::Create(builder.getContext(), "trap.div.nonzero", function);
+        auto* proceed = llvm::BasicBlock::Create(builder.getContext(), "trap.div.ok", function);
+        auto* zero = builder.CreateICmpEQ(rhs, llvm::ConstantInt::get(i64, 0));
+        builder.CreateCondBr(zero, zero_divisor, nonzero);
+        builder.SetInsertPoint(nonzero);
+        auto* overflow = builder.CreateAnd(
+            builder.CreateICmpEQ(lhs, llvm::ConstantInt::getSigned(i64, std::numeric_limits<std::int64_t>::min())),
+            builder.CreateICmpEQ(rhs, llvm::ConstantInt::getSigned(i64, -1)));
+        builder.CreateCondBr(overflow, failure, proceed);
+        builder.SetInsertPoint(proceed);
+        // Also keep constant-folded unreachable paths free of poison.
+        auto* safe = builder.CreateSelect(builder.CreateOr(zero, overflow),
+            llvm::ConstantInt::get(i64, 1), rhs);
+        return builder.CreateSDiv(lhs, safe, "trap.div");
+    }
     if (remainder) {
         auto* proceed = llvm::BasicBlock::Create(builder.getContext(), "trap.rem.ok",
             builder.GetInsertBlock()->getParent());
@@ -191,7 +211,9 @@ llvm::Value* lower_trapped_i64(const Expression& e, llvm::IRBuilder<>& builder,
         builder.SetInsertPoint(proceed);
         // MIN % -1 is zero, not LLVM poison. Replace -1 with 1 before srem.
         auto* safe = builder.CreateSelect(
-            builder.CreateICmpEQ(rhs, llvm::ConstantInt::getSigned(i64, -1)),
+            builder.CreateOr(
+                builder.CreateICmpEQ(rhs, llvm::ConstantInt::getSigned(i64, -1)),
+                builder.CreateICmpEQ(rhs, llvm::ConstantInt::get(i64, 0))),
             llvm::ConstantInt::get(i64, 1), rhs);
         auto* rem = builder.CreateSRem(lhs, safe, "trap.rem");
         if (e.kind == K::Remainder) return rem;
@@ -249,8 +271,8 @@ llvm::Value* lower(const Expression& expr,
             // not a String handle or a fabricated guest Error object.
             if (expr.trap_origin && moves->hosted_trap_arithmetic &&
                     expr.arguments.front()->kind != Expression::Kind::Integer) {
-                constexpr std::uint64_t arithmetic_overflow_id = 65537;
-                constexpr std::uint64_t division_by_zero_id = 65538;
+                constexpr auto arithmetic_overflow_id = static_cast<std::uint32_t>(types::NativeNumericError::ArithmeticOverflow);
+                constexpr auto division_by_zero_id = static_cast<std::uint32_t>(types::NativeNumericError::DivisionByZero);
                 auto* function = builder.GetInsertBlock()->getParent();
                 auto* failed = llvm::BasicBlock::Create(builder.getContext(),
                     "trap.arithmetic.err", function);
@@ -308,6 +330,35 @@ llvm::Value* lower(const Expression& expr,
             const auto schema = moves->record_schemas->at(expr.sum_type);
             auto* tag = checked_sum_tag(builder, i64, handle, schema, type.kind == NativeSumType::Kind::Option ? 2 : 3, moves->sum_check, moves->record_get);
             const bool option = type.kind == NativeSumType::Kind::Option;
+            if (types::native_error_projection(expr.name)) {
+                const auto nominal = types::native_error_projection_type(expr.name);
+                if (!moves->hosted_trap_arithmetic || option || !type.trap_error ||
+                        expr.sum_type != "Result<int,Error>" || !expr.arguments.empty() ||
+                        !expr.argument_names.empty() || !types::native_numeric_error_type(nominal))
+                    throw std::runtime_error("unproved native numeric Error type projection");
+                // Preserve unwrap_err semantics: an Ok is a terminal failure,
+                // not a false type test. Only read the active Err payload.
+                auto* function = builder.GetInsertBlock()->getParent();
+                auto* err = llvm::BasicBlock::Create(builder.getContext(), "error.payload.active", function);
+                auto* valid = llvm::BasicBlock::Create(builder.getContext(), "error.identity.valid", function);
+                auto* invalid = llvm::BasicBlock::Create(builder.getContext(), "error.identity.invalid", function);
+                builder.CreateCondBr(builder.CreateICmpEQ(tag, llvm::ConstantInt::get(i64, 1)), err, invalid);
+                builder.SetInsertPoint(err);
+                auto* code = builder.CreateCall(moves->record_get,
+                    {handle, llvm::ConstantInt::get(i64, schema), llvm::ConstantInt::get(i64, 2)});
+                auto* overflow = builder.CreateICmpEQ(code, llvm::ConstantInt::get(i64,
+                    static_cast<std::uint32_t>(types::NativeNumericError::ArithmeticOverflow)));
+                auto* zero = builder.CreateICmpEQ(code, llvm::ConstantInt::get(i64,
+                    static_cast<std::uint32_t>(types::NativeNumericError::DivisionByZero)));
+                builder.CreateCondBr(builder.CreateOr(overflow, zero), valid, invalid);
+                builder.SetInsertPoint(invalid);
+                builder.CreateCall(native_trap(*function->getParent()));
+                builder.CreateUnreachable();
+                builder.SetInsertPoint(valid);
+                if (nominal == "Error") return llvm::ConstantInt::get(i64, 1);
+                return builder.CreateZExt(builder.CreateICmpEQ(code, llvm::ConstantInt::get(i64,
+                    types::native_numeric_error_id(nominal))), i64);
+            }
             if (expr.name == "is_some" || expr.name == "is_none" || expr.name == "is_ok" || expr.name == "is_err") {
                 const auto selected = expr.name == "is_some" || expr.name == "is_err" ? 1 : 0;
                 return builder.CreateZExt(builder.CreateICmpEQ(tag, llvm::ConstantInt::get(i64, selected)), i64);
@@ -678,6 +729,28 @@ llvm::Value* lower(const Expression& expr,
             if (expr.kind == Expression::Kind::ShiftRight)
                 return builder.CreateAShr(left, distance, "shift.signed.right");
             return builder.CreateLShr(left, distance, "shift.unsigned.right");
+        }
+        case Expression::Kind::Divide: {
+            if (!expr.left || !expr.right)
+                throw std::runtime_error("native integer division requires two operands");
+            auto* lhs = lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
+            auto* rhs = lower(*expr.right, builder, i64, storage, field_storage, functions, moves);
+            auto* parent = builder.GetInsertBlock()->getParent();
+            auto* module = parent->getParent();
+            auto* failed = llvm::BasicBlock::Create(builder.getContext(), "div.trap", parent);
+            auto* proceed = llvm::BasicBlock::Create(builder.getContext(), "div.ok", parent);
+            auto* zero = builder.CreateICmpEQ(rhs, llvm::ConstantInt::get(i64, 0));
+            auto* overflow = builder.CreateAnd(
+                builder.CreateICmpEQ(lhs, llvm::ConstantInt::getSigned(i64, std::numeric_limits<std::int64_t>::min())),
+                builder.CreateICmpEQ(rhs, llvm::ConstantInt::getSigned(i64, -1)));
+            builder.CreateCondBr(builder.CreateOr(zero, overflow), failed, proceed);
+            builder.SetInsertPoint(failed);
+            builder.CreateCall(native_trap(*module));
+            builder.CreateUnreachable();
+            builder.SetInsertPoint(proceed);
+            auto* safe = builder.CreateSelect(builder.CreateOr(zero, overflow),
+                llvm::ConstantInt::get(i64, 1), rhs);
+            return builder.CreateSDiv(lhs, safe, "div");
         }
         case Expression::Kind::Remainder:
         case Expression::Kind::Modulo: {
