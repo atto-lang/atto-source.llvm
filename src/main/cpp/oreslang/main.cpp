@@ -1,5 +1,6 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/backend/DurableCounterV1Guest.hpp"
+#include "oreslang/backend/DurableScalarV1Guest.hpp"
 #include "oreslang/backend/NativeSourceLogPathsV1.hpp"
 #include "oreslang/backend/ActorRegionV1Guest.hpp"
 #include "oreslang/backend/ActorRegionV2Guest.hpp"
@@ -540,12 +541,12 @@ static void require_actor_region_v1_aot_graph(const oreslang::Program& program) 
 }
 
 int main(int argc, char** argv) {
-    if (argc > 1 && std::string_view(argv[1]) == "--durable-counter-actor-v1") {
+    if (argc > 1 && (std::string_view(argv[1]) == "--durable-counter-actor-v1" || std::string_view(argv[1]) == "--durable-scalar-codec-v1")) {
         try {
             if (argc != 3 || std::filesystem::path(argv[2]).extension() != ".atto")
-                throw std::invalid_argument("usage: --durable-counter-actor-v1 source.atto");
+                throw std::invalid_argument(std::string("usage: ")+argv[1]+" source.atto");
             const auto text = read_regular_source(argv[2], 16384, "durable source exceeds limit");
-            const auto ir = oreslang::emit_durable_counter_v1_ir(text);
+            const auto ir = std::string_view(argv[1]) == "--durable-scalar-codec-v1" ? oreslang::emit_durable_scalar_v1_ir(text) : oreslang::emit_durable_counter_v1_ir(text);
             std::cout << ir;
             std::cout.flush();
             return std::cout ? 0 : 1;
