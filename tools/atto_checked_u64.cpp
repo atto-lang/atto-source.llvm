@@ -1,4 +1,4 @@
-// Explicit closed unsigned scalar compiler candidate. Emit only validated LLVM IR.
+// Shared closed unsigned scalar frontend. LLVM and native C++ emitters use one validated tree.
 #include <charconv>
 #include <cstdint>
 #include <iostream>
@@ -111,6 +111,22 @@ class Compiler {
         for (std::size_t i = 0; i < args.size(); ++i) out += (i ? ", i64 " : "i64 ") + args[i];
         out += ")\n"; return v;
     }
+    std::string emit_cpp_node(const Node& n, const Function& f, std::string& out, unsigned& next) const {
+        if (n.kind == Node::literal) return n.value + "ULL";
+        if (n.kind == Node::param) {
+            for (std::size_t i = 0; i < f.params.size(); ++i) if (f.params[i] == n.value) return "p" + std::to_string(i);
+            fail("internal parameter");
+        }
+        std::vector<std::string> args;
+        for (const auto& child : n.children) args.push_back(emit_cpp_node(*child, f, out, next));
+        std::string target;
+        if (n.kind == Node::call) target = "f" + std::to_string(index.at(n.value));
+        else target = n.value == "+" ? "checked_add" : n.value == "-" ? "checked_sub" : "checked_mul";
+        auto v = "v" + std::to_string(next++);
+        out += "  const U " + v + " = " + target + "(";
+        for (std::size_t i = 0; i < args.size(); ++i) out += (i ? ", " : "") + args[i];
+        out += ");\n"; return v;
+    }
 public:
     explicit Compiler(const std::string& source) {
         if (source.size() > 16384) fail("source budget");
@@ -144,7 +160,7 @@ public:
         if (m == index.end() || !funcs[m->second].exported || !funcs[m->second].params.empty()) fail("public zero-arity main required");
         for (std::size_t i = 0; i < funcs.size(); ++i) check_function(i);
     }
-    std::string emit() const {
+    std::string emit_llvm() const {
         std::string out = "declare void @llvm.trap()\n";
         for (auto op : {"add", "sub"}) {
             std::string s(op), intrinsic = "@llvm.u" + s + ".with.overflow.i64";
@@ -163,14 +179,45 @@ public:
         if (out.size() > 131072) fail("emitted IR budget");
         return out;
     }
+    std::string emit_cpp() const {
+        std::string out = R"(#include <cstdint>
+#include <cinttypes>
+#include <cstdio>
+#include <cstdlib>
+#include <limits>
+using U = std::uint64_t;
+constexpr U MAX = std::numeric_limits<U>::max();
+[[noreturn]] void overflow() { std::fputs("E_U64_OVERFLOW\n", stderr); std::exit(70); }
+[[maybe_unused]] static U checked_add(U a, U b) { if (b > MAX - a) overflow(); return a + b; }
+[[maybe_unused]] static U checked_sub(U a, U b) { if (b > a) overflow(); return a - b; }
+[[maybe_unused]] static U checked_mul(U a, U b) { if (b != 0 && a > MAX / b) overflow(); return a * b; }
+)";
+        for (std::size_t i = 0; i < funcs.size(); ++i) {
+            out += "[[maybe_unused]] static U f" + std::to_string(i) + "(";
+            for (std::size_t p = 0; p < funcs[i].params.size(); ++p) out += (p ? ", U" : "U");
+            out += ");\n";
+        }
+        for (std::size_t i = 0; i < funcs.size(); ++i) {
+            const auto& f = funcs[i]; out += "static U f" + std::to_string(i) + "(";
+            for (std::size_t p = 0; p < f.params.size(); ++p) out += (p ? ", [[maybe_unused]] U p" : "[[maybe_unused]] U p") + std::to_string(p);
+            out += ") {\n"; unsigned next = 0; auto v = emit_cpp_node(*f.body, f, out, next); out += "  return " + v + ";\n}\n";
+        }
+        out += "int main() { std::printf(\"%\" PRIu64 \"\\n\", f" + std::to_string(index.at("main")) + "()); return 0; }\n";
+        if (out.size() > 131072) fail("emitted C++ budget");
+        return out;
+    }
 };
 } // namespace
-int main() {
+int main(int argc, char** argv) {
     try {
+        bool cpp = argc == 2 && std::string_view(argv[1]) == "--emit=cpp";
+        if (argc != 1 && !cpp && !(argc == 2 && std::string_view(argv[1]) == "--emit=llvm")) fail("unsupported target");
         std::string source; char c;
         while (std::cin.get(c)) { if (source.size() == 16384) fail("source budget"); source.push_back(c); }
         if (!std::cin.eof() || std::cin.bad()) fail("input read");
-        const auto ir = Compiler(source).emit(); std::cout << ir;
+        const Compiler compiler(source);
+        const auto artifact = cpp ? compiler.emit_cpp() : compiler.emit_llvm();
+        std::cout << artifact;
         if (!std::cout) fail("output write");
         return 0;
     } catch (const std::exception& e) { std::cerr << "E_U64_PROFILE: " << e.what() << '\n'; return 2; }

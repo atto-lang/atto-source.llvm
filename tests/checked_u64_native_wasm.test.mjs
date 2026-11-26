@@ -52,6 +52,14 @@ try {
     const source='pub fnc main(): uint { return later((4+5)*6)-3-2; } fnc later(u64 n): u64 { return n+1; }';
     for(const opt of ['-O0','-O2']) for(const wasm of [false,true]) await observe(source,'50',opt,wasm);
   });
+  await test('explicit target selection and no implicit unsupported target',()=>{
+    const source='pub fnc main():u64{return 42;}';
+    assert.equal(success(run(compiler,['--emit=llvm'],source)),lower(source));
+    assert.match(success(run(compiler,['--emit=cpp'],source)),/std::uint64_t/);
+    for(const args of [['--emit=unknown'],['--emit=cpp','extra']]) {
+      const r=run(compiler,args,source);assert.equal(r.status,2);assert.equal(r.stdout,'');assert.match(r.stderr,/unsupported target/);
+    }
+  });
   await test('refuse invalid source before emitting IR',()=>{
     const guest=body=>'pub fnc main(): u64 {return '+body+';}';
     for(const source of [guest('18446744073709551616'),guest('-1'),guest('1/2'),guest('x'),guest('main()'),guest('f(1)')+'fnc f():u64{return 1;}',guest('1')+'fnc f(int n):u64{return 1;}',guest('1')+'fnc f(u64 n,u64 n):u64{return n;}',guest('1')+guest('2'),guest('1')+'fnc f():u64{return g();} fnc g():u64{return f();}',guest('1'+'+1'.repeat(100)),guest('('.repeat(40)+'1'+')'.repeat(40)),guest('01'),guest('1')+'\u202e',guest('1')+' // comment',guest('1')+' '.repeat(17000)]) {
