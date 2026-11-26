@@ -725,7 +725,7 @@ impl Parser {
                     }
                     self.advance();
                     self.expect(Tok::LParen, "'('")?;
-                    let params = self.parse_params()?;
+                    let params = self.parse_params(false)?;
                     let body = self.parse_block()?;
                     m.ctor = Some(Constructor { pos: mpos, params, body });
                 }
@@ -876,7 +876,7 @@ impl Parser {
         if self.is_word("self") {
             return Err(unsupported(self.pos(), "explicit 'self' receivers"));
         }
-        let params = self.parse_params()?;
+        let params = self.parse_params(true)?;
         if *self.peek() == Tok::LParen {
             return Err(unsupported(self.pos(), "curried method parameter lists"));
         }
@@ -949,7 +949,7 @@ impl Parser {
     }
 
     /// Parameters after `(` up to and including `)`.
-    fn parse_params(&mut self) -> R<Vec<Param>> {
+    fn parse_params(&mut self, allow_rebind: bool) -> R<Vec<Param>> {
         let mut params: Vec<Param> = Vec::new();
         if *self.peek() != Tok::RParen {
             loop {
@@ -960,7 +960,7 @@ impl Parser {
                         format!("more than {MAX_PARAMS} parameters"),
                     ));
                 }
-                let p = self.parse_param()?;
+                let p = self.parse_param(allow_rebind)?;
                 if params.iter().any(|q| q.name == p.name) {
                     return Err(Diagnostic::new(
                         p.pos,
@@ -1087,7 +1087,7 @@ impl Parser {
             return Err(unsupported(self.pos(), "generic functions"));
         }
         self.expect(Tok::LParen, "'('")?;
-        let params = self.parse_params()?;
+        let params = self.parse_params(true)?;
         let ret = if let Some(ty) = prefix_type {
             if matches!(self.peek(), Tok::Arrow | Tok::Colon) {
                 return Err(Diagnostic::new(self.pos(), "E_SYNTAX",
@@ -1119,23 +1119,50 @@ impl Parser {
         })
     }
 
-    fn parse_param(&mut self) -> R<Param> {
+    fn parse_param(&mut self, allow_rebind: bool) -> R<Param> {
         let pos = self.pos();
+        // Contextual marker; a name or nominal type named rebind stays legal.
+        let explicit_rebind = self.is_word("rebind")
+            && matches!(self.peek_at(1), Tok::Ident(_))
+            && (matches!(self.peek_at(2), Tok::Colon | Tok::Lt | Tok::LParen)
+                || (matches!(self.peek_at(2), Tok::Ident(_))
+                    && (self.word_at(1) != Some("mut")
+                        || matches!(self.peek_at(3), Tok::Ident(_) | Tok::Lt))));
+        if explicit_rebind {
+            self.advance();
+            if !allow_rebind {
+                return Err(unsupported(pos, "rebind constructor parameters"));
+            }
+            if self.is_word("rebind") && self.word_at(2).is_some() {
+                return Err(Diagnostic::new(pos, "E_SYNTAX", "duplicate rebind marker"));
+            }
+            if self.is_word("mut") {
+                return Err(unsupported(pos, "rebind with writable referent access"));
+            }
+        }
         if self.is_word("structural") {
             return Err(unsupported(pos, "structural parameters"));
         }
-        // compatibility form `name: type [mut]`
-        if matches!(self.peek(), Tok::Ident(_)) && *self.peek_at(1) == Tok::Colon {
-            let (name, pos) = self.ident("a parameter name")?;
-            self.advance();
-            let ty = self.parse_type()?;
-            let mutable = self.eat_word("mut");
-            return self.finish_param(name, ty, mutable, pos);
+        let (name, ty, legacy_mut, name_pos) =
+            if matches!(self.peek(), Tok::Ident(_)) && *self.peek_at(1) == Tok::Colon {
+                let (name, name_pos) = self.ident("a parameter name")?;
+                self.advance();
+                if explicit_rebind && self.is_word("mut") {
+                    return Err(unsupported(pos, "rebind with writable referent access"));
+                }
+                let ty = self.parse_type()?;
+                let legacy_mut = self.eat_word("mut");
+                (name, ty, legacy_mut, name_pos)
+            } else {
+                let ty = self.parse_type()?;
+                let legacy_mut = self.eat_word("mut");
+                let (name, name_pos) = self.ident("a parameter name")?;
+                (name, ty, legacy_mut, name_pos)
+            };
+        if explicit_rebind && (legacy_mut || !matches!(ty, Type::Int | Type::Bool)) {
+            return Err(unsupported(pos, "rebind outside the native copied scalar subset"));
         }
-        let ty = self.parse_type()?;
-        let mutable = self.eat_word("mut");
-        let (name, pos) = self.ident("a parameter name")?;
-        self.finish_param(name, ty, mutable, pos)
+        self.finish_param(name, ty, explicit_rebind || legacy_mut, name_pos)
     }
 
     fn finish_param(&self, name: String, ty: Type, mutable: bool, pos: Pos) -> R<Param> {
