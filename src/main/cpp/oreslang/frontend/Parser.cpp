@@ -6043,12 +6043,20 @@ private:
                     return;
                 }
             }
-            while (accept("val")) {
-                if (function.locals.size() >= 128) fail("E_REFINEMENT_LIMIT: too many immutable bindings");
+            std::unordered_map<std::string, RefinedQuantity> mutable_types;
+            while (token_.text == "val" || (strict_i64_ && token_.text == "let")) {
+                const bool mutable_slot = accept("let");
+                if (!mutable_slot) require("val");
+                if (function.locals.size() >= 128) fail("E_REFINEMENT_LIMIT: too many bindings");
                 LocalBinding local;
                 local.offset = token_.offset;
+                local.assignable = mutable_slot;
+                local.owner_mutable = mutable_slot;
                 RefinedQuantity type;
-                if (peek_next().text == ":") {
+                const bool inferred = strict_i64_ && !mutable_slot && peek_next().text == "=";
+                if (inferred) {
+                    local.name = identifier();
+                } else if (peek_next().text == ":") {
                     local.name = identifier();
                     require(":");
                     type = read_refined_type();
@@ -6058,15 +6066,84 @@ private:
                 }
                 require("=");
                 auto value = verified_expression(0);
+                if (inferred) type = value.type();
                 type.require(value.type(), "E_REFINEMENT_BINDING", "binding " + local.name);
                 require(";");
                 if (!verified_locals_.emplace(local.name, RefinedQuantity{type.unit, value.range, type.i32}).second)
                     fail("E_REFINEMENT_DUPLICATE: duplicate verified binding");
+                if (mutable_slot) mutable_types.emplace(local.name, type);
                 verified_upper_bounds_.emplace(local.name, std::move(value.upper_bounds));
                 local.initializer = std::move(value.expression);
                 function.locals.push_back(std::move(local));
             }
             if(strict_i64_) {
+                // Strict scalar prefix: declarations first, direct writes and one-slot
+                // inductive while statements, then the existing pure returning CFG.
+                // No branch-local mutation, aliasing, or unverified fallback.
+                while (token_.text == "while" ||
+                       (token_.kind == Kind::Identifier && peek_next().text == "=")) {
+                    if (function.statements.size() >= 128)
+                        fail("E_REFINEMENT_LIMIT: too many strict statements");
+                    const auto at = token_.offset;
+                    if (accept("while")) {
+                        if (mutable_types.size() != 1)
+                            fail("E_VERIFY_UNSUPPORTED: strict while requires one mutable slot");
+                        const auto& [counter, invariant] = *mutable_types.begin();
+                        invariant.require(verified_locals_.at(counter), "E_REFINEMENT_BINDING", "loop entry " + counter);
+                        auto header = verified_locals_;
+                        header.at(counter) = invariant;
+                        // Prior relational facts for the updated slot do not survive a backedge.
+                        verified_upper_bounds_.at(counter).clear();
+                        auto edges = strict_condition(header, 0);
+                        require("{");
+                        verified_locals_ = std::move(edges.yes);
+                        if (identifier() != counter)
+                            fail("E_VERIFY_UNSUPPORTED: strict loop must update its sole mutable slot");
+                        require("=");
+                        auto next = verified_expression(0);
+                        require(";");
+                        invariant.require(next.type(), "E_REFINEMENT_BINDING", "loop backedge " + counter);
+                        if (!accept("}"))
+                            fail("E_VERIFY_UNSUPPORTED: strict while permits one direct update");
+                        Statement update{};
+                        update.kind = Statement::Kind::ScalarWrite;
+                        update.offset = at;
+                        update.receiver = counter;
+                        update.expression = std::move(next.expression);
+                        Statement stop{};
+                        stop.kind = Statement::Kind::Break;
+                        stop.offset = at;
+                        Statement choose{};
+                        choose.kind = Statement::Kind::Conditional;
+                        choose.offset = at;
+                        choose.condition = std::move(edges.test);
+                        choose.then_statements.push_back(std::move(update));
+                        choose.else_statements.push_back(std::move(stop));
+                        Statement loop{};
+                        loop.kind = Statement::Kind::Loop;
+                        loop.offset = at;
+                        loop.then_statements.push_back(std::move(choose));
+                        function.statements.push_back(std::move(loop));
+                        verified_locals_ = std::move(edges.no);
+                    } else {
+                        const auto target = identifier();
+                        auto declared = mutable_types.find(target);
+                        if (declared == mutable_types.end())
+                            fail("E_VERIFY_UNSUPPORTED: strict assignment requires mutable slot");
+                        require("=");
+                        auto value = verified_expression(0);
+                        require(";");
+                        declared->second.require(value.type(), "E_REFINEMENT_BINDING", "assignment " + target);
+                        verified_locals_.at(target) = RefinedQuantity{declared->second.unit, value.range, declared->second.i32};
+                        verified_upper_bounds_.at(target) = std::move(value.upper_bounds);
+                        Statement update{};
+                        update.kind = Statement::Kind::ScalarWrite;
+                        update.offset = at;
+                        update.receiver = target;
+                        update.expression = std::move(value.expression);
+                        function.statements.push_back(std::move(update));
+                    }
+                }
                 function.result=strict_returns(declared_result,guaranteed_result,signature,function,name,0);
                 require("}");
             } else {

@@ -48,5 +48,20 @@ int main() {
             "fnc f(int x) -> int { if x != 0 || 42/x > 0 { return 42; } return 0; } pub fnc main() -> int { return f(0); }",
             "fnc f(int x, int y) -> int { if x != 0 { return 42/y; } return 0; } pub fnc main() -> int { return f(1,1); }",
             "fnc f(int x) -> int { if x != 0 || x == 0 { return 42/x; } return 0; } pub fnc main() -> int { return f(1); }"})reject(pre+std::string(source),"E_VERIFY_UNPROVEN:");
+    for (std::string_view body : {
+        "type Small = int where self >= 1 and self <= 21; fnc f(Small n) -> Bounded { val a=n+n; return a; } pub fnc main() -> int { return f(21); }",
+        "pub fnc main() -> int { let int x = 1; x = 42; return x; }",
+        "pub fnc main() -> int { let Bounded x = 1; while x < 42 { x = x+1; } return x; }",
+        "pub fnc main() -> int { let int x = 42; while x > 0 { x = x-1; } return x+42; }",
+        "pub fnc main() -> int { let int x = 0; while x < 21 { x = x+1; } while x < 42 { x = x+1; } return x; }"
+    }) (void)parse_verified_strict_i64(pre+std::string(body));
+    reject(pre+"pub fnc main() -> int { let int x = 1; x = 0; return 42/x; }","E_VERIFY_UNPROVEN:");
+    reject(pre+"pub fnc main() -> int { let int x = 0; while x >= 0 { x = x+1; } return x; }","E_VERIFY_UNPROVEN:");
+    reject(pre+"pub fnc main() -> int { let Bounded x = 1; while x <= 42 { x = x+1; } return x; }","E_REFINEMENT_BINDING:");
+    reject(pre+"pub fnc main() -> int { let int x = 1; while x > 0 { x = x-1; } return 42/x; }","E_VERIFY_UNPROVEN:");
+    reject(pre+"pub fnc main() -> int { val a=1; a=0; return a; }","E_VERIFY_UNSUPPORTED:");
+    reject(pre+"pub fnc main() -> int { val a=a; return 42; }","E_REFINEMENT_NAME:");
+    reject(pre+"pub fnc main() -> int { val a=9223372036854775807+1; return 42; }","E_VERIFY_UNPROVEN:");
+    reject(pre+"pub fnc main() -> int { let int x=0; while x < 42 { x=x+1; x=x+1; } return x; }","E_VERIFY_UNSUPPORTED:");
     std::cout << "PASS strict i64 real parser and validators; no native guest claim\n";
 }
