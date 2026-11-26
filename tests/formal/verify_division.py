@@ -26,6 +26,9 @@ def regress(solver):
     base = (ROOT / 'representative_division.ll').read_text()
     cases = [
         ('correct', base, EXPECTED),
+        ('four-byte accesses', '\n'.join(line.replace('align 8', 'align 4') if 'load i64' in line or 'store i64' in line else line for line in base.split('\n')), EXPECTED),
+        ('mixed access alignment', base.replace('load i64, ptr %sa, align 8', 'load i64, ptr %sa, align 4'), EXPECTED),
+        ('overaligned store', base.replace('store i64 %a, ptr %sa, align 8', 'store i64 %a, ptr %sa, align 16'), None),
         ('missing overflow', base.replace('%z, %o', '%z, %z'), ['sat', 'sat', 'unsat', 'sat', 'sat']),
         ('wrong safe value', base.replace('i64 1, i64 %y', 'i64 0, i64 %y'), ['unsat', 'sat', 'unsat', 'sat', 'sat']),
         ('wrong admitted divisor', base.replace('i64 1, i64 %y', 'i64 1, i64 1'), ['unsat', 'unsat', 'sat', 'sat', 'sat']),
