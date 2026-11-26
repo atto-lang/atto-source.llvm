@@ -17,12 +17,14 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - name: Verify exact source and execute negative admission
+      - name: Verify exact source and execute host-linker admission
         env:
           EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           git rev-parse HEAD HEAD^{tree}
+          clang --version
+          ld.lld --version
           bash -n scripts/compile-aot.sh tests/aot_package_linkage_admission.sh
           bash tests/aot_package_linkage_admission.sh
