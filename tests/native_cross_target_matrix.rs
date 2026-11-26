@@ -116,13 +116,36 @@ fn elf_identity(bytes: &[u8], triple: &str, executable: bool) -> bool {
     }
     let kind = u16::from_le_bytes([bytes[16], bytes[17]]);
     let actual = u16::from_le_bytes([bytes[18], bytes[19]]);
-    actual == machine && if executable { kind == 2 || kind == 3 } else { kind == 1 }
+    let version = u32::from_le_bytes(bytes[20..24].try_into().expect("ELF version"));
+    let (flags_offset, size_offset) = if class == 1 { (36, 40) } else { (48, 52) };
+    let flags = u32::from_le_bytes(bytes[flags_offset..flags_offset + 4].try_into().expect("ELF flags"));
+    let declared_size = u16::from_le_bytes(bytes[size_offset..size_offset + 2].try_into().expect("ELF header size"));
+    if actual != machine || version != 1 || usize::from(declared_size) != header_len {
+        return false;
+    }
+    if machine == 40 {
+        // ARM EABI5. Relocatable objects often carry no float ABI flag;
+        // their CPU architecture and VFP calling convention require
+        // separate .ARM.attributes checks. Linked hard-float images must
+        // explicitly identify hard-float and must not claim soft-float.
+        const EABI_MASK: u32 = 0xff00_0000;
+        const EABI5: u32 = 0x0500_0000;
+        const FLOAT_MASK: u32 = 0x600;
+        const HARD_FLOAT: u32 = 0x400;
+        if flags & EABI_MASK != EABI5
+            || (executable && flags & FLOAT_MASK != HARD_FLOAT)
+            || (!executable && !matches!(flags & FLOAT_MASK, 0 | HARD_FLOAT))
+        {
+            return false;
+        }
+    }
+    if executable { kind == 2 || kind == 3 } else { kind == 1 }
 }
 
 fn require_elf(path: &str, triple: &str, executable: bool) {
     let bytes = fs::read(path).unwrap_or_else(|e| fail(&format!("{path}: {e}")));
     if !elf_identity(&bytes, triple, executable) {
-        fail(&format!("{triple}: wrong ELF class, byte order, machine or type: {path}"));
+        fail(&format!("{triple}: wrong ELF class, byte order, machine, type, header or ABI flags: {path}"));
     }
 }
 
@@ -140,13 +163,34 @@ fn check_identity_guard() {
         h[..4].copy_from_slice(b"\x7fELF");
         h[4] = class; h[5] = 1; h[6] = 1; h[16] = 1;
         h[18..20].copy_from_slice(&machine.to_le_bytes());
+        h[20..24].copy_from_slice(&1u32.to_le_bytes());
+        let size_offset = if class == 1 { 40 } else { 52 };
+        h[size_offset..size_offset + 2].copy_from_slice(&(len as u16).to_le_bytes());
+        if machine == 40 {
+            h[36..40].copy_from_slice(&0x0500_0000u32.to_le_bytes());
+        }
         assert!(elf_identity(&h, triple, false));
+        let mut invalid = h.clone();
+        invalid[20..24].copy_from_slice(&0u32.to_le_bytes());
+        assert!(!elf_identity(&invalid, triple, false));
+        let mut invalid = h.clone();
+        invalid[size_offset..size_offset + 2].copy_from_slice(&0u16.to_le_bytes());
+        assert!(!elf_identity(&invalid, triple, false));
         assert!(!elf_identity(&h, triple, true));
         assert!(!elf_identity(&h[..20], triple, false));
         for (other, _) in TRIPLES {
             if other != triple { assert!(!elf_identity(&h, other, false)); }
         }
         h[16] = 2;
+        if machine == 40 {
+            // EABI5 with no hard-float declaration is not sufficient.
+            assert!(!elf_identity(&h, triple, true));
+            for bad in [0x0500_0200u32, 0x0500_0600, 0x0400_0400] {
+                h[36..40].copy_from_slice(&bad.to_le_bytes());
+                assert!(!elf_identity(&h, triple, true));
+            }
+            h[36..40].copy_from_slice(&0x0500_0400u32.to_le_bytes());
+        }
         assert!(elf_identity(&h, triple, true));
         assert!(!elf_identity(&h, triple, false));
         h[5] = 2;
