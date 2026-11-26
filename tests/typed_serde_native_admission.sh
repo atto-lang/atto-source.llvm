@@ -15,6 +15,8 @@ reject() {
   local label="$1" source="$2" rc=0
   printf '%s\n' "$source" > "$work/$label.atto"
   "$compiler" "$work/$label.atto" > "$work/$label.ll" 2> "$work/$label.err" || rc=$?
+  echo "LLVM_SERDE_ADMISSION_CASE $label rc=$rc"
+  cat "$work/$label.err"
   test "$rc" = 1
   test ! -s "$work/$label.ll"
   grep -Eq '^oreslang-llvmc: .+' "$work/$label.err"
@@ -23,8 +25,9 @@ reject() {
   echo "LLVM_SERDE_ADMISSION_DENIED $label"
 }
 reject missing 'pub fnc main(): int { return deserialize; }'
-reject class 'define class User as pub to_json(): string { return "x"; } end pub fnc main(): int { return 0; }'
-reject struct 'define struct User implements Serializable as value: int; end pub fnc main(): int { return 0; }'
-reject interface 'define interface JsonSerializable as to_json(): string; end pub fnc main(): int { return 0; }'
-reject trait 'define trait JsonDeserializable as from_json(string input): string; end pub fnc main(): int { return 0; }'
+# LLVM supports nominal classes: use the established scalar class syntax
+# and exercise missing members, rather than assuming class declarations fail.
+for member in to_json to_message_pack serialize deserialize; do
+  reject "$member" "define class User as pub final int token: 42; end pub fnc main(): int { let User value = new User(); return value.$member(); }"
+done
 echo 'LLVM_TYPED_SERDE_ADMISSION_PASS checks=6 NOT_SERIALIZER_EXECUTION'
