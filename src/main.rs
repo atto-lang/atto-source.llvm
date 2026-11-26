@@ -960,6 +960,10 @@ fn cli() -> Result<(), String> {
     staged.publish()
 }
 
+// Canonical compiler-cache host substrate, exact shared Rust source vectors.
+mod sha256;
+mod compiler_cache_key;
+mod compiler_artifact_receipt;
 fn main() {
     if let Err(e) = cli() {
         eprintln!("{e}");
