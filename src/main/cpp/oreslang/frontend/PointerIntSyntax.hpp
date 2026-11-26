@@ -72,12 +72,19 @@ public:
             } else {
                 need(owner_);
                 need(".");
-                if (take("write_at")) {
+                if (token().text == "write_at" || token().text == "write") {
+                    const bool singleton = take("write");
+                    if (!singleton) need("write_at");
                     if (!live_) reject("write after close", token().offset);
                     step.kind = Step::Kind::Write;
                     need("(");
-                    step.index = index_literal(0, count_ - 1);
-                    need(",");
+                    if (singleton) {
+                        if (count_ != 1) reject("write requires singleton allocation", token().offset);
+                        step.index = 0;
+                    } else {
+                        step.index = index_literal(0, count_ - 1);
+                        need(",");
+                    }
                     step.value = expression();
                     need(")"); need(";");
                     initialized_[step.index] = true;
@@ -88,7 +95,7 @@ public:
                     need("("); need(")"); need(";");
                     live_ = false;
                 } else {
-                    reject("only write_at(index,value) or close() are pointer effects", token().offset);
+                    reject("only write(value), write_at(index,value) or close() are pointer effects", token().offset);
                 }
             }
             plan.steps.push_back(std::move(step));
@@ -244,8 +251,12 @@ private:
         if (name == owner_) {
             if (!live_) reject("read after close or pointer escape", offset);
             if (!take(".")) reject("Pointer<int> owner cannot escape as a scalar or handle", offset);
-            need("read_at"); need("(");
-            const auto index = index_literal(0, count_ - 1);
+            const bool singleton = take("read");
+            if (!singleton) need("read_at");
+            need("(");
+            if (singleton && count_ != 1)
+                reject("read requires singleton allocation", offset);
+            const auto index = singleton ? std::size_t{0} : index_literal(0, count_ - 1);
             need(")");
             if (!initialized_[index]) reject("read of uninitialized pointer element", offset);
             auto expr = std::make_unique<Expr>();
@@ -294,16 +305,19 @@ private:
     }
     std::unique_ptr<Expr> combine(Expr::Kind kind, std::unique_ptr<Expr> lhs,
                                   std::unique_ptr<Expr> rhs) {
-        const __int128 x = lhs->known;
-        const __int128 y = rhs->known;
-        const __int128 value = kind == Expr::Kind::Add ? x + y :
-            kind == Expr::Kind::Subtract ? x - y : x * y;
-        if (value < std::numeric_limits<std::int64_t>::min() ||
-                value > std::numeric_limits<std::int64_t>::max())
+        const std::int64_t x = lhs->known;
+        const std::int64_t y = rhs->known;
+        std::int64_t value = 0;
+        // GCC/Clang checked operations avoid both signed overflow and the
+        // nonstandard __int128 type rejected by the strict native build.
+        const bool overflow = kind == Expr::Kind::Add ? __builtin_add_overflow(x, y, &value) :
+            kind == Expr::Kind::Subtract ? __builtin_sub_overflow(x, y, &value) :
+            __builtin_mul_overflow(x, y, &value);
+        if (overflow)
             reject("checked arithmetic overflow", token().offset);
         auto expr = std::make_unique<Expr>();
         expr->kind = kind;
-        expr->known = static_cast<std::int64_t>(value);
+        expr->known = value;
         expr->lhs = std::move(lhs);
         expr->rhs = std::move(rhs);
         return expr;

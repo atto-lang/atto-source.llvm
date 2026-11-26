@@ -11,7 +11,11 @@ PINNED = {
   "reject-counted-bool.atto": "4a52c22442bc8a9fe55eb95b23722595db32c97e",
   "reject-counted-scalar.atto": "a2a2dd184237f17b5e8d455f498719ef1ed01d97",
   "reject-counted-default.atto": "0c67c1fc8eaf55df6abb2b0fe7d2ce80f169bc69",
-  "reject-counted-write.atto": "63fa3c9add56f3793e6d755f006cd3568acf1f04"
+  "reject-counted-write.atto": "63fa3c9add56f3793e6d755f006cd3568acf1f04",
+  "counted-dynamic.atto": "7c9ea9270d766612de0d502147e0df31b0dc3454",
+  "counted-dynamic-zero.atto": "4707b13d3daebe05ced967418ba120cf801e2d8c",
+  "reject-counted-dynamic-bool.atto": "36cd372a5385e34f2e3bd8dd936e4e0491052633",
+  "reject-counted-dynamic-unknown.atto": "0e61da7a98987ed5a182148538b35b8a890abf26"
 }
 
 def run(compiler, source):
@@ -36,7 +40,7 @@ def main():
     with tempfile.TemporaryDirectory() as td:
         path = pathlib.Path(td) / "probe.atto"
         for prefix in ("select", "nb select", "await select", "await nb select"):
-            for header in ("(3)", "<int>(3)", "(0)", "(-1)", "(true)", "(1+2)"):
+            for header in ("(3)", "<int>(3)", "(0)", "(-1)", "(true)", "(1+2)", "(count)", "<int>(count)", "(count+1)", "<int>(count+1)"):
                 for body in ("{ default: -> { return 42; } }", "over default: -> { return 42; } end"):
                     path.write_text("pub fnc main(): int { return " + prefix + header + " " + body + "; }\n")
                     result = run(compiler, path)
@@ -45,7 +49,7 @@ def main():
         path.write_text("pub fnc main(): int { return 42; }\n")
         result = run(compiler, path)
         assert result.returncode == 0 and result.stdout.strip(), result.stderr
-    print("LLVM_COUNTED_SELECT_ADMISSION_PASS 9 exact fixture blobs + 48 isolated rejections; no IR on rejection; positive counted guest NOT EXECUTED")
+    print("LLVM_COUNTED_SELECT_ADMISSION_PASS 13 exact fixture blobs + 80 isolated rejections; no IR on rejection; positive counted guest NOT EXECUTED")
 
 if __name__ == "__main__":
     main()
