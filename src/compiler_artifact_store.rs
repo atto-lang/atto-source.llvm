@@ -228,9 +228,11 @@ mod tests {
         symlink(&retired,&real).unwrap();assert!(ArtifactStore::open(&real).is_err());
         assert_eq!(store.load(&KEY,&SECRET).unwrap().unwrap(),PAYLOAD);
         let lock=open_child(store.root.directory(),".",O_RDONLY|O_DIRECTORY|O_CLOEXEC,0).unwrap();
-        assert_eq!(unsafe{flock(lock.as_raw_fd(),LOCK_EX|LOCK_NB)},0);
+        // A parallel test may fork while a prior lock FD is live, then
+        // close it at exec. Retry only transient contention during setup.
+        after_fork(||{if unsafe{flock(lock.as_raw_fd(),LOCK_EX|LOCK_NB)}==0{Ok(())}else{Err(io::Error::last_os_error())}}).unwrap();
         assert_eq!(store.publish(&KEY,&data,&SECRET).unwrap_err().kind(),io::ErrorKind::WouldBlock);
-        drop(lock);store.publish(&KEY,&data,&SECRET).unwrap();
+        drop(lock);after_fork(||store.publish(&KEY,&data,&SECRET)).unwrap();
     }
 
 
