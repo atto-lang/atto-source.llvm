@@ -5656,6 +5656,10 @@ private:
             while (accept("|>")) {
                 if (++stages > kMaxNativePipelineStages)
                     fail("pipeline exceeds 128 stages");
+                if (token_.text == "match") {
+                    value = value_match_expression(std::move(value));
+                    continue;
+                }
                 auto stage = primary();
                 if (stage->kind != Expression::Kind::Variable &&
                         stage->kind != Expression::Kind::Call)
@@ -6255,14 +6259,30 @@ private:
         return {native_dispatch_equal(*projection, *literal), std::move(field), key};
     }
 
-    std::unique_ptr<Expression> value_match_expression() {
+    std::unique_ptr<Expression> value_match_expression(std::unique_ptr<Expression> injected = nullptr) {
         const auto offset = token_.offset;
         require("match");
         consume_optional_value_match_result_type();
-        auto subject = expression();
+        const bool pipeline = static_cast<bool>(injected);
+        auto subject = pipeline ? std::move(injected) : expression();
+        // Conditional lowering clones its subject. Until a dedicated match
+        // temporary exists, admit only trivial immutable-observation forms
+        // in pipeline position, not calls, arithmetic or compound stages.
+        if (pipeline && subject->kind != Expression::Kind::Integer &&
+                subject->kind != Expression::Kind::Boolean &&
+                subject->kind != Expression::Kind::Variable)
+            fail("native pipeline match requires a literal or local subject until once-only lowering exists");
         if (!native_pure_scalar_tree(*subject))
             fail("native value match subject must be a replay-safe scalar expression");
         require("over");
+        const bool braced = accept("{");
+        const std::string_view close = braced ? "}" : "end";
+        auto arm_value = [&]() {
+            auto result = token_.text == "{"
+                ? dispatch_value_arm("native value match") : expression();
+            accept(",");
+            return result;
+        };
 
         struct Arm {
             std::unique_ptr<Expression> condition;
@@ -6274,7 +6294,7 @@ private:
         std::unordered_set<std::string> seen;
         std::string structural_field;
 
-        while (token_.text != "end") {
+        while (token_.text != close) {
             if (arms.size() + (fallback ? 1u : 0u) >= 32)
                 fail("native value match arm limit exceeded (32)");
             // All three spellings designate one fallback, evaluated after concrete arms.
@@ -6286,7 +6306,7 @@ private:
                 if (token_.text == "when" || token_.text == "as")
                     fail("native value match default arm cannot have a guard or binding");
                 require("->");
-                fallback = dispatch_value_arm("native value match");
+                fallback = arm_value();
                 continue;
             }
             if (token_.text == "structural" || token_.text == "struct")
@@ -6303,7 +6323,7 @@ private:
                 require("->");
                 arms.push_back({
                     std::move(field_test.condition),
-                    dispatch_value_arm("native structural field match"),
+                    arm_value(),
                     "field:" + field_test.field + ":" + field_test.key
                 });
                 continue;
@@ -6325,11 +6345,11 @@ private:
             require("->");
             arms.push_back({
                 native_dispatch_equal(*subject, *constant),
-                dispatch_value_arm("native value match"),
+                arm_value(),
                 key
             });
         }
-        require("end");
+        require(close);
 
         // Bool true/false is statically exhaustive; other scalar matches need
         // an explicit wildcard so there is always an ARM_RESULT value.
