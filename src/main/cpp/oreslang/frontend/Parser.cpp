@@ -4187,6 +4187,7 @@ private:
                     if (binding.scalar_type == ScalarType::I64) require("int");
                 }
                 if (!type_right_const) binding.name = identifier();
+                if (token_.text == ";") fail("E_MISSING_INITIALIZER: explicit initializer required");
                 require("=");
                 // Lower a terminal unary `pending |> std.await` through
                 // the *same* checked Future/Task await slot and ownership
@@ -4648,6 +4649,7 @@ private:
             statement.branch_local = std::move(local); return statement;
         };
         std::size_t statement_depth = 0;
+        std::size_t active_keyword_if = 0;
         foreach_statement = [&]() {
             Lexer look = lexer_;
             const auto open = look.next(), mode = look.next(), name = look.next(), of = look.next();
@@ -4757,6 +4759,12 @@ private:
         branch_arm = [&](bool finally_scope, bool then_scope) {
             if (++statement_depth > 16) fail("native structured statement depth exceeds 16");
             struct Depth { std::size_t& n; ~Depth() { --n; } } depth{statement_depth};
+            struct KeywordIfScope {
+                std::size_t& depth;
+                bool active;
+                KeywordIfScope(std::size_t& d, bool a) : depth(d), active(a) { if (active) ++depth; }
+                ~KeywordIfScope() { if (active) --depth; }
+            } keyword_if{active_keyword_if, then_scope};
             struct Receivers { std::unordered_set<std::string>& target; std::unordered_set<std::string> saved;
                 ~Receivers() { target = std::move(saved); } } receivers{class_receivers_, class_receivers_};
             std::vector<Statement> actions;
@@ -4877,8 +4885,9 @@ private:
                         require("{"); statement.then_statements = branch_arm(false, false); require("}");
                         if (accept("else")) { require("{"); statement.else_statements = branch_arm(false, false); require("}"); }
                     }
-                    // The native migration parser still requires 'fi' after brace forms.
-                    require("fi"); actions.push_back(std::move(statement)); continue;
+                    if (then_form) require("fi");
+                    else if (active_keyword_if == 0) accept("fi");
+                    actions.push_back(std::move(statement)); continue;
                 }
                 if ((token_.text == "break" || token_.text == "continue") &&
                         scalar_loop_depth > 0 && !finally_scope) {
@@ -5252,6 +5261,16 @@ private:
                 // hoist the else arm and use its return as the function result.
                 if (!value.returns_void && !value.statements.empty() && !terminal_try_finally) {
                     Statement& last = value.statements.back();
+                    // The existing structured-return emitter joins real return
+                    // edges through a cleanup snapshot. Preserve nested terminal
+                    // conditionals rather than hoisting an arm across its scope.
+                    if (last.kind == Statement::Kind::Conditional &&
+                            value.return_class.empty() &&
+                            value.return_type == ScalarType::I64 &&
+                            guard_failure_exits(value.statements)) {
+                        require("}");
+                        return value;
+                    }
                     if (last.kind == Statement::Kind::Conditional &&
                             last.then_statements.size() == 1 &&
                             last.then_statements.front().kind == Statement::Kind::Return &&
@@ -5362,11 +5381,12 @@ private:
                         fail("native protected try return requires nonthrowing scalar/field read");
                     require(";");
                     if (!then_form) require("}");
-                    // Java accepts `if c then return a; else ...; fi`. In the structured
-                    // then-form an else arm is an ordinary conditional branch; other
-                    // guarded-return contexts have no else lowering and say so.
+                    // Forward-port #786: braced terminal else uses the same
+                    // typed structured CFG. Keep legacy single return guards
+                    // and protected/class return restrictions unchanged.
                     const bool full_conditional =
-                        then_form && value.return_class.empty() && !terminal_try_finally;
+                        (then_form || token_.text == "else") &&
+                        value.return_class.empty() && !terminal_try_finally;
                     if (!full_conditional && token_.text == "else")
                         fail("native guarded return cannot take an else branch in this context");
                     if (full_conditional) {
@@ -5377,11 +5397,17 @@ private:
                         conditional.condition = std::move(guard.condition);
                         Statement terminal; terminal.kind = Statement::Kind::Return; terminal.offset = offset;
                         terminal.expression = std::move(guard.result); conditional.then_statements.push_back(std::move(terminal));
-                        if (accept("else")) conditional.else_statements = branch_arm(false, then_form);
-                        require("fi");
+                        if (accept("else")) {
+                            if (!then_form) require("{");
+                            conditional.else_statements = branch_arm(false, then_form);
+                            if (!then_form) require("}");
+                        }
+                        if (then_form) require("fi");
+                        else if (active_keyword_if == 0) accept("fi");
                         value.statements.push_back(std::move(conditional));
                     } else {
-                        require("fi");
+                        if (then_form) require("fi");
+                        else if (active_keyword_if == 0) accept("fi");
                         value.early_returns.push_back(std::move(guard));
                         return_guards_started = true;
                     }
@@ -5402,8 +5428,9 @@ private:
                         if (!then_form) require("{");
                         conditional.else_statements = branch_arm(false, then_form);
                         if (!then_form) require("}");
-                    } else if (!then_form) require("else");
-                    require("fi");
+                    }
+                    if (then_form) require("fi");
+                    else if (active_keyword_if == 0) accept("fi");
                     value.statements.push_back(std::move(conditional));
                 }
                 continue;
