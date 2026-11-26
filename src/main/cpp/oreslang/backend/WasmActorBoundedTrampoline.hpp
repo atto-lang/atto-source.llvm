@@ -1,6 +1,7 @@
 #pragma once
 
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/backend/LlvmCompat.hpp"
 #include "oreslang/runtime/TargetAbi.hpp"
 
 #include <cstdint>
@@ -158,7 +159,7 @@ inline std::string emit(const Program& source) {
     auto* limit = llvm::ConstantInt::get(i64, 64);
     auto* status0 = llvm::ConstantInt::get(i32, 0);
     auto* status1 = llvm::ConstantInt::get(i32, 1);
-    auto* trap = llvm::Intrinsic::getDeclaration(&module, llvm::Intrinsic::trap);
+    auto* trap = native_trap(module);
     auto* slotsType = llvm::ArrayType::get(i64, 64);
     auto global = [&](llvm::Type* type, llvm::Constant* initial,
                       const char* name) -> llvm::GlobalVariable* {
