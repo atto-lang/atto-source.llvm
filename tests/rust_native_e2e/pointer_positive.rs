@@ -68,4 +68,11 @@ pub fn run(h: &mut Harness) {
         "fnc update(mut Pointer<int> q): void { q.write(29); } fnc inspect(Pointer<int> q): int { return q.read(); } pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(13); val int before = inspect(borrow! p); update(borrow! mut p); val int after = inspect(borrow! p); p.close(); return before + after; }",
         &["--experimental-pointer-int-aot"], 42, true, None);
 
+    h.positive("pointer_mutable_scalar_argument_42",
+        "fnc update(mut Pointer<int> q, int value): void { q.write(value); } pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(0); update(mut p, 42); val int a = p.read(); p.close(); return a; }",
+        &["--experimental-pointer-int-aot"], 42, true, None);
+    h.positive("pointer_mutable_scalar_snapshot_42",
+        "fnc inspect(Pointer<int> q): int { return q.read(); } fnc update(mut Pointer<int> q, int value): void { q.write(value); } pub fnc main(): int { let mut Pointer<int> p = Pointer.alloc_value<int>(13); val int a = inspect(p); update(borrow! mut p, a + 16); val int b = inspect(p); p.close(); return a + b; }",
+        &["--experimental-pointer-int-aot"], 42, true, None);
+
 }

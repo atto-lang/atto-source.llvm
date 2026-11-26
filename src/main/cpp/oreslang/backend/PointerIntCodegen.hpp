@@ -47,11 +47,15 @@ inline std::string emit_verified_ir(const Plan& plan) {
     llvm::Function* mutable_helper = nullptr;
     if (!plan.mutable_helper.empty()) {
         auto* pointer_type = llvm::PointerType::getUnqual(context);
-        auto* helper_type = llvm::FunctionType::get(builder.getVoidTy(), {pointer_type}, false);
+        auto* helper_type = plan.mutable_scalar_parameter.empty() ?
+            llvm::FunctionType::get(builder.getVoidTy(), {pointer_type}, false) :
+            llvm::FunctionType::get(builder.getVoidTy(), {pointer_type, i64}, false);
         mutable_helper = llvm::Function::Create(helper_type, llvm::GlobalValue::InternalLinkage,
             "atto.pointer.mutable.helper", module);
         builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", mutable_helper));
-        builder.CreateStore(builder.getInt64(plan.mutable_write), mutable_helper->getArg(0));
+        llvm::Value* value = plan.mutable_scalar_parameter.empty() ?
+            static_cast<llvm::Value*>(builder.getInt64(plan.mutable_write)) : mutable_helper->getArg(1);
+        builder.CreateStore(value, mutable_helper->getArg(0));
         builder.CreateRetVoid();
     }
     auto* main_type = llvm::FunctionType::get(i32, false);
@@ -117,7 +121,8 @@ inline std::string emit_verified_ir(const Plan& plan) {
             break;
         }
         case Step::Kind::MutableCall:
-            builder.CreateCall(mutable_helper, {slot(0)});
+            if (step.value) builder.CreateCall(mutable_helper, {slot(0), lower(*step.value)});
+            else builder.CreateCall(mutable_helper, {slot(0)});
             break;
         case Step::Kind::Scalar:
             scalar_values.emplace(step.name, lower(*step.value));

@@ -92,9 +92,14 @@ inline void verify_plan(const Plan& plan) {
                 !valid_helper_id(plan.mutable_helper) || !valid_helper_id(plan.mutable_parameter) ||
                 plan.mutable_helper == plan.owner || plan.mutable_helper == plan.mutable_parameter)
             ownership_error("invalid mutable helper signature");
-    } else if (plan.mutable_write != 0) {
+    } else if (plan.mutable_write != 0 || !plan.mutable_scalar_parameter.empty()) {
         ownership_error("orphan mutable helper write");
     }
+    if (!plan.mutable_scalar_parameter.empty() &&
+            (!valid_helper_id(plan.mutable_scalar_parameter) ||
+             plan.mutable_scalar_parameter == plan.mutable_parameter ||
+             plan.mutable_scalar_parameter == plan.mutable_helper || plan.mutable_write != 0))
+        ownership_error("invalid scalar helper formal");
     if (plan.steps.size() > 128 || !plan.result)
         ownership_error("invalid bounded pointer plan");
     std::array<bool, 16> initialized{};
@@ -107,10 +112,15 @@ inline void verify_plan(const Plan& plan) {
     bool live = true;
     std::size_t close_count = 0;
     std::size_t budget = 0;
+    bool scalar_call_argument = false;
 
     auto eval = [&](auto&& self, const Expr& expr, unsigned depth) -> std::int64_t {
         if (depth > 64 || ++budget > 4096)
             ownership_error("expression depth/node budget exceeded");
+        if (scalar_call_argument && (expr.kind == Expr::Kind::Read ||
+                expr.kind == Expr::Kind::ReadonlyCall || expr.kind == Expr::Kind::Length ||
+                expr.kind == Expr::Kind::SizeBytes))
+            ownership_error("conflicting access during mutable loan");
         std::int64_t result = 0;
         switch (expr.kind) {
         case Expr::Kind::Literal:
@@ -214,9 +224,12 @@ inline void verify_plan(const Plan& plan) {
             break;
         case Step::Kind::MutableCall:
             if (borrowed_local || !live || plan.count != 1 || plan.mutable_helper.empty() ||
-                    step.name != plan.mutable_helper || step.index != 0 || step.value)
+                    step.name != plan.mutable_helper || step.index != 0 ||
+                    static_cast<bool>(step.value) != !plan.mutable_scalar_parameter.empty())
                 ownership_error("invalid mutable singleton call authority or shape");
-            elements[0] = plan.mutable_write;
+            scalar_call_argument = true;
+            elements[0] = step.value ? eval(eval, *step.value, 0) : plan.mutable_write;
+            scalar_call_argument = false;
             initialized[0] = true;
             break;
         case Step::Kind::Scalar:
