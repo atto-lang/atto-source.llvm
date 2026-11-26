@@ -9691,7 +9691,7 @@ void resolve_future_pipeline_contracts(Program& program) {
 // Lexer::next() excludes comments and quoted literals from this check.
 void reject_unlowered_mutex_constructor(std::string_view source,
                                        bool experimental_pointer_int_aot) {
-    Lexer scan(source, experimental_pointer_int_aot);
+    Lexer scan(source, /*unsafe_base_offset=*/0, experimental_pointer_int_aot);
     Token preceding{Kind::End, {}, 0};
     bool expect_angle = false;
     bool within_generic = false;
