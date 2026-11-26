@@ -6030,7 +6030,8 @@ private:
                 const auto parameter = identifier();
                 auto actual = verified_locals_.find(parameter);
                 if (actual == verified_locals_.end()) fail("E_REFINEMENT_NAME: requires must name a parameter");
-                actual->second = read_verified_bound(actual->second, read_quantity_comparison());
+                const auto comparison=accept("!=")?std::string("!="):read_quantity_comparison();
+                actual->second = read_verified_bound(actual->second, comparison);
                 if(span){if(token_.offset!=span->end)fail("E_REFINEMENT_CONTRACT: trailing annotation tokens");lexer_=resume_lexer;token_=resume_token;last_token_end_=resume_end;}
             }
             VerifiedFunction signature;
