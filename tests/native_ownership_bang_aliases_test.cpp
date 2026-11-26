@@ -39,11 +39,15 @@ static std::string read_fixture(const std::string& root, const std::string& file
         {"borrow-mut-compatible-native.atto", "7c551be97b88204296f0c00000018dcd4798bd3a"},
         {"rt-borrow-mut-native.atto", "e7b2cb178c266262a94df18dd88c46ae9d32632b"},
         {"take-after-use-reject.atto", "7757036e704fc334842cac8254863139d85d2935"},
+        {"take-after-use-reject-separated.atto", "1891eff889230ed60ca4192fc90d2f9667b09c38"},
         {"borrow-escape-reject.atto", "0c5d993b9c95d586ac2cb4018ce0df24856a36ae"},
+        {"borrow-escape-reject-separated.atto", "80f73652483ab317d3ed271bcc5d7ddc5d318943"},
         {"share-class-reject.atto", "7dfd33777320170333551a6941ddff9828bfe349"},
+        {"share-class-reject-separated.atto", "27f4b834a51c781cf8310942273ed21325419b38"},
         {"copy-compact-native.atto", "7cb835795345423f606caeed9b8fd4beb1c0a976"},
         {"copy-spaced-native.atto", "911e84e65f1783e6ca61c544e3f5953d0deccd1a"},
         {"copy-deep-scalars-native.atto", "5209998955bc1b4fa7bd3ea21c4a708abde0f25f"},
+        {"copy-deep-scalars-native-separated.atto", "fb481b43c46e9bcec30eeb7d12e8eb07e48ab832"},
         {"copy-deep-string-reject.atto", "cf20161c12731e340b78bf94c90e1b77c21728ba"},
         {"take-native.atto", "c6983ffa37413732d359e87613a8ea79aa9dd591"},
         {"share-native.atto", "5a1ac6ab8a4c4cffba2e21eeff02f2dd75414c30"}
@@ -186,12 +190,12 @@ int main(int argc, char** argv) {
                              "borrow-mut-canonical-native.atto",
                              "borrow-mut-compatible-native.atto",
                              "rt-borrow-mut-native.atto",
-                             "take-after-use-reject.atto",
-                             "borrow-escape-reject.atto",
-                             "share-class-reject.atto",
+                             "take-after-use-reject-separated.atto",
+                             "borrow-escape-reject-separated.atto",
+                             "share-class-reject-separated.atto",
                              "copy-compact-native.atto",
                              "copy-spaced-native.atto",
-                             "copy-deep-scalars-native.atto",
+                             "copy-deep-scalars-native-separated.atto",
                              "copy-deep-string-reject.atto",
                              "take-native.atto", "share-native.atto"}) {
         (void)read_fixture(root, name);
@@ -293,9 +297,9 @@ int main(int argc, char** argv) {
         if (program.functions.size() != 3)
             throw std::runtime_error("mutable borrow guest admission missing");
     }
-    semantic_reject(read_fixture(root, "take-after-use-reject.atto"), "moved");
-    semantic_reject(read_fixture(root, "borrow-escape-reject.atto"), "borrowed reference");
-    semantic_reject(read_fixture(root, "share-class-reject.atto"), "non-Copy");
+    semantic_reject(read_fixture(root, "take-after-use-reject-separated.atto"), "moved");
+    semantic_reject(read_fixture(root, "borrow-escape-reject-separated.atto"), "borrowed reference");
+    semantic_reject(read_fixture(root, "share-class-reject-separated.atto"), "non-Copy");
     semantic_reject(read_fixture(root, "copy-deep-string-reject.atto"), "E_COPY_GRAPH_UNPROVEN");
 
     // The native unary grammar is limited to 64 nested operands; aliases

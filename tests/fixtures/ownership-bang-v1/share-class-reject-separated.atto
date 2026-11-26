@@ -1,0 +1,7 @@
+define class Parcel as
+  pub let int value = 3;
+end
+pub fnc main(): int {
+  let mut Parcel b = new Parcel();
+  return share! b;
+}
