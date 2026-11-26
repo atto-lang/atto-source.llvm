@@ -1206,3 +1206,39 @@ mod attached_actor_state_native_no_ir {
         }
     }
 }
+
+
+#[cfg(test)]
+mod parameter_rebind_tests {
+    use super::*;
+
+    #[test]
+    fn untouched_scalar_parameters_use_incoming_ssa() {
+        let fixed = "fnc id(int n): int { return n; } pub fnc main(): int { return id(42); }";
+        let marked = fixed.replace("int n", "rebind int n");
+        let ir = compile_ir(fixed).unwrap();
+        assert_eq!(ir, compile_ir(&marked).unwrap());
+        assert!(ir.contains("ret i64 %arg0"), "{ir}");
+        assert!(!ir.contains("alloca"), "{ir}");
+    }
+
+    #[test]
+    fn written_parameter_keeps_checked_local_slot() {
+        for formal in ["rebind int n", "rebind n: int"] {
+            let source = format!("fnc bump({formal}): int {{ n = n + 1; return n; }} pub fnc main(): int {{ return bump(41); }}");
+            let ir = compile_ir(&source).unwrap();
+            assert!(ir.contains("%local0 = alloca i64"), "{ir}");
+            assert!(ir.contains("llvm.sadd.with.overflow.i64"), "{ir}");
+            assert!(ir.contains("load i64, ptr %local0"), "{ir}");
+        }
+        let error = compile_ir("fnc bump(int n): int { n = n + 1; return n; } pub fnc main(): int { return bump(41); }").unwrap_err();
+        assert!(error.contains("E_IMMUTABLE"), "{error}");
+    }
+
+    #[test]
+    fn nested_parameter_writes_are_not_elided() {
+        let source = "fnc bump(rebind int n): int { if n eq 41 then n = 42; fi return n; } pub fnc main(): int { return bump(41); }";
+        let ir = compile_ir(source).unwrap();
+        assert!(ir.contains("%local0 = alloca i64"), "{ir}");
+    }
+}
