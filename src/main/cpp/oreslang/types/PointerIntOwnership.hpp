@@ -84,12 +84,6 @@ inline void verify_plan(const Plan& plan) {
     std::size_t close_count = 0;
     std::size_t budget = 0;
 
-    auto checked = [](const __int128 val) -> std::int64_t {
-        if (val < std::numeric_limits<std::int64_t>::min() ||
-                val > std::numeric_limits<std::int64_t>::max())
-            ownership_error("checked integer arithmetic overflow");
-        return static_cast<std::int64_t>(val);
-    };
     auto eval = [&](auto&& self, const Expr& expr, unsigned depth) -> std::int64_t {
         if (depth > 64 || ++budget > 4096)
             ownership_error("expression depth/node budget exceeded");
@@ -121,18 +115,25 @@ inline void verify_plan(const Plan& plan) {
         case Expr::Kind::Neg:
             if (!expr.lhs || expr.rhs)
                 ownership_error("malformed unary pointer expression");
-            result = checked(-static_cast<__int128>(self(self, *expr.lhs, depth + 1)));
+            if (__builtin_sub_overflow(std::int64_t{0}, self(self, *expr.lhs, depth + 1), &result))
+                ownership_error("checked integer arithmetic overflow");
             break;
         case Expr::Kind::Add:
         case Expr::Kind::Subtract:
         case Expr::Kind::Multiply: {
             if (!expr.lhs || !expr.rhs)
                 ownership_error("malformed arithmetic expression");
-            const __int128 left = self(self, *expr.lhs, depth + 1);
-            const __int128 right = self(self, *expr.rhs, depth + 1);
-            result = checked(expr.kind == Expr::Kind::Add ? left + right :
-                             expr.kind == Expr::Kind::Subtract ? left - right :
-                             left * right);
+            const std::int64_t left = self(self, *expr.lhs, depth + 1);
+            const std::int64_t right = self(self, *expr.rhs, depth + 1);
+            // Match the parser's checked arithmetic without nonstandard wide
+            // integer types or evaluating an overflowing signed operation.
+            const bool overflow = expr.kind == Expr::Kind::Add ?
+                __builtin_add_overflow(left, right, &result) :
+                expr.kind == Expr::Kind::Subtract ?
+                __builtin_sub_overflow(left, right, &result) :
+                __builtin_mul_overflow(left, right, &result);
+            if (overflow)
+                ownership_error("checked integer arithmetic overflow");
             break;
         }
         default:

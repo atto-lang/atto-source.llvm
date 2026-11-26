@@ -305,16 +305,19 @@ private:
     }
     std::unique_ptr<Expr> combine(Expr::Kind kind, std::unique_ptr<Expr> lhs,
                                   std::unique_ptr<Expr> rhs) {
-        const __int128 x = lhs->known;
-        const __int128 y = rhs->known;
-        const __int128 value = kind == Expr::Kind::Add ? x + y :
-            kind == Expr::Kind::Subtract ? x - y : x * y;
-        if (value < std::numeric_limits<std::int64_t>::min() ||
-                value > std::numeric_limits<std::int64_t>::max())
+        const std::int64_t x = lhs->known;
+        const std::int64_t y = rhs->known;
+        std::int64_t value = 0;
+        // GCC/Clang checked operations avoid both signed overflow and the
+        // nonstandard __int128 type rejected by the strict native build.
+        const bool overflow = kind == Expr::Kind::Add ? __builtin_add_overflow(x, y, &value) :
+            kind == Expr::Kind::Subtract ? __builtin_sub_overflow(x, y, &value) :
+            __builtin_mul_overflow(x, y, &value);
+        if (overflow)
             reject("checked arithmetic overflow", token().offset);
         auto expr = std::make_unique<Expr>();
         expr->kind = kind;
-        expr->known = static_cast<std::int64_t>(value);
+        expr->known = value;
         expr->lhs = std::move(lhs);
         expr->rhs = std::move(rhs);
         return expr;
