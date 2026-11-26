@@ -14,7 +14,7 @@ fn lex_unicode_scalars_and_preserve_negation_boundary() {
 
 #[test]
 fn unicode_guest_compiles_and_not_lowers_like_bang() {
-    let unicode = "pub fnc main(): int { val Φ = 10; val φ = 20; val 数量 = 30; val 𠮷 = 40; if ¬false then if ¬¬true then return Φ + φ + 数量 + 𠮷; else return 0; fi else return 0; fi }";
+    let unicode = "pub fnc main(): int { val Φ = 10; val φ = 20; val 数量 = 30; val 𠮷 = 40; if ¬false && ¬¬true && ¬(true && false) then return Φ + φ + 数量 + 𠮷; else return 0; fi }";
     let ascii_not = unicode.replace('¬', "!");
     let bytes = compile(unicode).expect("Unicode guest must compile");
     assert!(bytes.starts_with(b"\0asm\x01\0\0\0"));
@@ -35,4 +35,16 @@ fn rejects_invalid_negation_and_hidden_bidi() {
     for source in ["// \u{202e}", "/* \u{2066} */", "\"\u{200f}\""] {
         assert_eq!(lex(source).unwrap_err().code, "E_SOURCE_BIDI");
     }
+}
+
+#[test]
+fn canonical_punctuation_checks_both_operands_and_preserves_precedence() {
+    for source in [
+        "pub fnc main(): bool { return false && 1; }",
+        "pub fnc main(): bool { return true || 1; }",
+        "pub fnc main(): bool { return 1 && true; }",
+        "pub fnc main(): bool { return false && unknown; }",
+    ] { assert!(compile(source).is_err(), "{source}"); }
+    let source = "pub fnc main(): int { return (false || true && ¬false) ? 42 : 0; }";
+    assert!(compile(source).is_ok());
 }
