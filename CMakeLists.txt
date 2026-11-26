@@ -667,6 +667,10 @@ target_include_directories(oreslang-llvmc PRIVATE
 add_definitions(${LLVM_DEFINITIONS})
 llvm_map_components_to_libnames(ORE_LLVM_LIBS core support)
 target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
+option(ATTO_TEST_INTERFACE_CONSUMER "Enable fixed interface consumer test CLI" OFF)
+if(ATTO_TEST_INTERFACE_CONSUMER)
+  target_compile_definitions(oreslang-llvmc PRIVATE ATTO_TEST_INTERFACE_CONSUMER=1)
+endif()
 
 include(CTest)
 
