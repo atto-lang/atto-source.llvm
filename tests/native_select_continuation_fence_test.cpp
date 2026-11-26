@@ -380,7 +380,26 @@ static void concurrent_claim_cancel_lifecycle_stress() {
     consumer.join(); canceller.join(); assert(fence.close() && fence.retirement_ready());
 }
 
+static void owner_destruction_revokes_pending_while_execution_survives() {
+    using Fence = NativeSelectContinuationFence<2>;
+    Fence::Ticket pending;
+    Fence::Execution running;
+    {
+        Fence fence;
+        auto selected = fence.register_continuation(1);
+        pending = fence.register_continuation(1);
+        running = fence.try_claim(selected);
+        assert(running.valid() && pending.active());
+    }
+    assert(!pending.active());
+    assert(!pending.close());
+    assert(running.valid());
+    assert(running.close());
+    assert(!running.close());
+}
+
 int main() {
+    owner_destruction_revokes_pending_while_execution_survives();
     million_generation_reuse();
     concurrent_claim_cancel_lifecycle_stress();
     mixed_pending_execution_churn();
