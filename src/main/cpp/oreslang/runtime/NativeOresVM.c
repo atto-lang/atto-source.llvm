@@ -39,6 +39,25 @@ struct OresNativeVM {
     pthread_cond_t nio_idle;
 };
 
+/* Fixed-capacity host-only, thread-affine NIO borrow ledger. Nested leases
+ * have separate counts; at most 16 distinct VMs per host thread. No heap
+ * allocation, blocking, or guest-owned state on NIO acquisition paths.
+ */
+#define ORES_NIO_THREAD_LEASE_CAPACITY 16
+typedef struct { OresNativeVM* vm; size_t depth; } OresNioLocalBorrow;
+static _Thread_local OresNioLocalBorrow nio_local_borrows[ORES_NIO_THREAD_LEASE_CAPACITY];
+static OresNioLocalBorrow* nio_local_find(OresNativeVM* vm) {
+    if (!vm) return NULL;
+    for (size_t i = 0; i < ORES_NIO_THREAD_LEASE_CAPACITY; ++i)
+        if (nio_local_borrows[i].vm == vm) return &nio_local_borrows[i];
+    return NULL;
+}
+static OresNioLocalBorrow* nio_local_empty(void) {
+    for (size_t i = 0; i < ORES_NIO_THREAD_LEASE_CAPACITY; ++i)
+        if (!nio_local_borrows[i].vm) return &nio_local_borrows[i];
+    return NULL;
+}
+
 static int valid_domain(enum OresNativeVMDomain domain) {
     return domain >= ORES_NATIVE_VM_MAIN && domain < ORES_NATIVE_VM_DOMAIN_COUNT;
 }
@@ -776,8 +795,14 @@ void* ores_native_vm_nio_acquire(OresNativeVM* vm) {
     void* backend = NULL;
     if (!vm->control_retired && vm->nio_backend
             && vm->nio_borrows != (size_t)-1) {
-        ++vm->nio_borrows;
-        backend = vm->nio_backend;
+        OresNioLocalBorrow* local = nio_local_find(vm);
+        if (!local) local = nio_local_empty();
+        if (local && local->depth != (size_t)-1) {
+            local->vm = vm;
+            ++local->depth;
+            ++vm->nio_borrows;
+            backend = vm->nio_backend;
+        }
     }
     control_unlock(vm);
     return backend;
@@ -785,8 +810,11 @@ void* ores_native_vm_nio_acquire(OresNativeVM* vm) {
 
 void ores_native_vm_nio_release(OresNativeVM* vm, void* backend) {
     if (!vm || !backend) abort();
+    OresNioLocalBorrow* local = nio_local_find(vm);
+    if (!local || !local->depth) abort(); // lease is thread-affine
     control_lock(vm);
     if (!vm->nio_borrows || backend != vm->nio_backend) abort();
+    if (--local->depth == 0) local->vm = NULL;
     if (--vm->nio_borrows == 0 && vm->control_retired) {
         if (pthread_cond_broadcast(&vm->nio_idle) != 0) abort();
     }
@@ -816,6 +844,14 @@ int ores_native_vm_close(OresNativeVM* vm) {
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i)
         if (ores_native_actor_scheduler_is_current_carrier(vm->schedulers[i]))
             return 0;
+    /* A self-owned bootstrap reservation or backend borrow cannot retire
+     * while this thread waits for itself. Return with the VM retired so
+     * the owner can release/cancel and an external host can retry close. */
+    control_lock(vm);
+    const int owns_bootstrap = vm->nio_bootstrap_in_progress
+        && pthread_equal(vm->nio_bootstrap_owner, pthread_self());
+    control_unlock(vm);
+    if (owns_bootstrap || nio_local_find(vm)) return 0;
     /* Retirement woke the blocking CONTROL loop; join it before destroying
      * the pool schedulers it can signal. Only a trusted external host closes. */
     if (vm->main_control_started) {

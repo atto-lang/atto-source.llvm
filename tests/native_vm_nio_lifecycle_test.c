@@ -1227,6 +1227,31 @@ int main(void) {
     close(rt_pipe[1]);
     check(ores_native_vm_close(vm));
 
+    fprintf(stderr, "NIO_STAGE self-owned-close\n");
+    {
+        OresNativeVM* self = ores_native_vm_open(&cfg);
+        check(self != NULL);
+        check(ores_native_vm_nio_begin_bootstrap(self));
+        check(!ores_native_vm_close(self));
+        check(!ores_native_vm_nio_can_attach(self));
+        ores_native_vm_nio_cancel_bootstrap(self);
+        check(ores_native_vm_close(self));
+    }
+    {
+        OresNativeVM* self = ores_native_vm_open(&cfg);
+        check(self != NULL);
+        check(ores_native_vm_enable_nio(self, 1, 0, 1));
+        void* first = ores_native_vm_nio_acquire(self);
+        void* second = ores_native_vm_nio_acquire(self);
+        check(first != NULL && first == second);
+        check(!ores_native_vm_close(self));
+        check(ores_native_vm_nio_acquire(self) == NULL);
+        ores_native_vm_nio_release(self, first);
+        check(!ores_native_vm_close(self));
+        ores_native_vm_nio_release(self, second);
+        check(ores_native_vm_close(self));
+    }
+
     fprintf(stderr, "NIO_STAGE close-bootstrap\n");
     // Concurrent host shutdown must also wait for an in-progress reactor
     // bootstrap, even if no backend has been installed yet. A late selector
