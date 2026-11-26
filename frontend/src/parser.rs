@@ -363,6 +363,10 @@ impl Parser {
     }
 
     fn parse_type(&mut self) -> R<Type> {
+        self.parse_type_with_return_marker(false)
+    }
+
+    fn parse_type_with_return_marker(&mut self, allow_return_marker: bool) -> R<Type> {
         let pos = self.pos();
         let name = match self.peek() {
             Tok::Ident(s) => s.clone(),
@@ -432,7 +436,9 @@ impl Parser {
             // A class or enum name; the checker resolves it.
             n => Type::Named(self.type_name(n.to_string(), pos)),
         };
-        if matches!(self.peek(), Tok::Lt | Tok::LBracket | Tok::Question | Tok::Pipe) {
+        let return_marker = allow_return_marker && *self.peek() == Tok::Lt
+            && *self.peek_at(1) == Tok::Minus;
+        if !return_marker && matches!(self.peek(), Tok::Lt | Tok::LBracket | Tok::Question | Tok::Pipe) {
             return Err(unsupported(self.pos(), "generic, optional, union and sequence types"));
         }
         Ok(ty)
@@ -689,7 +695,7 @@ impl Parser {
             };
             // Admit the inert susp marker on an actor's attached receive
             // entrypoint. Any actually suspended body must still be rejected.
-            if actor && self.is_word("susp") && self.word_at(1) == Some("receive")
+            if actor && self.is_word("suspends") && self.word_at(1) == Some("receive")
                 && *self.peek_at(2) == Tok::LParen
             {
                 self.advance();
@@ -1034,7 +1040,7 @@ impl Parser {
         let start = self.pos();
         self.eat_word("pub");
         // Header-level susp does not make unsupported await/resume code legal.
-        let _susp = self.eat_word("susp");
+        let _susp = self.eat_word("suspends");
         if self.is_word("private") {
             return Err(unsupported(self.pos(), "'private' visibility"));
         }
@@ -1076,7 +1082,7 @@ impl Parser {
             false
         };
         let prefix_type = if return_first {
-            let ty = self.parse_type()?;
+            let ty = self.parse_type_with_return_marker(true)?;
             self.consume_return_first_marker()?;
             Some(ty)
         } else {
