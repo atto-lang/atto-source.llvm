@@ -18,6 +18,14 @@ for mode in dynamic hybrid unknown; do
   ORESLANG_LLVMC="$w/compiler" bash "$driver" "$w/nonexistent.atto" "$w/new" "--link=$mode" 2>"$w/error" || code=$?
   [[ "$code" == 64 && ! -e "$w/new" && ! -e "$w/invoked" ]]
 done
+for dest in "$w/output" "$w/new"; do
+  code=0
+  ORESLANG_LLVMC="$w/compiler" bash "$driver" "$w/nonexistent.atto" "$dest" '' 2>"$w/error" || code=$?
+  [[ "$code" == 64 && ! -e "$w/invoked" ]]
+  grep -Fq 'E_LINK_MODE:' "$w/error"
+done
+cmp "$w/prior" "$w/output"
+test ! -e "$w/new"
 echo 'PASS host driver denies unsupported/invalid modes without touching compiler or output'
 # Source-free integration: synthetic IR producer, real Clang/LLD and ELF
 # screening. Assert the FINAL link receives the selected flags, not the probe.
@@ -52,20 +60,7 @@ for opt in 0 2; do
       ORESLANG_AOT_LTO="$lto" bash "$driver" "$w/stub.atto" "$w/native" --link=static
     grep -Fxq -- "-O$opt" "$LINK_ARGS"
     case "$lto" in
-      off) if grep -Eq '^(-flto|-flto=thin|-fuse-ld=lld)
-  printf 'pub fnc main(): int { return 42; }\n' > "$w/main.atto"
-  bash "$driver" "$w/main.atto" "$w/default"
-  bash "$driver" "$w/main.atto" "$w/static" --link=static
-  ORESLANG_AOT_OBJECT_PIPELINE=separate ORESLANG_AOT_LTO=off bash "$driver" "$w/main.atto" "$w/object-static" --link=static
-  for exe in default static object-static; do
-    code=0; "$w/$exe" || code=$?
-    [[ "$code" == 42 ]]
-  done
-  echo 'PASS actual LLVM compiler native guest default, explicit static and separate object return 42'
-else
-  echo 'RECEIPT actual_guest=NOT_EXECUTED'
-fi
- "$LINK_ARGS"; then exit 1; fi ;;
+      off) if grep -Eq '^(-flto|-flto=thin|-fuse-ld=lld)$' "$LINK_ARGS"; then exit 1; fi ;;
       full) grep -Fxq -- -flto "$LINK_ARGS"; grep -Fxq -- -fuse-ld=lld "$LINK_ARGS" ;;
       thin) grep -Fxq -- -flto=thin "$LINK_ARGS"; grep -Fxq -- -fuse-ld=lld "$LINK_ARGS" ;;
     esac
@@ -109,11 +104,12 @@ if [[ "${1:-}" == --guest ]]; then
   printf 'pub fnc main(): int { return 42; }\n' > "$w/main.atto"
   bash "$driver" "$w/main.atto" "$w/default"
   bash "$driver" "$w/main.atto" "$w/static" --link=static
-  for exe in default static; do
+  ORESLANG_AOT_OBJECT_PIPELINE=separate ORESLANG_AOT_LTO=off bash "$driver" "$w/main.atto" "$w/object-static" --link=static
+  for exe in default static object-static; do
     code=0; "$w/$exe" || code=$?
     [[ "$code" == 42 ]]
   done
-  echo 'PASS actual LLVM compiler native guest default and explicit static return 42'
+  echo 'PASS actual LLVM compiler native guest default, explicit static and separate object return 42'
 else
   echo 'RECEIPT actual_guest=NOT_EXECUTED'
 fi
