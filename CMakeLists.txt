@@ -964,7 +964,8 @@ if(BUILD_TESTING)
     # Deliberate std::bad_alloc injection during the retirement snapshot:
     # either all correlations remain, or every retired identity is returned.
     add_executable(oreslang-native-ipc-loss-failpoint-test
-        tests/native_ipc_receipt_loss_failpoint_test.cpp)
+        tests/native_ipc_receipt_loss_failpoint_test.cpp
+        tests/native_ipc_receipt_loss_failpoint_allocator.cpp)
     target_include_directories(oreslang-native-ipc-loss-failpoint-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_link_libraries(oreslang-native-ipc-loss-failpoint-test PRIVATE Threads::Threads)
