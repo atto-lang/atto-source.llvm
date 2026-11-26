@@ -5981,7 +5981,7 @@ private:
             function.native_internal = !exported;
             verified_locals_.clear();
             verified_upper_bounds_.clear();
-            strict_slots_.clear();
+            strict_slots_.clear();strict_arrays_.clear();
             require("(");
             if (token_.text != ")") {
                 do {
@@ -6176,10 +6176,14 @@ private:
         auto e=make_expression(kind,at);e->left=std::move(l.expression);e->right=std::move(r.expression);
         return {std::move(e),std::move(yes),std::move(no)};
     }
+    struct StrictLoopExitContext {
+        std::unordered_map<std::string,RefinedQuantity> writes;
+        bool has_break=false;
+    };
     bool strict_statement_block(const RefinedQuantity& declared,const RefinedQuantity& guaranteed,
             const VerifiedFunction& signature,Function& function,const std::string& name,
             std::vector<Statement>& body,std::unordered_map<std::string,RefinedQuantity> mutable_types,
-            std::size_t depth,bool root=false) {
+            std::size_t depth,bool root=false,StrictLoopExitContext* active_loop=nullptr) {
         if(depth>16)fail("E_VERIFY_UNSUPPORTED: strict block depth");
         constexpr std::string_view prefix="__atto_strict_version_";
         bool returned=false;
@@ -6187,6 +6191,17 @@ private:
             if(returned)fail("E_VERIFY_UNSUPPORTED: statement after strict return");
             if(body.size()>=128)fail("E_REFINEMENT_LIMIT: strict statement budget");
             const auto at=token_.offset;
+            if(token_.text=="break"||token_.text=="continue"){
+                if(!active_loop)fail("E_VERIFY_UNSUPPORTED: loop exit outside strict while");
+                const bool breaking=accept("break");
+                if(!breaking)require("continue");
+                require(";");
+                if(breaking)active_loop->has_break=true;
+                else for(const auto& [key,invariant]:active_loop->writes)
+                    invariant.require(verified_locals_.at(key),"E_REFINEMENT_BINDING","continue backedge "+key);
+                Statement exit{};exit.kind=breaking?Statement::Kind::Break:Statement::Kind::Continue;exit.offset=at;
+                body.push_back(std::move(exit));returned=true;continue;
+            }
             if(accept("return")){
                 auto value=verified_expression(0);
                 declared.require(value.type(),"E_REFINEMENT_RETURN","return from "+name);
@@ -6226,14 +6241,18 @@ private:
                     invariant.require(header.at(key),"E_REFINEMENT_BINDING","loop entry "+key);
                     header.at(key)=invariant;verified_upper_bounds_.at(key).clear();
                 }
+                for(auto& [key,upper]:verified_upper_bounds_)
+                    for(const auto& written:writes)upper.erase(written);
                 const auto header_bounds=verified_upper_bounds_;
                 auto p=strict_condition(header,0);
                 require("{");verified_locals_=std::move(p.yes);
                 Statement loop{};loop.kind=Statement::Kind::Loop;loop.offset=at;
                 Statement guard{};guard.kind=Statement::Kind::Conditional;guard.offset=at;
                 guard.condition=std::move(p.test);
+                StrictLoopExitContext loop_exits;
+                for(const auto& key:writes)loop_exits.writes.emplace(key,mutable_types.at(key));
                 const bool terminal=strict_statement_block(declared,guaranteed,signature,function,name,
-                    guard.then_statements,mutable_types,depth+1);
+                    guard.then_statements,mutable_types,depth+1,false,&loop_exits);
                 require("}");
                 if(!terminal)for(const auto& key:writes)
                     mutable_types.at(key).require(verified_locals_.at(key),"E_REFINEMENT_BINDING","loop backedge "+key);
@@ -6241,7 +6260,7 @@ private:
                 guard.else_statements.push_back(std::move(exit));
                 loop.then_statements.push_back(std::move(guard));
                 body.push_back(std::move(loop));
-                verified_locals_=std::move(p.no);verified_upper_bounds_=header_bounds;strict_slots_=slots;
+                verified_locals_=loop_exits.has_break?header:std::move(p.no);verified_upper_bounds_=header_bounds;strict_slots_=slots;
                 continue;
             }
             if(accept("if")){
@@ -6251,7 +6270,7 @@ private:
                 Statement stmt{};stmt.kind=Statement::Kind::Conditional;stmt.offset=at;stmt.condition=std::move(p.test);
                 require("{");verified_locals_=std::move(p.yes);
                 const bool yr=strict_statement_block(declared,guaranteed,signature,function,name,
-                    stmt.then_statements,mutable_types,depth+1);
+                    stmt.then_statements,mutable_types,depth+1,false,active_loop);
                 require("}");
                 const auto yes=verified_locals_;const auto ybounds=verified_upper_bounds_;
                 verified_locals_=std::move(p.no);verified_upper_bounds_=bounds;strict_slots_=slots;
@@ -6259,7 +6278,7 @@ private:
                 if(accept("else")){
                     require("{");
                     nr=strict_statement_block(declared,guaranteed,signature,function,name,
-                        stmt.else_statements,mutable_types,depth+1);
+                        stmt.else_statements,mutable_types,depth+1,false,active_loop);
                     require("}");
                 }
                 const auto no=verified_locals_;const auto nbounds=verified_upper_bounds_;
@@ -6286,8 +6305,31 @@ private:
                 if(peek_next().text==":"){key=identifier();require(":");type=read_refined_type();}
                 else if(inferred){if(mut)fail("E_VERIFY_UNSUPPORTED: mutable binding requires explicit type");key=identifier();}
                 else{type=read_refined_type();key=identifier();}
-                if(key.compare(0,prefix.size(),prefix)==0)fail("E_VERIFY_UNSUPPORTED: reserved strict version identifier");
-                require("=");auto value=verified_expression(0);require(";");
+                if(key.compare(0,prefix.size(),prefix)==0||strict_arrays_.count(key))fail("E_VERIFY_UNSUPPORTED: reserved or reused strict binding");
+                require("=");
+                if(accept("Array")){
+                    if(mut||!inferred||verified_locals_.count(key))fail("E_VERIFY_UNSUPPORTED: fixed array requires fresh inferred val");
+                    require(".");require("of");require("(");
+                    std::vector<std::pair<std::string,VerifiedI64Range>> cells;
+                    do{
+                        if(cells.size()>=16||function.locals.size()>=128)fail("E_REFINEMENT_LIMIT: fixed array cell budget");
+                        auto cell=verified_expression(0);
+                        if(!(cell.unit==QuantityUnit()))fail("E_UNIT_DIMENSION: scalar array cell");
+                        LocalBinding slot;slot.offset=at;slot.name=std::string(prefix)+std::to_string(function.locals.size());
+                        slot.assignable=true;slot.initializer=make_expression(Expression::Kind::Integer,at);
+                        slot.initializer->integer=0;
+                        Statement stmt{};stmt.kind=Statement::Kind::ScalarWrite;stmt.offset=at;
+                        stmt.receiver=slot.name;stmt.expression=std::move(cell.expression);
+                        cells.emplace_back(slot.name,cell.range);
+                        function.locals.push_back(std::move(slot));body.push_back(std::move(stmt));
+                    }while(accept(","));
+                    require(")");require(";");
+                    auto range=cells.front().second;for(const auto& cell:cells)range=range.join(cell.second);
+                    verified_locals_.emplace(key,RefinedQuantity{QuantityUnit(),range,false});
+                    verified_upper_bounds_.emplace(key,std::unordered_set<std::string>{});
+                    strict_arrays_.emplace(key,std::move(cells));continue;
+                }
+                auto value=verified_expression(0);require(";");
                 if(inferred)type=value.type();
                 type.require(value.type(),"E_REFINEMENT_BINDING","binding "+key);
                 if(!verified_locals_.emplace(key,RefinedQuantity{type.unit,value.range,type.i32}).second)
@@ -6327,6 +6369,29 @@ private:
         if (!accept("(")) {
             auto found = verified_locals_.find(name);
             if (found == verified_locals_.end()) fail("E_REFINEMENT_NAME: unknown immutable value '" + name + "'");
+            if(const auto a=strict_arrays_.find(name);a!=strict_arrays_.end()){
+                if(!accept("["))fail("E_VERIFY_UNSUPPORTED: array cannot escape or be used as scalar");
+                auto index=verified_expression(depth+1);require("]");
+                if(!(index.unit==QuantityUnit()))fail("E_UNIT_DIMENSION: scalar index required");
+                const auto lo=index.range.minimum(),hi=index.range.maximum();
+                if(lo<0||hi>=static_cast<std::int64_t>(a->second.size()))fail("E_VERIFY_UNPROVEN: index not proved within receiver bounds");
+                if(index.expression->kind!=Expression::Kind::Variable&&index.expression->kind!=Expression::Kind::Integer)
+                    fail("E_VERIFY_UNSUPPORTED: fixed index requires local or literal");
+                auto read=[&](std::int64_t k){
+                    auto x=make_expression(Expression::Kind::Variable,offset);
+                    x->name=a->second[static_cast<std::size_t>(k)].first;return x;
+                };
+                auto value=read(hi);auto range=a->second[static_cast<std::size_t>(hi)].second;
+                for(auto k=hi-1;k>=lo;--k){
+                    auto test=make_expression(Expression::Kind::Equal,offset);
+                    test->left=clone_native_expression(*index.expression);
+                    test->right=make_expression(Expression::Kind::Integer,offset);test->right->integer=k;
+                    auto next=make_expression(Expression::Kind::Conditional,offset);
+                    next->condition=std::move(test);next->when_true=read(k);next->when_false=std::move(value);
+                    value=std::move(next);range=range.join(a->second[static_cast<std::size_t>(k)].second);
+                }
+                return {std::move(value),QuantityUnit(),depth+1,range,{},false};
+            }
             auto value = make_expression(Expression::Kind::Variable, offset);
             const auto slot=strict_slots_.find(name);
             value->name = slot==strict_slots_.end()?name:slot->second;
@@ -10474,6 +10539,7 @@ private:
     std::unordered_map<std::string, VerifiedFunction> verified_functions_;
     bool verified_callable_ = false;
     std::unordered_map<std::string,std::string> strict_slots_;
+    std::unordered_map<std::string,std::vector<std::pair<std::string,VerifiedI64Range>>> strict_arrays_;
     bool strict_i64_ = false;
     std::string_view source_;
     Lexer lexer_;
