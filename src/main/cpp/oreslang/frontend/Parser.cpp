@@ -61,20 +61,25 @@ bool reserved_unsafe_stdlib_import(std::string_view path) {
     // G0: lexical package identity is compared before loading native modules.
     // Later path normalization must not make std/./unsafe look harmless.
     const auto reserved = [](std::string_view candidate) {
-        for (const std::string_view root : {
-                "ores.std/unsafe", "std/unsafe", "ores.std.unsafe",
-                "std.unsafe", "ores.std:unsafe", "std:unsafe"}) {
-            if (candidate == root ||
-                (candidate.size() > root.size() &&
-                 candidate.substr(0, root.size()) == root &&
-                 (candidate[root.size()] == '/' || candidate[root.size()] == '.')))
-                return true;
+        // Exact components avoid both alias laundering and substring matches.
+        std::vector<std::string_view> parts;
+        for (std::size_t from = 0; from < candidate.size();) {
+            const auto end = candidate.find_first_of("/.:", from);
+            const auto part = candidate.substr(from, end == std::string_view::npos
+                ? candidate.size() - from : end - from);
+            if (!part.empty()) parts.push_back(part);
+            if (end == std::string_view::npos) break;
+            from = end + 1;
         }
-        return false;
+        const std::size_t offset = !parts.empty() &&
+            (parts[0] == "atto" || parts[0] == "ores") ? 1 : 0;
+        return parts.size() > offset + 1 &&
+               parts[offset] == "std" && parts[offset + 1] == "unsafe";
     };
     if (reserved(path)) return true;
     const bool rooted = path.substr(0, 4) == "std/" ||
-                        path.substr(0, 9) == "ores.std/";
+                        path.substr(0, 9) == "ores.std/" ||
+                        path.substr(0, 9) == "atto.std/";
     // Relative imports may canonicalize into the reserved stdlib namespace.
     if (path.find('/') == std::string_view::npos) return false;
     std::vector<std::string_view> segments;
