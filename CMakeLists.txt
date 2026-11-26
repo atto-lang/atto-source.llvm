@@ -5871,7 +5871,7 @@ if(BUILD_TESTING)
     # existing compiler-owned contract harness / exact-tree CI configuration.
     oreslang_contract_test(native_ownership_bang_copy_compact_guest
         ownership-bang-v1/copy-compact-native.atto
-        --run 42 --clang "${ORE_CLANG}")
+        --diagnostic "E_BANG_KEYWORD_WHITESPACE")
     oreslang_contract_test(native_ownership_bang_copy_spaced_guest
         ownership-bang-v1/copy-spaced-native.atto
         --run 42 --clang "${ORE_CLANG}")
@@ -5901,7 +5901,7 @@ if(BUILD_TESTING)
     foreach(mode IN ITEMS 0 2)
         oreslang_contract_test(native_ownership_bang_copy_compact_O${mode}
             ownership-bang-v1/copy-compact-native.atto
-            --run 42 --clang "${ORE_CLANG}" --opt-level "${mode}")
+            --diagnostic "E_BANG_KEYWORD_WHITESPACE")
         oreslang_contract_test(native_ownership_bang_copy_spaced_O${mode}
             ownership-bang-v1/copy-spaced-native.atto
             --run 42 --clang "${ORE_CLANG}" --opt-level "${mode}")
