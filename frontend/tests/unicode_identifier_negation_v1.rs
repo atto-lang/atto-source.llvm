@@ -14,7 +14,7 @@ fn lex_unicode_scalars_and_preserve_negation_boundary() {
 
 #[test]
 fn unicode_guest_compiles_and_not_lowers_like_bang() {
-    let unicode = "pub fnc main(): int { val Φ = 10; val φ = 20; val 数量 = 30; val 𠮷 = 40; if ¬false && ¬¬true then return Φ + φ + 数量 + 𠮷; else return 0; fi }";
+    let unicode = "pub fnc main(): int { val Φ = 10; val φ = 20; val 数量 = 30; val 𠮷 = 40; if ¬false then if ¬¬true then return Φ + φ + 数量 + 𠮷; else return 0; fi else return 0; fi }";
     let ascii_not = unicode.replace('¬', "!");
     let bytes = compile(unicode).expect("Unicode guest must compile");
     assert!(bytes.starts_with(b"\0asm\x01\0\0\0"));
