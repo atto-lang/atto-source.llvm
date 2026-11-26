@@ -5755,7 +5755,7 @@ private:
                     require("int");
                 }
                 Parameter param;
-                param.name = name == "_" ? "$discard$" + std::to_string(helper.parameters.size()) : name;
+                param.name = name;
                 param.scalar_type = ScalarType::I64;
                 helper.parameters.push_back(std::move(param));
                 if (!accept(",")) {
@@ -5769,6 +5769,15 @@ private:
         }
         if (helper.parameters.size() != values.size())
             fail("NATIVE_TUPLE_PATTERN_ARITY: pattern and value differ");
+        // The ownership CFG validates every parameter as a lexical place.
+        // Generate valid, collision-free lexical identifiers for discards only
+        // after all source binders are known. They never enter the body scope.
+        for (std::size_t i = 0; i < helper.parameters.size(); ++i) {
+            if (helper.parameters[i].name != "_") continue;
+            auto name = "__atto_tuple_discard_" + std::to_string(i);
+            while (bindings.count(name)) name += "_";
+            helper.parameters[i].name = std::move(name);
+        }
         require("|");
         require("->");
         helper.result = conditional();
