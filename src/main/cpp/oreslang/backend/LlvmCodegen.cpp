@@ -262,9 +262,57 @@ llvm::Value* lower(const Expression& expr,
                     type.kind != NativeSumType::Kind::Result ||
                     type.value_type != ScalarType::I64 || expr.name != "Ok" ||
                     expr.arguments.size() != 1 || !expr.arguments.front() ||
-                    !native_trap_pure_integer(*expr.arguments.front()) ||
+                    (!native_trap_pure_integer(*expr.arguments.front()) &&
+                     !native_trap_checked_option_unwrap(*expr.arguments.front())) ||
                     expr.sum_type != "Result<int,Error>")))
                 throw std::runtime_error("unproved native trap AST reached LLVM codegen");
+            if (expr.trap_origin && native_trap_checked_option_unwrap(*expr.arguments.front())) {
+                // This direct, closed Option<int> slice has no intervening
+                // call or cleanup frame. A malformed handle remains terminal
+                // via checked_sum_tag; only a valid None takes the Err edge.
+                if (!moves->hosted_trap_arithmetic)
+                    throw std::runtime_error("checked Option unwrap trap requires hosted native profile");
+                const auto& operand = *expr.arguments.front();
+                const auto& receiver = native_sum(*moves->sum_program, operand.sum_type);
+                if (receiver.kind != NativeSumType::Kind::Option ||
+                        receiver.value_type != ScalarType::I64)
+                    throw std::runtime_error("unproved checked Option unwrap descriptor");
+                auto* handle = lower(*operand.left, builder, i64, storage, field_storage, functions, moves);
+                const auto schema = moves->record_schemas->at(operand.sum_type);
+                auto* tag = checked_sum_tag(builder, i64, handle, schema, 2,
+                    moves->sum_check, moves->record_get);
+                auto* function = builder.GetInsertBlock()->getParent();
+                auto* some = llvm::BasicBlock::Create(builder.getContext(), "trap.unwrap.some", function);
+                auto* none = llvm::BasicBlock::Create(builder.getContext(), "trap.unwrap.none", function);
+                auto* join = llvm::BasicBlock::Create(builder.getContext(), "trap.unwrap.result", function);
+                builder.CreateCondBr(builder.CreateICmpEQ(tag, llvm::ConstantInt::get(i64, 1)), some, none);
+                builder.SetInsertPoint(some);
+                auto* payload = builder.CreateCall(moves->record_get,
+                    {handle, llvm::ConstantInt::get(i64, schema), llvm::ConstantInt::get(i64, 1)});
+                builder.CreateBr(join);
+                builder.SetInsertPoint(none);
+                builder.CreateBr(join);
+                builder.SetInsertPoint(join);
+                auto* result_tag = builder.CreatePHI(i64, 2, "trap.unwrap.tag");
+                auto* ok = builder.CreatePHI(i64, 2, "trap.unwrap.ok");
+                auto* error = builder.CreatePHI(i64, 2, "trap.unwrap.error");
+                result_tag->addIncoming(llvm::ConstantInt::get(i64, 0), some);
+                result_tag->addIncoming(llvm::ConstantInt::get(i64, 1), none);
+                ok->addIncoming(payload, some);
+                ok->addIncoming(llvm::ConstantInt::get(i64, 0), none);
+                // Proposed opaque status ID, not a general guest Error handle.
+                // Registration and full nominal identity ABI remain outstanding.
+                constexpr std::uint64_t option_unwrap_status = 65539;
+                error->addIncoming(llvm::ConstantInt::get(i64, 0), some);
+                error->addIncoming(llvm::ConstantInt::get(i64, option_unwrap_status), none);
+                auto* fields = entry_alloca(builder, i64, llvm::ConstantInt::get(i64, 3), "trap.unwrap.fields");
+                builder.CreateStore(result_tag, fields);
+                builder.CreateStore(ok, builder.CreateGEP(i64, fields, llvm::ConstantInt::get(i64, 1)));
+                builder.CreateStore(error, builder.CreateGEP(i64, fields, llvm::ConstantInt::get(i64, 2)));
+                return builder.CreateCall(moves->record_new,
+                    {llvm::ConstantInt::get(i64, moves->record_schemas->at(expr.sum_type)),
+                     llvm::ConstantInt::get(i64, 3), fields}, "trap.unwrap");
+            }
             // The legacy nominal Error slot is opaque to source code. In
             // this hosted slice it carries the stable arithmetic ABI ID,
             // not a String handle or a fabricated guest Error object.
