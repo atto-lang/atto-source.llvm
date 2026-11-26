@@ -1,0 +1,5 @@
+# Checked shift flow validator
+
+Validate three restricted scalar i64 (i64, i64) functions in unoptimized LLVM IR. Requires exactly the original count compared unsigned against 64, a terminal trap on the false edge, and the correct shl/lshr/ashr of original operands with exact return on the true edge. Rejects masking, poison-producing flags, wrong guard/operand/branch, additional effects and unsupported instructions. The mathematical count and bit-pattern contract is in atto-common-source #154. Assumes defined LLVM instruction, stack and trap semantics on the intended target; does not prove the complete compiler, optimized artifacts, or guest error identity.
+
+With llvmlite 0.47.0 run `python3 tests/formal/checked-shift/test_shift.py` and `python3 tests/formal/checked-shift/check_shift.py emitted.ll symbol left|logical-right|arithmetic-right`. Local LLVM 20.1.8 parsed/verified six positive representative forms and rejected fifteen mutations. Tested blobs checker 7925dd15e81642d4462f47c034af59580bb82daa and tests 312a384027abb91f9e3b53270398d6e1ddcf45b0. Actual production qualification is a separate CI requirement.
