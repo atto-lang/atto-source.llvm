@@ -10,6 +10,10 @@ fn compile(input:&str,namespace:&str,symbol:&str)->Result<String,String>{
     compile_arity(input,namespace,symbol,0)
 }
 pub(crate) fn compile_arity(input:&str,namespace:&str,symbol:&str,arity:usize)->Result<String,String>{
+    let typed=admit_arity(input,namespace,symbol,arity)?;
+    crate::emit_admitted_ir(&typed,Some((symbol,arity)))
+}
+pub(crate) fn admit_arity(input:&str,namespace:&str,symbol:&str,arity:usize)->Result<atto_compiler::check::TProgram,String>{
     if input.len()>4096||input.contains('\0')||!ident(namespace)||!ident(symbol)||symbol=="main"{
         return Err(deny("source or identifier budget"));
     }
@@ -46,7 +50,7 @@ pub(crate) fn compile_arity(input:&str,namespace:&str,symbol:&str,arity:usize)->
     // Keep a valid ordinary zero-argument main to preserve the normal
     // checker contract. Export only the checked provider's full-width ABI.
     let source=format!("{declaration}pub fnc main(): int {{ return 0; }}\n");
-    crate::compile_ir_entry(&source,crate::LibraryProfile::FreestandingCore,Some((symbol,arity)))
+    crate::admit_ir_source(&source,crate::LibraryProfile::FreestandingCore,Some((symbol,arity)))
 }
 #[cfg(test)]
 mod tests{
