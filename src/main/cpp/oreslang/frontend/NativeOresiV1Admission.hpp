@@ -425,4 +425,48 @@ inline ScalarI64Import bind_scalar_i64_import(
                            std::string(module), std::string(name));
 }
 
+
+// Host-owned lock selection, not a guest supplied alias. A stable slot must
+// identify a dependency instance in the consumer's link domain; side-by-side
+// versions use different slots. The exact release is still checked separately.
+// This is a metadata planner, NOT executable artifact admission.
+struct ScalarLogicalSlotPin {
+    std::string link_domain;
+    std::string dependency_slot;
+    std::string expected_release;
+    std::string compiler_version;
+    std::string feature_policy;
+};
+
+inline std::string stable_scalar_link_symbol(
+        const Verified& proof, const ScalarLogicalSlotPin& trusted_pin,
+        std::string_view ns, std::string_view module, std::string_view name) {
+    if (!detail::package_instance(trusted_pin.link_domain) ||
+        !detail::alias(trusted_pin.dependency_slot) ||
+        trusted_pin.expected_release != proof.package_instance_id() ||
+        trusted_pin.compiler_version.size()>256u ||
+        trusted_pin.feature_policy.size()>256u ||
+        !detail::package_instance(trusted_pin.compiler_version) ||
+        !detail::package_instance(trusted_pin.feature_policy))
+        detail::reject("invalid or stale scalar logical slot pin");
+    const auto binding = bind_scalar_i64_import(proof,ns,module,name,
+        trusted_pin.compiler_version,trusted_pin.feature_policy);
+    // Length framing and explicit domain/physical ABI avoid concatenation
+    // ambiguity and collisions with release-bound symbols. Release identity
+    // must NOT enter the stable symbol, but must enter the final release lock.
+    std::vector<std::uint8_t> bytes;
+    auto field = [&](std::string_view value) {
+        const auto n = static_cast<std::uint32_t>(value.size());
+        for (int i=3;i>=0;--i) bytes.push_back(static_cast<std::uint8_t>(n>>(8*i)));
+        bytes.insert(bytes.end(),value.begin(),value.end());
+    };
+    field("atto-scalar-logical-slot-v1");
+    field(trusted_pin.link_domain);field(trusted_pin.dependency_slot);
+    field(proof.compiler_version());field(proof.target_abi());
+    field(proof.feature_policy());field("i64()");
+    field(binding.namespace_name());field(binding.module_name());
+    field(binding.function_name());
+    return "__atto_slot_v1_" + detail::sha256(bytes);
+}
+
 } // namespace oreslang::package_interface
