@@ -101,7 +101,7 @@ chmod 700 "$tmp/unavailable-link-auditor/readelf"
 if PATH="$tmp/unavailable-link-auditor:$PATH" "$root/scripts/compile-aot.sh" "$source" "$tmp/bin/preserved" > "$tmp/link-refused.out" 2> "$tmp/link-refused.err"; then
     echo 'linked-image admission failure was bypassed' >&2; exit 1
 fi
-grep -Fq 'LINKED_GC_AUDIT_UNSUPPORTED_FORMAT' "$tmp/link-refused.err" || {
+grep -Fq 'LINKED_GC_AUDIT_UNVERIFIABLE: readelf failed' "$tmp/link-refused.err" || {
     cat "$tmp/link-refused.err" >&2
     echo 'linked-image rejection failed for another reason' >&2; exit 1
 }
