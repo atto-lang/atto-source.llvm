@@ -103,7 +103,14 @@ inline bool native_trap_direct_unwrap_shape(const Expression& e) {
         && e.name == "unwrap" && e.left && e.left->kind == Expression::Kind::Variable
         && !e.right && !e.condition && !e.condition_lhs && !e.condition_rhs
         && !e.when_true && !e.when_false && e.arguments.empty()
-        && e.argument_names.empty() && e.type_arguments.empty() && !e.type_arguments_present;
+        && e.argument_names.empty() && e.type_arguments.empty() && !e.type_arguments_present
+        && !e.trap_origin && !e.pipeline_stage && !e.native_box_read
+        && !e.left->name.empty() && !e.left->left && !e.left->right
+        && !e.left->condition && !e.left->condition_lhs && !e.left->condition_rhs
+        && !e.left->when_true && !e.left->when_false && e.left->arguments.empty()
+        && e.left->argument_names.empty() && e.left->type_arguments.empty()
+        && !e.left->type_arguments_present && !e.left->trap_origin
+        && !e.left->pipeline_stage && !e.left->native_box_read;
 }
 inline bool native_trap_checked_option_unwrap(const Expression& e) {
     return native_trap_direct_unwrap_shape(e) && e.kind == Expression::Kind::SumAccess
