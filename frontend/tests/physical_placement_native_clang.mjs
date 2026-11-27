@@ -5,7 +5,12 @@ import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 const compiler=resolve(process.env.ATTOC??'target/release/attoc');
 const root=await mkdtemp(join(tmpdir(),'atto-native-placement-'));
-const run=(exe,args)=>spawnSync(exe,args,{encoding:'utf8',timeout:30000});
+const run=(exe,args)=>{
+  const r=spawnSync(exe,args,{encoding:'utf8',timeout:30000});
+  assert.ifError(r.error); assert.equal(r.signal,null,`unexpected signal: ${exe}`);
+  assert.ok(Number.isInteger(r.status),`missing exit status: ${exe}`);
+  return r;
+};
 let serial=0;
 async function compile(source){
   const name=join(root,'case-'+serial++),input=name+'.atto',c=name+'.c';
@@ -45,7 +50,7 @@ try{
     [nested,'return a + b + c + d;','return a + missing;'],
   ]){
     const bad=source.replace(from,to);assert.notEqual(bad,source,from);
-    const {r,c}=await compile(bad);assert.notEqual(r.status,0,bad);
+    const {r,c}=await compile(bad);assert.equal(r.status,1,bad);
     assert.equal(r.stdout,'');await assert.rejects(stat(c),{code:'ENOENT'});
   }
   console.log('LLVM_PHYSICAL_PLACEMENT_NEGATIVE_PASS count=20');
