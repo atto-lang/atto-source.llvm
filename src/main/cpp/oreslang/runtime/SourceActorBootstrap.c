@@ -766,6 +766,16 @@ static void* source_spawn_locked(OresSourceActorInit constructor,
         uint64_t max_frames, uint64_t lifetime_frame_budget,
         uint64_t restart_limit, size_t slot);
 
+/* This restricted linear ActorRef source profile only has one consuming
+ * recovery bridge. A plain STOP/join must not create an unreachable child.
+ * The registered root still decides policy after physical finalization. */
+static int source_recovery_owns_locked(const SourceActor* actor) {
+    const OresSourceRecoveryLeaseV1* lease = &group.recovery_lease;
+    return lease->held && lease->slot == actor->ref.actor_slot
+        && lease->generation == actor->ref.generation
+        && lease->correlation == actor->id;
+}
+
 static void source_supervisor_notice(
         void* raw, size_t parent_slot, OresNativeActorTerminalFailure failure) {
     ensure(raw == &group && parent_slot == SOURCE_GROUP_ROOT_SLOT);
@@ -787,6 +797,7 @@ static void source_supervisor_notice(
     if (failure.kind == ORES_NATIVE_CONTROL_PANIC
         && failure.failure_code == ORES_SOURCE_ACTOR_FAILURE_FRAME
         && original->restart_remaining != 0
+        && source_recovery_owns_locked(original)
         && !original->restart_decided) {
         original->restart_decided = 1;
         successor_slot = source_free_slot_locked();
@@ -1373,7 +1384,7 @@ static void close_idle_group_locked(void) {
     }
 }
 
-void oreslang_source_actor_join_done(void* opaque) {
+static void source_join_done(void* opaque, int recovery_claimed) {
     group_lock();
     SourceActor* instance = source_resolve_locked(opaque, 0);
     ensure(instance != NULL);
@@ -1381,13 +1392,16 @@ void oreslang_source_actor_join_done(void* opaque) {
     ensure(atomic_load_explicit(
         &instance->stop_requested, memory_order_acquire) == 1);
 
-    int expected = 0;
-    ensure(atomic_compare_exchange_strong_explicit(
-        &instance->join_started,
-        &expected,
-        1,
-        memory_order_acq_rel,
-        memory_order_acquire));
+    if (recovery_claimed) {
+        ensure(source_recovery_owns_locked(instance)
+            && atomic_load_explicit(&instance->join_started, memory_order_acquire));
+    } else {
+        int expected = 0;
+        ensure(!source_recovery_owns_locked(instance)
+            && atomic_compare_exchange_strong_explicit(
+                &instance->join_started, &expected, 1,
+                memory_order_acq_rel, memory_order_acquire));
+    }
 
     /*
      * This is trusted outer-host glue, never a carrier turn. Do not block a
@@ -1502,10 +1516,11 @@ void oreslang_source_actor_join_done(void* opaque) {
         ensure(pthread_cond_wait(&instance->callback_completed, &group.mutex) == 0);
     ensure(pthread_cond_destroy(&instance->callback_completed) == 0);
     group.actors[slot] = NULL;
-    if (failure_code != 0 && instance->restart_remaining != 0) {
-        /* Preserve only metadata for rejecting stale ActorRef pointers and
-         * returning a supervisor-selected replacement. The actor-owned heap
-         * and all logical frames were destroyed before terminal CONTROL. */
+    if (recovery_claimed) {
+        ensure(failure_code != 0 && instance->restart_remaining != 0
+            && source_recovery_owns_locked(instance) && instance->restart_settled);
+        /* Preserve only the exact consuming recovery decision. Plain STOP
+         * never retains an unconsumed replacement or tombstone. */
         instance->tombstone = 1;
         group.retired[slot] = instance;
     } else {
@@ -1520,6 +1535,10 @@ void oreslang_source_actor_join_done(void* opaque) {
 
     close_idle_group_locked();
     group_unlock();
+}
+
+void oreslang_source_actor_join_done(void* opaque) {
+    source_join_done(opaque, 0);
 }
 
 void* oreslang_source_actor_recover_blocking(void* opaque) {
@@ -1547,6 +1566,13 @@ void* oreslang_source_actor_recover_blocking(void* opaque) {
     }
     if (eligible) eligible = ores_source_recovery_claim(&group.recovery_lease,
         (size_t)previous->ref.actor_slot, previous->ref.generation, previous->id);
+    if (eligible) {
+        /* Both consuming authorities linearize under the same mutex. */
+        int expected = 0;
+        ensure(atomic_compare_exchange_strong_explicit(
+            &previous->join_started, &expected, 1,
+            memory_order_acq_rel, memory_order_acquire));
+    }
     group_unlock();
     if (!eligible) return NULL;
 
@@ -1554,7 +1580,7 @@ void* oreslang_source_actor_recover_blocking(void* opaque) {
      * registered root CONTROL publication. No guest carrier parks here.
      * Root's CONTROL callback decides policy and creates a fresh child,
      * which cannot see any of the previous incarnation's owned storage. */
-    oreslang_source_actor_join_done(opaque);
+    source_join_done(opaque, 1);
     group_lock();
     const size_t old_slot = (size_t)previous->ref.actor_slot;
     ensure(old_slot < group.next_slot && group.retired[old_slot] == previous);
