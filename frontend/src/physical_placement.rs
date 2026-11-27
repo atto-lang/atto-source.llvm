@@ -104,7 +104,7 @@ pub(crate) struct Plan {
     owners: Vec<Decl>,
     root: usize,
     pub steps: Vec<Step>,
-    pub result: Vec<usize>,
+    pub result: Vec<(usize, bool)>, // (copy index, subtract from preceding result)
 }
 fn err() -> String { "E_POINTER_PLACEMENT: invalid closed typed nested struct placement profile".into() }
 impl Plan {
@@ -124,7 +124,7 @@ impl Plan {
         self.physical_slots()?;
         let leaves=self.leaves()?;
         let bad=err;
-        if self.steps.is_empty() || self.steps.len()>32 || self.result.is_empty() || self.result.len()>8 {
+        if self.steps.is_empty() || self.steps.len()>32 || self.result.is_empty() || self.result.len()>8 || self.result[0].1 {
             return Err(bad());
         }
         #[derive(PartialEq,Eq)]
@@ -152,8 +152,9 @@ impl Plan {
         }
         if state!=State::Freed || bound.is_some() {return Err(bad());}
         let mut sum=0i64;
-        for i in &self.result {
-            sum=sum.checked_add(*copies.get(*i).ok_or_else(bad)?).ok_or_else(bad)?;
+        for &(i,subtract) in &self.result {
+            let value=*copies.get(i).ok_or_else(bad)?;
+            sum=if subtract{sum.checked_sub(value)}else{sum.checked_add(value)}.ok_or_else(bad)?;
         }
         Ok(copies.len())
     }
@@ -296,11 +297,13 @@ impl PointParser<'_> {
             else{return Err(err());};
             self.need(Token::Punct(b';'))?;steps.push(step);
         }
-        self.word("return")?;let mut result=Vec::new();
+        self.word("return")?;let mut result=Vec::new();let mut subtract=false;
         loop {
             if result.len()==8{return Err(err());}
-            let n=self.ident()?;result.push(*names.get(&n).ok_or_else(err)?);
-            if !self.p.take(Token::Punct(b'+'))?{break;}
+            let n=self.ident()?;result.push((*names.get(&n).ok_or_else(err)?,subtract));
+            if self.p.take(Token::Punct(b'+'))?{subtract=false;}
+            else if self.p.take(Token::Punct(b'-'))?{subtract=true;}
+            else{break;}
         }
         self.need(Token::Punct(b';'))?;self.need(Token::Punct(b'}'))?;self.need(Token::End)?;
         
@@ -351,7 +354,7 @@ fn emit(plan:&Plan)->Result<String,String>{
         }
     }
     out.push_str("  int64_t sum = 0;\n");
-    for &i in &plan.result{writeln!(out,"  if (__builtin_add_overflow(sum, v{i}, &sum)) return 1;").map_err(|_|err())?;}
+    for &(i,subtract) in &plan.result{let op=if subtract{"sub"}else{"add"};writeln!(out,"  if (__builtin_{op}_overflow(sum, v{i}, &sum)) return 1;").map_err(|_|err())?;}
     out.push_str("  *out = sum;\n  return 0;\n}\n");Ok(out)
 }
 pub(crate) fn compile(text:&str)->Result<String,Diagnostic>{
