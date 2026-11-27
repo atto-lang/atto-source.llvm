@@ -16,6 +16,7 @@
 #include <map>
 #include <mutex>
 #include <pthread.h>
+#include <random>
 #include <stdexcept>
 #include <sys/mman.h>
 #include <thread>
@@ -55,6 +56,7 @@ const char* to_string(Status s) noexcept {
         case Status::ActorRestarted: return "ActorRestarted";
         case Status::ActorTerminated: return "ActorTerminated";
         case Status::PipelineAborted: return "PipelineAborted";
+        case Status::IncompatibleCode: return "IncompatibleCode";
     }
     return "Unknown";
 }
@@ -155,10 +157,25 @@ struct Mail {
     std::vector<std::uint8_t> bytes;
     bool has_promise = false;
     std::promise<TurnResult> promise;
+    // Host-side envelope: the sender's trace context. Never copied into the cage.
+    TraceContext trace;
+    bool traced = false;
+};
+
+// One installed version of a VM's guest code. Actors hold it, so it outlives every turn that uses it.
+struct Code {
+    const OresVmGuestModule* module = nullptr;
+    std::shared_ptr<const void> owner; // e.g. the mapped library; released with the last actor on this version
+    std::uint64_t version = 0;
 };
 
 struct Actor {
-    const OresVmGuestKind* kind = nullptr;
+    const OresVmGuestKind* kind = nullptr; // points into code->module, so only valid while code is held
+    std::shared_ptr<const Code> code;
+    std::uint32_t kind_index = 0;
+    // The span of the turn this actor is in, while tracing. Mail it sends becomes that span's child.
+    TraceContext turn_trace;
+    bool turn_traced = false;
     std::uint32_t generation = 0; // bumped at every release, so stale refs never match
     std::uint32_t region = 0;
     std::uint32_t region_bytes = 0;
@@ -182,7 +199,13 @@ struct Actor {
 
 struct Vm {
     std::mutex mutex;
-    VmSpec spec;
+    VmSpec spec; // spec.module is the code at open; current code is `code`
+    std::shared_ptr<const Code> code;
+    std::atomic<bool> tracing{false};
+    std::uint32_t span_capacity = 4096;
+    std::deque<SpanRecord> spans; // bounded by span_capacity
+    std::uint64_t spans_recorded = 0;
+    std::uint64_t spans_dropped = 0;
     std::uint64_t generation = 0;
     std::uint8_t* cage = nullptr;
     std::atomic<int> phase{static_cast<int>(Phase::Running)};
@@ -399,6 +422,26 @@ struct TenantVmHost::Core {
     std::unordered_map<std::string, std::shared_ptr<Vm>> by_id;
     std::unordered_map<std::uint64_t, std::shared_ptr<Vm>> by_generation;
     std::uint64_t next_generation = 1;
+    // Trace and span ids: splitmix64 over a randomly seeded counter. Unique and unpredictable enough
+    // for correlation; they are not secrets and grant nothing.
+    std::atomic<std::uint64_t> id_state{std::random_device{}() ^ (std::uint64_t{std::random_device{}()} << 32)};
+    std::uint64_t next_id() {
+        std::uint64_t z = id_state.fetch_add(0x9E3779B97F4A7C15ull, std::memory_order_relaxed) + 0x9E3779B97F4A7C15ull;
+        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+        z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+        z ^= z >> 31;
+        return z ? z : 1;
+    }
+    template <std::size_t N> void fill_id(std::array<std::uint8_t, N>& out) {
+        for (std::size_t i = 0; i < N; i += 8) {
+            const std::uint64_t v = next_id();
+            std::memcpy(out.data() + i, &v, std::min<std::size_t>(8, N - i));
+        }
+    }
+    static std::uint64_t unix_ns() {
+        return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+    }
     std::uint64_t admitted_heap = 0;
 
     std::mutex ready_mutex;
@@ -505,6 +548,7 @@ struct TenantVmHost::Core {
 
     void run_one_turn(Carrier* c, const std::shared_ptr<Vm>& vm) {
         Mail mail;
+        PendingSpan span;
         Actor* actor = nullptr;
         std::uint32_t slot = 0;
         {
@@ -525,6 +569,7 @@ struct TenantVmHost::Core {
             --vm->inflight;
             refund_mail_locked(*vm, mail.bytes.size());
             ++vm->turns;
+            begin_turn_span_locked(*vm, *actor, mail, span);
             schedule_locked(vm); // others of this VM may run in parallel, at the back of the line
         }
 
@@ -607,19 +652,98 @@ struct TenantVmHost::Core {
             std::lock_guard<std::mutex> lock(vm->mutex);
             finish_turn_locked(vm, *actor, slot, over_budget);
         }
+        if (span.recording) end_turn_span(*vm, span, result.status, result.failure != FailReason::None ? result.failure : reason);
         // After the bookkeeping, so that a caller acting on this result sees the actor idle.
         if (mail.has_promise) mail.promise.set_value(std::move(result));
         if (over_budget) fail(vm, FailReason::CpuBudget, 0);
         maybe_retire(vm);
     }
 
+    // A turn's span, between the start of the turn and its result.
+    struct PendingSpan {
+        bool recording = false;
+        SpanRecord record;
+    };
+
+    // Under the VM lock, as the turn takes its mail. With tracing off this is one relaxed load.
+    void begin_turn_span_locked(Vm& vm, Actor& actor, const Mail& mail, PendingSpan& span) {
+        actor.turn_traced = false;
+        if (!vm.tracing.load(std::memory_order_relaxed)) return;
+        TraceContext ctx;
+        if (mail.traced) {
+            ctx.trace_id = mail.trace.trace_id;
+            ctx.sampled = mail.trace.sampled;
+            span.record.parent_span_id = mail.trace.span_id;
+            span.record.has_parent = true;
+        } else {
+            fill_id(ctx.trace_id); // a root: tracing is on for this VM, so it is sampled
+            ctx.sampled = true;
+        }
+        fill_id(ctx.span_id);
+        actor.turn_trace = ctx;
+        actor.turn_traced = true;
+        if (!ctx.sampled) return; // propagate the context, record nothing
+        span.recording = true;
+        span.record.trace_id = ctx.trace_id;
+        span.record.span_id = ctx.span_id;
+        span.record.actor_ref = (std::uint64_t{actor.generation} << 32) | actor.slot;
+        span.record.kind = actor.kind_index;
+        span.record.code_version = actor.code->version;
+        span.record.start_unix_ns = unix_ns();
+    }
+
+    // Mail sent from inside a traced turn is that turn's child.
+    static void stamp_mail(const Actor* self, Mail& mail) {
+        if (!self || !self->turn_traced) return;
+        mail.trace = self->turn_trace;
+        mail.traced = true;
+    }
+
+    void end_turn_span(Vm& vm, PendingSpan& span, Status status, FailReason failure) {
+        span.record.end_unix_ns = unix_ns();
+        span.record.status = status;
+        span.record.failure = failure;
+        std::lock_guard<std::mutex> lock(vm.mutex);
+        ++vm.spans_recorded;
+        if (vm.spans.size() >= vm.span_capacity) { ++vm.spans_dropped; return; }
+        vm.spans.push_back(span.record);
+    }
+
+    // Moves an idle actor onto the VM's current code. Its instance is cleared because lowered code
+    // keeps Wasm globals and function tables there, and a table entry from the old code must never be
+    // called once that code can be unmapped. Region, heap and stored state stay, so the new code
+    // resumes from stored state exactly as after a restart.
+    static void switch_code_locked(Vm& vm, Actor& actor) {
+        if (!actor.live || actor.running || actor.code == vm.code) return;
+        actor.kind = &vm.code->module->kinds[actor.kind_index];
+        if (actor.kind->instance_bytes) std::memset(actor.instance.get(), 0, actor.kind->instance_bytes);
+        actor.code = vm.code;
+    }
+
+    // Same memory layout, so regions, heaps and stored state already allocated stay valid.
+    static bool compatible_code(const OresVmGuestModule& from, const OresVmGuestModule& to) {
+        if (to.kind_count < from.kind_count) return false;
+        for (std::uint32_t i = 0; i < from.kind_count; ++i) {
+            const OresVmGuestKind& a = from.kinds[i];
+            const OresVmGuestKind& b = to.kinds[i];
+            if (a.state_bytes != b.state_bytes || a.heap_bytes != b.heap_bytes ||
+                a.scratch_bytes != b.scratch_bytes || a.instance_bytes != b.instance_bytes ||
+                a.stored_bytes != b.stored_bytes || a.flags != b.flags)
+                return false;
+        }
+        return true;
+    }
+
     void finish_turn_locked(const std::shared_ptr<Vm>& vm, Actor& actor, std::uint32_t slot, bool& over_budget) {
         actor.running = false;
+        actor.turn_traced = false;
         --vm->running;
         const std::uint64_t budget = vm->spec.limits.cpu_budget_ms;
         over_budget = budget && vm->cpu_ns.load(std::memory_order_relaxed) / 1000000 > budget;
         const Phase phase = vm->current_phase();
         if (phase == Phase::Running || phase == Phase::Quiescing) {
+            // An upgrade that landed during this turn takes effect here, at the turn boundary.
+            switch_code_locked(*vm, actor);
             if (actor.stopping && actor.mailbox.empty()) release_actor_locked(*vm, actor, slot);
             else make_ready_locked(vm, slot);
             schedule_locked(vm);
@@ -909,8 +1033,8 @@ struct TenantVmHost::Core {
 
     Status spawn_locked(const std::shared_ptr<Vm>& vm, std::uint32_t kind_index, std::uint64_t& out_ref) {
         Vm& v = *vm;
-        if (kind_index >= v.spec.module->kind_count) return Status::BadKind;
-        const OresVmGuestKind* kind = &v.spec.module->kinds[kind_index];
+        if (kind_index >= v.code->module->kind_count) return Status::BadKind;
+        const OresVmGuestKind* kind = &v.code->module->kinds[kind_index];
         if (v.live_actors >= v.spec.limits.max_actors) return Status::ActorQuota;
         const auto bytes = static_cast<std::uint32_t>(align_up(
             std::uint64_t{kind->state_bytes} + kind->heap_bytes + kind->scratch_bytes, kAlignment));
@@ -931,6 +1055,8 @@ struct TenantVmHost::Core {
         }
         Actor& actor = *v.actors[slot];
         actor.kind = kind;
+        actor.code = v.code;
+        actor.kind_index = kind_index;
         actor.slot = slot;
         actor.parent = 0;
         actor.aborted = false;
@@ -979,6 +1105,8 @@ struct TenantVmHost::Core {
         vm.instance_bytes -= std::uint64_t{actor.kind->instance_bytes} + actor.kind->stored_bytes;
         actor.instance.reset();
         actor.heap_free.reset();
+        actor.kind = nullptr;
+        actor.code.reset(); // may release an old code version once its last actor is gone
         vm.pending_stops.insert(vm.pending_stops.end(), actor.children.begin(), actor.children.end());
         actor.children.clear();
         actor.live = false;
@@ -1117,7 +1245,7 @@ struct TenantVmHost::Core {
         return result;
     }
 
-    int send_impl(const std::shared_ptr<Vm>& shared, std::uint64_t target, std::uint32_t offset, std::uint32_t length) {
+    int send_impl(const std::shared_ptr<Vm>& shared, const Actor* self, std::uint64_t target, std::uint32_t offset, std::uint32_t length) {
         Vm& vm = *shared;
         if (length > vm.spec.limits.max_payload_bytes) return 0;
         std::lock_guard<std::mutex> lock(vm.mutex);
@@ -1132,6 +1260,7 @@ struct TenantVmHost::Core {
             return 0;
         Mail mail;
         mail.bytes.assign(vm.cage + offset, vm.cage + offset + length);
+        stamp_mail(self, mail);
         if (!charge_mail_locked(vm, length)) return 0;
         actor->mailbox.push_back(std::move(mail));
         ++vm.inflight;
@@ -1143,7 +1272,7 @@ struct TenantVmHost::Core {
         Carrier* c = host_enter();
         int result = 0;
         try {
-            result = static_cast<Core*>(c->core)->send_impl(*c->vm, target, offset, length);
+            result = static_cast<Core*>(c->core)->send_impl(*c->vm, c->actor, target, offset, length);
         } catch (...) { // out of memory is this guest's refusal, not the process's end
         }
         host_leave(c);
@@ -1223,6 +1352,7 @@ struct TenantVmHost::Core {
         std::vector<Mail> ready(count);
         for (std::uint32_t i = 0; i < count; ++i) {
             ready[i].bytes.resize(sizeof(std::int64_t));
+            stamp_mail(&self, ready[i]);
             std::memcpy(ready[i].bytes.data(), &sends[i].value, sizeof(std::int64_t));
         }
         for (std::uint32_t i = 0; i < count; ++i) {
@@ -1520,6 +1650,8 @@ VmOpenResult TenantVmHost::open(VmSpec spec) {
 
     auto vm = std::make_shared<Vm>();
     vm->spec = std::move(spec);
+    // The owner moves into the first code version, so an upgrade can release it.
+    vm->code = std::make_shared<const Code>(Code{vm->spec.module, std::move(vm->spec.module_owner), 1});
     vm->closed = vm->closed_promise.get_future().share();
     {
         std::lock_guard<std::mutex> lock(core_->registry_mutex);
@@ -1566,6 +1698,10 @@ VmSpawnResult TenantVmHost::spawn_actor(const VmHandle& handle, std::uint32_t ki
 }
 
 std::future<TurnResult> TenantVmHost::call(const VmActor& ref, std::vector<std::uint8_t> payload) {
+    return call(ref, std::move(payload), TraceContext{});
+}
+
+std::future<TurnResult> TenantVmHost::call(const VmActor& ref, std::vector<std::uint8_t> payload, const TraceContext& parent) {
     Status status = Status::Ok;
     auto vm = core_->resolve(ref.root_, ref.vm_, ref.generation_, status);
     if (!vm) return ready_result(status);
@@ -1581,6 +1717,12 @@ std::future<TurnResult> TenantVmHost::call(const VmActor& ref, std::vector<std::
     Mail mail;
     mail.bytes = std::move(payload);
     mail.has_promise = true;
+    // All-zero ids mean no parent: W3C never allows them.
+    const auto nonzero = [](const auto& id) { return std::any_of(id.begin(), id.end(), [](std::uint8_t b) { return b != 0; }); };
+    if (nonzero(parent.trace_id) && nonzero(parent.span_id)) {
+        mail.trace = parent;
+        mail.traced = true;
+    }
     auto future = mail.promise.get_future();
     actor->mailbox.push_back(std::move(mail));
     ++vm->inflight;
@@ -1601,6 +1743,23 @@ Status TenantVmHost::stop_actor(const VmActor& ref) {
     if (!actor->running && actor->mailbox.empty())
         core_->release_actor_locked(*vm, *actor, static_cast<std::uint32_t>(ref.ref_));
     return Status::Ok;
+}
+
+VmUpgradeResult TenantVmHost::upgrade(const VmHandle& handle, const OresVmGuestModule* module,
+                                      std::shared_ptr<const void> module_owner) {
+    VmUpgradeResult out;
+    Status status = Status::Ok;
+    auto vm = core_->resolve(handle.root_, handle.vm_, handle.generation_, status);
+    if (!vm) { out.status = status; return out; }
+    if (!valid_module(module)) { out.status = Status::InvalidArgument; return out; }
+    std::lock_guard<std::mutex> lock(vm->mutex);
+    if (vm->current_phase() != Phase::Running) { out.status = Status::NotRunning; return out; }
+    if (!Core::compatible_code(*vm->code->module, *module)) { out.status = Status::IncompatibleCode; return out; }
+    vm->code = std::make_shared<const Code>(Code{module, std::move(module_owner), vm->code->version + 1});
+    for (auto& actor : vm->actors) Core::switch_code_locked(*vm, *actor);
+    out.status = Status::Ok;
+    out.code_version = vm->code->version;
+    return out;
 }
 
 Status TenantVmHost::begin_shutdown(const VmHandle& handle) {
@@ -1654,6 +1813,13 @@ VmSnapshot TenantVmHost::snapshot(const VmHandle& handle) const {
     out.mail_abandoned = vm->mail_abandoned;
     out.pipelines_aborted = vm->pipelines_aborted;
     out.actors_aborted = vm->actors_aborted;
+    out.code_version = vm->code->version;
+    for (const auto& actor : vm->actors)
+        if (actor->live && actor->code != vm->code) ++out.actors_on_old_code;
+    out.tracing = vm->tracing.load(std::memory_order_relaxed);
+    out.spans_recorded = vm->spans_recorded;
+    out.spans_dropped = vm->spans_dropped;
+    out.spans_buffered = vm->spans.size();
     return out;
 }
 
@@ -1668,6 +1834,76 @@ HostStats TenantVmHost::stats() const {
     out.queued_bytes = core_->queued_bytes.load();
     out.actor_restarts = core_->actor_restarts.load();
     return out;
+}
+
+} // namespace oreslang::runtime::vm
+
+namespace oreslang::runtime::vm {
+
+Status TenantVmHost::set_tracing(const VmHandle& handle, TraceSettings settings) {
+    Status status = Status::Ok;
+    auto vm = core_->resolve(handle.root_, handle.vm_, handle.generation_, status);
+    if (!vm) return status;
+    if (settings.buffer_spans == 0 || settings.buffer_spans > (1u << 20)) return Status::InvalidArgument;
+    std::lock_guard<std::mutex> lock(vm->mutex);
+    if (vm->current_phase() != Phase::Running) return Status::NotRunning;
+    vm->span_capacity = settings.buffer_spans;
+    while (vm->spans.size() > vm->span_capacity) { vm->spans.pop_front(); ++vm->spans_dropped; }
+    vm->tracing.store(settings.enabled, std::memory_order_relaxed);
+    return Status::Ok;
+}
+
+std::vector<SpanRecord> TenantVmHost::drain_spans(const VmHandle& handle, std::size_t max) {
+    std::vector<SpanRecord> out;
+    Status status = Status::Ok;
+    auto vm = core_->resolve(handle.root_, handle.vm_, handle.generation_, status);
+    if (!vm || max == 0) return out;
+    std::lock_guard<std::mutex> lock(vm->mutex);
+    const std::size_t n = std::min(max, vm->spans.size());
+    out.assign(vm->spans.begin(), vm->spans.begin() + static_cast<std::ptrdiff_t>(n));
+    vm->spans.erase(vm->spans.begin(), vm->spans.begin() + static_cast<std::ptrdiff_t>(n));
+    return out;
+}
+
+namespace {
+int hex_value(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    return -1; // uppercase is not valid traceparent
+}
+template <std::size_t N> bool parse_hex(const std::string& s, std::size_t at, std::array<std::uint8_t, N>& out) {
+    bool nonzero = false;
+    for (std::size_t i = 0; i < N; ++i) {
+        const int hi = hex_value(s[at + 2 * i]), lo = hex_value(s[at + 2 * i + 1]);
+        if (hi < 0 || lo < 0) return false;
+        out[i] = static_cast<std::uint8_t>(hi << 4 | lo);
+        nonzero = nonzero || out[i] != 0;
+    }
+    return nonzero;
+}
+} // namespace
+
+bool parse_traceparent(const std::string& h, TraceContext& out) {
+    if (h.size() != 55 || h.compare(0, 3, "00-") != 0 || h[35] != '-' || h[52] != '-') return false;
+    TraceContext ctx;
+    std::array<std::uint8_t, 1> flags{};
+    if (!parse_hex(h, 3, ctx.trace_id) || !parse_hex(h, 36, ctx.span_id)) return false;
+    const int hi = hex_value(h[53]), lo = hex_value(h[54]);
+    if (hi < 0 || lo < 0) return false;
+    flags[0] = static_cast<std::uint8_t>(hi << 4 | lo);
+    ctx.sampled = (flags[0] & 1) != 0;
+    out = ctx;
+    return true;
+}
+
+std::string format_traceparent(const TraceContext& c) {
+    static const char* digits = "0123456789abcdef";
+    std::string s = "00-";
+    for (auto b : c.trace_id) { s += digits[b >> 4]; s += digits[b & 15]; }
+    s += '-';
+    for (auto b : c.span_id) { s += digits[b >> 4]; s += digits[b & 15]; }
+    s += c.sampled ? "-01" : "-00";
+    return s;
 }
 
 } // namespace oreslang::runtime::vm

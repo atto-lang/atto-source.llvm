@@ -69,6 +69,18 @@ OresVmCVm* ores_vm_c_open_guest(OresVmCHost* h, const char* tenant_id, const Ore
         return nullptr;
     }
 }
+// Hot upgrade to a digest-admitted guest library. Returns the Status value; the VM keeps the new
+// library mapped while any actor uses it and releases the old one after its last turn.
+int32_t ores_vm_c_upgrade_guest(OresVmCHost* h, OresVmCVm* v, const OresVmCGuest* g, uint64_t* code_version) {
+    if (!h || !v || !g) return static_cast<int32_t>(Status::InvalidArgument);
+    try {
+        VmUpgradeResult result = h->host.upgrade(v->handle, g->guest.module, g->guest.owner);
+        if (code_version) *code_version = result.code_version;
+        return static_cast<int32_t>(result.status);
+    } catch (...) {
+        return static_cast<int32_t>(Status::HostClosed);
+    }
+}
 void ores_vm_c_vm_free(OresVmCVm* v) { delete v; }
 
 OresVmCActor* ores_vm_c_spawn(OresVmCHost* h, OresVmCVm* v, uint32_t kind, int32_t* status) {

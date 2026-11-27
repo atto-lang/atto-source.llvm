@@ -1,0 +1,11 @@
+// Version 2 of counter.atto for hot-upgrade tests: same actor, same field, new behaviour.
+define actor Counter as {
+  let total: int = 0;
+  pub fnc on_message(int increment): int {
+    total = total + increment + 1000;
+    return total;
+  }
+}
+pub fnc main(): int {
+  return 0;
+}
