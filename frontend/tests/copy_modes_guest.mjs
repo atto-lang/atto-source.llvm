@@ -6,8 +6,23 @@ import {spawnSync} from 'node:child_process';
 const compiler=resolve(process.env.ATTOC??'target/debug/attoc');
 const flat='define class Box as\n pub let int n = 20;\nend\n';
 const nested='define class Leaf as pub val int n = 20; end\ndefine class Root as pub let Leaf child = new Leaf(); pub let int extra = 1; end\n';
+const mutableNested='define class Scores as pub let int n = 20; end\ndefine class Person as pub let mut Scores scores = new Scores(); pub let int age = 1; end\n';
+const fixedNested=mutableNested.replace('pub let mut Scores','pub val Scores');
 const main=s=>'pub fnc main(): int { '+s+' }';
 const cases=[
+ ['mutable-detach',mutableNested+main('let mut Person a = new Person(); let mut Person b = copy! a; b.scores = new Scores(); b.scores.n = 22; return a.scores.n + b.scores.n;'),42],
+ ['mutable-deep',mutableNested+main('let mut Person a = new Person(); a.scores.n = 10; let mut Person b = copy! a; let mut Person c = copy!! b; c.scores.n = 22; return a.scores.n + b.scores.n + c.scores.n;'),42],
+ ['lexical-release',mutableNested+main('let mut Person a = new Person(); let int before = 0; block { let mut Person b = copy! a; block { let mut Person c = copy! b; before = c.scores.n; } } a.scores.n = 22; return before + a.scores.n;'),42],
+ ['detach-source-recovery',mutableNested+main('let mut Person a = new Person(); let mut Person b = copy! a; b.scores = new Scores(); a.scores.n = 21; b.scores.n = 21; return a.scores.n+b.scores.n;'),42],
+ ['fixed-nested-slot',fixedNested+main('let mut Person a = new Person(); let mut Person b = copy! a; let mut Person c = copy!! b; a.age = 2; return a.scores.n+c.scores.n+a.age;'),42],
+ ['fixed-nested-replace',fixedNested+main('let mut Person a = new Person(); let mut Person b = copy! a; b.scores = new Scores(); return b.scores.n;'),'E_COPY_READONLY_SLOT'],
+ ['source-shared-write',mutableNested+main('let mut Person a = new Person(); let mut Person b = copy! a; a.scores.n = 22; return b.scores.n;'),'E_COPY_READONLY'],
+ ['copy-shared-write',mutableNested+main('let mut Person a = new Person(); let mut Person b = copy! a; b.scores.n = 22; return a.scores.n;'),'E_COPY_READONLY'],
+ ['live-sibling',mutableNested+main('let mut Person a = new Person(); let mut Person b = copy! a; block { let mut Person c = copy! b; } a.scores.n = 22; return b.scores.n;'),'E_COPY_READONLY'],
+ ['root-transfer',mutableNested+main('let mut Person a = new Person(); block { let mut Person b = copy! a; let escaped = b; } a.scores.n = 22; return a.scores.n;'),'E_COPY_UNPROVEN'],
+ ['root-rebind',mutableNested+main('let mut Person a = new Person(); let mut Person b = copy! a; b = new Person(); return a.scores.n;'),'E_COPY_UNPROVEN'],
+ ['root-boundary',mutableNested+'fnc read(Person x): int { return x.scores.n; }\n'+main('let mut Person a = new Person(); return read(a);'),'E_COPY_UNPROVEN'],
+ ['root-temporary',mutableNested+main('let mut Person a = new Person(); copy! a; return a.scores.n;'),'E_COPY_UNPROVEN'],
  ['nested-immutable',nested+main('let Root a = new Root(); let Root b = copy! a; let Root c = copy!! b; a.extra = 2; b.extra = 3; c.extra = 4; b.child = new Leaf(); return a.child.n + c.child.n + a.extra;'),42],
  ['nested-escape',nested+main('let Root a = new Root(); let Root b = copy! a; let Leaf x = b.child; return x.n;'),'E_BORROW'],
  ['nested-write',nested+main('let Root a = new Root(); let Root b = copy! a; b.child.n = 0; return a.child.n;'),'E_OWNERSHIP'],
