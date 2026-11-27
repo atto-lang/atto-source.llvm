@@ -376,6 +376,9 @@ struct FnCx<'a> {
     loops: u32,
     /// First slot declared inside each enclosing loop body.
     loop_floors: Vec<u32>,
+    /// Only a statically untaken ternary arm may contain unproved signed division.
+    /// Both arms still undergo ordinary type, name and ownership checking.
+    dead_division_arm: bool,
     /// Class-typed locals whose value has been moved out.
     moved: BTreeSet<u32>,
     imports: &'a mut Vec<Import>,
@@ -1476,6 +1479,7 @@ impl<'a> FnCx<'a> {
             nparams: 0,
             loops: 0,
             loop_floors: Vec::new(),
+            dead_division_arm: false,
             moved: BTreeSet::new(),
             imports,
             data,
@@ -2441,11 +2445,32 @@ impl<'a> FnCx<'a> {
                 }
                 if a.ty == Type::Int && b.ty == Type::Int {
                     if *op == BinOp::Div {
-                        return Err(Diagnostic::new(
-                            pos,
-                            "E_UNSUPPORTED",
-                            "'/' on two ints is not admitted: whether int / int yields float or int is undecided (spec S-25); write a float operand, e.g. 7.0 / 2",
-                        ));
+                        // Signed quotient truncates toward zero. Admit only
+                        // divisions proved incapable of a division-specific
+                        // ordinary error until typed error edges are available.
+                        let literal = |v: &TE| match &v.e {
+                            TExpr::I64(n) => Some(*n),
+                            TExpr::Neg(inner) => match &inner.e {
+                                TExpr::I64(n) => n.checked_neg(),
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+                        let safe = match literal(&b) {
+                            Some(0) | None => false,
+                            Some(-1) => literal(&a).is_some_and(|n| n != i64::MIN),
+                            Some(_) => true,
+                        };
+                        if !safe {
+                            if !self.dead_division_arm {
+                                return Err(Diagnostic::new(pos, "E_UNSUPPORTED",
+                                    "checked integer division requires a proven nonzero divisor and no MIN/-1 overflow, or typed ordinary-error lowering"));
+                            }
+                            // Operands have already been checked. Do not emit a
+                            // potentially trapping divide even in the statically
+                            // unreachable arm. Its value cannot be observed.
+                            return Ok(TE { e: TExpr::I64(0), ty: Type::Int });
+                        }
                     }
                 } else {
                     // Java binary numeric promotion: an int operand widens to float.
@@ -2471,8 +2496,7 @@ impl<'a> FnCx<'a> {
                 }
             }
             let ty = match op {
-                BinOp::Add | BinOp::Sub | BinOp::Mul => Type::Int,
-                BinOp::Div => unreachable!("int / int rejected above"),
+                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => Type::Int,
                 BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => Type::Bool,
                 BinOp::Eq | BinOp::Ne => {
                     if a.ty != b.ty {
@@ -2524,12 +2548,20 @@ impl<'a> FnCx<'a> {
         })
     }
 
+    fn ternary_arm(&mut self, expr: &Expr, untaken: bool) -> R<TE> {
+        let previous = self.dead_division_arm;
+        self.dead_division_arm = previous || untaken;
+        let result = self.value(expr);
+        self.dead_division_arm = previous;
+        result
+    }
+
     #[inline(never)]
     fn ternary(&mut self, c: &Expr, a: &Expr, b: &Expr, pos: Pos) -> R<TE> {
         Ok({
             let c = self.cond(c, "ternary")?;
-            let a = self.value(a)?;
-            let b = self.value(b)?;
+            let a = self.ternary_arm(a, matches!(&c.e, TExpr::Bool(false)))?;
+            let b = self.ternary_arm(b, matches!(&c.e, TExpr::Bool(true)))?;
             if a.ty != b.ty {
                 return Err(type_err(
                     pos,

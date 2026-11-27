@@ -1553,6 +1553,11 @@ public:
                 program.classes.push_back(std::move(cls));
                 break;
             }
+            // define [pub] fnc/routine is not a module wrapper.
+            if (token_.text == "fnc" || token_.text == "routine") {
+                program.functions.push_back(function({}, exported));
+                continue;
+            }
             if (exported && token_.text != "class") fail("native public module wrapper is not supported in the i64 subset");
             if (accept("serial")) {
                 require("actor");
@@ -1755,6 +1760,10 @@ public:
                     cls.exported = public_class;
                     remember_class_scalar_fields(cls);
                     program.classes.push_back(std::move(cls));
+                    continue;
+                }
+                if (token_.text == "fnc" || token_.text == "routine") {
+                    program.functions.push_back(function({}, public_class));
                     continue;
                 }
                 if (public_class && token_.text != "class") fail("native pub define currently supports only class declarations");
@@ -3574,7 +3583,13 @@ private:
             value.name = extension_function_name(
                 extension_receiver_alias_, extension_method_name_);
         } else {
-            value.exported = owner.empty() ? accept("pub") : visible;
+            if (owner.empty()) {
+                const bool inline_public = accept("pub");
+                if (visible && inline_public) fail("duplicate pub modifier");
+                value.exported = visible || inline_public;
+            } else {
+                value.exported = visible;
+            }
         const bool source_async = owner.empty() && accept("async");
         // A foreign declaration has no Atto body. Never treat its source
         // spelling as a freely chosen native linker symbol.
@@ -6773,6 +6788,38 @@ private:
 
     std::unique_ptr<Expression> primary() {
         const auto offset = token_.offset;
+
+        // A closed, single-valued-break loop has no observable backedge.
+        // Keep the normal typed expression and native codegen paths in
+        // authority; reject bare names/calls and general loop CFGs.
+        if (token_.text == "loop" && peek_next().text == "{") {
+            advance();
+            require("{");
+            require("break");
+            if (token_.text == ";" || token_.text == "}")
+                fail("E_BREAK_VALUE: value loop requires a break operand");
+            auto value = expression();
+            using K = Expression::Kind;
+            switch (value->kind) {
+                case K::Integer: case K::Boolean: case K::String:
+                case K::Negate: case K::Abs: case K::LogicalNot:
+                case K::Add: case K::Subtract: case K::Multiply:
+                case K::Remainder: case K::Modulo: case K::BitXor:
+                case K::Equal: case K::NotEqual: case K::Less:
+                case K::LessEqual: case K::Greater: case K::GreaterEqual:
+                case K::LogicalAnd: case K::LogicalOr: case K::LogicalXor:
+                case K::Conditional: case K::Cast:
+                case K::ShiftLeft: case K::ShiftRight: case K::ShiftUnsignedRight:
+                    break;
+                default:
+                    fail("value-loop operand requires typed CFG lowering");
+            }
+            require(";");
+            require("}");
+            if (token_.text == "(")
+                fail("calling a computed value loop");
+            return value;
+        }
 
         // Source-to-MIR analysis runs inside the real compiler parser, but
         // never publishes an executable AST or LLVM scalar fallback.

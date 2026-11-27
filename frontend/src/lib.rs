@@ -32,13 +32,18 @@ pub const COMPILER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Compile one `.atto` source file to a guest WebAssembly module.
 pub fn compile(source: &str) -> Result<Vec<u8>, Diagnostic> {
-    compile_target(source, false)
+    compile_target(source, false, false)
+}
+
+/// Explicit isolated core-wasm.i64-v1 profile; the browser ABI is unchanged.
+pub fn compile_isolated_core(source: &str) -> Result<Vec<u8>, Diagnostic> {
+    compile_target(source, false, true)
 }
 
 /// Restricted attached nominal scalar source -> checked C11 (Clang GNU expressions).
 /// The caller must compile/link this text; this is not the independent C++ frontend.
 pub fn compile_struct_native_c(source: &str) -> Result<String, Diagnostic> {
-    String::from_utf8(compile_target(source, true)?).map_err(|_| native_scalar_c::unsupported())
+    String::from_utf8(compile_target(source, true, false)?).map_err(|_| native_scalar_c::unsupported())
 }
 
 /// Explicit closed source-defined physical placement -> native C/Clang lane.
@@ -46,7 +51,7 @@ pub fn compile_physical_placement_c(source:&str)->Result<String,Diagnostic>{
     physical_placement::compile(source)
 }
 
-fn compile_target(source: &str, native_c: bool) -> Result<Vec<u8>, Diagnostic> {
+fn compile_target(source: &str, native_c: bool, isolated: bool) -> Result<Vec<u8>, Diagnostic> {
     if source.len() > SOURCE_CAP {
         return Err(Diagnostic::new(
             Pos { line: 1, col: 1 },
@@ -100,7 +105,7 @@ fn compile_target(source: &str, native_c: bool) -> Result<Vec<u8>, Diagnostic> {
                                     "scalar struct lowering must not allocate or use actor/generator/global state"));
                             }
                             if native_c { return native_scalar_c::emit(&typed).map(String::into_bytes); }
-                            let bytes = wasm::emit(&typed);
+                            let bytes = if isolated { wasm::emit_isolated_core(&typed)? } else { wasm::emit(&typed) };
                             if bytes.len() > wasm::MAX_OUTPUT {
                                 return Err(Diagnostic::new(toks[start].pos, "E_OUTPUT_LIMIT",
                                     "generated module exceeds 1 MiB"));
@@ -162,7 +167,7 @@ fn compile_target(source: &str, native_c: bool) -> Result<Vec<u8>, Diagnostic> {
     }
     let program = parser::Parser::new(toks).parse_program()?;
     let typed = check::check(&program)?;
-    let bytes = wasm::emit(&typed);
+    let bytes = if isolated { wasm::emit_isolated_core(&typed)? } else { wasm::emit(&typed) };
     if bytes.len() > wasm::MAX_OUTPUT {
         return Err(Diagnostic::new(
             Pos { line: 1, col: 1 },
