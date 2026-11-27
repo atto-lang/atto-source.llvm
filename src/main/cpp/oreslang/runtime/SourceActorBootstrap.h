@@ -92,7 +92,9 @@ void* oreslang_source_actor_spawn_supervised_budgeted(
 /* Consumes a logically failed ActorRef and awaits the root supervisor's
  * CONTROL-selected replacement. The old ActorRef remains an invalid,
  * generation-fenced tombstone until consuming recovery reads the decision;
- * after recovery the old token cannot resolve even for diagnostics. No scheduler carrier
+ * after recovery the old token cannot resolve even for diagnostics. In this
+ * restricted linear source profile plain STOP/join discards the failed ref
+ * without requesting a replacement. No scheduler carrier
  * may call this blocking trusted-main bridge. Returns NULL on escalation. */
 void* oreslang_source_actor_recover_blocking(void* failed_actor);
 
