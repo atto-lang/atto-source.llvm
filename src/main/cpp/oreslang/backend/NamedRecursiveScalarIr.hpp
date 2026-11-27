@@ -41,7 +41,7 @@ inline bool valid(const Stage& s) {
 // ABI: i32 status (0 success, 1 overflow, 6 depth), output written only
 // on success. Each native recursive invocation has its own depth and scratch.
 // No dynamic allocation, shared global depth, or host callback.
-inline std::optional<std::string> emit(const Stage& s){
+inline std::optional<std::string> emit(const Stage& s,std::optional<std::int64_t> input={}){
     if(!valid(s))return {};
     std::string ir="declare {i64,i1} @llvm.sadd.with.overflow.i64(i64,i64)\n"
         "declare {i64,i1} @llvm.ssub.with.overflow.i64(i64,i64)\n"
@@ -90,8 +90,15 @@ inline std::optional<std::string> emit(const Stage& s){
         auto v=expr(expr,s.arms[i].body);if(exhausted)return {};
         line("store i64 "+v+", ptr %out, align 8");line("ret i32 0");
     }
-    ir+="}\ndefine i32 @atto_named_scalar(i64 %arg, ptr %out) {\nentry:\n"
-        "  %status = call i32 @stage(i64 %arg, i32 0, ptr %out)\n  ret i32 %status\n}\n";
+    ir+="}\n";
+    if(input){
+        ir+="define i32 @atto_named_main(ptr %out) {\nentry:\n"
+            "  %status = call i32 @stage(i64 "+std::to_string(*input)+", i32 0, ptr %out)\n"
+            "  ret i32 %status\n}\n";
+    }else{
+        ir+="define i32 @atto_named_scalar(i64 %arg, ptr %out) {\nentry:\n"
+            "  %status = call i32 @stage(i64 %arg, i32 0, ptr %out)\n  ret i32 %status\n}\n";
+    }
     if(ir.size()>512*1024)return {};
     return ir;
 }
