@@ -209,6 +209,8 @@ pub struct Parser {
     in_generator: bool,
     struct_target: bool,
     struct_value_bindings: Option<Vec<Pos>>,
+    named_stage_allowed: bool,
+    named_stage_helpers: Vec<Func>,
 }
 
 struct TypeFirstField {
@@ -308,6 +310,8 @@ impl Parser {
             in_generator: false,
             struct_target: false,
             struct_value_bindings: None,
+            named_stage_allowed: false,
+            named_stage_helpers: Vec::new(),
         }
     }
 
@@ -531,6 +535,7 @@ impl Parser {
     }
 
     pub fn parse_program(&mut self) -> R<Program> {
+        Self::check_named_stage_profile(&self.toks)?;
         let mut prog = Program::default();
         let mut decls = 0usize;
         while *self.peek() != Tok::Eof {
@@ -586,6 +591,10 @@ impl Parser {
                 _ => prog.funcs.push(self.parse_func()?),
             }
         }
+        if decls.saturating_add(self.named_stage_helpers.len()) > MAX_FUNCS {
+            return Err(Diagnostic::new(self.pos(), "E_SOURCE_LIMIT", "named stage helpers exceed declaration budget"));
+        }
+        prog.funcs.append(&mut self.named_stage_helpers);
         prog.type_names = std::mem::take(&mut self.type_names);
         Ok(prog)
     }
@@ -1398,7 +1407,8 @@ impl Parser {
                 return Err(unsupported(self.pos(), &format!("'{m}' callables")));
             }
         }
-        let named_keyword = self.eat_word("fnc") || self.eat_word("routine");
+        let ordinary_fnc = self.eat_word("fnc");
+        let named_keyword = ordinary_fnc || self.eat_word("routine");
         // Return-first is a declaration-only context. Keep '<' and '-' as
         // independent expression tokens: 1<-2 remains 1 < -2.
         let return_first = self.return_first_marker_here();
@@ -1448,12 +1458,16 @@ impl Parser {
                 "a 'fnc *gen' declaration must return Generator<int> in this frontend stage"));
         }
         self.in_generator = is_generator;
+        let previous_stage = self.named_stage_allowed;
+        self.named_stage_allowed = ordinary_fnc && !is_generator && prefix_type.is_none();
         let body = if prefix_type.is_some() {
-            self.parse_return_first_body()?
+            self.parse_return_first_body()
         } else {
-            self.parse_block()?
+            self.parse_block()
         };
+        self.named_stage_allowed = previous_stage;
         self.in_generator = false;
+        let body = body?;
         let _ = start;
         Ok(Func {
             name,
@@ -2377,6 +2391,127 @@ impl Parser {
         Ok(left)
     }
 
+    /// The current stage lowering does not participate in the token-based
+    /// routine, module, generic or callback passes. Reject mixed profiles
+    /// before any of those passes can rewrite the lexical self-name.
+    pub(crate) fn check_named_stage_profile(tokens: &[Token]) -> R<()> {
+        let stage = tokens.windows(2).find(|w| w[0].tok == Tok::PipeGt
+            && matches!(&w[1].tok, Tok::Ident(n) if n == "fnc"));
+        let Some(stage) = stage else { return Ok(()); };
+        if tokens.iter().any(|t| matches!(&t.tok, Tok::Ident(n)
+            if matches!(n.as_str(), "routine" | "Fnc" | "module" | "namespace"
+                | "import" | "class" | "actor" | "struct" | "enum" | "type"
+                | "declare" | "export" | "extern" | "gen" | "generator" | "suspends" | "mtd")))
+            || tokens.windows(3).any(|w| matches!(&w[0].tok, Tok::Ident(n) if n == "fnc")
+                && matches!(&w[1].tok, Tok::Ident(_)) && w[2].tok == Tok::Lt)
+        {
+            return Err(unsupported(stage[0].pos,
+                "named pipeline stages require flat ordinary functions without mixed lowering profiles"));
+        }
+        Ok(())
+    }
+
+    /// Initial direct AOT slice: an explicitly typed unary int function,
+    /// one return expression or exhaustive scalar return-match, no captures,
+    /// no arbitrary calls, and no escaping callable value. Reuse ordinary
+    /// function checking and Wasm recursive-call quota, not a host evaluator.
+    fn parse_closed_named_stage(&mut self) -> R<String> {
+        let pos = self.pos();
+        if !self.named_stage_allowed || self.in_generator || self.struct_target || self.struct_value_bindings.is_some() {
+            return Err(unsupported(pos, "nested or non-function named pipeline stage"));
+        }
+        if self.named_stage_helpers.len() >= 64 {
+            return Err(Diagnostic::new(pos, "E_SOURCE_LIMIT", "too many named pipeline stages"));
+        }
+        self.expect_word("fnc")?;
+        let (name, _) = self.ident("a named pipeline callable")?;
+        self.expect(Tok::LParen, "'(' after named stage")?;
+        let params = self.parse_params()?;
+        if params.len() != 1 || params[0].ty != Type::Int || params[0].mutable {
+            return Err(unsupported(pos, "named stage requires one immutable int parameter"));
+        }
+        if params[0].name == name {
+            return Err(Diagnostic::new(pos, "E_DUPLICATE", "parameter duplicates recursive self-name"));
+        }
+        if !(self.eat(&Tok::Colon) || self.eat(&Tok::Arrow)) {
+            return Err(Diagnostic::new(self.pos(), "E_RETURN_ANNOTATION", "named stage requires an explicit result type"));
+        }
+        self.expect_word("int")?;
+        let hidden = format!("$named_stage_{}", self.named_stage_helpers.len());
+        // Disable recursive parsing of this special stage production in its
+        // own body; only its ordinary lexical self-call is admitted.
+        let previous = self.named_stage_allowed;
+        self.named_stage_allowed = false;
+        let parsed = (|| -> R<Stmt> {
+            self.expect(Tok::LBrace, "'{' after named stage result type")?;
+            if !self.eat_word("return") && !self.eat(&Tok::Caret) {
+                return Err(self.expected("return or '^' in named stage"));
+            }
+            let statement = if self.is_word("match") {
+                self.parse_return_match(pos)?
+            } else {
+                let value = self.parse_expr()?;
+                self.terminator()?;
+                Stmt::Return(Some(value), pos)
+            };
+            self.expect(Tok::RBrace, "'}' after named stage return")?;
+            Ok(statement)
+        })();
+        self.named_stage_allowed = previous;
+        let mut body = parsed?;
+        let param = params[0].name.as_str();
+        // Prove the entire accepted body is closed BEFORE hoisting.
+        // Free variables and other calls may not fall through to globals
+        // with the same spelling; the ordinary typed checker then checks
+        // arithmetic, return types, arity, match patterns and exhaustiveness.
+        fn closed(e: &mut Expr, param: &str, name: &str, hidden: &str, depth: usize) -> R<()> {
+            if depth >= 128 {
+                return Err(Diagnostic::new(e.pos, "E_NESTING", "named stage expression nesting limit"));
+            }
+            match &mut e.kind {
+                ExprKind::Int(_) => Ok(()),
+                ExprKind::Var(n) if n == param => Ok(()),
+                ExprKind::Unary(UnOp::Neg | UnOp::Plus, inner) =>
+                    closed(inner, param, name, hidden, depth + 1),
+                ExprKind::Binary(BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div, left, right) => {
+                    closed(left, param, name, hidden, depth + 1)?;
+                    closed(right, param, name, hidden, depth + 1)
+                }
+                ExprKind::Call(target, args) if target == name => {
+                    if args.len() != 1 {
+                        return Err(Diagnostic::new(e.pos, "E_ARITY", "recursive named stage requires one argument"));
+                    }
+                    closed(&mut args[0], param, name, hidden, depth + 1)?;
+                    *target = hidden.to_owned();
+                    Ok(())
+                }
+                _ => Err(Diagnostic::new(e.pos, "E_UNSUPPORTED",
+                    "named stage admits only closed integer expressions and direct self-calls")),
+            }
+        }
+        match &mut body {
+            Stmt::Return(Some(value), _) => closed(value, param, &name, &hidden, 0)?,
+            Stmt::Match { subject, arms, .. } => {
+                closed(subject, param, &name, &hidden, 0)?;
+                for arm in arms {
+                    if !matches!(&arm.pattern, Pattern::Int(_) | Pattern::Wild) || arm.guard.is_some() {
+                        return Err(unsupported(arm.pos, "named stage scalar match pattern or guard"));
+                    }
+                    match arm.body.as_mut_slice() {
+                        [Stmt::Return(Some(value), _)] => closed(value, param, &name, &hidden, 0)?,
+                        _ => return Err(unsupported(arm.pos, "named stage match arm body")),
+                    }
+                }
+            }
+            _ => return Err(unsupported(pos, "named stage body")),
+        }
+        self.named_stage_helpers.push(Func {
+            name: hidden.clone(), pos, is_generator: false,
+            params, ret: Type::Int, body: vec![body],
+        });
+        Ok(hidden)
+    }
+
     fn parse_ternary(&mut self) -> R<Expr> {
         let mut c = self.parse_logical_or()?;
         // Functional pipeline: value |> f |> g(extra) lowers to g(f(value), extra).
@@ -2387,6 +2522,13 @@ impl Parser {
         while *self.peek() == Tok::PipeGt {
             let pos = self.pos();
             self.advance();
+            if self.is_word("fnc") {
+                let name = self.parse_closed_named_stage()?;
+                self.grow(1)?;
+                links += 1;
+                c = Expr { kind: ExprKind::Call(name, vec![c]), pos };
+                continue;
+            }
             let stage = self.parse_postfix()?;
             let (name, mut args) = match stage.kind {
                 ExprKind::Var(name) => (name, Vec::new()),

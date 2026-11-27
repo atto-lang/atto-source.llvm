@@ -62,6 +62,7 @@ fn compile_target(source: &str, native_c: bool, isolated: bool) -> Result<Vec<u8
         ));
     }
     let toks = lexer::lex(source)?;
+    parser::Parser::check_named_stage_profile(&toks)?;
     if let Some(pos) = directed_pipe::unlowered_pos(&toks) {
         return Err(Diagnostic::new(pos, "E_UNSUPPORTED_CONTINUOUS_PIPE",
             "typed pipe/rpipe DATA graph is planned but no guest transport or PipeHandle exists"));
