@@ -695,7 +695,7 @@ fn compile_ir_with_binding_profile(source: &str, profile: LibraryProfile, explic
         target_native::lower(&toks)?
     } else {
         let parser = atto_compiler::parser::Parser::new(toks);
-        let parser = if explicit_rebinding { parser.with_explicit_rebinding() } else { parser };
+        let mut parser = if explicit_rebinding { parser.with_explicit_rebinding() } else { parser };
         parser.parse_program().map_err(|e|e.to_string())?
     };
     if let Some(library) = linked_http {
