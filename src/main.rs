@@ -655,6 +655,10 @@ pub fn compile_ir(source: &str) -> Result<String, String> {
 }
 
 fn compile_ir_with_profile(source: &str, profile: LibraryProfile) -> Result<String, String> {
+    compile_ir_with_binding_profile(source, profile, false)
+}
+
+fn compile_ir_with_binding_profile(source: &str, profile: LibraryProfile, explicit_rebinding: bool) -> Result<String, String> {
     if source.len() > atto_compiler::SOURCE_CAP {
         return Err("E_SOURCE_LIMIT: native Atto input exceeds 64 KiB".into());
     }
@@ -685,10 +689,14 @@ fn compile_ir_with_profile(source: &str, profile: LibraryProfile) -> Result<Stri
     }
     let (toks, linked_http) = link_registered_http_import(toks, profile)?;
     let mut program = if target_native::requires_target_link(&toks) {
+        if explicit_rebinding {
+            return Err("E_UNSUPPORTED: explicit binding profile not yet supported by target-link frontend".into());
+        }
         target_native::lower(&toks)?
     } else {
-        atto_compiler::parser::Parser::new(toks).parse_program()
-            .map_err(|e|e.to_string())?
+        let parser = atto_compiler::parser::Parser::new(toks);
+        let parser = if explicit_rebinding { parser.with_explicit_rebinding() } else { parser };
+        parser.parse_program().map_err(|e|e.to_string())?
     };
     if let Some(library) = linked_http {
         // Merge independently checked source units at the AST boundary, not
@@ -926,7 +934,9 @@ fn validate_native_artifact(path: &std::path::Path) -> Result<(), String> {
 }
 
 fn cli() -> Result<(), String> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let explicit_rebinding = args.last().is_some_and(|a| a == "--explicit-rebinding");
+    if explicit_rebinding { args.pop(); }
     let (src, out, emit_only, profile) = match args.as_slice() {
         [src, flag, out] if flag == "-o" => (src, out, false, LibraryProfile::Hosted),
         [src, flag, out, mode] if flag == "-o" && mode == "--emit-llvm" =>
@@ -935,14 +945,14 @@ fn cli() -> Result<(), String> {
             if flag == "-o" && mode == "--emit-llvm" && profile == "--freestanding-core" =>
             (src, out, true, LibraryProfile::FreestandingCore),
         _ => return Err(
-            "usage: atto-llvm input.atto -o output [--emit-llvm [--freestanding-core]]".into()
+            "usage: atto-llvm input.atto -o output [--emit-llvm [--freestanding-core]] [--explicit-rebinding]".into()
         ),
     };
     if !src.ends_with(".atto") {
         return Err("E_SOURCE: input must have the .atto extension".into());
     }
     let content = std::fs::read_to_string(src).map_err(|e|format!("E_INPUT: {e}"))?;
-    let ir = compile_ir_with_profile(&content, profile)?;
+    let ir = compile_ir_with_binding_profile(&content, profile, explicit_rebinding)?;
     let (staged, mut stage_file) = OutputStage::create(
         std::path::Path::new(src), std::path::Path::new(out)
     )?;
@@ -1211,6 +1221,26 @@ mod attached_actor_state_native_no_ir {
 #[cfg(test)]
 mod parameter_rebind_tests {
     use super::*;
+
+    #[test]
+    fn explicit_binding_profile_rejects_bare_local_writes_without_changing_legacy() {
+        let strict = |source| compile_ir_with_binding_profile(source, LibraryProfile::Hosted, true);
+        let old = "pub fnc main(): int { let int x = 40; x = x + 2; return x; }";
+        assert!(compile_ir(old).is_ok());
+        assert!(strict(old).unwrap_err().contains("E_EXPLICIT_REBIND"));
+        let new = old.replace("x = x + 2", "set x = x + 2");
+        assert_eq!(strict(&new).unwrap(), compile_ir(old).unwrap());
+        for source in [
+            "pub fnc main(): int { let int x = 0; for (x = 1; x < 2; x++) {} return x; }",
+            "pub fnc main(): int { let int x = 0; for (; x < 2; x = x + 1) {} return x; }",
+        ] {
+            assert!(strict(source).unwrap_err().contains("E_EXPLICIT_REBIND"), "{source}");
+        }
+        let loop_source = "pub fnc main(): int { let int x = 0; for (set x = 40; x < 42; set! (x = x + 1)) {} return x; }";
+        assert!(strict(loop_source).is_ok());
+        let fixed = "pub fnc main(): int { const int x = 40; set x = 42; return x; }";
+        assert!(strict(fixed).unwrap_err().contains("E_IMMUTABLE"));
+    }
 
     #[test]
     fn copied_scalar_let_shadow_creates_distinct_slots() {
