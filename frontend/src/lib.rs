@@ -47,13 +47,19 @@ pub fn compile(source: &str) -> Result<Vec<u8>, Diagnostic> {
     let mut depth = 0usize;
     let mut pending_struct = None;
     for (i, token) in toks.iter().enumerate() {
-        if depth == 0 && matches!(toks.get(i..i.saturating_add(5)),
+        if depth == 0 && (matches!(toks.get(i..i.saturating_add(5)),
             Some([lexer::Token { tok: lexer::Tok::Ident(a), .. },
                   lexer::Token { tok: lexer::Tok::Ident(_), .. },
                   lexer::Token { tok: lexer::Tok::Assign, .. },
                   lexer::Token { tok: lexer::Tok::Ident(b), .. },
                   lexer::Token { tok: lexer::Tok::LBrace, .. }])
-                if a == "type" && b == "struct") {
+                if a == "type" && b == "struct")
+            || matches!(toks.get(i..i.saturating_add(4)),
+                Some([lexer::Token { tok: lexer::Tok::Ident(a), .. },
+                      lexer::Token { tok: lexer::Tok::Ident(b), .. },
+                      lexer::Token { tok: lexer::Tok::Ident(_), .. },
+                      lexer::Token { tok: lexer::Tok::LBrace, .. }])
+                    if a == "define" && b == "struct")) {
             pending_struct = Some(i);
         }
         match &token.tok {

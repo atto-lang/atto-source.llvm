@@ -594,14 +594,17 @@ impl Parser {
     /// attachments. This does not certify initialization, layout or guest execution.
     pub fn parse_struct_with_target(&mut self) -> R<StructWithTarget> {
         self.struct_target = true;
-        self.expect_word("type")?;
+        let direct = self.eat_word("define");
+        if direct { self.expect_word("struct")?; } else { self.expect_word("type")?; }
         let (name, pos) = self.ident("a struct name")?;
         if UNSUPPORTED_TYPES.contains(&name.as_str()) ||
             matches!(name.as_str(), "int" | "bool" | "boolean" | "float" | "f64" | "string" | "String" | "void") {
             return Err(Diagnostic::new(pos, "E_RESERVED_TYPE", "struct name is an intrinsic type"));
         }
-        self.expect(Tok::Assign, "'=' after struct name")?;
-        self.expect_word("struct")?;
+        if !direct {
+            self.expect(Tok::Assign, "'=' after struct name")?;
+            self.expect_word("struct")?;
+        }
         self.expect(Tok::LBrace, "'{' after struct")?;
         let mut fields: Vec<(String, Type)> = Vec::new();
         while !self.eat(&Tok::RBrace) {
@@ -800,7 +803,9 @@ impl Parser {
                 }
                 ty
             } else {
-                self.expect(Tok::Colon, "':' before attached method return type")?;
+                if !(self.eat(&Tok::Colon) || self.eat(&Tok::Arrow)) {
+                    return Err(self.expected("':' or '->' before attached method return type"));
+                }
                 self.parse_type()?
             };
             if !scalar_params(&params) || !matches!(ret, Type::Int | Type::Bool | Type::Void) {
