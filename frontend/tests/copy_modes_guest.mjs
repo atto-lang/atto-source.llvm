@@ -5,8 +5,15 @@ import {tmpdir} from 'node:os';
 import {spawnSync} from 'node:child_process';
 const compiler=resolve(process.env.ATTOC??'target/debug/attoc');
 const flat='define class Box as\n pub let int n = 20;\nend\n';
+const nested='define class Leaf as pub val int n = 20; end\ndefine class Root as pub let Leaf child = new Leaf(); pub let int extra = 1; end\n';
 const main=s=>'pub fnc main(): int { '+s+' }';
 const cases=[
+ ['nested-immutable',nested+main('let Root a = new Root(); let Root b = copy! a; let Root c = copy!! b; a.extra = 2; b.extra = 3; c.extra = 4; b.child = new Leaf(); return a.child.n + c.child.n + a.extra;'),42],
+ ['nested-escape',nested+main('let Root a = new Root(); let Root b = copy! a; let Leaf x = b.child; return x.n;'),'E_BORROW'],
+ ['nested-write',nested+main('let Root a = new Root(); let Root b = copy! a; b.child.n = 0; return a.child.n;'),'E_OWNERSHIP'],
+ ['mutable-leaf',nested.replace('pub val int n','pub let int n')+main('let Root a = new Root(); return a.child.n;'),'E_UNSUPPORTED_TYPE'],
+ ['nested-method-leaf',nested.replace('n = 20; end','n = 20; read(): int { return self.n; } end')+main('let Root a = new Root(); return a.child.n;'),'E_UNSUPPORTED_TYPE'],
+ ['nested-rebind-alias',nested+main('let Root a = new Root(); let Root b = copy! a; let Leaf x = new Leaf(); b.child = x; return a.child.n;'),'E_COPY_UNPROVEN'],
  ['scalar-modes',main('let int a = 20; let int b = copy! a; let int c = copy!! a; a = 2; return a+b+c;'),42],
  ['nested-negation',main('let bool a = false; let bool b = copy! !a; let bool c = copy!! !a; return (b && c) ? 42 : 0;'),42],
  ['precedence',main('return copy! 20 + copy!! 22;'),42],

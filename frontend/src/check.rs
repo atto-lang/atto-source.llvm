@@ -312,6 +312,7 @@ struct MethodInfo {
 
 struct ClassInfo {
     name: String,
+    immutable_leaf: bool,
     fields: Vec<FieldInfo>,
     methods: Vec<MethodInfo>,
     new_idx: u32,
@@ -806,6 +807,15 @@ pub fn check(p: &Program) -> R<TProgram> {
         }
         Ok(out)
     };
+    // Only fixed scalar storage with no constructor/methods is a closed
+    // immutable leaf. A nominal reference or a fixed outer slot alone is
+    // never proof of transitive immutability.
+    let immutable_leaves: Vec<bool> = p.classes.iter().map(|c| {
+        c.ctor.is_none() && c.methods.is_empty() && c.fields.iter().all(|f|
+            f.mode == FieldMode::Final && const_init(&f.init)
+                && res(f.ty).is_ok_and(|t| matches!(t,
+                    Type::Int | Type::Bool | Type::Float | Type::Str | Type::Enum(_))))
+    }).collect();
     let fields_of = |owner: &str, fs: &[Field], actor: bool, global_base: u32| -> R<Vec<FieldInfo>> {
         let mut out: Vec<FieldInfo> = Vec::new();
         for (i, f) in fs.iter().enumerate() {
@@ -820,6 +830,9 @@ pub fn check(p: &Program) -> R<TProgram> {
             let ok = match ty {
                 Type::Int | Type::Bool => true,
                 Type::Float | Type::Str | Type::Enum(_) => !actor,
+                Type::Class(ci) => !actor && immutable_leaves[ci as usize]
+                    && matches!(&f.init.kind, ExprKind::New(name, args)
+                        if name == &class_names[ci as usize] && args.is_empty()),
                 _ => false,
             };
             if !ok {
@@ -847,7 +860,7 @@ pub fn check(p: &Program) -> R<TProgram> {
     };
 
     let mut classes = Vec::new();
-    for c in &p.classes {
+    for (ci, c) in p.classes.iter().enumerate() {
         let fields = fields_of(&c.name, &c.fields, false, 0)?;
         let mut methods = methods_of(&c.name, &c.methods, &c.fields)?;
         let new_idx = take();
@@ -866,6 +879,7 @@ pub fn check(p: &Program) -> R<TProgram> {
         };
         classes.push(ClassInfo {
             name: c.name.clone(),
+            immutable_leaf: immutable_leaves[ci],
             fields,
             methods,
             new_idx,
@@ -1343,6 +1357,14 @@ fn actor_type_ok(g: &Globals, actor: &str, t: Type, pos: Pos) -> R<()> {
 }
 
 fn field_init(g: &Globals, f: &Field, ty: Type, owner: &str, actor: bool, imports: &mut Vec<Import>, data: &mut Vec<u8>) -> R<TE> {
+    if let Type::Class(ci) = ty {
+        let info = &g.classes[ci as usize];
+        if !actor && info.immutable_leaf && matches!(&f.init.kind,
+            ExprKind::New(name, args) if name == &info.name && args.is_empty()) {
+            return Ok(TE { e: TExpr::Call(info.new_idx, Vec::new()), ty });
+        }
+        return Err(Diagnostic::new(f.init.pos, "E_COPY_UNPROVEN", "nested field requires a fresh immutable leaf"));
+    }
     if !const_init(&f.init) {
         return Err(Diagnostic::new(
             f.init.pos,
@@ -2153,7 +2175,15 @@ impl<'a> FnCx<'a> {
                                     return Err(Diagnostic::new(pos, "E_IMMUTABLE", "fixed class field"));
                                 }
                                 let (offset, fty) = (f.slot, f.ty);
-                                if !matches!(fty, Type::Int | Type::Bool | Type::Float | Type::Str | Type::Enum(_)) {
+                                let fresh_leaf = match fty {
+                                    Type::Class(child) => {
+                                        let leaf = &self.g.classes[child as usize];
+                                        leaf.immutable_leaf && matches!(&value.kind,
+                                            ExprKind::New(n, args) if n == &leaf.name && args.is_empty())
+                                    }
+                                    _ => false,
+                                };
+                                if !fresh_leaf && !matches!(fty, Type::Int | Type::Bool | Type::Float | Type::Str | Type::Enum(_)) {
                                     return Err(Diagnostic::new(pos, "E_COPY_UNPROVEN", "field requires a reference ownership proof"));
                                 }
                                 let v = self.value(value)?;
@@ -2192,6 +2222,9 @@ impl<'a> FnCx<'a> {
                     }
                 };
                 let (offset, fty, mode) = (f.slot, f.ty, f.mode);
+                if matches!(fty, Type::Class(_)) {
+                    return Err(Diagnostic::new(pos, "E_COPY_UNPROVEN", "nested reference constructor reassignment is not admitted"));
+                }
                 if mode == FieldMode::Final {
                     return Err(Diagnostic::new(
                         pos,
@@ -2307,6 +2340,9 @@ impl<'a> FnCx<'a> {
     /// An expression used as a value (not void).
     fn value(&mut self, e: &Expr) -> R<TE> {
         let v = self.expr(e)?;
+        if matches!(v.ty, Type::Class(_)) && matches!(v.e, TExpr::FieldGet { .. }) {
+            return Err(Diagnostic::new(e.pos, "E_BORROW", "nested reference projections cannot escape as owned handles"));
+        }
         if v.ty == Type::Void {
             return Err(type_err(e.pos, "a void call has no value"));
         }
@@ -2411,7 +2447,9 @@ impl<'a> FnCx<'a> {
             }
             // receivers that are not names recurse; keep that path thin
             ExprKind::Member(base, name) if !matches!(base.kind, ExprKind::Var(_) | ExprKind::SelfRef) => {
-                let obj = self.value(base)?;
+                let obj = if matches!(base.kind, ExprKind::Member(..)) {
+                    self.expr(base)?
+                } else { self.value(base)? };
                 self.member_on(obj, name, e.pos)
             }
             ExprKind::MethodCall(base, name, args) if !matches!(base.kind, ExprKind::Var(_) | ExprKind::SelfRef) => {
@@ -3410,6 +3448,9 @@ impl<'a> FnCx<'a> {
         let mut text = format!("{}{{", class.name);
         let mut plan: Vec<(String, Option<(u32, Type)>)> = Vec::new();
         for (i, f) in class.fields.iter().enumerate() {
+            if matches!(f.ty, Type::Class(_)) {
+                return Err(Diagnostic::new(pos, "E_UNSUPPORTED", "printing nested object fields is not supported"));
+            }
             if let Type::Enum(_) = f.ty {
                 return Err(Diagnostic::new(
                     pos,
