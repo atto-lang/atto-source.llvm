@@ -4,6 +4,7 @@
 #include "oreslang/frontend/ChannelGuestGate.hpp"
 #include "oreslang/frontend/Parser.hpp"
 #include "oreslang/frontend/NamedRecursiveScalarSource.hpp"
+#include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/frontend/PortableUnicodeIdentifier.hpp"
 #include "oreslang/types/CoreTypeRegistry.hpp"
 #include "oreslang/frontend/PointerIntSyntax.hpp"
@@ -1152,7 +1153,7 @@ public:
         require("|>");require("fnc");
         const auto self=identifier();
         require("(");require("int");const auto param=identifier();require(")");
-        if(self==param||self=="_"||param=="_"||self=="main")
+        if(self==param||self=="_"||param=="_"||self=="main"||self=="on"||param=="on")
             fail("E_NAMED_STAGE_NAME: distinct lexical identifiers required");
         if(!accept(":"))require("->");
         require("int");require("{");require_return_marker();
@@ -10055,6 +10056,7 @@ void reject_unlowered_mutex_constructor(std::string_view source,
 NamedRecursiveScalarPlan parse_named_recursive_scalar(std::string_view source) {
     if(source.size()>16384 || source.find("// ores:")!=std::string_view::npos)
         throw std::runtime_error("E_NAMED_STAGE_PROFILE: source budget or target directive");
+    require_valid_source_utf8(source);
     return Parser(source,false,false).named_recursive_scalar();
 }
 
