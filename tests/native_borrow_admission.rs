@@ -87,9 +87,13 @@ fn check_case_with_suffix(
     let stderr_file = fs::File::create(&stderr_path).unwrap();
     // Capture file names alone are not sufficient provenance: a malicious
     // compiler can replace an existing log with a symlink or another file.
+    // Keep the original open descriptions alive during execution. Size
+    // checks must not race unlink/replacement of the path, and keeping the
+    // inode alive prevents unlink/recreate from recycling its identity.
+    let capture_handles = [stdout_file.try_clone().unwrap(), stderr_file.try_clone().unwrap()];
     let capture_before = [
-        fs::symlink_metadata(&stdout_path).unwrap(),
-        fs::symlink_metadata(&stderr_path).unwrap(),
+        capture_handles[0].metadata().unwrap(),
+        capture_handles[1].metadata().unwrap(),
     ];
     let root_before = entries(root);
     let mut command = Command::new(compiler);
@@ -104,9 +108,8 @@ fn check_case_with_suffix(
         if let Some(status) = child.try_wait().unwrap() {
             break status;
         }
-        let excessive = [&stdout_path, &stderr_path]
-            .iter()
-            .any(|p| fs::metadata(p).unwrap().len() > 1024 * 1024);
+        let excessive = capture_handles.iter()
+            .any(|file| file.metadata().map_or(true, |meta| meta.len() > 1024 * 1024));
         if Instant::now() >= deadline || excessive {
             let _ = child.kill();
             let _ = child.wait();
@@ -119,7 +122,7 @@ fn check_case_with_suffix(
     for (stream_path, original) in [(&stdout_path, &capture_before[0]),
                                     (&stderr_path, &capture_before[1])] {
         let current = fs::symlink_metadata(stream_path)
-            .expect("compiler removed its harness-owned capture file");
+            .unwrap_or_else(|_| panic!("{name}: compiler replaced harness-owned capture file: {}", stream_path.display()));
         assert!(current.file_type().is_file(),
             "{name}: compiler replaced harness-owned capture file: {}", stream_path.display());
         #[cfg(unix)]
@@ -139,8 +142,19 @@ fn check_case_with_suffix(
             "{name}: compiler exceeded final output budget"
         );
     }
-    let stdout = fs::read_to_string(stdout_path).unwrap();
-    let stderr = fs::read_to_string(stderr_path).unwrap();
+    // Read the same open files that received the child output, never
+    // reopen paths that could be swapped after the provenance check.
+    let read_capture = |mut file: fs::File| {
+        use std::io::{Read, Seek, SeekFrom};
+        file.seek(SeekFrom::Start(0)).unwrap();
+        let mut bytes = Vec::new();
+        file.take(1024 * 1024 + 1).read_to_end(&mut bytes).unwrap();
+        assert!(bytes.len() <= 1024 * 1024, "{name}: compiler exceeded final output budget");
+        String::from_utf8(bytes).unwrap()
+    };
+    let [stdout_capture, stderr_capture] = capture_handles;
+    let stdout = read_capture(stdout_capture);
+    let stderr = read_capture(stderr_capture);
     assert!(
         fs::symlink_metadata(&input).unwrap().file_type().is_file(),
         "{name}: replaced input"
@@ -581,6 +595,14 @@ mod tests {
     fn negative_admission_rejects_capture_regular_file_replacement() {
         check_replaced_capture_file(
             "rm ../invalid-mutable-share.stderr\nprintf 'bad ownership\\n' > ../invalid-mutable-share.stderr\nexit 2",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn negative_admission_rejects_capture_removal() {
+        check_replaced_capture_file(
+            "rm ../invalid-mutable-share.stderr\nprintf 'bad ownership\\n' >&2\nexit 2",
         );
     }
 
