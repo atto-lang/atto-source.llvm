@@ -84,4 +84,23 @@ jobs:
           if target/release/atto-llvm "$work/strict-reject.atto" -o "$work/strict-reject.ll" --emit-llvm --explicit-rebinding >"$work/strict-reject.log" 2>&1; then exit 1; fi
           grep -q E_EXPLICIT_REBIND "$work/strict-reject.log"
           test ! -e "$work/strict-reject.ll"
+          printf '%s\n' 'pub fnc main(): int { let x = 40; set x++; set ++x; return x; }' > "$work/inc.atto"
+          printf '%s\n' 'pub fnc main(): int { let x = 44; set x--; set --x; return x; }' > "$work/dec.atto"
+          printf '%s\n' 'pub fnc main(): int { let x = 20; set x += 2; set x -= 1; set x *= 2; return x; }' > "$work/compound.atto"
+          printf '%s\n' 'pub fnc main(): int { let x = 32; for let i = 0; i < 10; set i++ { set x++; } return x; }' > "$work/counter.atto"
+          printf '%s\n' 'pub fnc main(): int { let x = 32; for (let i = 10; i > 0; set --i) { set x++; } return x; }' > "$work/descending.atto"
+          printf '%s\n' 'pub fnc main(): int { let x = 32; for let i = 0; i < 10; set i += 2 { set x += 2; } return x; }' > "$work/stride.atto"
+          for name in inc dec compound counter descending stride; do
+            target/release/atto-llvm "$work/$name.atto" -o "$work/$name.ll" --emit-llvm --explicit-rebinding
+            for opt in 0 2; do
+              clang -x ir -O"$opt" -o "$work/$name-$opt" "$work/$name.ll"
+              status=0
+              timeout 10s "$work/$name-$opt" || status=$?
+              test "$status" = 42
+            done
+          done
+          printf '%s\n' 'pub fnc main(): int { for let i = 0; i < 10; i++ {} return 42; }' > "$work/bare-counter.atto"
+          if target/release/atto-llvm "$work/bare-counter.atto" -o "$work/bare-counter.ll" --emit-llvm --explicit-rebinding >"$work/bare-counter.log" 2>&1; then exit 1; fi
+          grep -q E_EXPLICIT_REBIND "$work/bare-counter.log"
+          test ! -e "$work/bare-counter.ll"
           sha256sum "$work/"*.ll
