@@ -1278,6 +1278,8 @@ mod parameter_rebind_tests {
 
     #[test]
     fn scalar_match_aliases() {
+        compile_ir("pub fnc main(): int { return match 42 over on z when z == 42 -> z, on _ -> 0 end; }").expect("ordinary-guard-binder");
+        compile_ir("pub fnc main(): int { return match 42 over on 41 as z when (z + 9223372036854775807) == 0 -> 0, on _ as const z -> z end; }").expect("guard-lazy-overflow");
         compile_ir("pub fnc main(): int { return match 42 over on _ as int z -> z end; }").expect("alias-typed");
         compile_ir("pub fnc main(): int { return match 42 over on _ as const z -> z end; }").expect("alias-const");
         compile_ir("pub fnc main(): int { let int n = 20; let int r = 0; do match n over on _ as rebind int z -> { z = z + 2; r = z; } end return n + r; }").expect("alias-local");

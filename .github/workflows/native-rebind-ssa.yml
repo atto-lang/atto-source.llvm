@@ -194,3 +194,19 @@ jobs:
           incoming-alias-duplicate-reject c35ceb04f96e8aab70efded4d6ba09854167a390 E_SYNTAX
           scalar-name-first acd7353fb5b0d17e48dffad206210e770304a2f8 23
           SHARED_BINDINGS
+          printf '%s\n' 'pub fnc main(): int { return match 42 over on z when z == 42 -> z, on _ -> 0 end; }' > "$work/ordinary-guard-binder.atto"
+          target/release/atto-llvm "$work/ordinary-guard-binder.atto" -o "$work/ordinary-guard-binder.ll" --emit-llvm
+          for opt in 0 2; do
+            clang -x ir -O"$opt" -o "$work/ordinary-guard-binder-$opt" "$work/ordinary-guard-binder.ll"
+            status=0
+            timeout 10s "$work/ordinary-guard-binder-$opt" || status=$?
+            test "$status" = 42
+          done
+          printf '%s\n' 'pub fnc main(): int { return match 42 over on 41 as z when (z + 9223372036854775807) == 0 -> 0, on _ as const z -> z end; }' > "$work/guard-lazy-overflow.atto"
+          target/release/atto-llvm "$work/guard-lazy-overflow.atto" -o "$work/guard-lazy-overflow.ll" --emit-llvm
+          for opt in 0 2; do
+            clang -x ir -O"$opt" -o "$work/guard-lazy-overflow-$opt" "$work/guard-lazy-overflow.ll"
+            status=0
+            timeout 10s "$work/guard-lazy-overflow-$opt" || status=$?
+            test "$status" = 42
+          done

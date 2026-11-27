@@ -1940,7 +1940,11 @@ impl<'a> FnCx<'a> {
                 }
                 if let Some(n) = bind {
                     let slot = self.declare(n, sty, false, arm.pos)?;
-                    body.push(TStmt::Set(slot, get()));
+                    let assignment = TStmt::Set(slot, get());
+                    // A scalar guard reads the binder before the branch body.
+                    // Stage the copied value in the same setup as whole aliases.
+                    if arm.guard.is_some() { match_setup.push(assignment); }
+                    else { body.push(assignment); }
                 }
                 let guard = match &arm.guard {
                     Some(g) => Some(self.cond(g, "match guard")?),
