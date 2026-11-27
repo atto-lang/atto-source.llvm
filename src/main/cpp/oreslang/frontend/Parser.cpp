@@ -425,7 +425,7 @@ public:
         }
         // Contiguous comparison/logical operators are single tokens, matching
         // the Java/Graal precedence grammar.
-        for (std::string_view op : {"->", "::", "|>", "<|", "==", "!=", "<=", ">=", "&&", "||", "^^"}) {
+        for (std::string_view op : {"->", "::", ":=", "|>", "<|", "==", "!=", "<=", ">=", "&&", "||", "^^"}) {
             if (source_.substr(at_, 2) == op) {
                 at_ += 2;
                 return {Kind::Symbol, source_.substr(start, 2), start};
@@ -6695,8 +6695,41 @@ private:
         return expr;
     }
 
+    // A literal Pair key is lexical metadata, not a lookup or an invocation of
+    // Pair.of. Only immediate i64 .value projection is representable here.
+    bool starts_grouped_pair_literal() {
+        if (token_.kind != Kind::Symbol || token_.text != "(") return false;
+        Lexer probe = lexer_;
+        const Token key = probe.next();
+        const Token op = probe.next();
+        return (key.kind == Kind::Identifier || key.kind == Kind::String) &&
+               op.kind == Kind::Symbol && op.text == ":=";
+    }
+
+    std::unique_ptr<Expression> grouped_pair_literal_projection(std::size_t offset) {
+        require("(");
+        if (token_.kind == Kind::String) (void)string_literal(token_.text);
+        else if (token_.kind != Kind::Identifier || reserved(token_.text))
+            fail("E_PAIR_KEY_TYPE: Pair key requires a literal identifier or string");
+        advance();
+        require(":=");
+        auto payload = expression();
+        if (token_.text == ":=")
+            fail("E_PAIR_CHAIN: Pair construction is nonassociative");
+        require(")");
+        if (!accept("."))
+            fail("E_PAIR_ESCAPE_UNSUPPORTED: native owned Pair ABI is not implemented");
+        if (!accept("value"))
+            fail("E_PAIR_PROJECTION_UNSUPPORTED: only i64 value projection is admitted");
+        auto expr = make_expression(Expression::Kind::Cast, offset);
+        expr->cast_target = ScalarType::I64;
+        expr->left = std::move(payload);
+        return expr;
+    }
+
     std::unique_ptr<Expression> primary() {
         const auto offset = token_.offset;
+        if (starts_grouped_pair_literal()) return grouped_pair_literal_projection(offset);
         if (token_.kind == Kind::Identifier && token_.text == "Pair") {
             Lexer probe = lexer_;
             if (probe.next().text == "." && probe.next().text == "of")
