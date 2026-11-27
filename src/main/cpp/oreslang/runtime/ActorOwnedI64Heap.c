@@ -144,6 +144,33 @@ OresActorTurn ores_actor_i64_heap_enter(OresActorI64Heap* heap,
     return token;
 }
 
+int ores_actor_i64_heap_try_enter(OresActorI64Heap* heap,
+                                  uint64_t actor_id,
+                                  uint64_t incarnation,
+                                  OresActorTurn* out_turn) {
+    if (!out_turn || !heap) rejected();
+    // A denied retry never leaves a previously filled caller token usable.
+    out_turn->domain = 0;
+    out_turn->epoch = 0;
+    if (carrier_heap != NULL) rejected();
+    if (!try_lock_heap(heap)) return 0;
+    if (heap->retiring || !actor_id || !incarnation
+        || actor_id != heap->owner || incarnation != heap->incarnation
+        || heap->turn_epoch == UINT64_MAX) rejected();
+    if (heap->turn_active) {
+        unlock_heap(heap);
+        return 0;
+    }
+    heap->turn_active = 1;
+    ++heap->turn_epoch;
+    out_turn->domain = heap->domain;
+    out_turn->epoch = heap->turn_epoch;
+    carrier_heap = heap;
+    carrier_epoch = out_turn->epoch;
+    unlock_heap(heap);
+    return 1;
+}
+
 void ores_actor_i64_heap_leave(OresActorI64Heap* heap, OresActorTurn turn) {
     lock_heap(heap);
     if (!heap->turn_active || turn.domain != heap->domain

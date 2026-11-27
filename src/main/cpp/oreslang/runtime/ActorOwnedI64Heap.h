@@ -22,6 +22,17 @@ OresActorI64Heap* ores_actor_i64_heap_open(uint64_t actor_id,
 OresActorTurn ores_actor_i64_heap_enter(OresActorI64Heap* heap,
                                          uint64_t actor_id,
                                          uint64_t incarnation);
+/* Nonparking source scheduler admission. Returns 1 and writes an owning
+ * physical turn token on success. Returns 0 (and ZEROES out_turn) if another
+ * carrier already holds the actor turn or the short heap lock is contended.
+ * Invalid actor/incarnation, nested carrier entry, retirement and epoch
+ * exhaustion are fatal violations, never retryable scheduling decisions.
+ * A denied attempt does not increment the epoch or retain carrier authority.
+ */
+int ores_actor_i64_heap_try_enter(OresActorI64Heap* heap,
+                                  uint64_t actor_id,
+                                  uint64_t incarnation,
+                                  OresActorTurn* out_turn);
 void ores_actor_i64_heap_leave(OresActorI64Heap* heap, OresActorTurn turn);
 OresActorSlot ores_actor_i64_heap_new(OresActorI64Heap* heap,
                                        OresActorTurn turn, int64_t value);
