@@ -274,6 +274,11 @@ public:
             // Existing nb-select recognition is intentionally unchanged
             // until native select lowering supports that grammar.
             const auto first = source_.substr(start, at_ - start);
+            // Compiler-owned local Pair scalar slots use ordinary CFG
+            // place syntax, but no source token can mint that authority.
+            if (first.rfind("__atto_pair_local_", 0) == 0)
+                throw std::runtime_error("E_RESERVED: compiler-owned Pair local name at byte "
+                    + std::to_string(start));
             // Channel<int> has a distinct result/EOF/cancellation/ownership
             // representation. Reject the exact nominal type before any
             // scalar i64 LLVM lowering can reinterpret it as integers or
@@ -6896,7 +6901,7 @@ private:
             if (qualifier == "const" && !native_const_scalar_tree(*payload, value.locals))
                 fail("E_PAIR_CONSTEXPR: constant Pair requires constant payload");
             LocalBinding binding;
-            binding.name = "$pair$" + std::to_string(ordinal++);
+            binding.name = "__atto_pair_local_" + std::to_string(ordinal++);
             binding.offset = offset;
             binding.scalar_type = ScalarType::I64;
             binding.owner_mutable = qualifier != "const"; // const-proof metadata only
