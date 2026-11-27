@@ -698,6 +698,76 @@ llvm::Value* lower(const Expression& expr,
             result->addIncoming(rightCanonical, rhsExit);
             return result;
         }
+        case Expression::Kind::ClosedRecur: {
+            if (!valid_closed_recur(expr))
+                throw std::runtime_error("E_VALUE_LOOP_PROFILE: invalid closed recur lowering");
+            using K = Expression::Kind;
+            std::unordered_map<std::string, llvm::Value*> state;
+            auto operand = [&](auto&& self, const Expression& e) -> llvm::Value* {
+                if (e.kind == K::Integer) return llvm::ConstantInt::getSigned(i64, e.integer);
+                if (e.kind == K::Boolean) return llvm::ConstantInt::get(i64, e.boolean ? 1 : 0);
+                if (e.kind == K::Variable) return state.at(e.name);
+                auto* lhs = self(self, *e.left);
+                if (e.kind == K::Negate)
+                    return checked_signed_arithmetic(builder, llvm::Intrinsic::ssub_with_overflow,
+                        llvm::ConstantInt::get(i64, 0), lhs, "recur.neg");
+                auto* rhs = self(self, *e.right);
+                llvm::Value* cmp = nullptr;
+                switch (e.kind) {
+                    case K::Add: return checked_signed_arithmetic(builder, llvm::Intrinsic::sadd_with_overflow, lhs, rhs, "recur.add");
+                    case K::Subtract: return checked_signed_arithmetic(builder, llvm::Intrinsic::ssub_with_overflow, lhs, rhs, "recur.sub");
+                    case K::Multiply: return checked_signed_arithmetic(builder, llvm::Intrinsic::smul_with_overflow, lhs, rhs, "recur.mul");
+                    case K::Equal: cmp = builder.CreateICmpEQ(lhs, rhs); break;
+                    case K::NotEqual: cmp = builder.CreateICmpNE(lhs, rhs); break;
+                    case K::Less: cmp = builder.CreateICmpSLT(lhs, rhs); break;
+                    case K::LessEqual: cmp = builder.CreateICmpSLE(lhs, rhs); break;
+                    case K::Greater: cmp = builder.CreateICmpSGT(lhs, rhs); break;
+                    case K::GreaterEqual: cmp = builder.CreateICmpSGE(lhs, rhs); break;
+                    default: throw std::runtime_error("invalid closed recur operand");
+                }
+                return builder.CreateZExt(cmp, i64);
+            };
+            std::vector<llvm::Value*> initial;
+            for (std::size_t i = 0; i < expr.recur_names.size(); ++i) {
+                auto* v = operand(operand, *expr.recur_initializers[i]);
+                initial.push_back(v);
+                state.emplace(expr.recur_names[i], v);
+            }
+            auto* entry = builder.GetInsertBlock();
+            auto* fn = entry->getParent();
+            auto* header = llvm::BasicBlock::Create(builder.getContext(), "recur.header", fn);
+            auto* join = llvm::BasicBlock::Create(builder.getContext(), "recur.join", fn);
+            builder.CreateBr(header);
+            builder.SetInsertPoint(header);
+            std::vector<llvm::PHINode*> phis;
+            for (std::size_t i = 0; i < initial.size(); ++i) {
+                auto* phi = builder.CreatePHI(i64, 2, "recur.state");
+                phi->addIncoming(initial[i], entry);
+                phis.push_back(phi);
+                state.at(expr.recur_names[i]) = phi;
+            }
+            std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>> exits;
+            for (std::size_t i = 0; i < expr.recur_predicates.size(); ++i) {
+                auto* condition = operand(operand, *expr.recur_predicates[i]);
+                auto* taken = llvm::BasicBlock::Create(builder.getContext(), "recur.break", fn);
+                auto* next = llvm::BasicBlock::Create(builder.getContext(), "recur.next", fn);
+                builder.CreateCondBr(builder.CreateICmpNE(condition, llvm::ConstantInt::get(i64, 0)), taken, next);
+                builder.SetInsertPoint(taken);
+                auto* value = operand(operand, *expr.recur_results[i]);
+                exits.emplace_back(value, builder.GetInsertBlock());
+                builder.CreateBr(join);
+                builder.SetInsertPoint(next);
+            }
+            std::vector<llvm::Value*> updates;
+            for (const auto& update : expr.recur_updates) updates.push_back(operand(operand, *update));
+            auto* backedge = builder.GetInsertBlock();
+            for (std::size_t i = 0; i < phis.size(); ++i) phis[i]->addIncoming(updates[i], backedge);
+            builder.CreateBr(header);
+            builder.SetInsertPoint(join);
+            auto* result = builder.CreatePHI(i64, static_cast<unsigned>(exits.size()), "recur.result");
+            for (const auto& exit : exits) result->addIncoming(exit.first, exit.second);
+            return result;
+        }
         case Expression::Kind::Conditional: {
             // Type admission has proven a bool condition and compatible arm
             // result types; ownership admission has proven a valid affine join.
