@@ -8,7 +8,7 @@ const flat='define class Box as\n pub let int n = 20;\nend\n';
 const main=s=>'pub fnc main(): int { '+s+' }';
 const cases=[
  ['scalar-modes',main('let int a = 20; let int b = copy! a; let int c = copy!! a; a = 2; return a+b+c;'),42],
- ['nested-negation',main('let bool a = false; let bool b = copy! !a; let bool c = copy!! !a; if b && c { return 42; } else { return 0; }'),42],
+ ['nested-negation',main('let bool a = false; let bool b = copy! !a; let bool c = copy!! !a; return (b && c) ? 42 : 0;'),42],
  ['precedence',main('return copy! 20 + copy!! 22;'),42],
  ['flat-shallow',flat+main('let Box a = new Box(); let Box b = copy! a; a.n = 11; b.n = 31; return a.n+b.n;'),42],
  ['flat-deep',flat+main('let Box a = new Box(); let Box b = copy!! a; a.n = 12; b.n = 30; return a.n+b.n;'),42],
