@@ -167,3 +167,30 @@ jobs:
           if target/release/atto-llvm "$work/alias-scope.atto" -o "$work/alias-scope.ll" --emit-llvm >"$work/alias-scope.log" 2>&1; then exit 1; fi
           grep -q E_UNBOUND "$work/alias-scope.log"
           test ! -e "$work/alias-scope.ll"
+          # Exact shared fixture bytes, verified before every real guest compilation.
+          while read -r name blob outcome; do
+            source="contracts/incoming-scalar-bindings-v1/$name.atto"
+            test "$(git hash-object --no-filters "$source")" = "$blob"
+            output="$work/shared-$name.ll"
+            rm -f "$output"
+            if [[ "$outcome" =~ ^[0-9]+$ ]]; then
+              target/release/atto-llvm "$source" -o "$output" --emit-llvm
+              for opt in 0 2; do
+                clang -x ir -O"$opt" -o "$work/shared-$name-$opt" "$output"
+                status=0
+                timeout 10s "$work/shared-$name-$opt" || status=$?
+                test "$status" = "$outcome"
+              done
+            else
+              if target/release/atto-llvm "$source" -o "$output" --emit-llvm >"$work/shared-$name.log" 2>&1; then exit 1; fi
+              grep -Fq "$outcome" "$work/shared-$name.log"
+              test ! -e "$output"
+            fi
+          done <<'SHARED_BINDINGS'
+          incoming-alias-typed a468f12a990b9e228b3dda649ba839526d3a32f9 42
+          incoming-alias-rebind 389e63ac3aea25b4f20d2baac14908d98809b57a 42
+          incoming-alias-fixed-reject 3f8fbcd373405d950a16bcc2779d78d46027f493 E_IMMUTABLE
+          incoming-alias-type-reject f92cd4e128cafdface1a1e0eb8abd3cb0d14698f E_TYPE
+          incoming-alias-duplicate-reject c35ceb04f96e8aab70efded4d6ba09854167a390 E_SYNTAX
+          scalar-name-first acd7353fb5b0d17e48dffad206210e770304a2f8 23
+          SHARED_BINDINGS
