@@ -383,6 +383,9 @@ struct FnCx<'a> {
     dead_division_arm: bool,
     /// Class-typed locals whose value has been moved out.
     moved: BTreeSet<u32>,
+    // Monotonic proof: fresh locally allocated roots, never parameters or
+    // reassigned bindings. Conservative across all control-flow branches.
+    fresh_copy_roots: BTreeSet<u32>,
     imports: &'a mut Vec<Import>,
     data: &'a mut Vec<u8>,
 }
@@ -1512,6 +1515,7 @@ impl<'a> FnCx<'a> {
             loop_floors: Vec::new(),
             dead_division_arm: false,
             moved: BTreeSet::new(),
+            fresh_copy_roots: BTreeSet::new(),
             imports,
             data,
         }
@@ -1638,6 +1642,11 @@ impl<'a> FnCx<'a> {
                         "generator handles must be consumed by for-in until owned bindings support close"));
                 }
                 let slot = self.declare(name, v.ty, *kind == BindKind::Let, *pos)?;
+                if self.owner == Owner::TopLevel && matches!(v.ty, Type::Class(_))
+                    && (matches!(init.kind, ExprKind::New(..)) || matches!(&init.kind,
+                        ExprKind::Call(op, _) if matches!(op.as_str(), "$copy_shallow" | "$copy_deep"))) {
+                    self.fresh_copy_roots.insert(slot);
+                }
                 TStmt::Set(slot, v)
             }
             Stmt::Assign { name, value, pos } => {
@@ -1659,6 +1668,8 @@ impl<'a> FnCx<'a> {
                         format!("cannot assign {} to '{name}' of type {}", self.tn(v.ty), self.tn(ty)),
                     ));
                 }
+                // Rebinding cannot recover this narrow fresh-root proof.
+                self.fresh_copy_roots.remove(&slot);
                 // a reassigned object binding owns a value again
                 self.moved.remove(&slot);
                 TStmt::Set(slot, v)
@@ -2121,6 +2132,43 @@ impl<'a> FnCx<'a> {
 
     fn field_assign(&mut self, target: &Expr, field: &str, value: &Expr, pos: Pos) -> R<TStmt> {
         if !matches!(target.kind, ExprKind::SelfRef) {
+            // Closed flat class only. No general receiver-write or borrowing
+            // authority; loops and all parameters/rebound owners fail closed.
+            if self.owner == Owner::TopLevel && self.loops == 0 {
+                if let ExprKind::Var(name) = &target.kind {
+                    if let Some(local) = self.lookup(name) {
+                        let (slot, ty, mutable) = (local.slot, local.ty, local.mutable);
+                        if let Type::Class(ci) = ty {
+                            if self.fresh_copy_roots.contains(&slot) && !self.moved.contains(&slot) {
+                                if !mutable {
+                                    return Err(Diagnostic::new(pos, "E_IMMUTABLE", "class root binding is read-only"));
+                                }
+                                let class = &self.g.classes[ci as usize];
+                                let f = class.fields.iter().find(|f| f.name == field)
+                                    .ok_or_else(|| Diagnostic::new(pos, "E_UNBOUND", "unknown class field"))?;
+                                if !f.public {
+                                    return Err(Diagnostic::new(pos, "E_PRIVATE", "private class field"));
+                                }
+                                if f.mode != FieldMode::Constructor {
+                                    return Err(Diagnostic::new(pos, "E_IMMUTABLE", "fixed class field"));
+                                }
+                                let (offset, fty) = (f.slot, f.ty);
+                                if !matches!(fty, Type::Int | Type::Bool | Type::Float | Type::Str | Type::Enum(_)) {
+                                    return Err(Diagnostic::new(pos, "E_COPY_UNPROVEN", "field requires a reference ownership proof"));
+                                }
+                                let v = self.value(value)?;
+                                if v.ty != fty { return Err(type_err(value.pos, "field replacement type mismatch")); }
+                                if !self.fresh_copy_roots.contains(&slot) || self.moved.contains(&slot) {
+                                    return Err(Diagnostic::new(pos, "E_OWNERSHIP", "field owner moved while evaluating replacement"));
+                                }
+                                return Ok(TStmt::FieldSet {
+                                    obj: TE { e: TExpr::Local(slot), ty }, offset, ty: fty, value: v,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
             return Err(Diagnostic::new(
                 pos,
                 "E_OWNERSHIP",
@@ -2278,6 +2326,7 @@ impl<'a> FnCx<'a> {
                     format!("cannot move '{name}' inside a loop: it is declared outside the loop"),
                 ));
             }
+            self.fresh_copy_roots.remove(&slot);
             self.moved.insert(slot);
         }
         Ok(v)
