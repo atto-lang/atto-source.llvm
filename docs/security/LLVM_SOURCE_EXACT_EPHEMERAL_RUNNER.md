@@ -149,28 +149,127 @@ never executes a configured Git smudge filter. This explicitly treats partial
 source materialization as a **denied/tainted job**, not a resumable checkout.
 The final source-free verifier/materializer matrix is 15 + 9 = 24 cases.
 
-## Enforced protected-main policy at all authorization points
+## P0 independent post-run attestor boundary (issue #1233)
 
-A `main.protected=true` badge alone is insufficient: protection may allow
-direct, unreviewed pushes or may omit required check enforcement. Both
-pre-checkout and post-execution authorization now read the actual source-main
-branch-protection endpoint, fail closed if inaccessible, and require:
-independent CODEOWNER reviews, stale approval dismissal, at least one approval,
-admin enforcement, no force pushes or deletions, empty reviewer bypass lists,
-and at least one strict required status check. The administrator's separate
-JIT-preparation helper must enforce the same requirements before generating
-one-time credentials.
+A positive result from PR-controlled code or the execution job's own summary is NOT
+independent authorization. The previous same-job post-run gh/git approval check
+could inherit attacker-influenced GITHUB_PATH/GITHUB_ENV. It is removed from
+the untrusted execution job. The proposed workflow requires TWO genuinely
+different single-job disposable VMs in the original source organization:
 
-The source-free policy expression was exercised independently with 12 synthetic
-branch-protection cases: valid context/check-app configurations were admitted;
-weak review, bypass, no status checks, missing protections and non-strict
-required checks were denied. The trusted workflow's post-run mock includes
-19 negative authorization cases and the JIT mock includes added missing/empty/
-non-strict/malformed status-check failures.
+1. Executor label "oreslang-llvm-ephemeral-v1" runs independently reviewed PR
+   native/guest tests. No post-untrusted-code GH_TOKEN attestation is permitted.
+   Its step summary is nonauthoritative.
+2. Fresh attestor label "oreslang-llvm-attestor-ephemeral-v1" runs as a separate
+   job after a successful executor. It never checks out PR source, never shares
+   artifacts, caches, GITHUB_PATH/GITHUB_ENV, VM state or credentials with the
+   executor, and checks out only dispatch-pinned reviewed main. It uses its own
+   read-only Actions, contents and pull-request token. It rejects absent or
+   skipped actual suite steps, missing runners, duplicated job/step names, a
+   reused runner ID, crossed runner labels, wrong attempts, stale/dismissed
+   independent reviews, a changed PR head, or unprotected/moved main.
 
-This is a **candidate security hardening change**, not a submitted independent
-review or proof that protected source main is configured. As of the audit
-on October 31, 2026, LLVM main reports unprotected; API reads of the
-protection and ruleset endpoints fail with HTTP 403. No runner, source export
-or guest execution is thereby authorized. No source organization administrator
-controls were modified.
+Administrators must provision both runners OUTSIDE GitHub Actions on distinct
+clean single-tenant machines, AFTER independently reviewed source-main
+protection, runner-group repository/workflow restrictions, and exact current
+PR-head approval. From the approved trusted helper on an administrative host:
+
+    bash scripts/ci/prepare_source_ephemeral_jit.sh RUNNER_GROUP_ID /private/executor.b64
+    bash scripts/ci/prepare_source_ephemeral_jit.sh RUNNER_GROUP_ID /private/attestor.b64 --attestor
+
+Use separate one-time JIT credentials and tear down both single-job VMs afterward.
+The helper refuses overbroad groups, missing CODEOWNER/admin enforcement, altered
+trusted-main helper blobs, execution inside Actions and credential overwrites.
+One reused VM carrying both labels is prohibited and rejected by the attestor.
+Do not copy private LLVM source into any alternate organization.
+
+The source-free mock tests do NOT establish GitHub-hosted execution. The manual
+workflow_dispatch run is attached to trusted main, not a PR-head required status.
+A successful attestor is not by itself merge/export or hard-RT authorization.
+Both jobs remain NOT_EXECUTED until real source-org runner admission, protected
+main, independent review and two truly separate disposable machines are verified.
+
+## Governance integration with parent #1220 (current source-main policy)
+
+This stacked attestor fix is integrated with the parent's subsequent stronger
+governance requirements: executor pre-checkout authorization, administrator
+JIT provisioning and the **separate clean attestor** all fail closed unless
+the actual LLVM main branch-protection endpoint enforces CODEOWNER review,
+stale review dismissal, positive independent approval count, administrator
+enforcement, disabled force-push/deletion and review bypasses, and at least one
+strict required status check. A protected:true badge alone is insufficient.
+The attestor verifies protection from its own independent read-only GitHub API
+connection and never accepts a PR-generated policy receipt. Offline negative
+tests cover weak and absent controls, but are not approval or hosted evidence.
+
+The documented P0 post-run PATH/GITHUB_ENV injection is addressed by running
+the final attestor on a separate source-org-only disposable runner with no
+shared PR checkout, environment, artifacts or credentials. Real runner
+admission and exact-head native source execution remain unverified.
+
+## Pinned continuation lifecycle source-only test scope
+
+The `continuation-gate` suite must execute the checked-in native CMake/CTest target
+`oreslang-pinned-continuation-gate-test` and
+`native_pinned_continuation_loan_cancel_quiescence`, GCC and Clang ASan+UBSan,
+and an additional mandatory GCC ThreadSanitizer build and run of the same tracked
+source. The TSan step is **not** optional when `run_sanitizers=false`; that
+flag controls optional guest sanitizers in the actor suites. The independent
+fresh-runner attestor must observe completed/success GitHub step receipts for
+CTest, ASan+UBSan and TSan. Missing or skipped steps fail closed.
+
+Even successful host tests do not establish compiler-lowered Oreslang `await`
+lifecycle, physical actor-frame reclamation, Java/LLVM parity, PREEMPT_RT
+latency or hard-real-time certification. The suite cannot be dispatched until
+source-org admission, independent reviews and protected private `main` are
+enforced. Never mirror private source into another organization without the
+separately approved destination contract and source-main allowlist.
+
+## Fresh attestor: deny ambient proxy routing
+
+The fresh, token-bearing GitHub metadata attestor must connect directly to the
+hard-coded `https://api.github.com` endpoint. Python's default
+`urllib.request.build_opener` inherits `HTTPS_PROXY`, `ALL_PROXY` and
+platform proxy configuration; the attestor now explicitly supplies
+`urllib.request.ProxyHandler({})` alongside its no-redirect handler to avoid
+routing its bearer token through an environment-configured proxy. This does
+not replace trusted TLS certificates, secure VM provisioning or independent
+GitHub API approval checks.
+
+The source-free regression creates an inert hostile proxy setting, confirms
+that the original default opener inherits it, then verifies the proposed
+attestor opener supplies a disabled proxy handler and still rejects redirects.
+No HTTP requests, real credentials, private source transfer or runner
+registration are part of that regression.
+
+## Immutable protected-main required-check identity contract
+
+The source-exact executor and its independent attestor now require a trusted
+main-branch `scripts/ci/llvm_required_check_pins.json` containing the exact
+independently reviewed `(context, app_id)` pairs for every required GitHub
+status check. The file begins with `state=UNAPPROVED` and zero pins: **runner
+authorization is deliberately disabled** until a separately reviewed
+protected-main policy change records actual, issuer-bound check identities.
+No test fixture or live API response may be copied into this file as approval.
+
+A shared source-free Python verifier compares the pinned JSON contract with
+the protected source-main branch-protection response. It rejects missing,
+additional, duplicated, renamed, unpinned or app-ID-substituted checks,
+non-strict checks, and name-only legacy status contexts. It rejects bool,
+zero, null and string app IDs. The accepted set must match completely, not
+merely share a required context name. The local test matrix uses **synthetic
+only** context names and app IDs, not production approvals.
+
+The executor runs the validator and its self-tests after checkout of trusted
+main and BEFORE any PR source checkout. The admin-only JIT helper verifies
+the raw SHA of the local validator and pin file against reviewed source main,
+then validates the live branch protection before asking for a JIT registration
+token; its offline mocked enrollment tests use a synthetic local fixture.
+The separate clean attestor validates the same policy from its independently
+checked-out trusted main against a fresh GitHub API response. Missing access,
+unapproved pins or identity drift always deny the runner, never grant a
+fallback. No private source export/carrier policy is altered by this change.
+
+Exact committed source-free tests still require a successful original-source
+organization runner; local synthetic test execution does not prove LLVM
+compiled guest execution or source-runner admission.

@@ -28,6 +28,7 @@ on:
         default: true
 
 permissions:
+  actions: read
   contents: read
   pull-requests: read
 
@@ -37,6 +38,9 @@ concurrency:
 
 jobs:
   source-exact-validation:
+    permissions:
+      contents: read
+      pull-requests: read
     if: github.repository == 'ores-truffle-oreslang/oreslang-source.llvm' && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, linux, x64, oreslang-llvm-ephemeral-v1]
     timeout-minutes: 110
@@ -57,7 +61,7 @@ jobs:
           command -v gh
           protected_main="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.protected')"
           test "$protected_main" = "true"
-          # A protected:true badge is NOT proof of enforced review or checks.
+          # A protected badge alone cannot authorize executable source.
           strong_main_policy="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main/protection" --jq '
             (.required_pull_request_reviews | type == "object") and
             (.required_pull_request_reviews.require_code_owner_reviews == true) and
@@ -112,6 +116,7 @@ jobs:
         shell: bash
         env:
           PYTHONDONTWRITEBYTECODE: '1'
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
@@ -130,6 +135,18 @@ jobs:
           python3 scripts/ci/test_materialize_llvm_exact_checkout.py
           bash -n scripts/ci/test_llvm_source_exact_postrun.sh
           bash scripts/ci/test_llvm_source_exact_postrun.sh .github/workflows/llvm-source-exact-ephemeral.yml
+          test "$(git hash-object --no-filters scripts/ci/verify_llvm_independent_attestor.py)" = \
+            "$(git rev-parse HEAD:scripts/ci/verify_llvm_independent_attestor.py)"
+          python3 -I -B scripts/ci/test_verify_llvm_independent_attestor.py
+          # Reviewed main is checked out, and NO PR source has run yet.
+          # The checked-in identity pins are intentionally UNAPPROVED.
+          for tracked_path in scripts/ci/llvm_required_check_pins.json scripts/ci/verify_llvm_required_check_pins.py scripts/ci/test_verify_llvm_required_check_pins.py; do
+            test "$(git hash-object --no-filters "$tracked_path")" = "$(git rev-parse "HEAD:$tracked_path")"
+          done
+          python3 -I -B scripts/ci/test_verify_llvm_required_check_pins.py
+          bash scripts/ci/test_prepare_source_ephemeral_jit.sh scripts/ci/prepare_source_ephemeral_jit.sh
+          gh api "repos/${GITHUB_REPOSITORY}/branches/main/protection" |
+            python3 -I -B scripts/ci/verify_llvm_required_check_pins.py scripts/ci/llvm_required_check_pins.json -
 
       - name: Fetch pinned PR objects into empty sparse checkout (never persist auth)
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -170,15 +187,17 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: '1'
           GIT_TERMINAL_PROMPT: '0'
+          SOURCE_SHA: ${{ inputs.source_sha }}
         run: |
           set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           test -f scripts/publish-private-ci-source-v3.py
           test -f scripts/test-publish-private-ci-source-v3.py
           test -f tests/test_atomic_ref_cleanup_local.py
           python3 scripts/test-publish-private-ci-source-v3.py -v
           PYTHONPATH=scripts python3 -m unittest discover -s tests -p test_private_ci_export_gate.py -v
           python3 -m unittest discover -s tests -p test_atomic_ref_cleanup_local.py -v
-          echo "V3_SECURITY_SUITE_EXECUTED_FOR_EXACT_SOURCE_SHA=${{ inputs.source_sha }}"
+          echo "V3_SECURITY_SUITE_EXECUTED_FOR_EXACT_SOURCE_SHA=$SOURCE_SHA"
 
       - name: Verify preinstalled LLVM / Clang / CMake toolchain
         if: inputs.suite == 'actor-llvm' || inputs.suite == 'actor-ledger' || inputs.suite == 'continuation-gate' || inputs.suite == 'cgl-compat'
@@ -294,6 +313,26 @@ jobs:
           done
           echo "PINNED_CONTINUATION_GCC_CLANG_SANITIZERS_EXECUTED_FOR_SHA=$SOURCE_SHA"
 
+      - name: Execute exact-head pinned continuation under GCC TSan
+        if: inputs.suite == 'continuation-gate'
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          TSAN_OPTIONS: "halt_on_error=1"
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -f tests/pinned_continuation_gate_test.cpp
+          command -v g++
+          command -v timeout
+          scratch="$(mktemp -d)"
+          trap 'rm -rf "$scratch"' EXIT
+          g++ -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror -pthread \
+            -fsanitize=thread -fno-omit-frame-pointer -I src/main/cpp \
+            tests/pinned_continuation_gate_test.cpp -o "$scratch/pinned-test-tsan"
+          timeout 120s "$scratch/pinned-test-tsan"
+          echo "PINNED_CONTINUATION_TSAN_EXECUTED_FOR_SHA=$SOURCE_SHA"
+
       # Generic Linux binary compatibility only, not PREEMPT_RT/RT certification.
       - name: Execute exact-head CGL negative preflight, native compiler, CTest and guest ELF
         if: inputs.suite == 'cgl-compat'
@@ -362,58 +401,8 @@ jobs:
           done
           echo "CGL_CLANG_ASAN_UBSAN_LINKED_TESTS_EXECUTED_FOR_SHA=$SOURCE_SHA"
 
-      # Re-attest current identity after the actual selected suite has executed.
-      - name: Post-run attestation of current PR head and independent reviewer
-        if: success()
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ inputs.pr_number }}
-          SOURCE_SHA: ${{ inputs.source_sha }}
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          test "$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.protected')" = "true"
-          strong_main_policy="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main/protection" --jq '
-            (.required_pull_request_reviews | type == "object") and
-            (.required_pull_request_reviews.require_code_owner_reviews == true) and
-            (.required_pull_request_reviews.dismiss_stale_reviews == true) and
-            (.required_pull_request_reviews.required_approving_review_count | type == "number") and
-            (.required_pull_request_reviews.required_approving_review_count >= 1) and
-            (.enforce_admins.enabled == true) and
-            (.allow_force_pushes.enabled == false) and
-            (.allow_deletions.enabled == false) and
-            (.required_status_checks | type == "object") and
-            (.required_status_checks.strict == true) and
-            (((.required_status_checks.contexts // []) | type) == "array") and
-            (((.required_status_checks.checks // []) | type) == "array") and
-            (((.required_status_checks.contexts // []) | length) > 0 or
-             ((.required_status_checks.checks // []) | length) > 0) and
-            ([.required_pull_request_reviews.bypass_pull_request_allowances? |
-              (.users // []), (.teams // []), (.apps // [])] | all(. == []))
-          ')"
-          test "$strong_main_policy" = "true"
-          receipt="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '[.head.sha, .head.repo.full_name, .state, (.head.repo.private|tostring), (.user.id|tostring)] | @tsv')"
-          actual_sha="$(printf '%s' "$receipt" | cut -f1)"
-          actual_repo="$(printf '%s' "$receipt" | cut -f2)"
-          pr_state="$(printf '%s' "$receipt" | cut -f3)"
-          is_private="$(printf '%s' "$receipt" | cut -f4)"
-          author_id="$(printf '%s' "$receipt" | cut -f5)"
-          test "$actual_sha" = "$SOURCE_SHA"
-          test "$actual_repo" = "$GITHUB_REPOSITORY"
-          test "$pr_state" = "open"
-          test "$is_private" = "true"
-          [[ "$author_id" =~ ^[1-9][0-9]*$ ]]
-          review="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100" --jq 'if length >= 100 then "TOO_MANY_REVIEWS" else ([.[] | select(.user.login == "ORESoftware" and .submitted_at != null)] | sort_by(.submitted_at, .id) | last // {} | [(.state // ""), (.commit_id // ""), (.user.id // 0 | tostring)] | @tsv) end')"
-          state="$(printf '%s' "$review" | cut -f1)"
-          review_sha="$(printf '%s' "$review" | cut -f2)"
-          reviewer_id="$(printf '%s' "$review" | cut -f3)"
-          test "$state" = "APPROVED"
-          test "$review_sha" = "$SOURCE_SHA"
-          test "$reviewer_id" = "11139560"
-          test "$reviewer_id" != "$author_id"
-          echo "POST_EXECUTION_EXACT_PR_HEAD_REVIEW=PASS"
-
+      # No post-untrusted-source GH_TOKEN or authorization in this job.
+      # Only a fresh attestor job can make an independent evidence claim.
       - name: Exact-source result scope (never a carrier export approval)
         if: always()
         shell: bash
@@ -428,7 +417,57 @@ jobs:
             echo "PR: $PR_NUMBER; source commit: $SOURCE_SHA; suite: $SUITE"
             echo "Root tree: $(git rev-parse 'HEAD^{tree}' 2>/dev/null || echo NOT_CHECKED_OUT)"
             echo "ASan/UBSan requested: $SANITIZERS_REQUESTED"
-            echo 'Status is valid only when the selected actual test steps executed.'
+            echo 'UNTRUSTED_JOB_SUMMARY_ONLY=true; independent fresh-runner attestor required.'
             echo 'This workflow does not authorize private-source export or claim retained object purge.'
             echo 'Require reviewed main workflow and one-job disposable source-only runner.'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # NEW disposable VM, no PR checkout, no artifacts, no GITHUB_PATH/GITHUB_ENV
+  # inherited from the untrusted source-exact-validation job.
+  independent-postrun-attestation:
+    needs: [source-exact-validation]
+    if: github.repository == 'ores-truffle-oreslang/oreslang-source.llvm' && github.ref == 'refs/heads/main' && needs.source-exact-validation.result == 'success'
+    runs-on: [self-hosted, linux, x64, oreslang-llvm-attestor-ephemeral-v1]
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout reviewed protected main only (no PR source)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+          lfs: false
+
+      - name: Verify attestor source identity and run offline negative regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = self-hosted
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git hash-object --no-filters scripts/ci/verify_llvm_independent_attestor.py)" = \
+            "$(git rev-parse HEAD:scripts/ci/verify_llvm_independent_attestor.py)"
+          test "$(git hash-object --no-filters scripts/ci/test_verify_llvm_independent_attestor.py)" = \
+            "$(git rev-parse HEAD:scripts/ci/test_verify_llvm_independent_attestor.py)"
+          python3 -I -B scripts/ci/test_verify_llvm_independent_attestor.py
+          for tracked_path in scripts/ci/llvm_required_check_pins.json scripts/ci/verify_llvm_required_check_pins.py scripts/ci/test_verify_llvm_required_check_pins.py; do
+            test "$(git hash-object --no-filters "$tracked_path")" = "$(git rev-parse "HEAD:$tracked_path")"
+          done
+          python3 -I -B scripts/ci/test_verify_llvm_required_check_pins.py
+
+      - name: Independently verify current exact head approval and actual source job steps
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          SUITE: ${{ inputs.suite }}
+          RUN_SANITIZERS: ${{ inputs.run_sanitizers }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          PYTHONOPTIMIZE=0 python3 -I -B scripts/ci/verify_llvm_independent_attestor.py
