@@ -8,8 +8,17 @@ const flat='define class Box as\n pub let int n = 20;\nend\n';
 const nested='define class Leaf as pub val int n = 20; end\ndefine class Root as pub let Leaf child = new Leaf(); pub let int extra = 1; end\n';
 const mutableNested='define class Scores as pub let int n = 20; end\ndefine class Person as pub let mut Scores scores = new Scores(); pub let int age = 1; end\n';
 const fixedNested=mutableNested.replace('pub let mut Scores','pub val Scores');
+const deepTree='define class Scores as pub let int n = 20; end\ndefine class Profile as pub let mut Scores scores = new Scores(); end\ndefine class Person as pub let mut Profile profile = new Profile(); pub let int age = 1; end\n';
 const main=s=>'pub fnc main(): int { '+s+' }';
 const cases=[
+ ['tree-detach',deepTree+main('let mut Person a = new Person(); let mut Person b = copy! a; let mut Person c = copy! b; b.profile = new Profile(); b.profile.scores.n = 22; return c.profile.scores.n + b.profile.scores.n;'),42],
+ ['tree-deep',deepTree+main('let mut Person a = new Person(); a.profile.scores.n = 10; let mut Person b = copy! a; let mut Person c = copy!! b; c.profile.scores.n = 22; return a.profile.scores.n+b.profile.scores.n+c.profile.scores.n;'),42],
+ ['tree-release',deepTree+main('let mut Person a = new Person(); let int before = 0; block { let mut Person b = copy! a; before = b.profile.scores.n; } a.profile.scores.n = 22; return before+a.profile.scores.n;'),42],
+ ['tree-shared-write',deepTree+main('let mut Person a = new Person(); let mut Person b = copy! a; a.profile.scores.n = 22; return b.profile.scores.n;'),'E_COPY_READONLY'],
+ ['tree-inner-replace',deepTree+main('let mut Person a = new Person(); a.profile.scores = new Scores(); return a.profile.scores.n;'),'E_COPY_UNPROVEN'],
+ ['tree-shared-inner-replace',deepTree+main('let mut Person a = new Person(); let mut Person b = copy! a; b.profile.scores = new Scores(); return a.profile.scores.n;'),'E_COPY_READONLY'],
+ ['tree-cycle','define class LoopNode as pub let mut LoopNode next = new LoopNode(); end\n'+main('return 42;'),'E_UNSUPPORTED_TYPE'],
+ ['tree-depth',deepTree+'define class Outer as pub let mut Person person = new Person(); end\n'+main('return 42;'),'E_COPY_UNPROVEN'],
  ['mutable-detach',mutableNested+main('let mut Person a = new Person(); let mut Person b = copy! a; b.scores = new Scores(); b.scores.n = 22; return a.scores.n + b.scores.n;'),42],
  ['mutable-deep',mutableNested+main('let mut Person a = new Person(); a.scores.n = 10; let mut Person b = copy! a; let mut Person c = copy!! b; c.scores.n = 22; return a.scores.n + b.scores.n + c.scores.n;'),42],
  ['lexical-release',mutableNested+main('let mut Person a = new Person(); let int before = 0; block { let mut Person b = copy! a; block { let mut Person c = copy! b; before = c.scores.n; } } a.scores.n = 22; return before + a.scores.n;'),42],
