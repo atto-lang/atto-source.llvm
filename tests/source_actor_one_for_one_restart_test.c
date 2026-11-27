@@ -12,6 +12,9 @@
 #include <stdlib.h>
 #include <stdatomic.h>
 #include <string.h>
+#include <pthread.h>
+#include <time.h>
+#include <sched.h>
 
 #define CHECK(x) do { if (!(x)) { \
   fprintf(stderr, "SOURCE_ACTOR_RESTART_FAIL line=%d condition=%s\n", __LINE__, #x); \
@@ -215,7 +218,60 @@ static void check_failed_stop_reuse(void) {
     puts("SOURCE_ACTOR_FAILED_STOP_REUSE_PASS cycles=256 orphan=0 sibling=42");
 }
 
+extern int oreslang_source_actor_test_flush_done_waiters(void);
+static atomic_int flush_turn_entered, flush_turn_release;
+static int64_t held_turn(OresActorI64Heap* h, uint64_t d, uint64_t e, int64_t msg) {
+    (void)h; (void)d; (void)e;
+    atomic_store(&flush_turn_entered, 1);
+    while (!atomic_load(&flush_turn_release)) sched_yield();
+    return msg;
+}
+static void wait_for_flag(int (*read_flag)(void)) {
+    const struct timespec interval = {0, 1000000};
+    for (int i = 0; i < 10000; ++i) {
+        if (read_flag()) return;
+        nanosleep(&interval, NULL);
+    }
+    CHECK(0 && "timed out waiting for deterministic test boundary");
+}
+static int turn_entered(void) { return atomic_load(&flush_turn_entered); }
+typedef struct { void* actor; int result; } FlushProbe;
+static void* run_flush(void* raw) {
+    FlushProbe* probe = raw;
+    probe->result = oreslang_source_actor_flush_blocking(probe->actor);
+    return NULL;
+}
+static void check_sealed_flush(void) {
+    for (int abandon = 0; abandon <= 1; ++abandon) {
+        atomic_store(&flush_turn_entered, 0);
+        atomic_store(&flush_turn_release, 0);
+        void* a = oreslang_source_actor_spawn(initialize, held_turn, 1);
+        CHECK(a && oreslang_source_actor_try_send(a, 42));
+        wait_for_flag(turn_entered);
+        if (abandon) CHECK(oreslang_source_actor_try_send(a, 99));
+        oreslang_source_actor_request_stop(a);
+        FlushProbe probe = {a, -1};
+        pthread_t thread;
+        CHECK(pthread_create(&thread, NULL, run_flush, &probe) == 0);
+        wait_for_flag(oreslang_source_actor_test_flush_done_waiters);
+        atomic_store(&flush_turn_release, 1);
+        CHECK(pthread_join(thread, NULL) == 0);
+        CHECK(probe.result == !abandon);
+        OresSourceActorMessageReceipt receipt = {0};
+        CHECK(oreslang_source_actor_message_receipt(a, &receipt));
+        CHECK(receipt.processed_callbacks == 1 && receipt.successful_messages == 1);
+        CHECK(receipt.last_success_result == 42);
+        oreslang_source_actor_join_done(a);
+        CHECK(!oreslang_source_actor_flush_blocking(a));
+    }
+    puts("SOURCE_ACTOR_SEALED_FLUSH_PASS active_completed=1 queued_abandoned=1");
+}
+
 int main(int argc, char** argv) {
+    if (argc == 2 && strcmp(argv[1], "--sealed-flush") == 0) {
+        check_sealed_flush();
+        return 0;
+    }
     const int exhaust_restart = argc == 2 && strcmp(argv[1], "--exhaust") == 0;
     const int capacity_denial = argc == 2 && strcmp(argv[1], "--capacity") == 0;
     const int reuse = argc == 2 && strcmp(argv[1], "--reuse") == 0;
