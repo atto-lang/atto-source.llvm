@@ -132,5 +132,21 @@ int main() {
     denied("@ActorMaxThreads(MaxActorThreads.LOW)\n"
            "define class C as let int x = 1; end\n"
            + std::string(valid_actor), "expected 'actor'");
+    // Grouped or legacy spawn policies must not become plain ActorRef bindings.
+    for (const auto* suffix : {
+        "with {}",
+        "with { schedule { max_parallelism = 2; affinity = sticky; } }",
+        "with { resources { heap_size = 67108864; stack_size = 65536; mailbox_capacity = 1024; } }",
+        "with { init { name = \"worker-1\"; seed = 42; } }",
+        "/* comment */ with { init {} }",
+        "with schedule(max_parallelism=2)",
+        "with { unknown {} }"
+    }) {
+        denied(std::string(valid_actor) + "\n pub fnc main(): int { const ActorRef<Worker> w = spawn Worker() " +
+               suffix + "; return 0; }", "E_SPAWN_OPTIONS_UNSUPPORTED");
+    }
+    auto legacy_spawn = parse_program(std::string(valid_actor) +
+        "\n pub fnc main(): int { const ActorRef<Worker> w = spawn Worker(); return 0; }");
+    check(legacy_spawn.actors.size() == 1);
     return 0;
 }
