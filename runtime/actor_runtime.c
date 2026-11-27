@@ -55,6 +55,7 @@ typedef struct Actor {
     uint8_t *arena;
     uint32_t arena_next;
     uint32_t generation;
+    uint64_t tenant; /* immutable host-issued scope; zero = local-only */
     int32_t type_id;
     uint32_t queue_head;
     uint32_t queue_len;
@@ -129,7 +130,7 @@ static void *actor_worker(void *arg) {
 
 /* Returns zero on failure. Low 16 bits are 1-based registry slot,
  * high 16 bits are generation. No slot reuse before global shutdown. */
-int32_t atto_actor_spawn(int32_t type_id) {
+static int32_t actor_spawn_scoped(int32_t type_id, uint64_t tenant) {
     if (active_actor) return 0; /* actor-child spawning not yet admitted */
     pthread_mutex_lock(&registry_lock);
     if (finishing || type_id < 0 || count >= ATTO_MAX_ACTORS) {
@@ -149,6 +150,7 @@ int32_t atto_actor_spawn(int32_t type_id) {
     }
     actor->arena_next = ATTO_STATE_BYTES;
     actor->generation = 1u;
+    actor->tenant = tenant;
     actor->type_id = type_id;
     if (pthread_mutex_init(&actor->lock, NULL) != 0) {
         free(actor->arena); free(actor);
@@ -180,6 +182,17 @@ int32_t atto_actor_spawn(int32_t type_id) {
     int32_t handle = (int32_t)((actor->generation << 16) | (index + 1u));
     pthread_mutex_unlock(&registry_lock);
     return handle;
+}
+
+/* Preserve the compiled local guest ABI; local actors have no proxy authority. */
+int32_t atto_actor_spawn(int32_t type_id) {
+    return actor_spawn_scoped(type_id, 0);
+}
+
+/* Trusted host only: tenant comes from authenticated placement, never mail. */
+int32_t atto_host_actor_spawn_scoped(int32_t type_id, uint64_t tenant) {
+    if (tenant == 0) return 0;
+    return actor_spawn_scoped(type_id, tenant);
 }
 
 /* Linearization point: the enqueue while holding registry and mailbox locks.
@@ -261,7 +274,8 @@ int32_t atto_host_actor_send_ticket(int32_t ref, int64_t value,
         return -1;
     pthread_mutex_lock(&registry_lock);
     Actor *actor = registry[slot - 1];
-    if (finishing || !actor || actor->generation != generation) {
+    if (finishing || !actor || actor->generation != generation ||
+        actor->tenant != route->tenant) {
         pthread_mutex_unlock(&registry_lock);
         return -1;
     }
@@ -308,7 +322,8 @@ int32_t atto_host_actor_ticket_snapshot(int32_t ref, uint64_t id,
         !route_valid(route, token)) return -1;
     pthread_mutex_lock(&registry_lock);
     Actor *actor = registry[slot - 1];
-    if (finishing || !actor || actor->generation != generation) {
+    if (finishing || !actor || actor->generation != generation ||
+        actor->tenant != route->tenant) {
         pthread_mutex_unlock(&registry_lock);
         return -1;
     }
@@ -332,7 +347,8 @@ int32_t atto_host_actor_ticket_release(int32_t ref, uint64_t id,
         !route_valid(route, token)) return -1;
     pthread_mutex_lock(&registry_lock);
     Actor *actor = registry[slot - 1];
-    if (finishing || !actor || actor->generation != generation) {
+    if (finishing || !actor || actor->generation != generation ||
+        actor->tenant != route->tenant) {
         pthread_mutex_unlock(&registry_lock);
         return -1;
     }
