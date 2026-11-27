@@ -91,7 +91,10 @@ void* oreslang_source_actor_spawn_supervised_budgeted(
 
 /* Consumes a logically failed ActorRef and awaits the root supervisor's
  * CONTROL-selected replacement. The old ActorRef remains an invalid,
- * generation-fenced tombstone until group teardown. No scheduler carrier
+ * generation-fenced tombstone until consuming recovery reads the decision;
+ * after recovery the old token cannot resolve even for diagnostics. In this
+ * restricted linear source profile plain STOP/join discards the failed ref
+ * without requesting a replacement. No scheduler carrier
  * may call this blocking trusted-main bridge. Returns NULL on escalation. */
 void* oreslang_source_actor_recover_blocking(void* failed_actor);
 
@@ -103,7 +106,9 @@ void oreslang_source_actor_send(void* actor, int64_t payload);
  * snapshot captured at entry to finish physical DATA callbacks (a failed
  * callback is still completed, never a successful result). It does not seal
  * the mailbox or convert actor-local failures into process aborts.
- * Returns 0 when a prior terminal seal prevents the snapshot from completing.
+ * A terminal seal waits for physical DONE if the snapshot is still pending;
+ * returns 0 only if the sealed snapshot cannot complete (abandoned DATA),
+ * or if the reference is invalid or already being consumed.
  * Must not be invoked on an actor carrier; this blocking sync API is not
  * actor-method suspension or a general async Promise/Task.
  */

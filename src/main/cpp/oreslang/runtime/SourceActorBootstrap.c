@@ -33,13 +33,15 @@ typedef struct SourceActor {
     uint32_t restart_remaining;
     uint64_t fields_count;
     /* For a failed supervised incarnation, this metadata remains an invalid
-     * tombstone until the root group closes. Every backing heap/frame is
+     * tombstone until consuming recovery completes (or the root group closes).
+     * Every backing heap/frame is
      * reclaimed before the root supervisor authorizes a fresh incarnation.
      * It preserves the consuming recovery decision and read-only diagnostics.
      * Public identity is a monotonic token, never this allocation address. */
     struct SourceActor* replacement;
     int restart_decided;
     int restart_settled;
+    int terminal_policy_settled;
     int tombstone;
     /* Accepted guest DATA snapshot and waiters are guarded by group.mutex.
      * Physical callbacks signal this preinitialized condition after their
@@ -98,6 +100,10 @@ typedef struct {
     DoneAwaitFrame* pending_done;
     SourceActor* actors[SOURCE_GROUP_SLOTS];
     SourceActor* retired[SOURCE_GROUP_SLOTS];
+    /* A stopped leaf can outlive its source record in the VM while the
+     * supervisor CONTROL turn finishes. The exact VM ref reserves the slot
+     * until the VM acknowledges and accepts reclamation. */
+    OresNativeActorRef pending_leaf_reclaim[SOURCE_GROUP_SLOTS];
     pthread_cond_t supervisor_progress;
     OresSourceRecoveryLeaseV1 recovery_lease;
     size_t next_slot;
@@ -185,6 +191,11 @@ int oreslang_source_actor_frame_pop(void) {
 }
 
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
+static atomic_int test_flush_done_waiters;
+int oreslang_source_actor_test_flush_done_waiters(void) {
+    return atomic_load_explicit(&test_flush_done_waiters, memory_order_acquire);
+}
+
 static atomic_int test_hold_initialization;
 static atomic_int test_initialization_entered;
 static atomic_int test_hold_readiness_publication;
@@ -248,6 +259,30 @@ static int same_allocation(
         && a.domain == b.domain
         && a.owner == b.owner
         && a.generation == b.generation;
+}
+
+/* group.mutex held. Only the native VM may authorize scheduler reuse.
+ * No blocking or polling on a supervisor carrier. */
+static void source_reclaim_settled_leaves_locked(void) {
+    OresNativeExecutionContext current = {0};
+    if (ores_native_vm_current_execution_context(
+            group.vm, ORES_NATIVE_VM_MAIN, &current)) return;
+    for (size_t i = 0; i < group.next_slot; ++i) {
+        OresNativeActorRef old = group.pending_leaf_reclaim[i];
+        if (!old.scheduler_domain) continue;
+        ensure(!group.actors[i] && !group.retired[i] && old.actor_slot == i);
+        if (ores_native_vm_reclaim_supervised_leaf_v1(
+                group.vm, ORES_NATIVE_VM_MAIN, old))
+            group.pending_leaf_reclaim[i] = (OresNativeActorRef){0};
+    }
+}
+
+static size_t source_free_slot_locked(void) {
+    for (size_t i = 0; i < SOURCE_GROUP_ROOT_SLOT; ++i)
+        if (!group.actors[i] && !group.retired[i]
+                && !group.pending_leaf_reclaim[i].scheduler_domain)
+            return i;
+    return SOURCE_GROUP_ROOT_SLOT;
 }
 
 static SourceActor* lookup(size_t index) {
@@ -725,12 +760,25 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
 /* A root supervisor CONTROL turn authorizes a bounded one-for-one restart.
  * It never publishes a synthetic guest success and never restarts a STOPPED
  * child. The replacement is a fresh physical slot, actor ID, private heap,
- * logical-frame store and mailbox. We leave the mutex before spawn: a worker
- * may concurrently publish the new incarnation's initialization CONTROL.
+ * logical-frame store and mailbox. Selection and admission share group.mutex;
+ * initialization is queued asynchronously, never executed by this callback.
  *
  * No root callback blocks waiting for a carrier or for guest execution.
  * The old actor must already have physical DONE and host finalization before
  * NativeOresVM can publish this authenticated terminal envelope. */
+static void* source_spawn_locked(OresSourceActorInit constructor,
+        OresSourceActorMessage on_message, uint64_t fields,
+        uint64_t max_frames, uint64_t lifetime_frame_budget,
+        uint64_t restart_limit, size_t slot);
+
+/* This restricted linear ActorRef source profile only has one consuming
+ * recovery bridge. A plain STOP/join must not create an unreachable child.
+ * The registered root still decides policy after physical finalization. */
+static int source_recovery_owns_locked(const SourceActor* actor) {
+    return ores_source_recovery_matches(&group.recovery_lease,
+        (size_t)actor->ref.actor_slot, actor->ref.generation, actor->id);
+}
+
 static void source_supervisor_notice(
         void* raw, size_t parent_slot, OresNativeActorTerminalFailure failure) {
     ensure(raw == &group && parent_slot == SOURCE_GROUP_ROOT_SLOT);
@@ -739,44 +787,34 @@ static void source_supervisor_notice(
         && failure.child.generation != 0 && failure.correlation != 0);
 
     SourceActor* original = NULL;
-    OresSourceActorInit constructor = NULL;
-    OresSourceActorMessage receiver = NULL;
-    uint64_t fields = 0, depth = 0, lifetime = 0, remaining = 0;
-    int approved = 0;
+    size_t successor_slot = SOURCE_GROUP_ROOT_SLOT;
     group_lock();
     const size_t slot = (size_t)failure.child.actor_slot;
     original = group.actors[slot] ? group.actors[slot] : group.retired[slot];
-    if (original && original->magic == SOURCE_ACTOR_MAGIC
+    ensure(original && original->magic == SOURCE_ACTOR_MAGIC
         && original->ref.scheduler_domain == failure.child.scheduler_domain
         && original->ref.actor_slot == failure.child.actor_slot
         && original->ref.generation == failure.child.generation
         && original->id == failure.correlation
-        && failure.kind == ORES_NATIVE_CONTROL_PANIC
+        && !original->terminal_policy_settled);
+    if (failure.kind == ORES_NATIVE_CONTROL_PANIC
         && failure.failure_code == ORES_SOURCE_ACTOR_FAILURE_FRAME
         && original->restart_remaining != 0
+        && source_recovery_owns_locked(original)
         && !original->restart_decided) {
         original->restart_decided = 1;
-        if (group.next_slot < SOURCE_GROUP_ROOT_SLOT) {
-            approved = 1;
-            constructor = original->constructor;
-            receiver = original->on_message;
-            fields = original->fields_count;
-            depth = original->frame_budget;
-            lifetime = original->lifetime_frame_budget;
-            remaining = original->restart_remaining - 1;
-        }
+        successor_slot = source_free_slot_locked();
     }
-    if (original && original->restart_decided && !approved) {
+    if (original->restart_decided && successor_slot == SOURCE_GROUP_ROOT_SLOT)
         original->restart_settled = 1;
-        ensure(pthread_cond_broadcast(&group.supervisor_progress) == 0);
-    }
-    group_unlock();
-    if (approved) {
-        void* fresh_handle = oreslang_source_actor_spawn_supervised_budgeted(
-                constructor, receiver, fields, depth, lifetime, remaining);
-        /* The original actor is a bounded tombstone, not a live mailbox.
-         * Do not migrate its state or preserve any old borrow or pointer. */
-        group_lock();
+    if (successor_slot < SOURCE_GROUP_ROOT_SLOT) {
+        const uint64_t remaining = original->restart_remaining - 1;
+        void* fresh_handle = source_spawn_locked(
+                original->constructor, original->on_message, original->fields_count,
+                original->frame_budget, original->lifetime_frame_budget,
+                remaining, successor_slot);
+        /* Do not migrate state or preserve an old borrow or pointer.
+         * Keep the selection and registration in the same critical section. */
         SourceActor* fresh = source_resolve_locked(fresh_handle, 0);
         ensure(fresh != NULL);
         ensure(original && original->magic == SOURCE_ACTOR_MAGIC
@@ -784,8 +822,6 @@ static void source_supervisor_notice(
             && original->replacement == NULL);
         original->replacement = fresh;
         original->restart_settled = 1;
-        ensure(pthread_cond_broadcast(&group.supervisor_progress) == 0);
-        group_unlock();
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
         fprintf(stderr,
             "SOURCE_ACTOR_ONE_FOR_ONE_RESTART_VERIFIED old_slot=%llu new_slot=%llu old_generation=%llu new_generation=%llu remaining=%llu\n",
@@ -808,7 +844,7 @@ static void source_supervisor_notice(
         atomic_fetch_add_explicit(
             &group.terminal_stopped_notices, 1, memory_order_release);
     }
-    group_lock();
+    original->terminal_policy_settled = 1;
     atomic_fetch_add_explicit(&group.terminal_notices, 1, memory_order_release);
     ensure(pthread_cond_broadcast(&group.supervisor_progress) == 0);
     group_unlock();
@@ -884,21 +920,21 @@ static void open_group_locked(void) {
 #endif
 }
 
-void* oreslang_source_actor_spawn_supervised_budgeted(
+/* Caller holds group.mutex. No guest constructor runs inline. */
+static void* source_spawn_locked(
         OresSourceActorInit constructor,
         OresSourceActorMessage on_message,
         uint64_t fields,
         uint64_t max_frames,
         uint64_t lifetime_frame_budget,
-        uint64_t restart_limit) {
+        uint64_t restart_limit, size_t slot) {
     ensure(constructor != NULL && fields >= 1 && fields <= 4096
         && max_frames <= 16 && lifetime_frame_budget <= 64
         && restart_limit <= 4);
-    group_lock();
-    if (!group.vm) open_group_locked();
-
-    ensure(group.next_slot < SOURCE_GROUP_ROOT_SLOT);
-    const size_t slot = group.next_slot++;
+    ensure(group.vm && slot < SOURCE_GROUP_ROOT_SLOT
+        && !group.actors[slot] && !group.retired[slot]
+        && !group.pending_leaf_reclaim[slot].scheduler_domain);
+    if (group.next_slot <= slot) group.next_slot = slot + 1;
     SourceActor* instance = (SourceActor*)calloc(1, sizeof(*instance));
     ensure(instance != NULL);
     instance->magic = SOURCE_ACTOR_MAGIC;
@@ -916,6 +952,7 @@ void* oreslang_source_actor_spawn_supervised_budgeted(
     instance->replacement = NULL;
     instance->restart_decided = 0;
     instance->restart_settled = 0;
+    instance->terminal_policy_settled = 0;
     instance->tombstone = 0;
     instance->admitted_sends = 0;
     instance->flush_waiters = 0;
@@ -958,7 +995,21 @@ void* oreslang_source_actor_spawn_supervised_budgeted(
     /* CONTROL initializes the compiler-emitted actor constructor on a worker. */
     ensure(ores_native_vm_publish_control(
         group.vm, ORES_NATIVE_VM_MAIN, instance->ref, 0));
-    void* handle = source_handle(instance);
+    return source_handle(instance);
+}
+
+void* oreslang_source_actor_spawn_supervised_budgeted(
+        OresSourceActorInit constructor,
+        OresSourceActorMessage on_message,
+        uint64_t fields,
+        uint64_t max_frames,
+        uint64_t lifetime_frame_budget,
+        uint64_t restart_limit) {
+    group_lock();
+    if (!group.vm) open_group_locked();
+    source_reclaim_settled_leaves_locked();
+    void* handle = source_spawn_locked(constructor, on_message, fields,
+        max_frames, lifetime_frame_budget, restart_limit, source_free_slot_locked());
     group_unlock();
     return handle;
 }
@@ -1000,6 +1051,26 @@ int oreslang_source_actor_flush_blocking(void* opaque) {
     while (atomic_load_explicit(&instance->processed, memory_order_acquire) < target
            && !atomic_load_explicit(&instance->stop_requested, memory_order_acquire))
         ensure(pthread_cond_wait(&instance->callback_completed, &group.mutex) == 0);
+    if (atomic_load_explicit(&instance->processed, memory_order_acquire) < target) {
+        /* STOP seals admission, not the physical callback. A failed or
+         * externally stopped active callback can still publish its receipt.
+         * The existing flush waiter pins the record, VM and exact lane until
+         * we return; join waits for all flush waiters before detaching it.
+         * Drop group.mutex so the carrier can publish and reach DONE. */
+        ensure(atomic_load_explicit(&instance->stop_requested, memory_order_acquire));
+        OresNativeVM* vm = group.vm;
+        const OresNativeActorRef ref = instance->ref;
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+        atomic_fetch_add_explicit(&test_flush_done_waiters, 1, memory_order_release);
+#endif
+        group_unlock();
+        ensure(ores_native_vm_wait_done(vm, ORES_NATIVE_VM_MAIN, ref));
+        group_lock();
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+        atomic_fetch_sub_explicit(&test_flush_done_waiters, 1, memory_order_release);
+#endif
+        ensure(source_resolve_locked(opaque, 0) == instance);
+    }
     const int completed = atomic_load_explicit(
         &instance->processed, memory_order_acquire) >= target;
     ensure(instance->flush_waiters > 0);
@@ -1322,6 +1393,7 @@ static void close_idle_group_locked(void) {
         /* Decision metadata remains bounded by the current group. Public
          * identities never recycle, even after these records are freed. */
         for (size_t i = 0; i < group.next_slot; ++i) {
+            group.pending_leaf_reclaim[i] = (OresNativeActorRef){0};
             SourceActor* retired = group.retired[i];
             if (!retired) continue;
             ensure(retired->tombstone && retired->heap == NULL
@@ -1335,7 +1407,7 @@ static void close_idle_group_locked(void) {
     }
 }
 
-void oreslang_source_actor_join_done(void* opaque) {
+static void source_join_done(void* opaque, int recovery_claimed) {
     group_lock();
     SourceActor* instance = source_resolve_locked(opaque, 0);
     ensure(instance != NULL);
@@ -1343,13 +1415,16 @@ void oreslang_source_actor_join_done(void* opaque) {
     ensure(atomic_load_explicit(
         &instance->stop_requested, memory_order_acquire) == 1);
 
-    int expected = 0;
-    ensure(atomic_compare_exchange_strong_explicit(
-        &instance->join_started,
-        &expected,
-        1,
-        memory_order_acq_rel,
-        memory_order_acquire));
+    if (recovery_claimed) {
+        ensure(source_recovery_owns_locked(instance)
+            && atomic_load_explicit(&instance->join_started, memory_order_acquire));
+    } else {
+        int expected = 0;
+        ensure(!source_recovery_owns_locked(instance)
+            && atomic_compare_exchange_strong_explicit(
+                &instance->join_started, &expected, 1,
+                memory_order_acq_rel, memory_order_acquire));
+    }
 
     /*
      * This is trusted outer-host glue, never a carrier turn. Do not block a
@@ -1452,6 +1527,11 @@ void oreslang_source_actor_join_done(void* opaque) {
         (unsigned long long)failed,
         (unsigned long long)failure_code);
 #endif
+    /* The exact root policy callback must settle before the record can be
+     * detached. The VM's independent acknowledgement gate still decides
+     * when the scheduler slot becomes reusable. */
+    while (!instance->terminal_policy_settled)
+        ensure(pthread_cond_wait(&group.supervisor_progress, &group.mutex) == 0);
     /* Quiesce trusted external flush waiters before dropping their condition
      * and the actor pointer. This wait releases group.mutex until the final
      * reader exits, preventing a use-after-free during STOP/join. */
@@ -1459,21 +1539,29 @@ void oreslang_source_actor_join_done(void* opaque) {
         ensure(pthread_cond_wait(&instance->callback_completed, &group.mutex) == 0);
     ensure(pthread_cond_destroy(&instance->callback_completed) == 0);
     group.actors[slot] = NULL;
-    if (failure_code != 0 && instance->restart_remaining != 0) {
-        /* Preserve only metadata for rejecting stale ActorRef pointers and
-         * returning a supervisor-selected replacement. The actor-owned heap
-         * and all logical frames were destroyed before terminal CONTROL. */
+    if (recovery_claimed) {
+        ensure(failure_code != 0 && instance->restart_remaining != 0
+            && source_recovery_owns_locked(instance) && instance->restart_settled);
+        /* Preserve only the exact consuming recovery decision. Plain STOP
+         * never retains an unconsumed replacement or tombstone. */
         instance->tombstone = 1;
         group.retired[slot] = instance;
     } else {
+        ensure(!group.pending_leaf_reclaim[slot].scheduler_domain);
+        group.pending_leaf_reclaim[slot] = instance->ref;
         instance->magic = 0;
         free(instance);
+        source_reclaim_settled_leaves_locked();
     }
     ensure(group.live > 0);
     group.live--;
 
     close_idle_group_locked();
     group_unlock();
+}
+
+void oreslang_source_actor_join_done(void* opaque) {
+    source_join_done(opaque, 0);
 }
 
 void* oreslang_source_actor_recover_blocking(void* opaque) {
@@ -1501,6 +1589,13 @@ void* oreslang_source_actor_recover_blocking(void* opaque) {
     }
     if (eligible) eligible = ores_source_recovery_claim(&group.recovery_lease,
         (size_t)previous->ref.actor_slot, previous->ref.generation, previous->id);
+    if (eligible) {
+        /* Both consuming authorities linearize under the same mutex. */
+        int expected = 0;
+        ensure(atomic_compare_exchange_strong_explicit(
+            &previous->join_started, &expected, 1,
+            memory_order_acq_rel, memory_order_acquire));
+    }
     group_unlock();
     if (!eligible) return NULL;
 
@@ -1508,7 +1603,7 @@ void* oreslang_source_actor_recover_blocking(void* opaque) {
      * registered root CONTROL publication. No guest carrier parks here.
      * Root's CONTROL callback decides policy and creates a fresh child,
      * which cannot see any of the previous incarnation's owned storage. */
-    oreslang_source_actor_join_done(opaque);
+    source_join_done(opaque, 1);
     group_lock();
     const size_t old_slot = (size_t)previous->ref.actor_slot;
     ensure(old_slot < group.next_slot && group.retired[old_slot] == previous);
@@ -1528,6 +1623,17 @@ void* oreslang_source_actor_recover_blocking(void* opaque) {
     ensure(ores_source_recovery_release(&group.recovery_lease, old_slot,
         previous->ref.generation, previous->id));
     void* replacement_handle = fresh ? source_handle(fresh) : NULL;
+    /* Recovery consumed this old identity. No external reader can still
+     * hold the record: join_done drained flush/readiness and root policy.
+     * The VM independently waits for physical CONTROL acknowledgement. */
+    ensure(previous->terminal_policy_settled && previous->tombstone
+        && !previous->heap && !previous->logical_frames
+        && !group.pending_leaf_reclaim[old_slot].scheduler_domain);
+    group.pending_leaf_reclaim[old_slot] = previous->ref;
+    group.retired[old_slot] = NULL;
+    previous->magic = 0;
+    free(previous);
+    source_reclaim_settled_leaves_locked();
     close_idle_group_locked();
     group_unlock();
     return replacement_handle;
