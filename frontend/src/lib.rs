@@ -17,6 +17,7 @@ pub mod generator_frame;
 pub mod lexer;
 pub mod parser;
 mod struct_value_guest;
+mod native_scalar_c;
 pub mod target_syntax;
 pub mod target_typed;
 pub mod wasm;
@@ -29,6 +30,16 @@ pub const COMPILER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Compile one `.atto` source file to a guest WebAssembly module.
 pub fn compile(source: &str) -> Result<Vec<u8>, Diagnostic> {
+    compile_target(source, false)
+}
+
+/// Restricted attached nominal scalar source -> checked C11 (Clang GNU expressions).
+/// The caller must compile/link this text; this is not the independent C++ frontend.
+pub fn compile_struct_native_c(source: &str) -> Result<String, Diagnostic> {
+    String::from_utf8(compile_target(source, true)?).map_err(|_| native_scalar_c::unsupported())
+}
+
+fn compile_target(source: &str, native_c: bool) -> Result<Vec<u8>, Diagnostic> {
     if source.len() > SOURCE_CAP {
         return Err(Diagnostic::new(
             Pos { line: 1, col: 1 },
@@ -81,6 +92,7 @@ pub fn compile(source: &str) -> Result<Vec<u8>, Diagnostic> {
                                 return Err(Diagnostic::new(toks[start].pos, "E_UNSUPPORTED",
                                     "scalar struct lowering must not allocate or use actor/generator/global state"));
                             }
+                            if native_c { return native_scalar_c::emit(&typed).map(String::into_bytes); }
                             let bytes = wasm::emit(&typed);
                             if bytes.len() > wasm::MAX_OUTPUT {
                                 return Err(Diagnostic::new(toks[start].pos, "E_OUTPUT_LIMIT",
@@ -94,6 +106,7 @@ pub fn compile(source: &str) -> Result<Vec<u8>, Diagnostic> {
             _ => {}
         }
     }
+    if native_c { return Err(native_scalar_c::unsupported()); }
     // Detect target declarations at any file-scope position, not only at
     // source byte zero. Ignore comments/strings (the lexer already tokenizes
     // them) and ignore nested brace bodies so a string or local expression
