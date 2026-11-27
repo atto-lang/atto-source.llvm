@@ -4240,6 +4240,15 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_native_defer_pipeline_named_factory
         native-defer-pipeline-named-factory-reject.atto
         --diagnostic "native defer pipeline requires a checked inline factory")
+    oreslang_contract_test(reject_native_defer_pipeline_nonvoid
+        native-defer-pipeline-nonvoid-reject.atto
+        --diagnostic "native defer factory cleanup requires a synchronous scalar void function")
+    oreslang_contract_test(reject_native_defer_pipeline_wrong_type
+        native-defer-pipeline-wrong-type-reject.atto
+        --diagnostic "native branch-local initializer requires")
+    oreslang_contract_test(reject_native_defer_pipeline_target_type
+        native-defer-pipeline-target-type-reject.atto
+        --diagnostic "argument 'n' requires")
     # Native return snapshot is immutable under subsequent deferred field cleanup.
     if(ORE_CLANG)
         oreslang_contract_test(native_defer_field_return_snapshot native-defer-field-return.ores
