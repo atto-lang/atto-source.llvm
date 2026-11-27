@@ -459,6 +459,12 @@ public:
                 return {Kind::Symbol, source_.substr(start, 2), start};
             }
         }
+        // Only the bounded unary tuple-pattern parser consumes a bare bar.
+        // Ordinary closures remain explicitly unsupported.
+        if (ch == '|') {
+            ++at_;
+            return {Kind::Symbol, source_.substr(start, 1), start};
+        }
         // Injected mutable state changes ownership and runtime lifetime.
         // No native annotation HIR exists yet: reject before '@' can be
         // treated as a generic symbol or discarded during source lowering.
@@ -1797,6 +1803,16 @@ public:
             }
         }
         for (auto& method : methods_) program.functions.push_back(std::move(method));
+        if (!tuple_pattern_helpers_.empty()) {
+            // This first profile is standalone and scalar-only. No package,
+            // actor or externally visible closure ABI can be manufactured.
+            if (wrapped_module || !program.module.empty() || !program.namespace_name.empty() ||
+                !program.imports.empty() || !program.namespace_imports.empty() ||
+                !program.exports.empty() || !program.classes.empty() || !program.actors.empty())
+                fail("NATIVE_TUPLE_PATTERN_SCOPE_UNSUPPORTED: standalone scalar compilation unit required");
+            for (auto& helper : tuple_pattern_helpers_)
+                program.functions.push_back(std::move(helper));
+        }
         if (wrapped_module) require("end");
         validate_actor_forwards(program);
         if (token_.kind != Kind::End) fail("unexpected trailing source");
@@ -5761,8 +5777,145 @@ private:
     // Eager scalar |> and reverse <| lower to the SAME checked call AST.
     // Reverse stages are right-associative: f <| g <| x means f(g(x)).
     // Continuous actor pipe/rpipe remain distinct, fail-closed operations.
+    // Recognize only an explicit tuple literal followed by a unary pattern.
+    // The probe consumes no source and does not grant admission.
+    bool unary_tuple_pattern_ahead() const {
+        if (token_.kind != Kind::Symbol || token_.text != "(") return false;
+        Lexer probe = lexer_;
+        std::size_t depth = 1;
+        bool comma = false;
+        bool first = true;
+        for (std::size_t count = 0; count < 2048; ++count) {
+            const Token t = probe.next();
+            if (t.kind == Kind::End) return false;
+            if (t.kind == Kind::Symbol) {
+                if (t.text == "(") ++depth;
+                else if (t.text == ")") {
+                    if (--depth == 0) {
+                        if (!first && !comma) return false;
+                        const Token pipe = probe.next();
+                        if (pipe.kind != Kind::Symbol || pipe.text != "|>") return false;
+                        const Token bar = probe.next();
+                        return bar.kind == Kind::Symbol && bar.text == "|";
+                    }
+                } else if (t.text == "," && depth == 1) comma = true;
+            }
+            first = false;
+        }
+        return false;
+    }
+
+    // The helper body is a closed pure scalar expression. No captures,
+    // arbitrary call targets, effects or hidden resource authority.
+    bool tuple_pattern_scalar(const Expression& e,
+            const std::unordered_set<std::string>* scope, std::size_t depth = 0) const {
+        if (depth > 64) return false;
+        using K = Expression::Kind;
+        switch (e.kind) {
+            case K::Integer: return true;
+            case K::Variable:
+                return !e.native_box_read && (!scope || scope->count(e.name) != 0);
+            case K::Negate:
+                return e.left && tuple_pattern_scalar(*e.left, scope, depth + 1);
+            case K::Add: case K::Subtract: case K::Multiply:
+                return e.left && e.right &&
+                    tuple_pattern_scalar(*e.left, scope, depth + 1) &&
+                    tuple_pattern_scalar(*e.right, scope, depth + 1);
+            case K::Call:
+                if (std::none_of(tuple_pattern_helpers_.begin(), tuple_pattern_helpers_.end(),
+                    [&](const Function& f) { return f.name == e.name; })) return false;
+                for (const auto& arg : e.arguments)
+                    if (!arg || !tuple_pattern_scalar(*arg, scope, depth + 1)) return false;
+                return true;
+            default: return false;
+        }
+    }
+
+    std::unique_ptr<Expression> unary_tuple_pattern() {
+        if (++tuple_pattern_depth_ > 32)
+            fail("NATIVE_TUPLE_PATTERN_DEPTH: nesting exceeds 32");
+        struct DepthGuard {
+            std::size_t& depth;
+            ~DepthGuard() { --depth; }
+        } guard{tuple_pattern_depth_};
+        const auto offset = token_.offset;
+        require("(");
+        std::vector<std::unique_ptr<Expression>> values;
+        if (!accept(")")) {
+            for (;;) {
+                if (values.size() >= 8) fail("NATIVE_TUPLE_PATTERN_ARITY: maximum 8");
+                auto value = expression();
+                if (!tuple_pattern_scalar(*value, nullptr))
+                    fail("NATIVE_TUPLE_PATTERN_TYPE: root elements require pure scalar int");
+                values.push_back(std::move(value));
+                if (!accept(",")) { require(")"); break; }
+                if (accept(")")) break;
+            }
+        }
+        require("|>");
+        require("|");
+        require("(");
+        Function helper;
+        helper.offset = offset;
+        helper.native_internal = true;
+        helper.return_type = ScalarType::I64;
+        std::unordered_set<std::string> bindings;
+        if (!accept(")")) {
+            for (;;) {
+                if (helper.parameters.size() >= 8)
+                    fail("NATIVE_TUPLE_PATTERN_ARITY: maximum 8");
+                auto name = identifier();
+                if (name == "arguments" || name == "self" ||
+                    (name != "_" && !bindings.insert(name).second))
+                    fail("NATIVE_TUPLE_PATTERN_DUPLICATE_BINDING");
+                if (accept(":")) {
+                    if (name == "_") fail("NATIVE_TUPLE_PATTERN_TYPED_DISCARD");
+                    require("int");
+                }
+                Parameter param;
+                param.name = name;
+                param.scalar_type = ScalarType::I64;
+                helper.parameters.push_back(std::move(param));
+                if (!accept(",")) {
+                    if (helper.parameters.size() == 1)
+                        fail("NATIVE_TUPLE_PATTERN_SINGLETON: trailing comma required");
+                    require(")");
+                    break;
+                }
+                if (accept(")")) break;
+            }
+        }
+        if (helper.parameters.size() != values.size())
+            fail("NATIVE_TUPLE_PATTERN_ARITY: pattern and value differ");
+        // The ownership CFG validates every parameter as a lexical place.
+        // Generate valid, collision-free lexical identifiers for discards only
+        // after all source binders are known. They never enter the body scope.
+        for (std::size_t i = 0; i < helper.parameters.size(); ++i) {
+            if (helper.parameters[i].name != "_") continue;
+            auto name = "__atto_tuple_discard_" + std::to_string(i);
+            while (bindings.count(name)) name += "_";
+            helper.parameters[i].name = std::move(name);
+        }
+        require("|");
+        require("->");
+        helper.result = conditional();
+        if (!tuple_pattern_scalar(*helper.result, &bindings))
+            fail("NATIVE_TUPLE_PATTERN_BODY: only closed int arithmetic over bound leaves");
+        if (tuple_pattern_helpers_.size() >= 128)
+            fail("NATIVE_TUPLE_PATTERN_LIMIT: maximum 128 helpers");
+        // '$' cannot be authored in identifiers. This private helper uses
+        // the existing typed, checked, ordered scalar call ABI.
+        helper.name = "$atto_tuple_pattern$" + std::to_string(tuple_pattern_helpers_.size());
+        auto call = make_expression(Expression::Kind::Call, offset);
+        call->name = helper.name;
+        call->arguments = std::move(values);
+        call->argument_names.resize(call->arguments.size());
+        tuple_pattern_helpers_.push_back(std::move(helper));
+        return call;
+    }
+
     std::unique_ptr<Expression> expression() {
-        auto value = conditional();
+        auto value = unary_tuple_pattern_ahead() ? unary_tuple_pattern() : conditional();
         std::size_t stages = 0;
         if (accept("<|")) {
             // Right-associative reverse application lowers to the same
@@ -6936,6 +7089,8 @@ private:
         // closure frames and typed capture ownership are not lowered yet.
         // Fail specifically here rather than allowing a logical-or token to
         // masquerade as a value at the beginning of an expression.
+        if (token_.text == "|")
+            fail("NATIVE_INLINE_LAMBDA_UNSUPPORTED: only closed scalar unary tuple-pattern pipelines are admitted");
         if (token_.text == "||") {
             // The native lexer deliberately does not yet combine => into
             // a single token; matching it as a lookahead symbol would miss
@@ -9871,6 +10026,8 @@ private:
     std::unordered_map<std::string,
         std::unordered_map<std::string, ScalarType>> public_class_fields_;
     std::vector<Function> methods_;
+    std::vector<Function> tuple_pattern_helpers_;
+    std::size_t tuple_pattern_depth_ = 0;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
     // 0 preserves legacy syntax, 1/2 require explicit backend version selection.
