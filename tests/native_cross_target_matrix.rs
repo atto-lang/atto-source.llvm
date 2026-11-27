@@ -63,6 +63,8 @@ const RUNTIME_FILES: &[&str] = &[
     "NativeAwaitTraceBridge.c", "NativeLogicalTrace.c", "NativeRecordRegion.c", "NativeRtDomain.c",
     // Required by admitted String-backed Result and source Task<int> guests.
     "NativeStringRegion.c", "SourceTaskRuntime.c",
+    // SourceActorBootstrap on current main requires logical-frame storage.
+    "NativeActorLogicalFramesV1.c",
 ];
 
 struct Options {
@@ -293,7 +295,7 @@ fn run(program: &str, args: &[&str]) -> Option<(i32, Vec<u8>, String)> {
         .unwrap_or_else(|e| fail(&format!("cannot start timeout for {program}: {e}")));
     let code = out.status.code().unwrap_or(-1);
     if code < 0 || (124..=127).contains(&code) || code >= 128 {
-        fail(&format!("{program}: timeout, launcher failure, signal, or reserved exit status {code}"));
+        fail(&format!("{program} {args:?}: timeout, launcher failure, signal, or reserved exit status {code}; stderr={}", String::from_utf8_lossy(&out.stderr)));
     }
     Some((code, out.stdout, String::from_utf8_lossy(&out.stderr).into_owned()))
 }
@@ -383,6 +385,7 @@ fn main() {
         let src = fixture.to_string_lossy().into_owned();
         let name = fixture.strip_prefix(&o.root).unwrap_or(fixture).to_string_lossy().into_owned();
         let expected = REQUIRED_RUNTIME_GUESTS.iter().find(|(path, _)| *path == name.as_str()).map(|(_, code)| *code);
+        println!("CHECK fixture {i}: {name}");
         // 1. Native oracle.
         let host_ir = match run(&o.compiler, &["--target=host", &src]) {
             Some((0, ir, _)) => ir,
@@ -425,6 +428,7 @@ fn main() {
             needs_runtime = true;
             runtime_linked += 1;
         }
+        println!("EXEC host oracle {i}: {name}");
         let Some((host_code, host_out, _)) = run(&hbin, &[]) else { fail(&format!("{name}: host binary did not start")) };
 
         if host_code < 0 { fail(&format!("{name}: host oracle terminated by signal")); }
@@ -483,6 +487,7 @@ fn main() {
                 }
             }
             require_elf(&bin, triple, true);
+            println!("EXEC target {triple} fixture {i}: {name}");
             let result = match o.runners.get(triple) {
                 Some(prefix) => {
                     let mut args: Vec<&str> = prefix[1..].iter().map(String::as_str).collect();
