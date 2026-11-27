@@ -10,6 +10,8 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const compiler = process.env.ORESLANG_LLVMC ?? join(root, "build/oreslang-llvmc");
 const clang = process.env.CLANG ?? "clang";
 const cases = [
+  ["name-first-as-equivalence", "positive", "8a74cb1a2c84fd511ca4d905d2af06bf60681ccc", "42"],
+  ["name-first-as-nonconst", "negative", "cafe6e32ea5d551c42a057b1267af1524fb48af7", "E_NON_CONST_INITIALIZER"],
   ["literal-equivalence", "positive", "a8e49769215a78946009f2cd2ac685b7c34c7804", "42"],
   ["type-right-equivalence", "positive", "7edb74ffe2d2a128c12e568e0fc19fe60753aae2", "42"],
   ["type-right-nonconst", "negative", "21f8827ec53c817f133789fb09dda7f2cc1e6bd8", "E_NON_CONST_INITIALIZER"],
