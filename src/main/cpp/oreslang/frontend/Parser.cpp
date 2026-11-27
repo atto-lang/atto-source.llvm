@@ -5964,18 +5964,40 @@ private:
     std::unique_ptr<Expression> product() {
         auto left = unary();
         while (token_.text == "*" || token_.text == "/" || token_.text == "%") {
-            // Java defines int/int division as a FLOAT result; this native
-            // source compiler lowers expressions only to signed i64. Reject
-            // at the operator before either lowering or emitting partial IR.
-            if (token_.text == "/")
-                fail("native floating division unsupported: int/int yields float in Java; "
-                     "LLVM float typing and zero-divisor semantics are not implemented");
+            // The merged Atto contract defines signed int/int as truncating
+            // integer division. Admit only operands proven literal and safe
+            // before emission; dynamic typed error lowering is a separate gate.
             if (token_.text == "%")
                 fail("'%' is reserved and is not AttoLang source syntax; "
                      "use Integer.rem(a, b) or Integer.mod(a, b)");
+            const bool division = token_.text == "/";
             const auto offset = token_.offset;
             advance();
             auto right = unary();
+            if (division) {
+                const auto signed_literal = [](const Expression& value)
+                        -> std::optional<std::int64_t> {
+                    using K = Expression::Kind;
+                    if (value.kind == K::Integer) return value.integer;
+                    if (value.kind == K::Negate && value.left &&
+                            value.left->kind == K::Integer &&
+                            value.left->integer != std::numeric_limits<std::int64_t>::min())
+                        return -value.left->integer;
+                    return std::nullopt;
+                };
+                const auto a = signed_literal(*left);
+                const auto b = signed_literal(*right);
+                if (!a || !b)
+                    fail("E_DIVISION_PROFILE_UNSUPPORTED: dynamic signed division requires checked typed error lowering");
+                if (*b == 0)
+                    fail("E_DIVISION_BY_ZERO: signed integer divisor is zero");
+                if (*a == std::numeric_limits<std::int64_t>::min() && *b == -1)
+                    fail("E_DIVISION_OVERFLOW: signed integer quotient exceeds i64");
+                auto quotient = make_expression(Expression::Kind::Integer, offset);
+                quotient->integer = *a / *b;
+                left = std::move(quotient);
+                continue;
+            }
             auto expr = make_expression(Expression::Kind::Multiply, offset);
             expr->left = std::move(left);
             expr->right = std::move(right);
