@@ -939,6 +939,11 @@ std::unique_ptr<Expression> clone_native_expression(const Expression& source) {
     result->when_false = clone(source.when_false);
     for (const auto& argument : source.arguments)
         result->arguments.push_back(clone_native_expression(*argument));
+    result->recur_names = source.recur_names;
+    for (const auto& item : source.recur_initializers) result->recur_initializers.push_back(clone(item));
+    for (const auto& item : source.recur_predicates) result->recur_predicates.push_back(clone(item));
+    for (const auto& item : source.recur_results) result->recur_results.push_back(clone(item));
+    for (const auto& item : source.recur_updates) result->recur_updates.push_back(clone(item));
     return result;
 }
 
@@ -6788,6 +6793,47 @@ private:
 
     std::unique_ptr<Expression> primary() {
         const auto offset = token_.offset;
+        // Distinguish the contextual function name loop(...) from loop(val ...).
+        if (token_.text == "loop") {
+            Lexer look = lexer_;
+            if (look.next().text == "(" && look.next().text == "val") {
+                auto plan = make_expression(Expression::Kind::ClosedRecur, offset);
+                advance(); require("(");
+                do {
+                    if (plan->recur_names.size() >= 8) fail("E_RECUR_LIMIT: state bindings");
+                    require("val");
+                    auto name = identifier();
+                    if (name == "recur" || name == "loop" ||
+                        std::find(plan->recur_names.begin(), plan->recur_names.end(), name) != plan->recur_names.end())
+                        fail("E_RECUR_BINDING: duplicate or reserved state");
+                    if (accept(":")) require("int");
+                    require("=");
+                    plan->recur_names.push_back(std::move(name));
+                    plan->recur_initializers.push_back(expression());
+                } while (accept(","));
+                require(")"); require("{");
+                bool terminal_else = false;
+                while (accept("if")) {
+                    if (plan->recur_predicates.size() >= 32) fail("E_RECUR_LIMIT: exit guards");
+                    plan->recur_predicates.push_back(expression());
+                    require("{"); require("break");
+                    plan->recur_results.push_back(expression());
+                    require(";"); require("}");
+                    if (accept("else")) { require("{"); terminal_else = true; break; }
+                }
+                require("recur"); require("(");
+                do {
+                    if (plan->recur_updates.size() >= 8) fail("E_RECUR_LIMIT: updates");
+                    plan->recur_updates.push_back(expression());
+                } while (accept(","));
+                require(")"); require(";");
+                if (terminal_else) { require("}"); accept("fi"); }
+                require("}");
+                if (token_.text == "(" || !valid_closed_recur(*plan))
+                    fail("E_VALUE_LOOP_PROFILE: invalid closed i64 recur expression");
+                return plan;
+            }
+        }
 
         // A closed, single-valued-break loop has no observable backedge.
         // Keep the normal typed expression and native codegen paths in
@@ -7659,6 +7705,9 @@ private:
                                     std::size_t depth = 1) {
         require_expression_depth(depth, expr);
         switch (expr.kind) {
+            case Expression::Kind::ClosedRecur:
+                if (!valid_closed_recur(expr)) throw std::runtime_error("E_VALUE_LOOP_PROFILE: invalid closed recur AST");
+                return;
             case Expression::Kind::Integer:
             case Expression::Kind::Boolean:
             case Expression::Kind::String:
@@ -7861,6 +7910,9 @@ private:
                     " at byte " + std::to_string(expr.offset));
         };
         switch (expr.kind) {
+            case Expression::Kind::ClosedRecur:
+                if (!valid_closed_recur(expr)) throw std::runtime_error("E_VALUE_LOOP_PROFILE: invalid typed recur AST");
+                return expr.resolved_type = ScalarType::I64;
             case Expression::Kind::SumConstruct:
             case Expression::Kind::SumAccess:
                 if (expr.left) (void)validate_scalar_expression(*expr.left, variables, functions, depth + 1);

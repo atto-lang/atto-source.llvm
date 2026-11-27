@@ -313,6 +313,9 @@ void check_call(const Expression& expr, Locals& locals, const Functions& functio
 
 void check_value(const Expression& expr, Locals& locals, const Functions& functions) {
     switch (expr.kind) {
+        case Expression::Kind::ClosedRecur:
+            if (!valid_closed_recur(expr)) reject(expr, "E_VALUE_LOOP_PROFILE: invalid closed recur ownership");
+            return;
         case Expression::Kind::Integer:
         case Expression::Kind::Boolean:
         case Expression::Kind::String:
@@ -504,6 +507,8 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
 // the distinct fallthrough path. This is *not* general branch-lifetime proof.
 void check_pure_guard(const Expression& expr, Locals& locals, const Functions& functions) {
     switch (expr.kind) {
+        case Expression::Kind::ClosedRecur:
+            reject(expr, "closed recur is not admitted as a pure guard");
         case Expression::Kind::Integer:
         case Expression::Kind::Boolean:
         case Expression::Kind::String:
