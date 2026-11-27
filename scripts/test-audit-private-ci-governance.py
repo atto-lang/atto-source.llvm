@@ -15,6 +15,17 @@ class PolicyAuditTest(unittest.TestCase):
     def test_empty_allowlist(self):
         self.assertEqual((), audit.parse_allowlist("# None approved\n"))
 
+    def test_checked_in_allowlist_has_no_active_carrier(self):
+        # Security freeze: an inert comment is not a live source-export permit.
+        # Re-enabling any carrier requires a separate reviewed policy change,
+        # protected main and incident disposition, not a cosmetic edit here.
+        policy = (Path(__file__).resolve().parents[1] / audit.APPROVAL_PATH)
+        self.assertEqual(
+            (),
+            audit.parse_allowlist(policy.read_text(encoding="utf-8")),
+            "No private LLVM source destination is approved in this draft",
+        )
+
     def test_valid_exact_repo(self):
         self.assertEqual(("private-org/ci-test",), audit.parse_allowlist("private-org/ci-test\n"))
 
