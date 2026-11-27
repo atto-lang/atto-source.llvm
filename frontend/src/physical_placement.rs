@@ -236,13 +236,13 @@ impl PointParser<'_> {
         self.need(Token::Punct(b'}'))?;self.need(Token::Punct(b'}'))?;
         Ok(Decl{name:owner,fields})
     }
-    fn arguments(&mut self,owners:&[Decl],id:usize,depth:usize,values:&mut Vec<i64>)->Result<(),String>{
+    fn arguments(&mut self,owners:&[Decl],id:usize,depth:usize,value_root:bool,values:&mut Vec<i64>)->Result<(),String>{
         if depth>=8{return Err(err());}
         let owner=owners.get(id).ok_or_else(err)?;
         self.word(&owner.name)?;
         // Placement root retains new T(...) at storage. Only nested value
         // expressions admit the two constructor aliases of the resolved owner.
-        if depth>0 && self.p.take(Token::Punct(b'.'))? {
+        if (depth>0 || value_root) && self.p.take(Token::Punct(b'.'))? {
             if self.word_is("make"){self.word("make")?;}
             else{self.word("new")?;}
         }
@@ -264,12 +264,12 @@ impl PointParser<'_> {
                     self.word("Array")?;self.need(Token::Punct(b'.'))?;self.word("of")?;self.need(Token::Punct(b'('))?;
                     for cell in 0..*n{
                         if cell>0{self.need(Token::Punct(b','))?;}
-                        self.arguments(owners,*i,depth+1,values)?;
+                        self.arguments(owners,*i,depth+1,false,values)?;
                     }
                     self.need(Token::Punct(b')'))?;
                 }
                 FieldKind::InlineArray(_,_)=>return Err(err()),
-                FieldKind::Inline(n) if *n<id=>self.arguments(owners,*n,depth+1,values)?,
+                FieldKind::Inline(n) if *n<id=>self.arguments(owners,*n,depth+1,false,values)?,
                 FieldKind::Inline(_)=>return Err(err()),
             }
         }
@@ -288,6 +288,47 @@ impl PointParser<'_> {
         let flat=leaves(&owners,root)?;
         self.word("pub")?;self.word("fnc")?;self.word("main")?;self.need(Token::Punct(b'('))?;self.need(Token::Punct(b')'))?;
         self.need(Token::Punct(b':'))?;self.word("int")?;self.need(Token::Punct(b'{'))?;
+        // Closed immutable, single-root ordinary value construction. Only
+        // compiler-owned trivial storage and scalar projections; no pointer
+        // escapes, explicit destroy, arbitrary methods or implicit copying.
+        if self.word_is("val"){
+            self.word("val")?;self.word(&owner)?;
+            let local=self.ident()?;
+            if fields.iter().any(|(f,_)|f==&local){return Err(err());}
+            self.need(Token::Punct(b'='))?;
+            let mut values=Vec::new();
+            self.arguments(&owners,root,0,true,&mut values)?;
+            self.need(Token::Punct(b';'))?;
+            let mut steps=vec![Step::Construct(values),Step::Bind];
+            let mut names=BTreeMap::new();
+            while self.word_is("val"){
+                if names.len()>=8{return Err(err());}
+                self.word("val")?;let n=self.ident()?;let i=names.len();
+                if n==local||fields.iter().any(|(f,_)|f==&n)||names.insert(n,i).is_some(){return Err(err());}
+                self.need(Token::Punct(b'='))?;self.word(&local)?;self.need(Token::Punct(b'.'))?;
+                let mut field=self.p.name()?;
+                for _ in 1..8{
+                    if self.p.take(Token::Punct(b'.'))?{field.push('.');field.push_str(&self.p.name()?);}
+                    else if self.p.take(Token::Punct(b'['))?{
+                        let cell=u64::try_from(self.number()?).map_err(|_|err())?;
+                        if cell>=8{return Err(err());}
+                        self.need(Token::Punct(b']'))?;field.push_str(&format!("[{cell}]"));
+                    }else{break;}
+                }
+                let index=flat.iter().position(|l|l.name==field).ok_or_else(err)?;
+                steps.push(Step::CopyField(u8::try_from(index).map_err(|_|err())?));
+                self.need(Token::Punct(b';'))?;
+            }
+            self.word("return")?;let mut result=Vec::new();
+            loop{
+                if result.len()>=8{return Err(err());}
+                let n=self.ident()?;result.push(*names.get(&n).ok_or_else(err)?);
+                if !self.p.take(Token::Punct(b'+'))?{break;}
+            }
+            self.need(Token::Punct(b';'))?;self.need(Token::Punct(b'}'))?;self.need(Token::End)?;
+            steps.extend([Step::Detach,Step::Destroy,Step::Free]);
+            let p=Plan{owners,root,steps,result};p.verify()?;return Ok(p);
+        }
         self.word("let")?;self.word("Storage")?;self.need(Token::Punct(b'<'))?;self.word(&owner)?;self.need(Token::Punct(b'>'))?;
         self.word("s")?;self.need(Token::Punct(b'='))?;self.op("alloc")?;self.word(&owner)?;self.need(Token::Punct(b';'))?;
         self.word("let")?;self.word("mut")?;self.word("RawPointer")?;self.need(Token::Punct(b'<'))?;self.word(&owner)?;
@@ -298,7 +339,7 @@ impl PointParser<'_> {
             if steps.len()>=32{return Err(err());}
             let step=if self.word_is("new") {
                 self.word("new")?;let mut values=Vec::new();
-                self.arguments(&owners,root,0,&mut values)?;
+                self.arguments(&owners,root,0,false,&mut values)?;
                 self.word("at")?;self.word("s")?;Step::Construct(values)
             } else if self.word_is("ref!") {
                 self.op("ref")?;self.word("p")?;self.word("to")?;self.word("s")?;Step::Bind
