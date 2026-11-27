@@ -357,7 +357,17 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
             if (source.class_array_fields.count(place.second)) reject(expr, "ownership violation: Array<int> field is non-Copy and cannot escape");
             if (source.subobjects.count(place.second)) reject(expr, "ownership violation: nested class field is non-Copy; use an explicit borrow");
             if (source.moved_fields.count(place.second)) reject(expr, "ownership violation: use-after-move class field");
-            if (source.exclusive_loan)
+            // An in-flight exclusive call loan freezes its actual direct
+            // scalar slot, not a distinct scalar sibling of the same flat
+            // local value. All root-wide loans and unknown layouts remain
+            // conservative. Destructive reads are separately fenced by Take.
+            const bool disjoint_direct_read = expr.left &&
+                expr.left->kind == Expression::Kind::Variable &&
+                source.mode == Mode::Value && !source.record_view &&
+                source.subobjects.empty() && source.class_array_fields.empty() &&
+                !source.direct_exclusive_loans.empty() &&
+                !source.direct_exclusive_loans.count(place.second);
+            if (source.exclusive_loan && !disjoint_direct_read)
                 reject(expr, "ownership violation: field read conflicts with active mutable borrow");
             return;
         }
