@@ -31,6 +31,7 @@ class Compiler {
     std::vector<std::string> tokens;
     std::size_t pos = 0;
     unsigned nodes = 0;
+    bool uses_division = false;
     std::vector<Function> funcs;
     std::map<std::string, std::size_t> index;
     std::string_view peek() const { return pos < tokens.size() ? tokens[pos] : std::string_view{}; }
@@ -66,8 +67,9 @@ class Compiler {
             }
         }
         for (;;) {
-            auto op = peek(); int prec = op == "*" ? 2 : op == "+" || op == "-" ? 1 : 0;
+            auto op = peek(); int prec = op == "*" || op == "/" ? 2 : op == "+" || op == "-" ? 1 : 0;
             if (prec < min) break;
+            if (op == "/") uses_division = true;
             ++pos; auto n = make(Node::binary, std::string(op));
             n->children.push_back(std::move(lhs)); n->children.push_back(expression(depth + 1, prec + 1)); lhs = std::move(n);
         }
@@ -105,7 +107,7 @@ class Compiler {
         for (const auto& child : n.children) args.push_back(emit_node(*child, f, out, next));
         std::string target;
         if (n.kind == Node::call) target = "f" + std::to_string(index.at(n.value));
-        else target = n.value == "+" ? "checked_add" : n.value == "-" ? "checked_sub" : "checked_mul";
+        else target = n.value == "+" ? "checked_add" : n.value == "-" ? "checked_sub" : n.value == "*" ? "checked_mul" : "checked_div";
         auto v = "%v" + std::to_string(next++);
         out += "  " + v + " = call i64 @" + target + "(";
         for (std::size_t i = 0; i < args.size(); ++i) out += (i ? ", i64 " : "i64 ") + args[i];
@@ -121,7 +123,7 @@ class Compiler {
         for (const auto& child : n.children) args.push_back(emit_cpp_node(*child, f, out, next));
         std::string target;
         if (n.kind == Node::call) target = "f" + std::to_string(index.at(n.value));
-        else target = n.value == "+" ? "checked_add" : n.value == "-" ? "checked_sub" : "checked_mul";
+        else target = n.value == "+" ? "checked_add" : n.value == "-" ? "checked_sub" : n.value == "*" ? "checked_mul" : "checked_div";
         auto v = "v" + std::to_string(next++);
         out += "  const U " + v + " = " + target + "(";
         for (std::size_t i = 0; i < args.size(); ++i) out += (i ? ", " : "") + args[i];
@@ -136,7 +138,7 @@ public:
             auto start = i++;
             if (alpha(c)) { while (i < source.size() && (alpha(source[i]) || digit(source[i]))) ++i; }
             else if (digit(c)) { while (i < source.size() && digit(source[i])) ++i; }
-            else if (std::string_view("(){}:,;+-*").find(c) == std::string_view::npos) fail("unsupported source byte");
+            else if (std::string_view("(){}:,;+-*/").find(c) == std::string_view::npos) fail("unsupported source byte");
             tokens.push_back(source.substr(start, i - start));
             if (tokens.size() > 2048) fail("token budget");
         }
@@ -203,6 +205,37 @@ ok:
   ret i64 %v
 }
 )";
+        if (uses_division) out += R"(define internal i64 @checked_div(i64 %a, i64 %b) {
+entry:
+  %zero = icmp eq i64 %b, 0
+  br i1 %zero, label %fault, label %loop
+fault:
+  call void @llvm.trap()
+  unreachable
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %loop ]
+  %bits = phi i64 [ %a, %entry ], [ %bits2, %loop ]
+  %r = phi i64 [ 0, %entry ], [ %r2, %loop ]
+  %q = phi i64 [ 0, %entry ], [ %q2, %loop ]
+  %carry = icmp slt i64 %r, 0
+  %bit = lshr i64 %bits, 63
+  %shift = shl i64 %r, 1
+  %trial = or i64 %shift, %bit
+  %ge = icmp uge i64 %trial, %b
+  %take = or i1 %carry, %ge
+  %sub = sub i64 %trial, %b
+  %r2 = select i1 %take, i64 %sub, i64 %trial
+  %qshift = shl i64 %q, 1
+  %qbit = zext i1 %take to i64
+  %q2 = or i64 %qshift, %qbit
+  %bits2 = shl i64 %bits, 1
+  %next = add i32 %i, 1
+  %done = icmp eq i32 %next, 64
+  br i1 %done, label %exit, label %loop
+exit:
+  ret i64 %q2
+}
+)";
         for (std::size_t i = 0; i < funcs.size(); ++i) {
             const auto& f = funcs[i]; out += "define internal i64 @f" + std::to_string(i) + "(";
             for (std::size_t p = 0; p < f.params.size(); ++p) out += (p ? ", i64 %p" : "i64 %p") + std::to_string(p);
@@ -232,6 +265,21 @@ constexpr U MAX = std::numeric_limits<U>::max();
     const U hi = cross1 + cross2 + (lo >> 32);
     if (hi > MASK) overflow();
     return (hi << 32) | (lo & MASK);
+}
+)";
+        if (uses_division) out += R"([[noreturn]] void division_by_zero() { std::fputs("E_U64_DIVISION_BY_ZERO\n", stderr); std::exit(71); }
+[[maybe_unused]] static U checked_div(U a, U b) {
+    if (b == 0) division_by_zero();
+    U q = 0, r = 0;
+    for (unsigned i = 0; i < 64; ++i) {
+        const bool carry = (r >> 63) != 0;
+        const U trial = (r << 1) | (a >> 63);
+        const bool take = carry || trial >= b;
+        r = take ? trial - b : trial;
+        q = (q << 1) | static_cast<U>(take);
+        a <<= 1;
+    }
+    return q;
 }
 )";
         for (std::size_t i = 0; i < funcs.size(); ++i) {
