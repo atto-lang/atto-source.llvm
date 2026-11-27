@@ -4314,15 +4314,20 @@ private:
                 binding.name = identifier();
                 require("=");
                 binding.initializer = expression();
-                if (!binding.initializer ||
-                        binding.initializer->kind != Expression::Kind::ArrayCall ||
-                        binding.initializer->name != "split_literal" ||
-                        !binding.initializer->left ||
-                        binding.initializer->arguments.size() != 1)
-                    fail("inferred native array val requires String.split_literal(String)");
-                binding.int_array = true;
+                // Keep the owned split-literal path distinct from statically
+                // inferred scalar values; the checked type environment admits
+                // only supported scalar initializers on the latter path.
                 binding.owner_mutable = true;
-                binding.array_element_type = ScalarType::String;
+                if (binding.initializer &&
+                        binding.initializer->kind == Expression::Kind::ArrayCall &&
+                        binding.initializer->name == "split_literal" &&
+                        binding.initializer->left &&
+                        binding.initializer->arguments.size() == 1) {
+                    binding.int_array = true;
+                    binding.array_element_type = ScalarType::String;
+                } else {
+                    binding.inferred_scalar = true;
+                }
             } else if ((token_.text == "val" || token_.text == "const") &&
                     [&] { Lexer look = lexer_; const auto type = look.next();
                         return type.text == "string" || type.text == "String" ||
