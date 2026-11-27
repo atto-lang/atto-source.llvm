@@ -1,10 +1,11 @@
 #include "NamedRecursiveScalarIr.hpp"
 #include <cassert>
+#include <charconv>
 #include <iostream>
 #include <string_view>
 using namespace oreslang::backend::named_recursive;
 int main(int argc,char** argv){
-    assert(argc==2);
+    assert(argc==2||argc==3);
     const Stage fib{{{Op::parameter},{Op::literal,0,0,0},{Op::literal,0,0,1},{Op::literal,0,0,2},{Op::sub,0,3},{Op::self,4},{Op::sub,0,2},{Op::self,6},{Op::add,5,7}},{{0,1},{1,2},{std::nullopt,8}}};
     const Stage count{{{Op::parameter},{Op::literal,0,0,0},{Op::literal,0,0,1},{Op::sub,0,2},{Op::self,3},{Op::add,4,2}},{{0,1},{std::nullopt,5}}};
     const Stage plus{{{Op::parameter},{Op::literal,0,0,1},{Op::add,0,1}},{{std::nullopt,2}}};
@@ -23,5 +24,11 @@ int main(int argc,char** argv){
     }
     const Stage* stage=mode=="fib"?&fib:mode=="count"?&count:mode=="plus"?&plus:mode=="order"?&order:nullptr;
     if(!stage)return 2;
-    auto ir=emit(*stage);assert(ir);std::cout<<*ir;
+    std::optional<std::int64_t> input;
+    if(argc==3){
+        std::string_view word=argv[2];std::int64_t n=0;
+        const auto parsed=std::from_chars(word.data(),word.data()+word.size(),n);
+        assert(parsed.ec==std::errc{}&&parsed.ptr==word.data()+word.size());input=n;
+    }
+    auto ir=emit(*stage,input);assert(ir);std::cout<<*ir;
 }
