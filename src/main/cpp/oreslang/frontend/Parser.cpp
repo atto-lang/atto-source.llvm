@@ -4287,7 +4287,8 @@ private:
         while (token_.text == "const" || token_.text == "val" || token_.text == "let" ||
                 token_.text == "int" || token_.text == "bool" ||
                 token_.text == "string" || token_.text == "String" ||
-                token_.text == "mut" || token_.text == "stdio" || array_effect_ahead()) {
+                token_.text == "mut" || token_.text == "stdio" ||
+                (token_.text == "process" && peek_next().text == ".") || array_effect_ahead()) {
             if (native_box_local()) continue;
             // Typed Future<void> is admitted ONLY as a linear lexical alias
             // for one already-spawned ActorRef.get_ready() lifecycle promise.
@@ -4439,7 +4440,8 @@ private:
                 if (binding.initializer->kind != Expression::Kind::ArrayCall ||
                         (binding.initializer->name != "add" && binding.initializer->name != "set"))
                     fail("native array effect supports only add(value) or set(index,value)");
-            } else if (token_.text == "stdio") {
+            } else if (token_.text == "stdio" ||
+                       (token_.text == "process" && peek_next().text == ".")) {
                 // ANF: discard an effect's integer status in an unspellable
                 // compiler-owned slot, preserving declaration/effect order.
                 binding.name = "$effect" + std::to_string(value.locals.size());
@@ -7355,28 +7357,36 @@ private:
             advance();
             return template_literal(raw, offset);
         }
-        if (accept("stdio")) {
+        if ((token_.text == "stdio" || token_.text == "process") &&
+                peek_next().text == ".") {
+            const std::string receiver(token_.text);
+            if (module_names_.count(receiver) || function_import_names_.count(receiver))
+                fail("E_STDOUT_SHADOW: native stdout requires an unshadowed endpoint");
+            advance();
             require(".");
             auto expr = make_expression(Expression::Kind::Console, offset);
+            expr->console_receiver = receiver;
             // String unless the native type checker proves an int/bool argument.
             expr->resolved_type = ScalarType::String;
             expr->name = identifier();
-            if (expr->name == "stdout") {
-                // Java stdio.stdout.write/println take exactly one argument and
-                // render it like stdio.print/println; write adds no newline.
-                // Lower onto the same Console node so output is byte-identical.
+            if ((receiver == "stdio" && (expr->name == "out" || expr->name == "stdout")) ||
+                    (receiver == "process" && expr->name == "stdout")) {
+                // Canonical stdout aliases share existing native Console lowering.
+                // Retain stdio.stdout only for old fixture compatibility.
+                const std::string endpoint = receiver + "." + expr->name;
                 require(".");
                 const std::string member = identifier();
                 if (member == "write") expr->name = "print";
-                else if (member == "println") expr->name = "println";
-                else fail("unsupported native stdio.stdout operation");
+                else if (member == "println" && endpoint == "stdio.stdout") expr->name = "println";
+                else fail("unsupported native " + endpoint + " operation");
                 require("(");
                 expr->left = expression();
-                if (token_.text == ",") fail("stdio.stdout." + member + " takes exactly one argument");
+                if (token_.text == ",") fail(endpoint + "." + member + " takes exactly one argument");
                 require(")");
                 return expr;
             }
-            if (expr->name != "print" && expr->name != "println") fail("unsupported native stdio operation");
+            if (receiver != "stdio" || (expr->name != "print" && expr->name != "println"))
+                fail("unsupported native stdio operation");
             // Java stdio.print/println concatenate arguments without an
             // inserted separator and append at most one newline. Lower all
             // string arguments to the existing checked string-concat AST so
@@ -8129,6 +8139,9 @@ private:
             case Expression::Kind::String:
                 return;
             case Expression::Kind::Console:
+                if (!expr.console_receiver.empty() &&
+                    (parameters.count(expr.console_receiver) || functions.count(expr.console_receiver)))
+                    throw std::runtime_error("E_STDOUT_SHADOW: native stdout requires an unshadowed endpoint");
                 validate_expression(*expr.left, parameters, functions, depth + 1);
                 return;
             case Expression::Kind::Variable:
@@ -8342,6 +8355,9 @@ private:
             case Expression::Kind::String:
                 return expr.resolved_type = ScalarType::String;
             case Expression::Kind::Console: {
+                if (!expr.console_receiver.empty() &&
+                    (variables.count(expr.console_receiver) || functions.count(expr.console_receiver)))
+                    throw std::runtime_error("E_STDOUT_SHADOW: native stdout requires an unshadowed endpoint");
                 // String, int or bool; int/bool are rendered as text by codegen.
                 const ScalarType argument = validate_scalar_expression(*expr.left, variables, functions, depth + 1);
                 if (argument != ScalarType::I64 && argument != ScalarType::Bool)
