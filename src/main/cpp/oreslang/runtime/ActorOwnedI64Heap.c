@@ -127,6 +127,37 @@ OresActorI64Heap* ores_actor_i64_heap_open(uint64_t actor_id,
     return heap;
 }
 
+OresActorTryEnterResult ores_actor_i64_heap_try_enter(
+                                    OresActorI64Heap* heap,
+                                    uint64_t actor_id, uint64_t incarnation,
+                                    OresActorTurn* out) {
+    if (!heap || !out || !actor_id || !incarnation) rejected();
+    /* Every non-success path must fail closed even if the scheduler reuses
+     * storage that previously held a valid turn token. */
+    *out = (OresActorTurn){0, 0};
+    if (carrier_heap != NULL) return ORES_ACTOR_TRY_CARRIER_OCCUPIED;
+    if (!try_lock_heap(heap)) return ORES_ACTOR_TRY_LOCK_BUSY;
+    if (actor_id != heap->owner || incarnation != heap->incarnation)
+        rejected();
+    if (heap->retiring) {
+        unlock_heap(heap);
+        return ORES_ACTOR_TRY_RETIRED;
+    }
+    if (heap->turn_active) {
+        unlock_heap(heap);
+        return ORES_ACTOR_TRY_ACTOR_ACTIVE;
+    }
+    if (heap->turn_epoch == UINT64_MAX) rejected();
+    ++heap->turn_epoch;
+    OresActorTurn token = {heap->domain, heap->turn_epoch};
+    heap->turn_active = 1;
+    carrier_heap = heap;
+    carrier_epoch = token.epoch;
+    *out = token;
+    unlock_heap(heap);
+    return ORES_ACTOR_TRY_ENTERED;
+}
+
 OresActorTurn ores_actor_i64_heap_enter(OresActorI64Heap* heap,
                                           uint64_t actor_id,
                                           uint64_t incarnation) {
