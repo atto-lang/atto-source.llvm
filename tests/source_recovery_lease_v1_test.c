@@ -10,7 +10,12 @@ int main(void) {
         CHECK(!ores_source_recovery_can_close(&lease, 1));
         CHECK(!ores_source_recovery_claim(&lease, slot, 0, i));
         CHECK(!ores_source_recovery_claim(&lease, slot, i, 0));
+        CHECK(!ores_source_recovery_matches(&lease, slot, i, i + 1));
         CHECK(ores_source_recovery_claim(&lease, slot, i, i + 1));
+        CHECK(ores_source_recovery_matches(&lease, slot, i, i + 1));
+        CHECK(!ores_source_recovery_matches(&lease, (slot + 1) % 63, i, i + 1));
+        CHECK(!ores_source_recovery_matches(&lease, slot, i + 1, i + 1));
+        CHECK(!ores_source_recovery_matches(&lease, slot, i, i));
         CHECK(!ores_source_recovery_can_close(&lease, 0));
         CHECK(!ores_source_recovery_claim(&lease, slot, i, i + 1));
         CHECK(!ores_source_recovery_release(&lease, (slot + 1) % 63, i, i + 1));
@@ -18,6 +23,7 @@ int main(void) {
         CHECK(!ores_source_recovery_release(&lease, slot, i, i));
         CHECK(!ores_source_recovery_can_close(&lease, 0));
         CHECK(ores_source_recovery_release(&lease, slot, i, i + 1));
+        CHECK(!ores_source_recovery_matches(&lease, slot, i, i + 1));
         CHECK(!ores_source_recovery_release(&lease, slot, i, i + 1));
         CHECK(ores_source_recovery_can_close(&lease, 0));
         CHECK(!ores_source_recovery_can_close(&lease, 1));
