@@ -1,5 +1,6 @@
 #pragma once
 
+#include "oreslang/frontend/PortableUnicodeIdentifier.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -108,7 +109,8 @@ inline PlaceState& place(State& state, const std::string& key) {
 // unverified place expressions must be lowered to typed PlaceIds first.
 // Otherwise a key like "p[0]" incorrectly appears disjoint from "p" and a
 // write through it could bypass an outstanding exclusive/shared loan.
-// This deliberately restricts the flat verifier to ASCII identifier segments.
+// Restrict the flat verifier to the same portable Unicode identifier segments
+// as the native lexer; separators and compiler-private names stay unchanged.
 inline void validate_disjoint_place_layout(const State& state) {
     constexpr std::size_t kMaxPlacePathBytes = 256;
     constexpr std::size_t kMaxPlacePathSegments = 16;
@@ -123,13 +125,6 @@ inline void validate_disjoint_place_layout(const State& state) {
         while (at < key.size()) {
             if (++segments > kMaxPlacePathSegments)
                 violation(key, "unproven or overdeep CFG field path");
-            const auto valid_start = [](unsigned char ch) {
-                return (ch >= 'A' && ch <= 'Z') ||
-                    (ch >= 'a' && ch <= 'z') || ch == '_';
-            };
-            const auto valid_continuation = [&](unsigned char ch) {
-                return valid_start(ch) || (ch >= '0' && ch <= '9');
-            };
             // Main's parser names compiler-owned ANF locals with a leading
             // '$' (e.g. '$effect1' for discarded comma-body items). Admit
             // that marker only on the root segment; '$' never appears in a
@@ -144,13 +139,15 @@ inline void validate_disjoint_place_layout(const State& state) {
                 at = key.size();
                 continue;
             }
-            if (!valid_start(static_cast<unsigned char>(key[at])))
+            const auto first = frontend::unicode_at(key, at);
+            if (!first.width || !frontend::portable_name_start(first.value))
                 violation(key, "unproven CFG place projection syntax");
-            ++at;
+            at += first.width;
             while (at < key.size() && key[at] != '.') {
-                if (!valid_continuation(static_cast<unsigned char>(key[at])))
+                const auto next = frontend::unicode_at(key, at);
+                if (!next.width || !frontend::portable_name_part(next.value))
                     violation(key, "unproven CFG place projection syntax");
-                ++at;
+                at += next.width;
             }
             if (at < key.size()) ++at;
         }

@@ -6386,6 +6386,8 @@ if(BUILD_TESTING)
         class-projection-sibling-take-reject.atto --diagnostic "cannot take a class field with active loans")
     oreslang_contract_test(native_projection_outer_loan
         class-projection-outer-loan-reject.atto --diagnostic "conflicting active native borrow")
+    oreslang_contract_test(native_projection_nested_release_outer_live
+        class-projection-nested-release-outer-live-reject.atto --diagnostic "conflicting active native borrow")
     oreslang_contract_test(native_projection_alias_conflict
         class-projection-overlap-reject.ores --diagnostic "conflicting active native borrow")
     oreslang_contract_test(native_projection_immutable_exclusive
@@ -6552,6 +6554,8 @@ if(BUILD_TESTING)
             class-projection-sibling-read-native.atto --run 42 --clang "${ORE_CLANG}" --no-native-abi)
         oreslang_contract_test(native_projection_sibling_read_nested_clang
             class-projection-sibling-read-nested-native.atto --run 42 --clang "${ORE_CLANG}" --no-native-abi)
+        oreslang_contract_test(native_projection_nested_release_clang
+            class-projection-nested-release-native.atto --run 42 --clang "${ORE_CLANG}" --no-native-abi)
 
         add_test(NAME native_projection_borrow_compiler_to_clang_matrix
             COMMAND "${Python3_EXECUTABLE}"
