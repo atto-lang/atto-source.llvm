@@ -58,7 +58,7 @@ impl Kind {
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum FieldKind { Scalar(Kind), Inline(usize), ScalarArray(Kind,u64) }
+enum FieldKind { Scalar(Kind), Inline(usize), ScalarArray(Kind,u64), InlineArray(usize,u64) }
 #[derive(Clone, Debug)]
 struct Decl { name: String, fields: Vec<(String,FieldKind)> }
 #[derive(Clone, Debug)]
@@ -85,6 +85,15 @@ fn leaves(owners:&[Decl],root:usize)->Result<Vec<Leaf>,String>{
                         path.pop();
                     }
                 }
+                FieldKind::InlineArray(i,n) if *i<id=>{
+                    if *n==0||*n>8||path.len()>=8{return Err(err());}
+                    for cell in 0..*n{
+                        path.push(usize::try_from(cell).map_err(|_|err())?);
+                        visit(owners,*i,&format!("{name}[{cell}]"),&format!("{c_path}[{cell}]"),path,out)?;
+                        path.pop();
+                    }
+                }
+                FieldKind::InlineArray(_,_)=>return Err(err()),
                 FieldKind::Inline(i) if *i<id=>visit(owners,*i,&name,&c_path,path,out)?,
                 FieldKind::Inline(_)=>return Err(err()),
             }
@@ -112,7 +121,7 @@ impl Plan {
     pub(crate) fn physical_slots(&self) -> Result<(Storage,Vec<(u64,Storage)>),String> {
         let leaves=self.leaves()?;
         let owners=self.owners.iter().map(|o|Owner {identity:o.name.clone(),fields:o.fields.iter().map(|(n,k)|{
-            let field=match k {FieldKind::Scalar(k)=>{let size=k.size();FieldType::Scalar(Storage{size,align:size})},FieldKind::Inline(i)=>FieldType::Inline(*i),FieldKind::ScalarArray(k,n)=>{let size=k.size();FieldType::ScalarArray(Storage{size,align:size},*n)}};
+            let field=match k {FieldKind::Scalar(k)=>{let size=k.size();FieldType::Scalar(Storage{size,align:size})},FieldKind::Inline(i)=>FieldType::Inline(*i),FieldKind::ScalarArray(k,n)=>{let size=k.size();FieldType::ScalarArray(Storage{size,align:size},*n)},FieldKind::InlineArray(i,n)=>FieldType::InlineArray(*i,*n)};
             (n.clone(),field)
         }).collect()}).collect::<Vec<_>>();
         let layouts=physical_layout::plan(&owners,Limits{max_size:65536,max_align:8,max_owners:8,max_fields:64})?;
@@ -189,11 +198,13 @@ impl PointParser<'_> {
         let name=self.p.name()?;
         if name=="Array"{
             self.need(Token::Punct(b'<'))?;
-            let k=Kind::parse(&self.p.name()?).ok_or_else(err)?;
+            let element=self.p.name()?;
             self.need(Token::Punct(b','))?;
             let n=u64::try_from(self.number()?).map_err(|_|err())?;
             if !(1..=8).contains(&n){return Err(err());}
-            self.need(Token::Punct(b'>'))?;return Ok(FieldKind::ScalarArray(k,n));
+            self.need(Token::Punct(b'>'))?;
+            if let Some(k)=Kind::parse(&element){return Ok(FieldKind::ScalarArray(k,n));}
+            return owners.iter().position(|o|o.name==element).map(|i|FieldKind::InlineArray(i,n)).ok_or_else(err);
         }
         if let Some(k)=Kind::parse(&name){return Ok(FieldKind::Scalar(k));}
         owners.iter().position(|o|o.name==name).map(FieldKind::Inline).ok_or_else(err)
@@ -242,6 +253,15 @@ impl PointParser<'_> {
                     }
                     self.need(Token::Punct(b')'))?;
                 }
+                FieldKind::InlineArray(i,n) if *i<id=>{
+                    self.word("Array")?;self.need(Token::Punct(b'.'))?;self.word("of")?;self.need(Token::Punct(b'('))?;
+                    for cell in 0..*n{
+                        if cell>0{self.need(Token::Punct(b','))?;}
+                        self.arguments(owners,*i,depth+1,values)?;
+                    }
+                    self.need(Token::Punct(b')'))?;
+                }
+                FieldKind::InlineArray(_,_)=>return Err(err()),
                 FieldKind::Inline(n) if *n<id=>self.arguments(owners,*n,depth+1,values)?,
                 FieldKind::Inline(_)=>return Err(err()),
             }
@@ -325,6 +345,7 @@ fn emit(plan:&Plan)->Result<String,String>{
                 FieldKind::Scalar(k)=>writeln!(out,"  {} f{j};",ctype(*k)),
                 FieldKind::Inline(n)=>writeln!(out,"  struct atto_s{n} f{j};"),
                 FieldKind::ScalarArray(k,n)=>writeln!(out,"  {} f{j}[{n}];",ctype(*k)),
+                FieldKind::InlineArray(i,n)=>writeln!(out,"  struct atto_s{i} f{j}[{n}];"),
             }.map_err(|_|err())?;
         }
         out.push_str("};\n");

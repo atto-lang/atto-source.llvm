@@ -54,6 +54,25 @@ try{
     const {r,c}=await compile(bad);assert.equal(r.status,1,bad);assert.equal(r.stdout,'');await assert.rejects(stat(c),{code:'ENOENT'});
   }
   console.log('LLVM_FIXED_ARRAY_PLACEMENT_NEGATIVE_PASS count=12');
+  const nominalSource="define struct Payload { int count; i8 flag; } with { constructor(int count, i8 flag) { self.count = count; self.flag = flag; } } define struct Packet { i8 tag; Array<Payload,2> items; i16 tail; } with { constructor(i8 tag, Array<Payload,2> items, i16 tail) { self.tag = tag; self.items = items; self.tail = tail; } } pub fnc main(): int { let Storage<Packet> s = alloc! Packet; let mut RawPointer<Packet> p = RawPointer.empty<Packet>(); new Packet(-1, Array.of(Payload(10,2),Payload(20,3)), 8) at s; ref! p to s; val a = (deref! p).tag; val b = (deref! p).items[0].count; val c = (deref! p).items[0].flag; val d = (deref! p).items[1].count; val e = (deref! p).items[1].flag; val f = (deref! p).tail; unref! p; destroy! s; free! s; return a + b + c + d + e + f; }";
+  const {r:nominalResult,c:nominalC}=await compile(nominalSource);assert.equal(nominalResult.status,0,nominalResult.stderr);
+  const nominalGenerated=await readFile(nominalC,'utf8');assert.match(nominalGenerated,/struct atto_s0 f1\[2\]/);
+  assert.match(nominalGenerated,/== 48, "size"/);
+  for(const offset of [0,8,16,24,32,40])assert.match(nominalGenerated,new RegExp('== '+offset+', "offset"'));
+  const nominalHost=join(root,'nominal-host.c');
+  await writeFile(nominalHost,'#include <stdint.h>\n#include <assert.h>\nextern int32_t atto_placement_entry(int64_t*);\nint main(void){for(int i=0;i<100;i++){int64_t out=-1;assert(atto_placement_entry(&out)==0 && out==42);}return 0;}\n');
+  for(const opt of ['-O0','-O2']){
+    const bin=nominalC+'.'+opt.slice(1),ir=bin+'.ll';
+    const emitted=run('clang',['-std=c11','-Wall','-Wextra','-Werror',opt,'-S','-emit-llvm',nominalC,'-o',ir]);assert.equal(emitted.status,0,emitted.stderr);
+    const llvm=await readFile(ir,'utf8');assert.match(llvm,/load volatile i64/);assert.match(llvm,/store volatile i8/);
+    const link=run('clang',['-std=c11','-Wall','-Wextra','-Werror','-fsanitize=undefined','-fno-sanitize-recover=all',opt,nominalC,nominalHost,'-o',bin]);assert.equal(link.status,0,link.stderr);
+    assert.equal(run(bin,[]).status,0);console.log('LLVM_NOMINAL_ARRAY_PLACEMENT_NATIVE_PASS',JSON.stringify({opt,repetitions:100}));
+  }
+  for(const [from,to] of [["Array<Payload,2> items;","Array<Packet,2> items;"],["Array<Payload,2> items;","Array<Missing,2> items;"],["Array<Payload,2> items;","Array<Payload,0> items;"],["Array<Payload,2> items;","Array<Payload,8> items;"],["Array<Payload,2> items,","Array<Payload,1> items,"],["Payload(20,3)","Payload(20,128)"],["Payload(20,3)","Other(20,3)"],[",Payload(20,3)",""],[".items[1].flag",".items[2].flag"],[".items[1].flag",".items[1]"],[".items[1].flag",".items[1].missing"],[".items[1].flag",".items[1].flag[0]"]]){
+    const bad=nominalSource.replace(from,to);assert.notEqual(bad,nominalSource);
+    const {r,c}=await compile(bad);assert.equal(r.status,1,bad);assert.equal(r.stdout,'');await assert.rejects(stat(c),{code:'ENOENT'});
+  }
+  console.log('LLVM_NOMINAL_ARRAY_PLACEMENT_NEGATIVE_PASS count=12');
   const nested=fixtures[1],flat=fixtures[0];
   for(const [source,from,to] of [
     [flat,'-3, 40, 5','128, 40, 5'],[flat,'ref! p','ref!p'],[flat,'ref! p','ref ! p'],
