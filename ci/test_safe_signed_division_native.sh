@@ -51,3 +51,20 @@ bad zero 'pub fnc main():int{return 42 / 0;}'
 bad overflow 'pub fnc main():int{return -9223372036854775808 / -1;}'
 bad dynamic-divisor 'fnc divide(int n,int d):int{return n/d;} pub fnc main():int{return divide(42,1);}'
 bad dynamic-minus-one 'fnc divide(int n):int{return n/-1;} pub fnc main():int{return divide(-42);}'
+
+# Proven-dead guard/ternary arms still check source types; no live dynamic division admitted.
+ok dead-guard-divisor 'pub fnc main():int{let int zero=0;guard false,42/zero eq 0 else return 42;end return 1;}'
+ok dead-ternary-zero 'pub fnc main():int{return true ? 42 : 1/0;}'
+ok dead-ternary-overflow 'pub fnc main():int{return false ? (-9223372036854775808/-1) : 42;}'
+ok nested-dead-division 'pub fnc main():int{let int d=0;return false ? (true ? 1/d : 2) : 42;}'
+bad live-guard-divisor 'pub fnc main():int{let int zero=0;guard true,42/zero eq 0 else return 42;end return 1;}'
+bad live-after-dead 'pub fnc main():int{let int n=false ? 1/0 : 42;return n/0;}'
+bad unknown-condition 'fnc f(bool p,int d):int{return p ? 42 : 1/d;}pub fnc main():int{return f(true,0);}'
+for invalid in 'pub fnc main():int{return true ? 42 : true/0;}' 'pub fnc main():int{return false ? unknown/0 : 42;}' 'pub fnc main():int{return true ? 42 : (1/0 eq 0);}' ; do
+  printf '%s\n' "$invalid" > "$work/dead-invalid.atto"
+  out="$work/dead-invalid.$backend"
+  if "$compiler" "$work/dead-invalid.atto" -o "$out" > "$work/dead-invalid.log" 2>&1; then exit 1; fi
+  test ! -e "$out"
+  grep -E 'E_TYPE|E_UNBOUND' "$work/dead-invalid.log"
+  echo "PASS dead-arm static denial $backend"
+done
