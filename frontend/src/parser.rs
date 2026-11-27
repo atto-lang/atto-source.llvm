@@ -599,7 +599,7 @@ impl Parser {
             if decls.len() >= 16 {
                 return Err(Diagnostic::new(self.pos(), "E_SOURCE_LIMIT", "too many attached nominal owners"));
             }
-            let decl = self.parse_struct_with_target()?;
+            let decl = self.parse_struct_with_target_impl(true)?;
             if !owners.insert(decl.name.clone()) {
                 return Err(Diagnostic::new(decl.pos, "E_DUPLICATE", "duplicate attached nominal owner"));
             }
@@ -615,6 +615,10 @@ impl Parser {
     }
 
     pub fn parse_struct_with_target(&mut self) -> R<StructWithTarget> {
+        self.parse_struct_with_target_impl(false)
+    }
+
+    fn parse_struct_with_target_impl(&mut self, allow_nominal: bool) -> R<StructWithTarget> {
         self.struct_target = true;
         let direct = self.eat_word("define");
         if direct { self.expect_word("struct")?; } else { self.expect_word("type")?; }
@@ -634,8 +638,8 @@ impl Parser {
                 return Err(Diagnostic::new(self.pos(), "E_SOURCE_LIMIT", "too many struct fields"));
             }
             let ty = self.parse_type()?;
-            if !matches!(ty, Type::Int | Type::Bool) {
-                return Err(unsupported(self.pos(), "non-int/bool attached struct fields"));
+            if !(matches!(ty, Type::Int | Type::Bool) || allow_nominal && matches!(ty, Type::Named(_))) {
+                return Err(unsupported(self.pos(), "unsupported attached struct field type"));
             }
             let (field, at) = self.ident("a struct field name")?;
             if fields.iter().any(|(prior, _)| prior == &field) {
@@ -654,10 +658,10 @@ impl Parser {
                     return Err(self.expected("a constructor or method inside with"));
                 }
                 while !self.eat(&Tok::RBrace) {
-                    self.parse_struct_attachment_member(&mut out)?;
+                    self.parse_struct_attachment_member(&mut out, allow_nominal)?;
                 }
             } else {
-                self.parse_struct_attachment_member(&mut out)?;
+                self.parse_struct_attachment_member(&mut out, allow_nominal)?;
             }
             if !self.eat_word("with") { break; }
         }
@@ -669,7 +673,7 @@ impl Parser {
     /// A deliberately bounded straight-line scalar constructor proof. Do not
     /// certify arbitrary calls, control flow or effects until the value ABI
     /// and full ownership checker can establish those contracts.
-    fn prove_struct_constructor(
+    pub(crate) fn prove_struct_constructor(
         fields: &[(String, Type)], params: &[Param], body: &[Stmt], pos: Pos,
     ) -> R<()> {
         use std::collections::{BTreeMap, BTreeSet};
@@ -776,7 +780,7 @@ impl Parser {
         Ok(())
     }
 
-    fn parse_struct_attachment_member(&mut self, out: &mut StructWithTarget) -> R<()> {
+    fn parse_struct_attachment_member(&mut self, out: &mut StructWithTarget, allow_nominal: bool) -> R<()> {
         let pos = self.pos();
         if out.methods.len() + out.constructors.len() >= MAX_MEMBERS {
             return Err(Diagnostic::new(pos, "E_SOURCE_LIMIT", "too many attached struct members"));
@@ -792,14 +796,16 @@ impl Parser {
             }
             self.expect(Tok::LParen, "'(' after constructor")?;
             let params = self.parse_params()?;
-            if !scalar_params(&params) {
-                return Err(unsupported(pos, "non-int/bool attached constructor parameters"));
+            if !(scalar_params(&params) || allow_nominal && params.iter().all(|p| matches!(p.ty, Type::Int | Type::Bool | Type::Named(_)))) {
+                return Err(unsupported(pos, "unsupported attached constructor parameters"));
             }
             if out.constructors.iter().any(|(_, ctor)| same_params(&ctor.params, &params)) {
                 return Err(Diagnostic::new(pos, "E_DUPLICATE", "duplicate struct constructor signature"));
             }
             let body = self.parse_block()?;
-            Self::prove_struct_constructor(&out.fields, &params, &body, pos)?;
+            if !allow_nominal || (scalar_params(&params) && out.fields.iter().all(|(_, t)| matches!(t, Type::Int | Type::Bool))) {
+                Self::prove_struct_constructor(&out.fields, &params, &body, pos)?;
+            }
             out.constructors.push((public, Constructor { pos, params, body }));
         } else if self.eat_word("mtd") {
             let prefixed = if self.return_first_marker_here() {
@@ -2308,10 +2314,18 @@ impl Parser {
     /// operators, which are eagerly evaluated. The lexer deliberately keeps
     /// paired pipes as two tokens: initial || still starts a zero-arg lambda.
     /// In infix position only, a pair is logical OR.
+    fn adjacent_operator_pair(&self, token: Tok) -> bool {
+        let Some(next) = self.toks.get(self.i + 1) else { return false; };
+        let current = &self.toks[self.i];
+        current.tok == token && next.tok == token
+            && current.pos.line == next.pos.line
+            && current.pos.col.checked_add(1) == Some(next.pos.col)
+    }
+
     fn parse_logical_or(&mut self) -> R<Expr> {
         let mut left = self.parse_logical_and()?;
         let mut links = 0;
-        while *self.peek() == Tok::Pipe && *self.peek_at(1) == Tok::Pipe {
+        while self.adjacent_operator_pair(Tok::Pipe) {
             let pos = self.pos();
             self.advance();
             self.advance();
@@ -2337,7 +2351,7 @@ impl Parser {
     fn parse_logical_and(&mut self) -> R<Expr> {
         let mut left = self.parse_equality()?;
         let mut links = 0;
-        while *self.peek() == Tok::Amp && *self.peek_at(1) == Tok::Amp {
+        while self.adjacent_operator_pair(Tok::Amp) {
             let pos = self.pos();
             if self.struct_target {
                 let next = self.toks[(self.i + 1).min(self.toks.len() - 1)].pos;
