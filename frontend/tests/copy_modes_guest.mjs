@@ -3,6 +3,7 @@ import {mkdtempSync,writeFileSync,readFileSync,existsSync,rmSync} from 'node:fs'
 import {join,resolve} from 'node:path';
 import {tmpdir} from 'node:os';
 import {spawnSync} from 'node:child_process';
+import {validRejection} from './copy_guest_receipt.mjs';
 const compiler=resolve(process.env.ATTOC??'target/debug/attoc');
 const flat='define class Box as\n pub let int n = 20;\nend\n';
 const nested='define class Leaf as pub val int n = 20; end\ndefine class Root as pub let Leaf child = new Leaf(); pub let int extra = 1; end\n';
@@ -69,6 +70,7 @@ const cases=[
  ['rhs-moves-root',flat+'\nfnc take_value(Box x): int { return x.n; }\n'+main('let Box a = new Box(); let Box b = copy! a; b.n = take_value(b); return 42;'),'E_OWNERSHIP'],
  ['bad-bang',main('return copy!!! 42;'),'E_TYPE'],
 ];
+assert.equal(new Set(cases.map(([id])=>id)).size,cases.length,'duplicate guest case ID');
 const dir=mkdtempSync(join(tmpdir(),'atto-copy-modes-'));
 try{
  for(const [id,source,expected] of cases){
@@ -83,8 +85,7 @@ try{
    const imports=WebAssembly.Module.imports(mod); const allowed=new Set(['print_i64','print_bool','print_f64','print_str','print_newline','actor_spawn','actor_send']); for(const i of imports){assert.equal(i.module,'atto');assert.equal(i.kind,'function');assert.ok(allowed.has(i.name));} const instance=new WebAssembly.Instance(mod,{atto:Object.fromEntries(imports.map(i=>[i.name,()=>{throw Error('unexpected host effect')}]))});
    assert.equal(instance.exports.main(),BigInt(expected),id);assert.equal(instance.exports.panic_code.value,0,id);
   } else {
-   assert.equal(r.status,1,id+': '+r.stderr);assert.ok(r.stderr.includes(expected),id+': '+r.stderr);
-   assert.equal(existsSync(output),false,id+': emitted rejected artifact');
+   assert.ok(validRejection(input,expected,r,existsSync(output)),id+': wrong diagnostic, process failure or emitted artifact: '+r.stderr);
   }
   console.log('PASS',id,expected);
  }
