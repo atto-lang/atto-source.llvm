@@ -6875,14 +6875,15 @@ private:
                     (receiver == "process" && expr->name == "stdout")) {
                 // Canonical stdout aliases share existing native Console lowering.
                 // Retain stdio.stdout only for old fixture compatibility.
+                const std::string endpoint = receiver + "." + expr->name;
                 require(".");
                 const std::string member = identifier();
                 if (member == "write") expr->name = "print";
-                else if (member == "println" && receiver == "stdio") expr->name = "println";
-                else fail("unsupported native stdout operation");
+                else if (member == "println" && endpoint == "stdio.stdout") expr->name = "println";
+                else fail("unsupported native " + endpoint + " operation");
                 require("(");
                 expr->left = expression();
-                if (token_.text == ",") fail("native stdout." + member + " takes exactly one argument");
+                if (token_.text == ",") fail(endpoint + "." + member + " takes exactly one argument");
                 require(")");
                 return expr;
             }
