@@ -296,6 +296,8 @@ struct FieldInfo {
     ty: Type,
     public: bool,
     mode: FieldMode,
+    referent_mutable: bool,
+    fixed_val: bool,
     /// byte offset (classes) or state global (actors)
     slot: u32,
 }
@@ -313,6 +315,7 @@ struct MethodInfo {
 struct ClassInfo {
     name: String,
     immutable_leaf: bool,
+    closed_scalar_leaf: bool,
     fields: Vec<FieldInfo>,
     methods: Vec<MethodInfo>,
     new_idx: u32,
@@ -387,6 +390,9 @@ struct FnCx<'a> {
     // Monotonic proof: fresh locally allocated roots, never parameters or
     // reassigned bindings. Conservative across all control-flow branches.
     fresh_copy_roots: BTreeSet<u32>,
+    nested_linear: bool,
+    nested_groups: BTreeMap<(u32, u32), u64>,
+    next_nested_group: u64,
     imports: &'a mut Vec<Import>,
     data: &'a mut Vec<u8>,
 }
@@ -810,9 +816,15 @@ pub fn check(p: &Program) -> R<TProgram> {
     // Only fixed scalar storage with no constructor/methods is a closed
     // immutable leaf. A nominal reference or a fixed outer slot alone is
     // never proof of transitive immutability.
+    let closed_scalar_leaves: Vec<bool> = p.classes.iter().map(|c| {
+        c.ctor.is_none() && c.methods.is_empty() && c.fields.iter().all(|f|
+            !f.referent_mutable && const_init(&f.init)
+                && res(f.ty).is_ok_and(|t| matches!(t,
+                    Type::Int | Type::Bool | Type::Float | Type::Str | Type::Enum(_))))
+    }).collect();
     let immutable_leaves: Vec<bool> = p.classes.iter().map(|c| {
         c.ctor.is_none() && c.methods.is_empty() && c.fields.iter().all(|f|
-            f.mode == FieldMode::Final && const_init(&f.init)
+            f.mode == FieldMode::Final && !f.referent_mutable && const_init(&f.init)
                 && res(f.ty).is_ok_and(|t| matches!(t,
                     Type::Int | Type::Bool | Type::Float | Type::Str | Type::Enum(_))))
     }).collect();
@@ -830,7 +842,7 @@ pub fn check(p: &Program) -> R<TProgram> {
             let ok = match ty {
                 Type::Int | Type::Bool => true,
                 Type::Float | Type::Str | Type::Enum(_) => !actor,
-                Type::Class(ci) => !actor && immutable_leaves[ci as usize]
+                Type::Class(ci) => !actor && ((!f.referent_mutable && immutable_leaves[ci as usize]) || ((f.referent_mutable || f.fixed_val) && closed_scalar_leaves[ci as usize]))
                     && matches!(&f.init.kind, ExprKind::New(name, args)
                         if name == &class_names[ci as usize] && args.is_empty()),
                 _ => false,
@@ -853,6 +865,8 @@ pub fn check(p: &Program) -> R<TProgram> {
                 ty,
                 public: f.public,
                 mode: f.mode,
+                referent_mutable: f.referent_mutable,
+                fixed_val: f.fixed_val,
                 slot: if actor { global_base + i as u32 } else { i as u32 * FIELD_BYTES },
             });
         }
@@ -862,6 +876,10 @@ pub fn check(p: &Program) -> R<TProgram> {
     let mut classes = Vec::new();
     for (ci, c) in p.classes.iter().enumerate() {
         let fields = fields_of(&c.name, &c.fields, false, 0)?;
+        if fields.iter().any(|f| matches!(f.ty, Type::Class(child) if f.referent_mutable || (f.fixed_val && !immutable_leaves[child as usize])))
+            && (c.ctor.is_some() || !c.methods.is_empty()) {
+            return Err(Diagnostic::new(c.pos, "E_COPY_UNPROVEN", "mutable nested root requires a closed constructor-free, method-free layout"));
+        }
         let mut methods = methods_of(&c.name, &c.methods, &c.fields)?;
         let new_idx = take();
         // fields_of has already proved this closed class layout contains
@@ -880,6 +898,7 @@ pub fn check(p: &Program) -> R<TProgram> {
         classes.push(ClassInfo {
             name: c.name.clone(),
             immutable_leaf: immutable_leaves[ci],
+            closed_scalar_leaf: closed_scalar_leaves[ci],
             fields,
             methods,
             new_idx,
@@ -961,6 +980,26 @@ pub fn check(p: &Program) -> R<TProgram> {
         actors,
         type_names: tn,
     };
+
+    let nested_root_type = |t: Type| matches!(t, Type::Class(ci)
+        if g.classes[ci as usize].fields.iter().any(|f| matches!(f.ty, Type::Class(child)
+            if f.referent_mutable || (f.fixed_val && !g.classes[child as usize].immutable_leaf))));
+    for f in &p.funcs {
+        if nested_root_type(res(f.ret)?) || f.params.iter().any(|q| res(q.ty).is_ok_and(nested_root_type)) {
+            return Err(Diagnostic::new(f.pos, "E_COPY_UNPROVEN", "mutable nested roots cannot cross callable boundaries"));
+        }
+    }
+    for c in &g.classes {
+        if c.ctor_params.iter().copied().any(nested_root_type) ||
+            c.methods.iter().any(|m| nested_root_type(m.ret) || m.params.iter().copied().any(nested_root_type)) {
+            return Err(Diagnostic::new(Pos::default(), "E_COPY_UNPROVEN", "mutable nested roots cannot cross class callable boundaries"));
+        }
+    }
+    for a in &g.actors {
+        if a.methods.iter().any(|m| nested_root_type(m.ret) || m.params.iter().copied().any(nested_root_type)) {
+            return Err(Diagnostic::new(Pos::default(), "E_COPY_UNPROVEN", "mutable nested roots cannot cross actor callable boundaries"));
+        }
+    }
 
     let main = match g.sigs.get(&("main".to_string(), 0)) {
         Some((i, _, ret)) => {
@@ -1156,9 +1195,18 @@ pub fn check(p: &Program) -> R<TProgram> {
                 e: TExpr::Alloc((info.fields.len() as u32 * FIELD_BYTES).max(FIELD_BYTES)), ty: me,
             })];
             for f in &info.fields {
+                let mut value = TE { e: TExpr::FieldGet { obj: Box::new(source.clone()), offset: f.slot }, ty: f.ty };
+                if mode == "deep" {
+                    if let Type::Class(child) = f.ty {
+                        if f.referent_mutable || (f.fixed_val && !g.classes[child as usize].immutable_leaf) {
+                            let idx = g.classes[child as usize].deep_idx.ok_or_else(||
+                                Diagnostic::new(c.pos, "E_COPY_AOT_WITNESS", "missing mutable leaf copier"))?;
+                            value = TE { e: TExpr::Call(idx, vec![value]), ty: f.ty };
+                        }
+                    }
+                }
                 body.push(TStmt::FieldSet {
-                    obj: target.clone(), offset: f.slot, ty: f.ty,
-                    value: TE { e: TExpr::FieldGet { obj: Box::new(source.clone()), offset: f.slot }, ty: f.ty },
+                    obj: target.clone(), offset: f.slot, ty: f.ty, value,
                 });
             }
             body.push(TStmt::Return(Some(target)));
@@ -1359,7 +1407,7 @@ fn actor_type_ok(g: &Globals, actor: &str, t: Type, pos: Pos) -> R<()> {
 fn field_init(g: &Globals, f: &Field, ty: Type, owner: &str, actor: bool, imports: &mut Vec<Import>, data: &mut Vec<u8>) -> R<TE> {
     if let Type::Class(ci) = ty {
         let info = &g.classes[ci as usize];
-        if !actor && info.immutable_leaf && matches!(&f.init.kind,
+        if !actor && ((!f.referent_mutable && info.immutable_leaf) || ((f.referent_mutable || f.fixed_val) && info.closed_scalar_leaf)) && matches!(&f.init.kind,
             ExprKind::New(name, args) if name == &info.name && args.is_empty()) {
             return Ok(TE { e: TExpr::Call(info.new_idx, Vec::new()), ty });
         }
@@ -1538,6 +1586,9 @@ impl<'a> FnCx<'a> {
             dead_division_arm: false,
             moved: BTreeSet::new(),
             fresh_copy_roots: BTreeSet::new(),
+            nested_linear: true,
+            nested_groups: BTreeMap::new(),
+            next_nested_group: 0,
             imports,
             data,
         }
@@ -1600,10 +1651,29 @@ impl<'a> FnCx<'a> {
         Ok(slot)
     }
 
+    fn has_mutable_nested(&self, ty: Type) -> bool {
+        matches!(ty, Type::Class(ci) if self.g.classes[ci as usize].fields.iter().any(|f|
+            matches!(f.ty, Type::Class(child) if f.referent_mutable || (f.fixed_val && !self.g.classes[child as usize].immutable_leaf))))
+    }
+    fn nested_unique(&self, root: u32, offset: u32) -> bool {
+        self.nested_groups.get(&(root, offset)).is_some_and(|group|
+            self.nested_groups.values().filter(|g| *g == group).take(2).count() == 1)
+    }
+    fn new_nested_group(&mut self, root: u32, offset: u32, pos: Pos) -> R<()> {
+        self.next_nested_group = self.next_nested_group.checked_add(1).ok_or_else(||
+            Diagnostic::new(pos, "E_COPY_GRAPH_BUDGET", "nested identity counter exhausted"))?;
+        self.nested_groups.insert((root, offset), self.next_nested_group);
+        Ok(())
+    }
     fn scoped(&mut self, body: &[Stmt]) -> R<Vec<TStmt>> {
         self.scopes.push(Vec::new());
         let r = self.stmts(body);
-        self.scopes.pop();
+        if let Some(ended) = self.scopes.pop() {
+            for l in ended {
+                self.nested_groups.retain(|(root, _), _| *root != l.slot);
+                self.fresh_copy_roots.remove(&l.slot);
+            }
+        }
         r
     }
 
@@ -1632,11 +1702,20 @@ impl<'a> FnCx<'a> {
     }
 
     fn stmt(&mut self, s: &Stmt) -> R<TStmt> {
+        if !matches!(s, Stmt::Bind { .. } | Stmt::Assign { .. } | Stmt::FieldAssign { .. } | Stmt::Expr(_) | Stmt::Return(..) | Stmt::Block(_)) {
+            self.nested_linear = false;
+            self.nested_groups.clear();
+        }
         Ok(match s {
             Stmt::Bind { kind, name, ty, init, pos } => {
                 let want = match ty {
                     Some(t) => Some(self.resolve(*t, *pos)?),
                     None => None,
+                };
+                let shared_source = match &init.kind {
+                    ExprKind::Call(op, args) if op == "$copy_shallow" => args.first().and_then(|e|
+                        if let ExprKind::Var(n) = &e.kind { self.lookup(n).map(|l| l.slot) } else { None }),
+                    _ => None,
                 };
                 let v = match &init.kind {
                     ExprKind::Call(op, args) if matches!(op.as_str(), "$copy_shallow" | "$copy_deep") =>
@@ -1668,6 +1747,22 @@ impl<'a> FnCx<'a> {
                     && (matches!(init.kind, ExprKind::New(..)) || matches!(&init.kind,
                         ExprKind::Call(op, _) if matches!(op.as_str(), "$copy_shallow" | "$copy_deep"))) {
                     self.fresh_copy_roots.insert(slot);
+                    if self.nested_linear {
+                        if let Type::Class(ci) = v.ty {
+                            let offsets: Vec<u32> = self.g.classes[ci as usize].fields.iter()
+                                .filter(|f| matches!(f.ty, Type::Class(child) if f.referent_mutable || (f.fixed_val && !self.g.classes[child as usize].immutable_leaf)))
+                                .map(|f| f.slot).collect();
+                            for offset in offsets {
+                                if let Some(source) = shared_source {
+                                    let group = *self.nested_groups.get(&(source, offset)).ok_or_else(||
+                                        Diagnostic::new(*pos, "E_COPY_UNPROVEN", "missing source field identity"))?;
+                                    self.nested_groups.insert((slot, offset), group);
+                                } else {
+                                    self.new_nested_group(slot, offset, *pos)?;
+                                }
+                            }
+                        }
+                    }
                 }
                 TStmt::Set(slot, v)
             }
@@ -1682,6 +1777,9 @@ impl<'a> FnCx<'a> {
                         "E_IMMUTABLE",
                         format!("cannot reassign val binding '{name}'"),
                     ));
+                }
+                if self.has_mutable_nested(ty) {
+                    return Err(Diagnostic::new(*pos, "E_COPY_UNPROVEN", "mutable nested root rebinding is unproved"));
                 }
                 let v = self.consume_expected(value, ty)?;
                 if v.ty != ty {
@@ -2153,6 +2251,45 @@ impl<'a> FnCx<'a> {
     }
 
     fn field_assign(&mut self, target: &Expr, field: &str, value: &Expr, pos: Pos) -> R<TStmt> {
+        if let ExprKind::Member(base, member) = &target.kind {
+            if let ExprKind::Var(name) = &base.kind {
+                if let Some((root, Type::Class(ci), mutable)) = self.lookup(name).map(|l| (l.slot, l.ty, l.mutable)) {
+                    let outer = &self.g.classes[ci as usize];
+                    if let Some(edge) = outer.fields.iter().find(|f| f.name == *member) {
+                        if let Type::Class(child) = edge.ty {
+                            if edge.referent_mutable && self.g.classes[child as usize].closed_scalar_leaf {
+                                if !self.nested_linear || self.owner != Owner::TopLevel || !mutable ||
+                                    !self.fresh_copy_roots.contains(&root) || self.moved.contains(&root) ||
+                                    !self.nested_unique(root, edge.slot) {
+                                    return Err(Diagnostic::new(pos, "E_COPY_READONLY", "nested referent has no independent write authority"));
+                                }
+                                if !edge.public { return Err(Diagnostic::new(pos, "E_PRIVATE", "private outer field")); }
+                                let leaf = &self.g.classes[child as usize];
+                                let f = leaf.fields.iter().find(|f| f.name == field).ok_or_else(||
+                                    Diagnostic::new(pos, "E_UNBOUND", "unknown nested field"))?;
+                                if !f.public { return Err(Diagnostic::new(pos, "E_PRIVATE", "private nested field")); }
+                                if f.mode != FieldMode::Constructor {
+                                    return Err(Diagnostic::new(pos, "E_IMMUTABLE", "fixed nested field"));
+                                }
+                                if !const_init(value) {
+                                    return Err(Diagnostic::new(pos, "E_COPY_UNPROVEN", "nested write RHS requires a proven constant expression"));
+                                }
+                                let (edge_offset, offset, ty) = (edge.slot, f.slot, f.ty);
+                                let v = self.value(value)?;
+                                if v.ty != ty { return Err(type_err(value.pos, "nested field assignment type mismatch")); }
+                                if !self.nested_unique(root, edge_offset) || self.moved.contains(&root) {
+                                    return Err(Diagnostic::new(pos, "E_COPY_READONLY", "nested field RHS invalidated authority"));
+                                }
+                                return Ok(TStmt::FieldSet {
+                                    obj: TE { e: TExpr::FieldGet { obj: Box::new(TE { e: TExpr::Local(root), ty: Type::Class(ci) }), offset: edge_offset }, ty: Type::Class(child) },
+                                    offset, ty, value: v,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
         if !matches!(target.kind, ExprKind::SelfRef) {
             // Closed flat class only. No general receiver-write or borrowing
             // authority; loops and all parameters/rebound owners fail closed.
@@ -2172,13 +2309,17 @@ impl<'a> FnCx<'a> {
                                     return Err(Diagnostic::new(pos, "E_PRIVATE", "private class field"));
                                 }
                                 if f.mode != FieldMode::Constructor {
+                                    if matches!(f.ty, Type::Class(_)) && self.has_mutable_nested(Type::Class(ci)) {
+                                        return Err(Diagnostic::new(pos, "E_COPY_READONLY_SLOT", "cannot replace fixed nested root field"));
+                                    }
                                     return Err(Diagnostic::new(pos, "E_IMMUTABLE", "fixed class field"));
                                 }
                                 let (offset, fty) = (f.slot, f.ty);
                                 let fresh_leaf = match fty {
                                     Type::Class(child) => {
                                         let leaf = &self.g.classes[child as usize];
-                                        leaf.immutable_leaf && matches!(&value.kind,
+                                        ((!f.referent_mutable && leaf.immutable_leaf) ||
+                                            (self.nested_linear && f.referent_mutable && leaf.closed_scalar_leaf)) && matches!(&value.kind,
                                             ExprKind::New(n, args) if n == &leaf.name && args.is_empty())
                                     }
                                     _ => false,
@@ -2190,6 +2331,9 @@ impl<'a> FnCx<'a> {
                                 if v.ty != fty { return Err(type_err(value.pos, "field replacement type mismatch")); }
                                 if !self.fresh_copy_roots.contains(&slot) || self.moved.contains(&slot) {
                                     return Err(Diagnostic::new(pos, "E_OWNERSHIP", "field owner moved while evaluating replacement"));
+                                }
+                                if fresh_leaf && matches!(fty, Type::Class(_)) && self.nested_linear {
+                                    self.new_nested_group(slot, offset, pos)?;
                                 }
                                 return Ok(TStmt::FieldSet {
                                     obj: TE { e: TExpr::Local(slot), ty }, offset, ty: fty, value: v,
@@ -2353,6 +2497,9 @@ impl<'a> FnCx<'a> {
     /// assignment, argument, return): naming an object local moves it.
     fn consume(&mut self, e: &Expr) -> R<TE> {
         let v = self.value(e)?;
+        if self.has_mutable_nested(v.ty) && !matches!(e.kind, ExprKind::New(..)) {
+            return Err(Diagnostic::new(e.pos, "E_COPY_UNPROVEN", "mutable nested root cannot escape lexical identity tracking"));
+        }
         if let (ExprKind::Var(name), TExpr::Local(slot), Type::Class(_)) = (&e.kind, &v.e, v.ty) {
             let slot = *slot;
             if self.loop_floors.last().is_some_and(|floor| slot < *floor) {
@@ -3257,6 +3404,12 @@ impl<'a> FnCx<'a> {
             Type::Class(ci) if binding && self.owner == Owner::TopLevel
                 && matches!(&args[0].kind, ExprKind::Var(_))
                 && matches!(&value.e, TExpr::Local(_)) => {
+                if self.has_mutable_nested(value.ty) {
+                    let TExpr::Local(slot) = &value.e else { unreachable!() };
+                    if !self.nested_linear || !self.fresh_copy_roots.contains(slot) || self.moved.contains(slot) {
+                        return Err(Diagnostic::new(pos, "E_COPY_UNPROVEN", "mutable nested copy requires a proven direct lexical root"));
+                    }
+                }
                 let info = &self.g.classes[ci as usize];
                 let idx = if name == "$copy_deep" { info.deep_idx } else { info.shallow_idx };
                 let idx = idx.ok_or_else(|| Diagnostic::new(pos, "E_COPY_OVERRIDE",

@@ -1100,13 +1100,14 @@ impl Parser {
                         _ => FieldMode::Final,
                     };
                     self.advance();
-                    if self.is_word("mut") && w != "val" {
-                        self.advance();
-                    }
+                    let referent_mutable = self.is_word("mut") && w != "val";
+                    if referent_mutable { self.advance(); }
                     if matches!(self.peek(), Tok::Ident(_)) && *self.peek_at(1) == Tok::Colon {
                         return Err(self.expected("a field type before the field name"));
                     }
-                    let f = self.parse_type_first_field(public, mode)?;
+                    let mut f = self.parse_type_first_field(public, mode)?;
+                    f.field.referent_mutable = referent_mutable;
+                    f.field.fixed_val = w == "val";
                     if f.init_was_colon {
                         return Err(Diagnostic::new(
                             f.field.init.pos,
@@ -1182,6 +1183,8 @@ impl Parser {
             ty,
             public,
             mode: FieldMode::Final,
+            referent_mutable: false,
+            fixed_val: false,
             init,
         })
     }
@@ -1206,6 +1209,8 @@ impl Parser {
                 ty,
                 public,
                 mode,
+                referent_mutable: false,
+                fixed_val: false,
                 init,
             },
             init_was_colon,
