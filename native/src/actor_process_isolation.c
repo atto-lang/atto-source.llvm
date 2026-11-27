@@ -1,5 +1,9 @@
 #define _GNU_SOURCE
 #define _POSIX_C_SOURCE 200809L
+#if defined(__APPLE__)
+/* Strict POSIX visibility can hide the Darwin spawn extension. */
+#define _DARWIN_C_SOURCE 1
+#endif
 #include "atto/actor_process_isolation.h"
 
 #include <errno.h>
@@ -52,6 +56,11 @@ static int reap_blocking(pid_t pid, int *status) {
  * equivalent default-close behavior. Unsupported targets return ENOTSUP.
  * Neither mechanism constitutes a complete OS security sandbox. */
 static int spawn_worker(pid_t *pid, const atto_actor_worker_spec *spec) {
+#if !defined(ATTO_SPAWN_DEFAULT_CLOSE_SUPPORTED)
+    /* Unsupported hosts still fail closed; do not suppress global warnings. */
+    (void)pid;
+    (void)spec;
+#endif
     posix_spawn_file_actions_t actions;
     posix_spawnattr_t attrs;
     int rc = posix_spawn_file_actions_init(&actions);
