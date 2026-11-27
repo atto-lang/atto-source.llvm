@@ -1,3 +1,4 @@
+#include "oreslang/types/NativeNumericErrorAbi.hpp"
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/backend/PointerIntCodegen.hpp"
 #include "oreslang/backend/NativeFlatClasses.hpp"
@@ -99,6 +100,7 @@ struct RegionMoveLowering {
     // Source-owned Box<int> identifiers remain non-Copy even though the
     // native owned region stores their values as opaque generation tokens.
     const std::unordered_set<std::string>* native_box_names = nullptr;
+    bool hosted_trap_arithmetic = false;
 };
 
 llvm::Value* receiver_array_region(const Expression& receiver, const RegionMoveLowering* moves) {
@@ -172,6 +174,36 @@ llvm::Value* checked_signed_arithmetic(llvm::IRBuilder<>& builder,
     return value;
 }
 
+// Closed trap expressions have no calls, owners or suspension. The shared
+// overflow edge short-circuits later operands; ordinary lowering is unchanged.
+llvm::Value* lower_trapped_overflow(const Expression& e, llvm::IRBuilder<>& builder,
+                                    llvm::Type* i64, llvm::BasicBlock* failure) {
+    using K = Expression::Kind;
+    if (e.kind == K::Integer)
+        return llvm::ConstantInt::getSigned(i64, e.integer);
+    const bool negate = e.kind == K::Negate;
+    if (!negate && e.kind != K::Add && e.kind != K::Subtract && e.kind != K::Multiply)
+        throw std::runtime_error("unproved arithmetic operand in native trap");
+    if (!e.left || (!negate && !e.right))
+        throw std::runtime_error("incomplete native trap arithmetic");
+    auto* lhs = negate ? llvm::ConstantInt::get(i64, 0)
+                       : lower_trapped_overflow(*e.left, builder, i64, failure);
+    auto* rhs = lower_trapped_overflow(negate ? *e.left : *e.right, builder, i64, failure);
+    const auto op = negate || e.kind == K::Subtract ? llvm::Intrinsic::ssub_with_overflow
+        : e.kind == K::Multiply ? llvm::Intrinsic::smul_with_overflow
+        : llvm::Intrinsic::sadd_with_overflow;
+    auto* module = builder.GetInsertBlock()->getModule();
+    auto* function = builder.GetInsertBlock()->getParent();
+    auto* intrinsic = native_intrinsic(*module, op, {i64});
+    auto* checked = builder.CreateCall(intrinsic, {lhs, rhs}, "trap.arithmetic.checked");
+    auto* value = builder.CreateExtractValue(checked, {0}, "trap.arithmetic.value");
+    auto* overflow = builder.CreateExtractValue(checked, {1}, "trap.arithmetic.overflow");
+    auto* proceed = llvm::BasicBlock::Create(builder.getContext(), "trap.arithmetic.ok", function);
+    builder.CreateCondBr(overflow, failure, proceed);
+    builder.SetInsertPoint(proceed);
+    return value;
+}
+
 llvm::Value* lower(const Expression& expr,
                    llvm::IRBuilder<>& builder,
                    llvm::Type* i64,
@@ -185,15 +217,47 @@ llvm::Value* lower(const Expression& expr,
             // or silently reinterpret an unrelated native handle.
             return lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
         case Expression::Kind::SumConstruct: {
-            // Independent backend gate: a trap-origin Ok may only wrap the
-            // statically total integer subset. Never accidentally catch host,
-            // ordinary guest, panic or cancellation errors by fabricating Some.
-            if (expr.trap_origin && (expr.name != "Ok" ||
-                    expr.arguments.size() != 1 ||
-                    !native_trap_pure_integer(*expr.arguments.front()) ||
-                    expr.sum_type != "Result<int,Error>"))
-                throw std::runtime_error("unproved native trap AST reached LLVM codegen");
             const auto& type = native_sum(*moves->sum_program, expr.sum_type);
+            // Only the compiler-owned closed trap slice may mint this Error
+            // carrier. Do not admit calls, host effects or arbitrary Error objects.
+            if ((type.trap_error && !expr.trap_origin) ||
+                    (expr.trap_origin && (!type.trap_error ||
+                    type.kind != NativeSumType::Kind::Result ||
+                    type.value_type != ScalarType::I64 || expr.name != "Ok" ||
+                    expr.arguments.size() != 1 || !expr.arguments.front() ||
+                    !native_trap_pure_integer(*expr.arguments.front()) ||
+                    expr.sum_type != "Result<int,Error>")))
+                throw std::runtime_error("unproved native trap AST reached LLVM codegen");
+            if (expr.trap_origin && moves->hosted_trap_arithmetic &&
+                    expr.arguments.front()->kind != Expression::Kind::Integer) {
+                // Stable arithmetic Error ABI ID; still opaque to source.
+                constexpr auto overflow_id = static_cast<std::uint32_t>(types::NativeNumericError::ArithmeticOverflow);
+                auto* function = builder.GetInsertBlock()->getParent();
+                auto* failed = llvm::BasicBlock::Create(builder.getContext(), "trap.arithmetic.err", function);
+                auto* join = llvm::BasicBlock::Create(builder.getContext(), "trap.arithmetic.result", function);
+                auto* payload = lower_trapped_overflow(*expr.arguments.front(), builder, i64, failed);
+                auto* success = builder.GetInsertBlock();
+                builder.CreateBr(join);
+                builder.SetInsertPoint(failed);
+                builder.CreateBr(join);
+                builder.SetInsertPoint(join);
+                auto* tag = builder.CreatePHI(i64, 2, "trap.result.tag");
+                auto* ok = builder.CreatePHI(i64, 2, "trap.result.ok");
+                auto* error = builder.CreatePHI(i64, 2, "trap.result.error");
+                tag->addIncoming(llvm::ConstantInt::get(i64, 0), success);
+                tag->addIncoming(llvm::ConstantInt::get(i64, 1), failed);
+                ok->addIncoming(payload, success);
+                ok->addIncoming(llvm::ConstantInt::get(i64, 0), failed);
+                error->addIncoming(llvm::ConstantInt::get(i64, 0), success);
+                error->addIncoming(llvm::ConstantInt::get(i64, overflow_id), failed);
+                auto* fields = entry_alloca(builder, i64, llvm::ConstantInt::get(i64, 3), "trap.result.fields");
+                builder.CreateStore(tag, fields);
+                builder.CreateStore(ok, builder.CreateGEP(i64, fields, llvm::ConstantInt::get(i64, 1)));
+                builder.CreateStore(error, builder.CreateGEP(i64, fields, llvm::ConstantInt::get(i64, 2)));
+                return builder.CreateCall(moves->record_new,
+                    {llvm::ConstantInt::get(i64, moves->record_schemas->at(expr.sum_type)),
+                     llvm::ConstantInt::get(i64, 3), fields}, "trap.result");
+            }
             const bool option = type.kind == NativeSumType::Kind::Option;
             const std::size_t count = option ? 2 : 3;
             const bool error = expr.name == "Err";
@@ -2119,6 +2183,9 @@ static std::string emit_verified_llvm_ir_impl(const Program& source, bool wasm32
         region_moves.native_box_names = &native_box_names;
         region_moves.sum_program = &source;
         region_moves.sum_check = sum_check;
+        region_moves.hosted_trap_arithmetic = !wasm32_target && !cortex_m_target &&
+            !bounded_allocator_provider && !tenant_vm_guest && !actor_region_v1 &&
+            source.actors.empty();
         region_moves.frozen_scalar_dispatch = &frozen_i64_dispatch;
         region_moves.frozen_scalar_callees = &frozen_scalar_callees;
         region_moves.frozen_scalar_symbols = &frozen_scalar_symbols;
