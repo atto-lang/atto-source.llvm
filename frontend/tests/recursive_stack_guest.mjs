@@ -54,4 +54,32 @@ try{
       console.log('PASS',id,isolated?'isolated':'normal');
     }
   }
+  // Throw across 400 recursive edges while 599 caller edges remain live.
+  // Restoring to zero would incorrectly admit the 500-edge probe; failing
+  // to restore would incorrectly reject the 400-edge probe.
+  const eh=count+`fnc walk(int n, int probe): int {
+    if n == 0 { throw Error("unwind"); }
+    if n < 0 { return walk(n+1, probe); }
+    if n == 1 {
+      return match trap walk(-400, probe) over
+        on None -> count(probe),
+        on Some(v) -> v
+      end;
+    }
+    return walk(n-1, probe);
+  } `;
+  for(const [id,src,want] of [
+    ['catch-restores-live-depth',eh+'pub fnc main(): int {return walk(600,400);}','400'],
+    ['catch-does-not-reset-live-depth',eh+'pub fnc main(): int {return walk(600,500);}','stack'],
+    ['catch-does-not-intercept-quota',count+'pub fnc main(): int {return match trap count(1025) over on None -> 99, on Some(v) -> v end;}','stack'],
+  ]){
+    const input=join(work,id+'.atto'),out=join(work,id+'.wasm');
+    await writeFile(input,src);
+    ok(run(compiler,[input,'-o',out],30000),id+' compile');
+    const guest=run(process.execPath,['--input-type=module','-e',worker,out,want,'normal'],10000);
+    ok(guest,id+' guest');
+    assert.equal(guest.stderr,'',id);
+    assert.equal(guest.stdout,'PASS '+want+'\n',id);
+    console.log('PASS',id);
+  }
 }finally{await rm(work,{recursive:true,force:true});}
