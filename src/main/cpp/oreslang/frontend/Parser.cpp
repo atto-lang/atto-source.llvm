@@ -4168,9 +4168,24 @@ private:
             binding.offset = token_.offset;
             const bool type_first_const = token_.text == "int" || token_.text == "bool" ||
                     token_.text == "String" || token_.text == "string";
-            if (token_.text == "const" && peek_next().text == "mut")
-                fail("E_CONST_MUT_UNSUPPORTED: scoped owned mutable value lowering is not yet implemented");
+            // The scalar alias uses the existing val owner path. Do not
+            // admit aggregate/capability owners through this bounded slice.
+            const bool scalar_const_mut = token_.text == "const" && peek_next().text == "mut";
             Lexer sum_look = lexer_; auto sum_first = sum_look.next();
+            if (scalar_const_mut) {
+                sum_first = sum_look.next();
+                Lexer check = sum_look;
+                const auto second = check.next();
+                const auto third = check.next();
+                const auto fourth = check.next();
+                const bool typed_prefix = (sum_first.text == "int" || sum_first.text == "bool") &&
+                    second.kind == Kind::Identifier && third.text == "=";
+                const bool typed_right = sum_first.kind == Kind::Identifier &&
+                    (second.text == ":" || second.text == "as") &&
+                    (third.text == "int" || third.text == "bool") && fourth.text == "=";
+                if (!typed_prefix && !typed_right)
+                    fail("E_CONST_MUT_UNSUPPORTED: only typed int/bool local alias admitted");
+            }
             // The type-right spelling is an explicit constant, not a runtime
             // val fallback: const name: int = e == const int name = e.
             // Independent lookahead: sum_look stays at the first token for
@@ -4203,8 +4218,13 @@ private:
             if (alias_prefixed || type_first_const || type_right_const ||
                     ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
                     (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "String" || sum_first.text == "string"))) {
-                const std::string mode = type_first_const ? "const" : std::string(token_.text);
-                if (!type_first_const) { advance(); if (mode == "let") accept("mut"); }
+                const std::string mode = scalar_const_mut ? "val" :
+                    type_first_const ? "const" : std::string(token_.text);
+                if (!type_first_const) {
+                    advance();
+                    if (scalar_const_mut) require("mut");
+                    else if (mode == "let") accept("mut");
+                }
                 binding.owner_mutable = mode != "const"; binding.assignable = mode == "let";
                 if (type_right_const) {
                     binding.name = identifier();
@@ -4298,9 +4318,14 @@ private:
                     }
                 } else {
                     binding.initializer = expression();
-                    if (mode == "const" &&
-                            !native_const_scalar_tree(*binding.initializer, value.locals))
-                        fail("E_NON_CONST_INITIALIZER: type-first/const scalar requires a compile-time value");
+                    if (mode == "const") {
+                        // Keep proven overflow rejection, but an unproven
+                        // initializer is an eager runtime value, not an error.
+                        const bool proven = native_const_scalar_tree(*binding.initializer, value.locals);
+                        if (!proven && binding.scalar_type != ScalarType::I64 &&
+                                binding.scalar_type != ScalarType::Bool)
+                            fail("E_NON_CONST_INITIALIZER: runtime non-scalar constant requires verified lowering");
+                    }
                 }
             } else if ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
                     (sum_first.text == "Option" || sum_first.text == "Result")) {
