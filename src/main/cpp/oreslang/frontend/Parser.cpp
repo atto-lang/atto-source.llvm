@@ -2882,14 +2882,15 @@ private:
             fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
         }
         if (accept("static")) {
-            if (accept("method")) fail("static method is invalid; use static fnc");
+            if (accept("method") || accept("mtd")) fail("static method is invalid; use static fnc");
             fail("native actor static fnc requires separate member lowering");
         }
         if (suspends_actor) {
             if (!accept("fnc") && !accept("mtd"))
                 fail("ATTO_TASK_E_SUSPENDS_DECL: use 'suspends fnc' or 'suspends mtd'");
         } else if (!accept("fnc")) {
-            accept("method"); // legacy synchronous actor method marker
+            if (token_.text == "method") fail("obsolete method introducer; use mtd");
+            accept("mtd"); // optional synchronous actor method marker
         }
         if (at_unsupported_critical_mode()) {
             fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
@@ -3076,13 +3077,38 @@ private:
             if (!publicly_visible) accept("private");
             if (token_.text == "abstract")
                 fail("NATIVE_PRIVATE_ABSTRACT_UNSUPPORTED: abstract method slots cannot lower as scalar fields or methods; no IR emitted");
-            // Formatter may insert 'mtd', but method identity and receiver
-            // erasure must remain unchanged. Never consume it as a class field.
-            const bool method_marker = accept("mtd");
+            // 'mtd' and legacy 'fnc' are contextual class
+            // method introducers only when followed by a callable name and
+            // then '(' or '<'. A bare method literally named mtd() or
+            // method() must retain its own selector and receiver ABI.
+            // Probe a *copy* of the lexer so malformed/doubled markers cannot
+            // mutate parser position or bypass ordinary method admission.
+            bool method_marker = false;
+            if (token_.text == "mtd" || token_.text == "method" || token_.text == "fnc") {
+                Lexer look = lexer_;
+                const Token name = look.next();
+                const Token after = look.next();
+                // Reject stacked introducers at the declaration boundary
+                // rather than letting "mtd method foo()" fall into native
+                // field parsing with an unrelated generic diagnostic.
+                if ((name.text == "mtd" || name.text == "method" || name.text == "fnc") &&
+                    after.kind == Kind::Identifier) {
+                    const Token following = look.next();
+                    if (following.text == "(" || following.text == "<")
+                        fail("native duplicate instance method introducer");
+                }
+                if (name.kind == Kind::Identifier &&
+                    (!reserved(name.text) || name.text == "pattern") &&
+                    (after.text == "(" || after.text == "<")) {
+                    if (token_.text == "method") fail("obsolete method introducer; use mtd");
+                    advance();
+                    method_marker = true;
+                }
+            }
             const bool method_ahead = token_.kind == Kind::Identifier && token_.text != "constructor" && (!reserved(token_.text) || token_.text == "pattern")
                 && [&] { Lexer look = lexer_; const auto next = look.next().text; return next == "(" || next == "<"; }();
             if (method_marker && !method_ahead)
-                fail("native mtd marker must precede a method signature");
+                fail("native method introducer must precede a callable signature");
             if (method_ahead) {
                 auto method = function(result.name, publicly_visible);
                 ClassMethod signature;

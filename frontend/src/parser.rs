@@ -1116,7 +1116,22 @@ impl Parser {
                     }
                     m.fields.push(f.field);
                 }
-                Some("fnc" | "method") => {
+                Some("fnc") => {
+                    self.advance();
+                    let method = self.parse_method(public, false)?;
+                    m.methods.push(method);
+                }
+                Some("method")
+                    if matches!(self.peek_at(1), Tok::Ident(_))
+                        && matches!(self.peek_at(2), Tok::LParen | Tok::Lt) =>
+                {
+                    return Err(Diagnostic::new(self.pos(), "E_SYNTAX", "obsolete method introducer; use mtd"));
+                }
+                Some("mtd")
+                    if matches!(self.peek_at(1), Tok::Ident(_))
+                        && matches!(self.peek_at(2), Tok::LParen | Tok::Lt) =>
+                {
+                    // Contextual marker: a bare mtd() or method() is a name.
                     self.advance();
                     let method = self.parse_method(public, false)?;
                     m.methods.push(method);

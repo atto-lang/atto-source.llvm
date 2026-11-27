@@ -40,6 +40,15 @@ namespace oreslang {
 // Guest identifiers exclude $, so native selector suffixes cannot alias source names.
 namespace {
 
+template <typename Map>
+const typename Map::mapped_type& require_native_entry(const Map& map,
+        const std::string& key, const char* context) {
+    const auto found = map.find(key);
+    if (found == map.end())
+        throw std::out_of_range(std::string("native lowering missing ") + context + " for '" + key + "'");
+    return found->second;
+}
+
 std::string field_key(const std::string& receiver, const std::string& field) {
     return receiver + "." + field;
 }
@@ -95,7 +104,7 @@ struct RegionMoveLowering {
 llvm::Value* receiver_array_region(const Expression& receiver, const RegionMoveLowering* moves) {
     if (receiver.kind == Expression::Kind::Field && receiver.left &&
             moves->class_array_regions)
-        return moves->class_array_regions->at(native_place_key(*receiver.left));
+        return require_native_entry(*moves->class_array_regions, native_place_key(*receiver.left), "array receiver region");
     return moves->array_region;
 }
 
@@ -108,11 +117,11 @@ llvm::Value* array_handle_address(const Expression& receiver,
     if (!moves) throw std::runtime_error("native Array<int> operation lacks region");
     if (receiver.kind == Expression::Kind::Variable && moves->array_names &&
             moves->array_names->count(receiver.name))
-        return storage.at(receiver.name);
+        return require_native_entry(storage, receiver.name, "array receiver storage");
     if (receiver.kind == Expression::Kind::Field && receiver.left &&
             moves->array_fields) {
         const std::string key = native_place_key(receiver);
-        if (moves->array_fields->count(key)) return fields.at(key);
+        if (moves->array_fields->count(key)) return require_native_entry(fields, key, "array field storage");
     }
     throw std::runtime_error("native Array<int> receiver is not an owned place");
 }
@@ -330,7 +339,7 @@ llvm::Value* lower(const Expression& expr,
                     llvm::ConstantInt::get(i64, moves->record_schemas->at(cls.name)),
                     llvm::ConstantInt::get(i64, cls.fields.size()), values}, "return.record.handle");
             }
-            llvm::Value* stored = builder.CreateLoad(i64, storage.at(expr.name),
+            llvm::Value* stored = builder.CreateLoad(i64, require_native_entry(storage, expr.name, "variable storage"),
                 expr.name + ".read");
             if (moves && moves->live_flags &&
                     moves->live_flags->count(expr.name))
@@ -817,7 +826,7 @@ llvm::Value* lower(const Expression& expr,
         case Expression::Kind::Call: {
             const std::string call_selector = native_function_slot(
                 expr.name, expr.arguments.size());
-            llvm::Function* callee = functions.at(call_selector);
+            llvm::Function* callee = require_native_entry(functions, call_selector, "call declaration");
             if (moves && moves->frozen_scalar_dispatch) {
                 const auto* witness = moves->frozen_scalar_dispatch->find_direct(call_selector);
                 if (witness) {
@@ -843,9 +852,9 @@ llvm::Value* lower(const Expression& expr,
             }
             const std::vector<std::size_t> no_hidden;
             const auto& hidden = moves && moves->class_array_parameters
-                ? moves->class_array_parameters->at(native_function_slot(expr.name, expr.arguments.size())) : no_hidden;
+                ? require_native_entry(*moves->class_array_parameters, call_selector, "call region parameters") : no_hidden;
             const bool owning = moves && moves->owning_results &&
-                moves->owning_results->at(native_function_slot(expr.name, expr.arguments.size()));
+                require_native_entry(*moves->owning_results, call_selector, "call owning-result metadata");
             if (callee->arg_size() != expr.arguments.size() + hidden.size() + (owning ? 2 : 0)) {
                 throw std::runtime_error("native named call argument count mismatch");
             }
@@ -2645,7 +2654,7 @@ static std::string emit_verified_llvm_ir_impl(const Program& source, bool wasm32
                         storage, field_storage, declarations, &region_moves);
                 }
                 init = new_checked_array(local.name);
-                result.array_shadow = array_failure_places.at(local.name);
+                result.array_shadow = require_native_entry(array_failure_places, local.name, "scoped array cleanup shadow");
                 array_names.insert(local.name);
                 if (local.initializer) {
                     if (!array_region || !array_failure || !array_failure_status)
@@ -3143,15 +3152,15 @@ static std::string emit_verified_llvm_ir_impl(const Program& source, bool wasm32
                     llvm::Value* source_place = nullptr;
                     if (expr.kind == Expression::Kind::Variable) {
                         source_key = field_key(expr.name, field.name);
-                        source_place = field_storage.at(source_key);
+                        source_place = require_native_entry(field_storage, source_key, "owning return field storage");
                     } else {
-                        source_key = constructor_sources.at(field.name);
-                        source_place = storage.count(source_key) ? storage.at(source_key) : field_storage.at(source_key);
+                        source_key = require_native_entry(constructor_sources, field.name, "owning return constructor source");
+                        source_place = storage.count(source_key) ? require_native_entry(storage, source_key, "owning return local storage") : require_native_entry(field_storage, source_key, "owning return projected storage");
                     }
                     auto* index = llvm::ConstantInt::get(i64, position++);
                     builder.CreateStore(destination, builder.CreateGEP(loan_ptr, destinations, index));
                     builder.CreateStore(source_place, builder.CreateGEP(loan_ptr, sources, index));
-                    shadows.push_back(array_failure_places.at(source_key));
+                    shadows.push_back(require_native_entry(array_failure_places, source_key, "owning return cleanup shadow"));
                 } else {
                     auto* value = expr.kind == Expression::Kind::Variable
                         ? builder.CreateLoad(i64, field_storage.at(field_key(expr.name, field.name)))
