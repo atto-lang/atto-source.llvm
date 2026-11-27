@@ -36,6 +36,25 @@ try{
       console.log('LLVM_PHYSICAL_PLACEMENT_NATIVE_PASS',JSON.stringify({size,opt,repetitions:100}));
     }
   }
+  const pair=(lhs,rhs)=>`define struct CoordPair { int left; int right; } with { constructor(int left, int right) { self.left = left; self.right = right; } } pub fnc main(): int { let Storage<CoordPair> s = alloc! CoordPair; let mut RawPointer<CoordPair> p = RawPointer.empty<CoordPair>(); new CoordPair(${lhs}, ${rhs}) at s; ref! p to s; val a = (deref! p).left; val b = (deref! p).right; unref! p; destroy! s; free! s; return a - b + b; }`;
+  for(const [lhs,rhs,expected] of [['42','-3','42'],['-9223372036854775808','-9223372036854775808','INT64_MIN'],['9223372036854775807','9223372036854775807','INT64_MAX']]){
+    const {r,c}=await compile(pair(lhs,rhs));assert.equal(r.status,0,r.stderr);
+    const generated=await readFile(c,'utf8');assert.match(generated,/__builtin_sub_overflow/);
+    const host=join(root,'sub-host.c');
+    await writeFile(host,`#include <stdint.h>\n#include <assert.h>\nextern int32_t atto_placement_entry(int64_t*);\nint main(void){for(int i=0;i<100;i++){int64_t out=777;assert(atto_placement_entry(&out)==0);assert(out==${expected});}assert(atto_placement_entry(0)==2);return 0;}\n`);
+    for(const opt of ['-O0','-O2']){
+      const bin=c+'.'+opt.slice(1),ir=bin+'.ll';
+      const emitted=run('clang',['-std=c11','-Wall','-Wextra','-Werror',opt,'-S','-emit-llvm',c,'-o',ir]);assert.equal(emitted.status,0,emitted.stderr);
+      const llvm=await readFile(ir,'utf8');assert.match(llvm,/llvm.ssub.with.overflow.i64/);
+      const link=run('clang',['-std=c11','-Wall','-Wextra','-Werror','-fsanitize=undefined','-fno-sanitize-recover=all',opt,c,host,'-o',bin]);assert.equal(link.status,0,link.stderr);
+      const guest=run(bin,[]);assert.equal(guest.status,0,guest.stderr);
+      console.log('LLVM_CHECKED_SUB_PLACEMENT_NATIVE_PASS',JSON.stringify({lhs,rhs,opt,repetitions:100}));
+    }
+  }
+  for(const [lhs,rhs] of [['-9223372036854775808','1'],['9223372036854775807','-1'],['0','-9223372036854775808'],['9223372036854775808','0'],['-9223372036854775809','0']]){
+    const {r,c}=await compile(pair(lhs,rhs));assert.equal(r.status,1,r.stderr);assert.equal(r.stdout,'');await assert.rejects(stat(c),{code:'ENOENT'});
+  }
+  console.log('LLVM_CHECKED_SUB_PLACEMENT_NEGATIVE_PASS count=5');
   const arraySource="define struct Packet { i8 tag; Array<i16,3> cells; int tail; } with { constructor(i8 tag, Array<i16,3> cells, int tail) { self.tag = tag; self.cells = cells; self.tail = tail; } } pub fnc main(): int { let Storage<Packet> s = alloc! Packet; let mut RawPointer<Packet> p = RawPointer.empty<Packet>(); new Packet(-1, Array.of(10,20,11), 2) at s; ref! p to s; val a = (deref! p).tag; val b = (deref! p).cells[0]; val c = (deref! p).cells[1]; val d = (deref! p).cells[2]; val e = (deref! p).tail; unref! p; destroy! s; free! s; return a + b + c + d + e; }";
   const {r:arrayResult,c:arrayC}=await compile(arraySource);assert.equal(arrayResult.status,0,arrayResult.stderr);
   const arrayGenerated=await readFile(arrayC,'utf8');assert.match(arrayGenerated,/int16_t f1\[3\]/);
