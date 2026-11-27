@@ -30,6 +30,8 @@ struct FunctionEmitter<'a> {
     slots: Vec<Type>,
     // Parameters with no typed writes remain incoming SSA values.
     direct_params: Vec<bool>,
+    // Innermost loop's break and continue destinations.
+    loop_targets: Vec<(String, String)>,
 }
 
 impl<'a> FunctionEmitter<'a> {
@@ -47,6 +49,7 @@ impl<'a> FunctionEmitter<'a> {
         Ok(Self {
             program, func, out: String::new(), counter: 0,
             terminated: false, block_name: String::new(), slots, direct_params,
+            loop_targets: Vec::new(),
         })
     }
 
@@ -69,7 +72,11 @@ impl<'a> FunctionEmitter<'a> {
                         Self::scan_parameter_writes(nested, direct);
                     }
                 }
-                TStmt::GlobalSet(_, _) | TStmt::Expr(_) | TStmt::Return(_) => {}
+                TStmt::Loop { body, update, .. } => {
+                    Self::scan_parameter_writes(body, direct);
+                    Self::scan_parameter_writes(update, direct);
+                }
+                TStmt::GlobalSet(_, _) | TStmt::Expr(_) | TStmt::Return(_) | TStmt::Break | TStmt::Continue => {}
                 _ => direct.fill(false),
             }
         }
@@ -401,6 +408,46 @@ impl<'a> FunctionEmitter<'a> {
                     self.branch(&end_label);
                 }
                 self.label(&end_label);
+            }
+            TStmt::Loop { cond, body, update } => {
+                // Do not accidentally enable actor loops before a native
+                // scheduler-cooperation and isolation witness exists.
+                if !self.program.actors.is_empty() {
+                    return Err("E_UNSUPPORTED_NATIVE_STMT: actor loop cooperation not verified".into());
+                }
+                let head = self.id("loop_head");
+                let work = self.id("loop_body");
+                let next = self.id("loop_update");
+                let done = self.id("loop_end");
+                self.branch(&head);
+                self.label(&head);
+                if let Some(test) = cond {
+                    let value = self.expr(test)?;
+                    self.instr(format!("br i1 {value}, label %{work}, label %{done}"));
+                    self.terminated = true;
+                } else {
+                    self.branch(&work);
+                }
+                self.label(&work);
+                self.loop_targets.push((done.clone(), next.clone()));
+                let result = self.block(body);
+                self.loop_targets.pop();
+                result?;
+                if !self.terminated {
+                    self.branch(&next);
+                }
+                self.label(&next);
+                self.block(update)?;
+                if !self.terminated {
+                    self.branch(&head);
+                }
+                self.label(&done);
+            }
+            TStmt::Break | TStmt::Continue => {
+                let (done, next) = self.loop_targets.last()
+                    .ok_or("E_INTERNAL: loop control outside native loop")?;
+                let target = if matches!(statement, TStmt::Break) { done } else { next }.clone();
+                self.branch(&target);
             }
             _ => return Err(format!("E_UNSUPPORTED_NATIVE_STMT: {statement:?}")),
         }
@@ -1237,7 +1284,7 @@ mod parameter_rebind_tests {
             assert!(strict(source).unwrap_err().contains("E_EXPLICIT_REBIND"), "{source}");
         }
         let loop_source = "pub fnc main(): int { let int x = 0; for (set x = 40; x < 42; set! (x = x + 1)) {} return x; }";
-        assert!(strict(loop_source).is_ok());
+        strict(loop_source).expect("strict scalar loop must lower to native IR");
         let fixed = "pub fnc main(): int { const int x = 40; set x = 42; return x; }";
         assert!(strict(fixed).unwrap_err().contains("E_IMMUTABLE"));
     }
