@@ -105,6 +105,36 @@ int main(void){for(int i=0;i<100;i++){
     const {r,c}=await compile(bad);assert.equal(r.status,1,bad);assert.equal(r.stdout,'');await assert.rejects(stat(c),{code:'ENOENT'});
   }
   console.log('LLVM_FIXED_ARRAY_PLACEMENT_NEGATIVE_PASS count=12');
+  const runtimeArray=arraySource.replace('main()','main(i16 cell_in, int tail_in)').replace('Array.of(10,20,11), 2','Array.of(10,cell_in,11), tail_in');
+  const {r:runtimeArrayResult,c:runtimeArrayC}=await compile(runtimeArray);
+  assert.equal(runtimeArrayResult.status,0,runtimeArrayResult.stderr);
+  const runtimeArrayHost=join(root,'runtime-array-host.c');
+  await writeFile(runtimeArrayHost,`#include <stdint.h>
+#include <assert.h>
+extern int32_t atto_placement_entry_args(int64_t,int64_t,int64_t*);
+int main(void){for(int i=0;i<100;i++){
+  int64_t out=777;
+  assert(atto_placement_entry_args(20,2,&out)==0 && out==42);
+  assert(atto_placement_entry_args(-20,42,&out)==0 && out==42);
+  out=777;
+  assert(atto_placement_entry_args(32768,2,&out)==1 && out==777);
+  assert(atto_placement_entry_args(-32769,2,&out)==1 && out==777);
+  assert(atto_placement_entry_args(20,INT64_MAX,&out)==1 && out==777);
+  assert(atto_placement_entry_args(20,2,0)==2);
+}return 0;}`);
+  for(const opt of ['-O0','-O2']){
+    const bin=runtimeArrayC+'.'+opt.slice(1);
+    const link=run('clang',['-std=c11','-Wall','-Wextra','-Werror','-fsanitize=undefined','-fno-sanitize-recover=all',opt,runtimeArrayC,runtimeArrayHost,'-o',bin]);
+    assert.equal(link.status,0,link.stderr);
+    const guest=run(bin,[]);assert.equal(guest.status,0,guest.stderr);
+    console.log('LLVM_RUNTIME_ARRAY_PLACEMENT_NATIVE_PASS',JSON.stringify({opt,success:200,failure:300,null_output:100}));
+  }
+  for(const [from,to] of [['i16 cell_in','i8 cell_in'],['Array.of(10,cell_in,11)','Array.of(10,tail_in,11)'],['Array.of(10,cell_in,11)','Array.of(10,unknown,11)'],['int tail_in','int tail'],['i16 cell_in','i16 cells']]){
+    const bad=runtimeArray.replace(from,to);assert.notEqual(bad,runtimeArray);
+    const {r,c}=await compile(bad);assert.equal(r.status,1,bad);assert.equal(r.stdout,'');await assert.rejects(stat(c),{code:'ENOENT'});
+  }
+  console.log('LLVM_RUNTIME_ARRAY_PLACEMENT_NEGATIVE_PASS count=5');
+
   const nominalSource="define struct Payload { int count; i8 flag; } with { constructor(int count, i8 flag) { self.count = count; self.flag = flag; } } define struct Packet { i8 tag; Array<Payload,2> items; i16 tail; } with { constructor(i8 tag, Array<Payload,2> items, i16 tail) { self.tag = tag; self.items = items; self.tail = tail; } } pub fnc main(): int { let Storage<Packet> s = alloc! Packet; let mut RawPointer<Packet> p = RawPointer.empty<Packet>(); new Packet(-1, Array.of(Payload(10,2),Payload(20,3)), 8) at s; ref! p to s; val a = (deref! p).tag; val b = (deref! p).items[0].count; val c = (deref! p).items[0].flag; val d = (deref! p).items[1].count; val e = (deref! p).items[1].flag; val f = (deref! p).tail; unref! p; destroy! s; free! s; return a + b + c + d + e + f; }";
   const {r:nominalResult,c:nominalC}=await compile(nominalSource);assert.equal(nominalResult.status,0,nominalResult.stderr);
   const nominalGenerated=await readFile(nominalC,'utf8');assert.match(nominalGenerated,/struct atto_s0 f1\[2\]/);

@@ -271,7 +271,11 @@ impl PointParser<'_> {
                     for cell in 0..*n{
                         if cell>0{self.need(Token::Punct(b','))?;}
                         if values.len()>=8{return Err(err());}
-                        let v=self.number()?;if !k.fits(v){return Err(err());}values.push(Operand::Literal(v));
+                        let v=if matches!(self.p.current,Token::Word(_)){
+                            let name=self.ident()?;
+                            Operand::Parameter(parameters.iter().position(|(n,ty)|n==&name&&ty==k).ok_or_else(err)?)
+                        }else{let n=self.number()?;if !k.fits(n){return Err(err());}Operand::Literal(n)};
+                        values.push(v);
                     }
                     self.need(Token::Punct(b')'))?;
                 }
@@ -308,7 +312,7 @@ impl PointParser<'_> {
                 if parameters.len()>=4{return Err(err());}
                 let kind=Kind::parse(&self.p.name()?).ok_or_else(err)?;
                 let name=self.ident()?;
-                if parameters.iter().any(|(n,_)|n==&name){return Err(err());}
+                if fields.iter().any(|(f,_)|f==&name)||parameters.iter().any(|(n,_)|n==&name){return Err(err());}
                 parameters.push((name,kind));
                 if self.p.take(Token::Punct(b')'))?{break;}
                 self.need(Token::Punct(b','))?;
