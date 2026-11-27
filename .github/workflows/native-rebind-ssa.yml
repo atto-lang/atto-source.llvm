@@ -73,6 +73,14 @@ jobs:
             timeout 10s "$work/strict-loop-$opt" || status=$?
             test "$status" = 42
           done
+          printf '%s\n' 'pub fnc main(): int { let x = 0; let n = 0; for (set x = 0; x < 10; set x = x + 1) { if x == 2 then continue; fi if x == 5 then break; fi set n = n + 10; } return n + 2; }' > "$work/strict-control.atto"
+          target/release/atto-llvm "$work/strict-control.atto" -o "$work/strict-control.ll" --emit-llvm --explicit-rebinding
+          for opt in 0 2; do
+            clang -x ir -O"$opt" -o "$work/strict-control-$opt" "$work/strict-control.ll"
+            status=0
+            timeout 10s "$work/strict-control-$opt" || status=$?
+            test "$status" = 42
+          done
           if target/release/atto-llvm "$work/strict-reject.atto" -o "$work/strict-reject.ll" --emit-llvm --explicit-rebinding >"$work/strict-reject.log" 2>&1; then exit 1; fi
           grep -q E_EXPLICIT_REBIND "$work/strict-reject.log"
           test ! -e "$work/strict-reject.ll"
