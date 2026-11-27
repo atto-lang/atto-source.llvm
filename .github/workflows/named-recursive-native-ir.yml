@@ -3,6 +3,10 @@ on:
   pull_request:
     paths:
       - 'src/main/cpp/oreslang/backend/NamedRecursiveScalarIr.hpp'
+      - 'src/main/cpp/oreslang/frontend/NamedRecursiveScalarSource.hpp'
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'src/main/cpp/oreslang/main.cpp'
+      - 'scripts/test-named-recursive-native-source.sh'
       - 'tests/named-recursive-native-ir/**'
       - 'scripts/test-named-recursive-native-ir.sh'
       - '.github/workflows/named-recursive-native-ir.yml'
@@ -13,7 +17,7 @@ jobs:
   native-guest:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -30,4 +34,20 @@ jobs:
           clang --version
           g++ --version
           bash scripts/test-named-recursive-native-ir.sh
+          test -z "$(git status --porcelain --untracked-files=all)"
+
+      - name: Install native LLVM and build real compiler
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang llvm-dev cmake ninja-build
+          cmake -G Ninja -S . -B "$RUNNER_TEMP/named-recursive-build" -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DLLVM_DIR="$(llvm-config --cmakedir)"
+          cmake --build "$RUNNER_TEMP/named-recursive-build" --target oreslang-llvmc --parallel 2
+          sha256sum "$RUNNER_TEMP/named-recursive-build/oreslang-llvmc"
+      - name: Execute exact source-to-native compiler proof
+        env:
+          ORESLANG_LLVMC: ${{ runner.temp }}/named-recursive-build/oreslang-llvmc
+        run: |
+          set -euo pipefail
+          bash scripts/test-named-recursive-native-source.sh
           test -z "$(git status --porcelain --untracked-files=all)"
