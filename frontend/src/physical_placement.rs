@@ -24,6 +24,7 @@ impl<'a> Parser<'a>{
                 Tok::Int(n)=>Token::Number(*n),Tok::LParen=>Token::Punct(b'('),Tok::RParen=>Token::Punct(b')'),
                 Tok::LBrace=>Token::Punct(b'{'),Tok::RBrace=>Token::Punct(b'}'),Tok::Lt=>Token::Punct(b'<'),Tok::Gt=>Token::Punct(b'>'),
                 Tok::Semi=>Token::Punct(b';'),Tok::Comma=>Token::Punct(b','),Tok::Colon=>Token::Punct(b':'),
+                Tok::LBracket=>Token::Punct(b'['),Tok::RBracket=>Token::Punct(b']'),
                 Tok::Dot=>Token::Punct(b'.'),Tok::Assign=>Token::Punct(b'='),Tok::Plus=>Token::Punct(b'+'),Tok::Minus=>Token::Punct(b'-'),
                 Tok::Eof=>Token::End,_=>Token::Other,
             };out.push(token);i+=1;
@@ -57,31 +58,50 @@ impl Kind {
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum FieldKind { Scalar(Kind), Inline(usize) }
+enum FieldKind { Scalar(Kind), Inline(usize), ScalarArray(Kind,u64), InlineArray(usize,u64) }
 #[derive(Clone, Debug)]
 struct Decl { name: String, fields: Vec<(String,FieldKind)> }
 #[derive(Clone, Debug)]
-struct Leaf { name: String, path: Vec<usize>, kind: Kind }
+struct Leaf { name: String, path: Vec<usize>, kind: Kind, c_path:String }
 fn leaves(owners:&[Decl],root:usize)->Result<Vec<Leaf>,String>{
-    fn visit(owners:&[Decl],id:usize,prefix:&str,path:&mut Vec<usize>,out:&mut Vec<Leaf>)->Result<(),String>{
+    fn visit(owners:&[Decl],id:usize,prefix:&str,c_prefix:&str,path:&mut Vec<usize>,out:&mut Vec<Leaf>)->Result<(),String>{
         if path.len()>=8{return Err(err());}
         let owner=owners.get(id).ok_or_else(err)?;
         for (index,(name,kind)) in owner.fields.iter().enumerate(){
             path.push(index);
             let name=if prefix.is_empty(){name.clone()}else{format!("{prefix}.{name}")};
+            let c_path=if c_prefix.is_empty(){format!("f{index}")}else{format!("{c_prefix}.f{index}")};
             match kind {
                 FieldKind::Scalar(k)=>{
                     if out.len()>=8{return Err(err());}
-                    out.push(Leaf{name,path:path.clone(),kind:*k});
+                    out.push(Leaf{name,path:path.clone(),kind:*k,c_path});
                 }
-                FieldKind::Inline(i) if *i<id=>visit(owners,*i,&name,path,out)?,
+                FieldKind::ScalarArray(k,n)=>{
+                    if *n==0||*n>8||path.len()>=8{return Err(err());}
+                    for cell in 0..*n{
+                        if out.len()>=8{return Err(err());}
+                        path.push(usize::try_from(cell).map_err(|_|err())?);
+                        out.push(Leaf{name:format!("{name}[{cell}]"),path:path.clone(),kind:*k,c_path:format!("{c_path}[{cell}]")});
+                        path.pop();
+                    }
+                }
+                FieldKind::InlineArray(i,n) if *i<id=>{
+                    if *n==0||*n>8||path.len()>=8{return Err(err());}
+                    for cell in 0..*n{
+                        path.push(usize::try_from(cell).map_err(|_|err())?);
+                        visit(owners,*i,&format!("{name}[{cell}]"),&format!("{c_path}[{cell}]"),path,out)?;
+                        path.pop();
+                    }
+                }
+                FieldKind::InlineArray(_,_)=>return Err(err()),
+                FieldKind::Inline(i) if *i<id=>visit(owners,*i,&name,&c_path,path,out)?,
                 FieldKind::Inline(_)=>return Err(err()),
             }
             path.pop();
         }
         Ok(())
     }
-    let mut result=Vec::new();visit(owners,root,"",&mut Vec::new(),&mut result)?;
+    let mut result=Vec::new();visit(owners,root,"","",&mut Vec::new(),&mut result)?;
     if result.is_empty(){return Err(err());}Ok(result)
 }
 #[derive(Clone, Debug)]
@@ -93,7 +113,7 @@ pub(crate) struct Plan {
     owners: Vec<Decl>,
     root: usize,
     pub steps: Vec<Step>,
-    pub result: Vec<usize>,
+    pub result: Vec<(usize, bool)>, // (copy index, subtract from preceding result)
 }
 fn err() -> String { "E_POINTER_PLACEMENT: invalid closed typed nested struct placement profile".into() }
 impl Plan {
@@ -101,7 +121,7 @@ impl Plan {
     pub(crate) fn physical_slots(&self) -> Result<(Storage,Vec<(u64,Storage)>),String> {
         let leaves=self.leaves()?;
         let owners=self.owners.iter().map(|o|Owner {identity:o.name.clone(),fields:o.fields.iter().map(|(n,k)|{
-            let field=match k {FieldKind::Scalar(k)=>{let size=k.size();FieldType::Scalar(Storage{size,align:size})},FieldKind::Inline(i)=>FieldType::Inline(*i)};
+            let field=match k {FieldKind::Scalar(k)=>{let size=k.size();FieldType::Scalar(Storage{size,align:size})},FieldKind::Inline(i)=>FieldType::Inline(*i),FieldKind::ScalarArray(k,n)=>{let size=k.size();FieldType::ScalarArray(Storage{size,align:size},*n)},FieldKind::InlineArray(i,n)=>FieldType::InlineArray(*i,*n)};
             (n.clone(),field)
         }).collect()}).collect::<Vec<_>>();
         let layouts=physical_layout::plan(&owners,Limits{max_size:65536,max_align:8,max_owners:8,max_fields:64})?;
@@ -113,7 +133,7 @@ impl Plan {
         self.physical_slots()?;
         let leaves=self.leaves()?;
         let bad=err;
-        if self.steps.is_empty() || self.steps.len()>32 || self.result.is_empty() || self.result.len()>8 {
+        if self.steps.is_empty() || self.steps.len()>32 || self.result.is_empty() || self.result.len()>8 || self.result[0].1 {
             return Err(bad());
         }
         #[derive(PartialEq,Eq)]
@@ -141,8 +161,9 @@ impl Plan {
         }
         if state!=State::Freed || bound.is_some() {return Err(bad());}
         let mut sum=0i64;
-        for i in &self.result {
-            sum=sum.checked_add(*copies.get(*i).ok_or_else(bad)?).ok_or_else(bad)?;
+        for &(i,subtract) in &self.result {
+            let value=*copies.get(i).ok_or_else(bad)?;
+            sum=if subtract{sum.checked_sub(value)}else{sum.checked_add(value)}.ok_or_else(bad)?;
         }
         Ok(copies.len())
     }
@@ -176,6 +197,16 @@ impl PointParser<'_> {
     }
     fn kind(&mut self,owners:&[Decl])->Result<FieldKind,String>{
         let name=self.p.name()?;
+        if name=="Array"{
+            self.need(Token::Punct(b'<'))?;
+            let element=self.p.name()?;
+            self.need(Token::Punct(b','))?;
+            let n=u64::try_from(self.number()?).map_err(|_|err())?;
+            if !(1..=8).contains(&n){return Err(err());}
+            self.need(Token::Punct(b'>'))?;
+            if let Some(k)=Kind::parse(&element){return Ok(FieldKind::ScalarArray(k,n));}
+            return owners.iter().position(|o|o.name==element).map(|i|FieldKind::InlineArray(i,n)).ok_or_else(err);
+        }
         if let Some(k)=Kind::parse(&name){return Ok(FieldKind::Scalar(k));}
         owners.iter().position(|o|o.name==name).map(FieldKind::Inline).ok_or_else(err)
     }
@@ -214,6 +245,24 @@ impl PointParser<'_> {
             if i>0{self.need(Token::Punct(b','))?;}
             match kind{
                 FieldKind::Scalar(k)=>{let v=self.number()?;if !k.fits(v)||values.len()>=8{return Err(err());}values.push(v);}
+                FieldKind::ScalarArray(k,n)=>{
+                    self.word("Array")?;self.need(Token::Punct(b'.'))?;self.word("of")?;self.need(Token::Punct(b'('))?;
+                    for cell in 0..*n{
+                        if cell>0{self.need(Token::Punct(b','))?;}
+                        if values.len()>=8{return Err(err());}
+                        let v=self.number()?;if !k.fits(v){return Err(err());}values.push(v);
+                    }
+                    self.need(Token::Punct(b')'))?;
+                }
+                FieldKind::InlineArray(i,n) if *i<id=>{
+                    self.word("Array")?;self.need(Token::Punct(b'.'))?;self.word("of")?;self.need(Token::Punct(b'('))?;
+                    for cell in 0..*n{
+                        if cell>0{self.need(Token::Punct(b','))?;}
+                        self.arguments(owners,*i,depth+1,values)?;
+                    }
+                    self.need(Token::Punct(b')'))?;
+                }
+                FieldKind::InlineArray(_,_)=>return Err(err()),
                 FieldKind::Inline(n) if *n<id=>self.arguments(owners,*n,depth+1,values)?,
                 FieldKind::Inline(_)=>return Err(err()),
             }
@@ -253,8 +302,13 @@ impl PointParser<'_> {
                 self.need(Token::Punct(b'='))?;self.need(Token::Punct(b'('))?;self.op("deref")?;self.word("p")?;self.need(Token::Punct(b')'))?;self.need(Token::Punct(b'.'))?;
                 let mut field=self.p.name()?;
                 for _ in 1..8{
-                    if !self.p.take(Token::Punct(b'.'))?{break;}
-                    field.push('.');field.push_str(&self.p.name()?);
+                    if self.p.take(Token::Punct(b'.'))?{field.push('.');field.push_str(&self.p.name()?);}
+                    else if self.p.take(Token::Punct(b'['))?{
+                        let cell=u64::try_from(self.number()?).map_err(|_|err())?;
+                        if cell>=8{return Err(err());}
+                        self.need(Token::Punct(b']'))?;
+                        field.push_str(&format!("[{cell}]"));
+                    }else{break;}
                 }
                 Step::CopyField(u8::try_from(flat.iter().position(|l|l.name==field).ok_or_else(err)?).map_err(|_|err())?)
             } else if self.word_is("unref!") {self.op("unref")?;self.word("p")?;Step::Detach}
@@ -263,11 +317,13 @@ impl PointParser<'_> {
             else{return Err(err());};
             self.need(Token::Punct(b';'))?;steps.push(step);
         }
-        self.word("return")?;let mut result=Vec::new();
+        self.word("return")?;let mut result=Vec::new();let mut subtract=false;
         loop {
             if result.len()==8{return Err(err());}
-            let n=self.ident()?;result.push(*names.get(&n).ok_or_else(err)?);
-            if !self.p.take(Token::Punct(b'+'))?{break;}
+            let n=self.ident()?;result.push((*names.get(&n).ok_or_else(err)?,subtract));
+            if self.p.take(Token::Punct(b'+'))?{subtract=false;}
+            else if self.p.take(Token::Punct(b'-'))?{subtract=true;}
+            else{break;}
         }
         self.need(Token::Punct(b';'))?;self.need(Token::Punct(b'}'))?;self.need(Token::End)?;
         
@@ -278,7 +334,7 @@ impl PointParser<'_> {
 
 fn ctype(k:Kind)->&'static str{match k{Kind::I8=>"int8_t",Kind::I16=>"int16_t",Kind::I32=>"int32_t",Kind::I64=>"int64_t"}}
 fn literal(v:i64)->String{if v==i64::MIN{"INT64_MIN".into()}else if v<0{format!("(-INT64_C({}))",-v)}else{format!("INT64_C({v})")}}
-fn path(leaf:&Leaf)->String{leaf.path.iter().map(|i|format!("f{i}")).collect::<Vec<_>>().join(".")}
+fn path(leaf:&Leaf)->&str{&leaf.c_path}
 fn emit(plan:&Plan)->Result<String,String>{
     plan.verify()?;
     let leaves=plan.leaves()?;
@@ -288,8 +344,12 @@ fn emit(plan:&Plan)->Result<String,String>{
     for (i,o) in plan.owners.iter().enumerate(){
         writeln!(out,"struct atto_s{i} {{").map_err(|_|err())?;
         for (j,(_,k)) in o.fields.iter().enumerate(){
-            let ty=match k{FieldKind::Scalar(k)=>ctype(*k).to_owned(),FieldKind::Inline(n)=>format!("struct atto_s{n}")};
-            writeln!(out,"  {ty} f{j};").map_err(|_|err())?;
+            match k{
+                FieldKind::Scalar(k)=>writeln!(out,"  {} f{j};",ctype(*k)),
+                FieldKind::Inline(n)=>writeln!(out,"  struct atto_s{n} f{j};"),
+                FieldKind::ScalarArray(k,n)=>writeln!(out,"  {} f{j}[{n}];",ctype(*k)),
+                FieldKind::InlineArray(i,n)=>writeln!(out,"  struct atto_s{i} f{j}[{n}];"),
+            }.map_err(|_|err())?;
         }
         out.push_str("};\n");
     }
@@ -315,7 +375,7 @@ fn emit(plan:&Plan)->Result<String,String>{
         }
     }
     out.push_str("  int64_t sum = 0;\n");
-    for &i in &plan.result{writeln!(out,"  if (__builtin_add_overflow(sum, v{i}, &sum)) return 1;").map_err(|_|err())?;}
+    for &(i,subtract) in &plan.result{let op=if subtract{"sub"}else{"add"};writeln!(out,"  if (__builtin_{op}_overflow(sum, v{i}, &sum)) return 1;").map_err(|_|err())?;}
     out.push_str("  *out = sum;\n  return 0;\n}\n");Ok(out)
 }
 pub(crate) fn compile(text:&str)->Result<String,Diagnostic>{
