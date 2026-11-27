@@ -6269,6 +6269,25 @@ if(BUILD_TESTING)
         native-entry-reject.ores --diagnostic "native Entry<K,V> unsupported")
     oreslang_contract_test(native_entry_generic_product_failclosed
         native-entry-generic-reject.ores --diagnostic "native Entry<K,V> unsupported")
+    oreslang_contract_test(native_pair_literal_value_ir
+        native-pair-literal-value.atto --ir "define i64 @__oreslang_guest_main")
+    oreslang_contract_test(native_pair_literal_dynamic_ir
+        native-pair-literal-dynamic.atto --ir "call i64 @twice")
+    oreslang_contract_test(native_pair_literal_chain_failclosed
+        native-pair-literal-chain-reject.atto --diagnostic "E_PAIR_CHAIN")
+    oreslang_contract_test(native_pair_literal_escape_failclosed
+        native-pair-literal-escape-reject.atto --diagnostic "E_PAIR_ESCAPE_UNSUPPORTED")
+    oreslang_contract_test(native_pair_literal_key_failclosed
+        native-pair-literal-key-reject.atto --diagnostic "E_PAIR_PROJECTION_UNSUPPORTED")
+    oreslang_contract_test(native_pair_literal_bool_failclosed
+        native-pair-literal-bool-reject.atto --diagnostic "impossible native cast")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_pair_literal_value_executes
+            native-pair-literal-value.atto --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_pair_literal_dynamic_executes
+            native-pair-literal-dynamic.atto --run 42 --clang "${ORE_CLANG}")
+        set_tests_properties(native_pair_literal_value_executes native_pair_literal_dynamic_executes PROPERTIES TIMEOUT 60)
+    endif()
     oreslang_contract_test(native_pair_value_projection_ir
         native-pair-value-projection.atto --ir "define i64 @__oreslang_guest_main")
     oreslang_contract_test(native_pair_value_dynamic_ir
