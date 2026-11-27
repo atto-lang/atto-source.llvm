@@ -842,12 +842,22 @@ fn main() {
             symlink(&fake_compiler, &symbolic).unwrap();
             let hard = scratch.0.join("clang-hardlink");
             fs::hard_link(&fake_clang, &hard).unwrap();
-            for destination in [&fake_compiler, &fake_clang, &symbolic, &hard] {
+            for (destination, expected_diagnostic) in [
+                (&fake_compiler, "must not alias"),
+                (&fake_clang, "must not alias"),
+                (&symbolic, "output must be absent or a regular non-symlink file"),
+                (&hard, "must not alias"),
+            ] {
                 let rejected = run(Command::new(driver).env("ORESLANG_LLVMC", &fake_compiler)
                     .env("CLANG", &fake_clang).arg(&source).arg(destination));
-                assert_eq!(rejected.status.code(), Some(64), "AOT alias guard: {}", String::from_utf8_lossy(&rejected.stderr));
-                assert!(String::from_utf8_lossy(&rejected.stderr).contains("must not alias"));
+                let stderr = String::from_utf8_lossy(&rejected.stderr);
+                assert_eq!(rejected.status.code(), Some(64), "AOT alias guard for {}: {stderr}", destination.display());
+                assert!(stderr.contains(expected_diagnostic), "AOT alias guard for {}: expected {expected_diagnostic:?}, got {stderr:?}", destination.display());
+                assert!(!stderr.contains("must not execute"), "protected input executed");
                 assert_eq!(fs::read(destination).unwrap(), sentinel);
+                assert_eq!(fs::read(&fake_compiler).unwrap(), sentinel);
+                assert_eq!(fs::read(&fake_clang).unwrap(), sentinel);
+                assert!(fs::symlink_metadata(&symbolic).unwrap().file_type().is_symlink());
             }
         }
         let scalar_record = r#"define class Number as pub val int code;end
