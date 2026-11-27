@@ -1,5 +1,24 @@
 # Implicit-const scalar v1 — exact-source candidate lane
 
+## Local binding v2 amendment (candidate, 2026-11-27)
+
+This branch deliberately supersedes the historical v1 expectations below for
+ordinary typed native int/bool locals, not the module/global constant rules.
+The original shared source files are retained byte-for-byte. The native
+test driver also pins the four additional type-right v1 fixtures and two
+name-first v2 fixtures (17 total). Its current expected results are:
+
+- 12 positive sources, each required to execute with result 42 at O0 and O2,
+  including implicit-nonconst, explicit-nonconst, type-right-nonconst,
+  name-first-as-nonconst, and const-mut-scalar (historical names retained).
+- Five targeted negatives: explicit/implicit/type-right fixed rebinding,
+  bare mut, and proven constant arithmetic overflow, all requiring no IR.
+- No general aggregate, string runtime const, actor, suspension, or
+  same-scope shadowing certification. This is a bounded implementation.
+
+The v1 table is retained as historical context, not as current LLVM
+acceptance criteria. Exact-head compiler-backed execution is still pending.
+
 **Status: CANDIDATE / COMPILER PARITY NOT VERIFIED.** These are staged identical
 `.atto` inputs for Java/Graal, LLVM and .NET structured compiler verification.
 The presence of a file, source-only check or failing pre-run GitHub Actions job
