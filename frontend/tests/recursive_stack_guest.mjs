@@ -33,6 +33,9 @@ const count='fnc count(int n): int { return match n over on 0 -> 0, on _ -> coun
 const mutual='fnc a(int n): int { return match n over on 0 -> 0, on _ -> b(n-1)+1 end; } fnc b(int n): int { return match n over on 0 -> 0, on _ -> a(n-1)+1 end; } ';
 try{
   for(const [id,src,want] of [
+    ['named-fib-10','pub fnc main(): int {return 10 |> fnc fib(int v): int {^ match v over on 0 -> 0, on 1 -> 1, on _ -> fib(v-2)+fib(v-1) end };}','55'],
+    ['named-shadow','fnc fib(int n): int {return 999;} pub fnc main(): int {return 10 |> fnc fib(int v): int {^ match v over on 0 -> 0, on 1 -> 1, on _ -> fib(v-2)+fib(v-1) end };}','55'],
+    ['named-limit','pub fnc main(): int {return 1025 |> fnc f(int v): int {^ match v over on 0 -> 0, on _ -> f(v-1)+1 end };}','stack'],
     ['acyclic','fnc leaf(int n): int {return n+1;} pub fnc main(): int {return leaf(41);}','42'],
     ['direct',count+'pub fnc main(): int {return count(600);}','600'],
     ['boundary',count+'pub fnc main(): int {return count(1024);}','1024'],
@@ -53,6 +56,38 @@ try{
       assert.equal(guest.stdout,'PASS '+want+'\n',id);
       console.log('PASS',id,isolated?'isolated':'normal');
     }
+  }
+  // Exact requested expensive expression: compile and validate, do not run.
+  const exact=join(work,'named-fib55-exact.atto'),exactOut=join(work,'named-fib55-exact.wasm');
+  await writeFile(exact,`pub fnc main(): int {
+    return 55 |> fnc fib(int v): int {
+        ^ match v over
+            on 0 -> 0,
+            on 1 -> 1,
+            on _ -> fib(v - 2) + fib(v - 1)
+        end
+    };
+}
+`);
+  ok(run(compiler,[exact,'-o',exactOut],30000),'exact named fib55 compile');
+  assert.ok(WebAssembly.validate(await readFile(exactOut)));
+  console.log('COMPILE ONLY exact fib55');
+  for(const [id,source,diagnostic] of [
+    ['capture','pub fnc main(): int {const int x=2; return 1 |> fnc f(int v): int {return v+x;};}',/E_UNSUPPORTED/],
+    ['arity','pub fnc main(): int {return 1 |> fnc f(int v): int {return f(v,v);};}',/E_ARITY/],
+    ['escape','pub fnc main(): int {val int x=1 |> fnc f(int v): int {return v;};return f(x);}',/E_UNBOUND/],
+    ['routine','routine r(int n): int {return n;} pub fnc main(): int {return 1 |> fnc f(int v): int {return v;};}',/E_UNSUPPORTED/],
+    ['collision','pub fnc main(): int {return 1 |> fnc f(int f): int {return f;};}',/E_DUPLICATE/],
+  ]){
+    const input=join(work,id+'.atto'),out=join(work,id+'.wasm');
+    await writeFile(input,source);
+    const result=run(compiler,[input,'-o',out],30000);
+    assert.equal(result.error,undefined,id);
+    assert.equal(result.signal,null,id);
+    assert.equal(result.status,1,id);
+    assert.match(result.stderr,diagnostic,id);
+    await assert.rejects(readFile(out),{code:'ENOENT'});
+    console.log('PASS rejection',id);
   }
   // Throw across 400 recursive edges while 599 caller edges remain live.
   // Restoring to zero would incorrectly admit the 500-edge probe; failing
