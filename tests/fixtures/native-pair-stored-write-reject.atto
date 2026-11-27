@@ -1,0 +1,1 @@
+pub fnc main(): int { let x := 42; x.value = 9; return x.value; }
