@@ -4983,10 +4983,45 @@ private:
             const bool is_match = accept("match");
             if (!is_match) require("switch");
 
+            const bool delimited = accept("|");
             auto subject = expression();
+            if (delimited) require("|");
             if (!native_pure_scalar_tree(*subject))
                 fail("native procedural dispatch subject must be a replay-safe scalar expression");
-            if (is_match) require("over");
+            if (is_match || delimited) require("over");
+
+            // Delimited procedural dispatch owns a single inferred scalar
+            // snapshot, initialized before dispatch even for default-only
+            // arms. Keep legacy structural dispatch on its existing path.
+            // The name cannot be spelled by a source identifier.
+            std::unique_ptr<LocalBinding> snapshot;
+            if (delimited) {
+                if (subject->kind == Expression::Kind::Variable &&
+                        class_receivers_.count(subject->name))
+                    fail("native delimited procedural dispatch requires a scalar subject");
+                snapshot = std::make_unique<LocalBinding>();
+                snapshot->name = "$dispatch." + std::to_string(offset);
+                snapshot->offset = offset;
+                snapshot->inferred_scalar = true;
+                snapshot->initializer = std::move(subject);
+                subject = make_expression(Expression::Kind::Variable, offset);
+                subject->name = snapshot->name;
+            }
+            auto scoped_dispatch = [&](Statement inner) -> Statement {
+                if (!snapshot) return inner;
+                Statement scope;
+                scope.kind = Statement::Kind::Conditional;
+                scope.offset = offset;
+                scope.condition = make_expression(Expression::Kind::Boolean, offset);
+                scope.condition->boolean = true;
+                Statement init;
+                init.kind = Statement::Kind::ScopedLocal;
+                init.offset = offset;
+                init.branch_local = std::move(snapshot);
+                scope.then_statements.push_back(std::move(init));
+                scope.then_statements.push_back(std::move(inner));
+                return scope;
+            };
 
             struct Arm {
                 std::unique_ptr<Expression> condition;
@@ -5003,6 +5038,8 @@ private:
                     fail("native procedural dispatch arm limit exceeded (32)");
 
                 if (is_match) {
+                    if (delimited && has_fallback)
+                        fail("native delimited match fallback must be last");
                     // All three spellings designate one fallback, evaluated after concrete arms.
                     const bool bare_default = accept("default");
                     if (!bare_default) require("on");
@@ -5091,6 +5128,7 @@ private:
                 fail("expected dispatch arm or 'end' in native procedural dispatch");
             }
             require("end");
+            if (delimited) accept(";");
 
             if (arms.empty()) {
                 if (!has_fallback)
@@ -5102,7 +5140,7 @@ private:
                     Expression::Kind::Boolean, offset);
                 unconditional.condition->boolean = true;
                 unconditional.then_statements = std::move(fallback);
-                return unconditional;
+                return scoped_dispatch(std::move(unconditional));
             }
 
             std::vector<Statement> tail = std::move(fallback);
@@ -5116,7 +5154,7 @@ private:
                 tail.clear();
                 tail.push_back(std::move(conditional));
             }
-            return std::move(tail.front());
+            return scoped_dispatch(std::move(tail.front()));
         };
         // Strict first native AOT scope slice. The compiler owns the span
         // token; it is never a scalar local, closure capture, actor message,
