@@ -50,3 +50,30 @@ fn exact_aliases_execute_and_wrong_authority_never_emits() {
     fs::remove_dir_all(root).unwrap();
     result
 }
+
+#[test]
+fn nominal_state_field_denials_never_emit_artifacts() {
+    let root = std::env::temp_dir().join(format!("atto-state-nominal-{}", std::process::id()));
+    fs::create_dir(&root).unwrap();
+    let compiler = env!("CARGO_BIN_EXE_atto-llvm");
+    let cases = [
+        (BASE.replace("s.count = s.count + value", "s.missing = s.count + value"), "E_STATE_LAYOUT"),
+        (BASE.replace("s.count + value", "s.missing + value"), "E_STATE_LAYOUT"),
+        (BASE.replace("-> s.count", "-> s.missing"), "E_STATE_LAYOUT"),
+        (BASE.replace("let int count = 0;", "val int count = 0;"), "E_STATE_LAYOUT"),
+        (BASE.replace("mtd (mut self: Counter)", "mtd (self: Counter)"), "E_MUTABILITY"),
+    ];
+    for (i, (source, diagnostic)) in cases.iter().enumerate() {
+        assert_ne!(source, BASE);
+        let input = root.join(format!("bad-{i}.atto"));
+        let output = root.join(format!("bad-{i}.ll"));
+        fs::write(&input, source).unwrap();
+        let result = Command::new(compiler).arg(&input).arg("-o").arg(&output)
+            .arg("--emit-llvm").output().unwrap();
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(!result.status.success(), "case {i} emitted");
+        assert!(!output.exists(), "case {i} leaked artifact");
+        assert!(stderr.contains(diagnostic), "case {i}: {stderr}");
+    }
+    fs::remove_dir_all(root).unwrap();
+}
