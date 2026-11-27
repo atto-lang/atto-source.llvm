@@ -33,7 +33,8 @@ typedef struct SourceActor {
     uint32_t restart_remaining;
     uint64_t fields_count;
     /* For a failed supervised incarnation, this metadata remains an invalid
-     * tombstone until the root group closes. Every backing heap/frame is
+     * tombstone until consuming recovery completes (or the root group closes).
+     * Every backing heap/frame is
      * reclaimed before the root supervisor authorizes a fresh incarnation.
      * It preserves the consuming recovery decision and read-only diagnostics.
      * Public identity is a monotonic token, never this allocation address. */
@@ -754,12 +755,17 @@ static void deliver(void* raw, size_t slot, uint64_t payload) {
 /* A root supervisor CONTROL turn authorizes a bounded one-for-one restart.
  * It never publishes a synthetic guest success and never restarts a STOPPED
  * child. The replacement is a fresh physical slot, actor ID, private heap,
- * logical-frame store and mailbox. We leave the mutex before spawn: a worker
- * may concurrently publish the new incarnation's initialization CONTROL.
+ * logical-frame store and mailbox. Selection and admission share group.mutex;
+ * initialization is queued asynchronously, never executed by this callback.
  *
  * No root callback blocks waiting for a carrier or for guest execution.
  * The old actor must already have physical DONE and host finalization before
  * NativeOresVM can publish this authenticated terminal envelope. */
+static void* source_spawn_locked(OresSourceActorInit constructor,
+        OresSourceActorMessage on_message, uint64_t fields,
+        uint64_t max_frames, uint64_t lifetime_frame_budget,
+        uint64_t restart_limit, size_t slot);
+
 static void source_supervisor_notice(
         void* raw, size_t parent_slot, OresNativeActorTerminalFailure failure) {
     ensure(raw == &group && parent_slot == SOURCE_GROUP_ROOT_SLOT);
@@ -768,10 +774,7 @@ static void source_supervisor_notice(
         && failure.child.generation != 0 && failure.correlation != 0);
 
     SourceActor* original = NULL;
-    OresSourceActorInit constructor = NULL;
-    OresSourceActorMessage receiver = NULL;
-    uint64_t fields = 0, depth = 0, lifetime = 0, remaining = 0;
-    int approved = 0;
+    size_t successor_slot = SOURCE_GROUP_ROOT_SLOT;
     group_lock();
     const size_t slot = (size_t)failure.child.actor_slot;
     original = group.actors[slot] ? group.actors[slot] : group.retired[slot];
@@ -786,27 +789,18 @@ static void source_supervisor_notice(
         && original->restart_remaining != 0
         && !original->restart_decided) {
         original->restart_decided = 1;
-        if (source_free_slot_locked() < SOURCE_GROUP_ROOT_SLOT) {
-            approved = 1;
-            constructor = original->constructor;
-            receiver = original->on_message;
-            fields = original->fields_count;
-            depth = original->frame_budget;
-            lifetime = original->lifetime_frame_budget;
-            remaining = original->restart_remaining - 1;
-        }
+        successor_slot = source_free_slot_locked();
     }
-    if (original && original->restart_decided && !approved) {
+    if (original->restart_decided && successor_slot == SOURCE_GROUP_ROOT_SLOT)
         original->restart_settled = 1;
-        ensure(pthread_cond_broadcast(&group.supervisor_progress) == 0);
-    }
-    group_unlock();
-    if (approved) {
-        void* fresh_handle = oreslang_source_actor_spawn_supervised_budgeted(
-                constructor, receiver, fields, depth, lifetime, remaining);
-        /* The original actor is a bounded tombstone, not a live mailbox.
-         * Do not migrate its state or preserve any old borrow or pointer. */
-        group_lock();
+    if (successor_slot < SOURCE_GROUP_ROOT_SLOT) {
+        const uint64_t remaining = original->restart_remaining - 1;
+        void* fresh_handle = source_spawn_locked(
+                original->constructor, original->on_message, original->fields_count,
+                original->frame_budget, original->lifetime_frame_budget,
+                remaining, successor_slot);
+        /* Do not migrate state or preserve an old borrow or pointer.
+         * Keep the selection and registration in the same critical section. */
         SourceActor* fresh = source_resolve_locked(fresh_handle, 0);
         ensure(fresh != NULL);
         ensure(original && original->magic == SOURCE_ACTOR_MAGIC
@@ -814,8 +808,6 @@ static void source_supervisor_notice(
             && original->replacement == NULL);
         original->replacement = fresh;
         original->restart_settled = 1;
-        ensure(pthread_cond_broadcast(&group.supervisor_progress) == 0);
-        group_unlock();
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
         fprintf(stderr,
             "SOURCE_ACTOR_ONE_FOR_ONE_RESTART_VERIFIED old_slot=%llu new_slot=%llu old_generation=%llu new_generation=%llu remaining=%llu\n",
@@ -838,7 +830,6 @@ static void source_supervisor_notice(
         atomic_fetch_add_explicit(
             &group.terminal_stopped_notices, 1, memory_order_release);
     }
-    group_lock();
     original->terminal_policy_settled = 1;
     atomic_fetch_add_explicit(&group.terminal_notices, 1, memory_order_release);
     ensure(pthread_cond_broadcast(&group.supervisor_progress) == 0);
@@ -915,22 +906,20 @@ static void open_group_locked(void) {
 #endif
 }
 
-void* oreslang_source_actor_spawn_supervised_budgeted(
+/* Caller holds group.mutex. No guest constructor runs inline. */
+static void* source_spawn_locked(
         OresSourceActorInit constructor,
         OresSourceActorMessage on_message,
         uint64_t fields,
         uint64_t max_frames,
         uint64_t lifetime_frame_budget,
-        uint64_t restart_limit) {
+        uint64_t restart_limit, size_t slot) {
     ensure(constructor != NULL && fields >= 1 && fields <= 4096
         && max_frames <= 16 && lifetime_frame_budget <= 64
         && restart_limit <= 4);
-    group_lock();
-    if (!group.vm) open_group_locked();
-
-    source_reclaim_settled_leaves_locked();
-    const size_t slot = source_free_slot_locked();
-    ensure(slot < SOURCE_GROUP_ROOT_SLOT);
+    ensure(group.vm && slot < SOURCE_GROUP_ROOT_SLOT
+        && !group.actors[slot] && !group.retired[slot]
+        && !group.pending_leaf_reclaim[slot].scheduler_domain);
     if (group.next_slot <= slot) group.next_slot = slot + 1;
     SourceActor* instance = (SourceActor*)calloc(1, sizeof(*instance));
     ensure(instance != NULL);
@@ -992,7 +981,21 @@ void* oreslang_source_actor_spawn_supervised_budgeted(
     /* CONTROL initializes the compiler-emitted actor constructor on a worker. */
     ensure(ores_native_vm_publish_control(
         group.vm, ORES_NATIVE_VM_MAIN, instance->ref, 0));
-    void* handle = source_handle(instance);
+    return source_handle(instance);
+}
+
+void* oreslang_source_actor_spawn_supervised_budgeted(
+        OresSourceActorInit constructor,
+        OresSourceActorMessage on_message,
+        uint64_t fields,
+        uint64_t max_frames,
+        uint64_t lifetime_frame_budget,
+        uint64_t restart_limit) {
+    group_lock();
+    if (!group.vm) open_group_locked();
+    source_reclaim_settled_leaves_locked();
+    void* handle = source_spawn_locked(constructor, on_message, fields,
+        max_frames, lifetime_frame_budget, restart_limit, source_free_slot_locked());
     group_unlock();
     return handle;
 }
@@ -1571,6 +1574,17 @@ void* oreslang_source_actor_recover_blocking(void* opaque) {
     ensure(ores_source_recovery_release(&group.recovery_lease, old_slot,
         previous->ref.generation, previous->id));
     void* replacement_handle = fresh ? source_handle(fresh) : NULL;
+    /* Recovery consumed this old identity. No external reader can still
+     * hold the record: join_done drained flush/readiness and root policy.
+     * The VM independently waits for physical CONTROL acknowledgement. */
+    ensure(previous->terminal_policy_settled && previous->tombstone
+        && !previous->heap && !previous->logical_frames
+        && !group.pending_leaf_reclaim[old_slot].scheduler_domain);
+    group.pending_leaf_reclaim[old_slot] = previous->ref;
+    group.retired[old_slot] = NULL;
+    previous->magic = 0;
+    free(previous);
+    source_reclaim_settled_leaves_locked();
     close_idle_group_locked();
     group_unlock();
     return replacement_handle;
