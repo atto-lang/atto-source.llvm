@@ -16,6 +16,7 @@ pub mod generator_cfg;
 pub mod generator_frame;
 pub mod lexer;
 pub mod parser;
+mod struct_value_guest;
 pub mod target_syntax;
 pub mod target_typed;
 pub mod wasm;
@@ -39,6 +40,53 @@ pub fn compile(source: &str) -> Result<Vec<u8>, Diagnostic> {
     if let Some(pos) = directed_pipe::unlowered_pos(&toks) {
         return Err(Diagnostic::new(pos, "E_UNSUPPORTED_CONTINUOUS_PIPE",
             "typed pipe/rpipe DATA graph is planned but no guest transport or PipeHandle exists"));
+    }
+    // Attached nominal struct syntax has its own target AST. Never route it
+    // through identity-bearing class or structural shape lowering. Locate
+    // top-level declaration headers using lexer tokens, not source text.
+    let mut depth = 0usize;
+    let mut pending_struct = None;
+    for (i, token) in toks.iter().enumerate() {
+        if depth == 0 && matches!(toks.get(i..i.saturating_add(5)),
+            Some([lexer::Token { tok: lexer::Tok::Ident(a), .. },
+                  lexer::Token { tok: lexer::Tok::Ident(_), .. },
+                  lexer::Token { tok: lexer::Tok::Assign, .. },
+                  lexer::Token { tok: lexer::Tok::Ident(b), .. },
+                  lexer::Token { tok: lexer::Tok::LBrace, .. }])
+                if a == "type" && b == "struct") {
+            pending_struct = Some(i);
+        }
+        match &token.tok {
+            lexer::Tok::LBrace => depth += 1,
+            lexer::Tok::RBrace => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    if let Some(start) = pending_struct.take() {
+                        if matches!(toks.get(i+1).map(|t| &t.tok),
+                            Some(lexer::Tok::Ident(w)) if w == "with") {
+                            if start != 0 {
+                                return Err(Diagnostic::new(toks[start].pos, "E_UNSUPPORTED",
+                                    "attached struct execution requires one standalone file-local declaration"));
+                            }
+                            let program = struct_value_guest::lower(toks.clone())?;
+                            let typed = check::check(&program)?;
+                            if typed.heap || typed.strings || !typed.actors.is_empty()
+                                || !typed.generators.is_empty() || !typed.globals.is_empty() {
+                                return Err(Diagnostic::new(toks[start].pos, "E_UNSUPPORTED",
+                                    "scalar struct lowering must not allocate or use actor/generator/global state"));
+                            }
+                            let bytes = wasm::emit(&typed);
+                            if bytes.len() > wasm::MAX_OUTPUT {
+                                return Err(Diagnostic::new(toks[start].pos, "E_OUTPUT_LIMIT",
+                                    "generated module exceeds 1 MiB"));
+                            }
+                            return Ok(bytes);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
     }
     // Detect target declarations at any file-scope position, not only at
     // source byte zero. Ignore comments/strings (the lexer already tokenizes
