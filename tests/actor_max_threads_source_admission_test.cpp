@@ -146,7 +146,7 @@ int main() {
                suffix + "; return 0; }", "E_SPAWN_OPTIONS_UNSUPPORTED");
     }
     auto legacy_spawn = parse_program(std::string(valid_actor) +
-        "\n pub fnc main(): int { val w: ActorRef<Worker> = spawn Worker(); return 0; }");
+        "\n pub fnc main(): int { val w: ActorRef<Worker> = spawn Worker(); w.stop(); return 0; }");
     check(legacy_spawn.actors.size() == 1);
     return 0;
 }
