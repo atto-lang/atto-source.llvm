@@ -40,5 +40,20 @@ int main() {
     result[1].second = 9;
     require(seed[0].second == V(5));
     require(run(seed, {{"size", 6}}) == expected);
-    std::cout << "18 host checks passed\n";
+    const auto infer = [&](const std::vector<A>& explicit_values, const std::vector<std::string>& holes,
+                           const std::vector<A>& evidence) {
+        return refine_inferred(schema, seed, explicit_values, holes, evidence);
+    };
+    require(infer({}, {"size"}, {{"size", 3}}) == std::vector<A>{{"type", std::string("int")}, {"size", 3}});
+    require(seed[0].second == V(5));
+    require(infer({}, {"size"}, {{"size", 0}})[1].second == V(0));
+    rejects([&] { infer({}, {"size"}, {}); });
+    rejects([&] { infer({}, {"size"}, {{"size", 3}, {"size", 3}}); });
+    rejects([&] { infer({{"size", 6}}, {"size"}, {{"size", 3}}); });
+    rejects([&] { infer({}, {"size"}, {{"size", 3}, {"type", std::string("int")}}); });
+    rejects([&] { infer({}, {"size", "size"}, {{"size", 3}}); });
+    rejects([&] { refine_inferred(schema, std::vector<A>{seed[1]}, {}, {"size"}, {{"size", 3}}); });
+    rejects([&] { infer({}, {"size"}, {{"size", -1}}); });
+    rejects([&] { infer({}, {"size"}, {{"size", std::string("3")}}); });
+    std::cout << "29 host checks passed\n";
 }
