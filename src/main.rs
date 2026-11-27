@@ -142,7 +142,35 @@ impl<'a> FunctionEmitter<'a> {
                         };
                         Ok(self.checked_math(op_name, &a, &b))
                     }
-                    BinOp::Div => Err("E_UNSUPPORTED_NATIVE_DIV: integer division is not admitted".into()),
+                    BinOp::Div => {
+                        if ty != "i64" {
+                            return Err("E_UNSUPPORTED_NATIVE_DIV: expected int".into());
+                        }
+                        // Defence in depth: an invalid divisor must never
+                        // reach LLVM sdiv, whose overflow is undefined.
+                        let zero = self.id("v");
+                        let min = self.id("v");
+                        let minus_one = self.id("v");
+                        let overflow = self.id("v");
+                        let bad = self.id("v");
+                        let trap = self.id("trap");
+                        let okay = self.id("okay");
+                        let result = self.id("v");
+                        self.instr(format!("%{zero} = icmp eq i64 {b}, 0"));
+                        self.instr(format!("%{min} = icmp eq i64 {a}, -9223372036854775808"));
+                        self.instr(format!("%{minus_one} = icmp eq i64 {b}, -1"));
+                        self.instr(format!("%{overflow} = and i1 %{min}, %{minus_one}"));
+                        self.instr(format!("%{bad} = or i1 %{zero}, %{overflow}"));
+                        self.instr(format!("br i1 %{bad}, label %{trap}, label %{okay}"));
+                        self.terminated = true;
+                        self.label(&trap);
+                        self.instr("call void @llvm.trap()");
+                        self.instr("unreachable");
+                        self.terminated = true;
+                        self.label(&okay);
+                        self.instr(format!("%{result} = sdiv i64 {a}, {b}"));
+                        Ok(format!("%{result}"))
+                    }
                     BinOp::And | BinOp::Or => {
                         if ty != "i1" {
                             return Err("E_UNSUPPORTED_NATIVE_LOGICAL: expected bool".into());

@@ -1,7 +1,12 @@
 #include "oreslang/runtime/NativeSelectContinuationFence.hpp"
 
 #include <atomic>
+#ifdef NDEBUG
+#undef NDEBUG  // Regression assertions must execute in release test builds too.
+#endif
 #include <cassert>
+#include <condition_variable>
+#include <mutex>
 #include <limits>
 #include <stdexcept>
 #include <thread>
@@ -284,7 +289,120 @@ static void execution_raii_retirement_is_exactly_once() {
     assert(fence.generation() == 2);
 }
 
+static void mixed_pending_execution_churn() {
+    using Fence = NativeSelectContinuationFence<64>;
+    Fence fence;
+    std::array<Fence::Ticket, 96> prior{};
+    for (int round = 0; round < 256; ++round) {
+        std::array<Fence::Ticket, 64> pending{};
+        std::array<Fence::Execution, 32> leases{};
+        for (auto& ticket : pending)
+            ticket = fence.register_continuation(fence.generation());
+        for (std::size_t i = 0; i < leases.size(); ++i) {
+            leases[i] = fence.try_claim(pending[i]);
+            assert(leases[i].valid());
+        }
+        assert(fence.executing() == 32 && fence.pending_tickets() == 32);
+        bool exhausted = false;
+        try { (void)fence.register_continuation(fence.generation()); }
+        catch (const std::overflow_error&) { exhausted = true; }
+        assert(exhausted);
+        assert(!fence.advance(fence.generation()));
+        for (const auto& stale : prior) {
+            assert(!fence.try_claim(stale).valid());
+            assert(!stale.close());
+        }
+        for (std::size_t i = 32; i < pending.size(); ++i)
+            assert(pending[i].close());
+        for (std::size_t i = 0; i < pending.size(); ++i)
+            prior[i] = pending[i];
+        for (std::size_t i = 64; i < prior.size(); ++i)
+            prior[i] = fence.register_continuation(fence.generation());
+        for (auto& lease : leases) {
+            assert(lease.close());
+            assert(!lease.close());
+        }
+        assert(fence.executing() == 0 && fence.pending_tickets() == 32);
+        assert(fence.advance(fence.generation()));
+        assert(fence.pending_tickets() == 0);
+    }
+    assert(fence.close() && fence.retirement_ready());
+}
+
+static void million_generation_reuse() {
+    using Fence = NativeSelectContinuationFence<4>;
+    Fence fence; Fence::Ticket old;
+    for (int i=0;i<1000000;++i) {
+        const auto g=fence.generation(); const auto t=fence.register_continuation(g);
+        auto lease=fence.try_claim(t);
+        assert(lease.valid() && fence.executing()==1);
+        assert(!fence.advance(g));
+        assert(!fence.try_claim(t).valid() && !t.close());
+        assert(!fence.try_claim(old).valid() && !old.close());
+        assert(lease.close() && !lease.close());
+        assert(fence.advance(g));
+        assert(fence.pending_tickets()==0 && fence.executing()==0);
+        old=t;
+    }
+    assert(fence.close() && fence.retirement_ready());
+}
+class LifecycleTestBarrier {
+    std::mutex mutex_; std::condition_variable cv_; unsigned arrived_=0, phase_=0;
+public:
+    void wait() {
+        std::unique_lock<std::mutex> lock(mutex_); const auto phase=phase_;
+        if (++arrived_==3) { arrived_=0; ++phase_; cv_.notify_all(); }
+        else cv_.wait(lock,[&]{return phase_!=phase;});
+    }
+};
+static void concurrent_claim_cancel_lifecycle_stress() {
+    using Fence=NativeSelectContinuationFence<1>;
+    constexpr int rounds=100000; Fence fence; Fence::Ticket ticket;
+    LifecycleTestBarrier barrier; bool claimed=false,cancelled=false;
+    std::thread consumer([&]{ for(int i=0;i<rounds;++i){
+        barrier.wait(); auto lease=fence.try_claim(ticket); claimed=lease.valid();
+        barrier.wait(); barrier.wait(); if(claimed) assert(lease.close()); barrier.wait();
+    }});
+    std::thread canceller([&]{ for(int i=0;i<rounds;++i){
+        barrier.wait(); cancelled=ticket.close(); barrier.wait(); barrier.wait(); barrier.wait();
+    }});
+    for(int i=0;i<rounds;++i){
+        const auto g=fence.generation(); ticket=fence.register_continuation(g);
+        barrier.wait(); barrier.wait();
+        assert(claimed!=cancelled && fence.pending_tickets()==0);
+        assert(fence.executing()==(claimed?1u:0u));
+        assert(!fence.try_claim(ticket).valid() && !ticket.close());
+        if(claimed) assert(!fence.advance(g));
+        barrier.wait(); barrier.wait();
+        assert(fence.executing()==0 && fence.advance(g));
+        assert(!fence.try_claim(ticket).valid());
+    }
+    consumer.join(); canceller.join(); assert(fence.close() && fence.retirement_ready());
+}
+
+static void owner_destruction_revokes_pending_while_execution_survives() {
+    using Fence = NativeSelectContinuationFence<2>;
+    Fence::Ticket pending;
+    Fence::Execution running;
+    {
+        Fence fence;
+        auto selected = fence.register_continuation(1);
+        pending = fence.register_continuation(1);
+        running = fence.try_claim(selected);
+        assert(running.valid() && pending.active());
+    }
+    assert(!pending.active());
+    assert(!pending.close());
+    assert(running.valid());
+    assert(running.close());
+    assert(!running.close());
+}
+
 int main() {
+    owner_destruction_revokes_pending_while_execution_survives();
+    million_generation_reuse();
+    concurrent_claim_cancel_lifecycle_stress();
+    mixed_pending_execution_churn();
     claim_holds_generation_until_physical_retirement();
     stale_and_foreign_tickets_fail_closed();
     physical_capacity_includes_claimed_execution();

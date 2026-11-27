@@ -6272,6 +6272,15 @@ if(BUILD_TESTING)
     add_test(NAME native_pinned_continuation_loan_cancel_quiescence
              COMMAND oreslang-pinned-continuation-gate-test)
     set_tests_properties(native_pinned_continuation_loan_cancel_quiescence PROPERTIES TIMEOUT 30)
+    if(UNIX)
+        add_executable(oreslang-pinned-continuation-loopback-test tests/pinned_continuation_loopback_test.cpp)
+        target_include_directories(oreslang-pinned-continuation-loopback-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-pinned-continuation-loopback-test PRIVATE Threads::Threads)
+        target_compile_options(oreslang-pinned-continuation-loopback-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        add_test(NAME native_pinned_continuation_loopback_host_only
+                 COMMAND oreslang-pinned-continuation-loopback-test)
+        set_tests_properties(native_pinned_continuation_loopback_host_only PROPERTIES TIMEOUT 30)
+    endif()
     # Real actor-owned fixed-field loans must survive logical suspension
     # without permitting mutation, cancellation-time drop, or cross-actor alias.
     if(UNIX)
@@ -6373,9 +6382,21 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_oversized_integer overflow-integer.ores --diagnostic "overflows signed 64-bit")
     oreslang_contract_test(reject_unclosed_comment unclosed-comment.ores --diagnostic "unterminated block comment")
 
-    # Primitive field projections use synchronous whole-object loan
-    # admission until per-field provenance can be proven by both checker and
-    # LLVM lowering. Rejections must emit zero IR.
+    # Direct flat scalar fields of a local owner have distinct call-loan
+    # identities; nonlocal/nested/whole-owner loans remain conservative.
+    # Rejections must emit zero IR.
+    oreslang_contract_test(native_projection_same_exclusive
+        class-projection-same-exclusive-reject.atto --diagnostic "conflicting active native borrow")
+    oreslang_contract_test(native_projection_same_field_read
+        class-projection-same-field-read-reject.atto --diagnostic "field read conflicts with active mutable borrow")
+    oreslang_contract_test(native_projection_root_loan_read
+        class-projection-root-loan-read-reject.atto --diagnostic "field read conflicts with active mutable borrow")
+    oreslang_contract_test(native_projection_sibling_take
+        class-projection-sibling-take-reject.atto --diagnostic "cannot take a class field with active loans")
+    oreslang_contract_test(native_projection_outer_loan
+        class-projection-outer-loan-reject.atto --diagnostic "conflicting active native borrow")
+    oreslang_contract_test(native_projection_nested_release_outer_live
+        class-projection-nested-release-outer-live-reject.atto --diagnostic "conflicting active native borrow")
     oreslang_contract_test(native_projection_alias_conflict
         class-projection-overlap-reject.ores --diagnostic "conflicting active native borrow")
     oreslang_contract_test(native_projection_immutable_exclusive
@@ -6532,6 +6553,18 @@ if(BUILD_TESTING)
             class-projection-shared-reborrow-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
         oreslang_contract_test(native_projection_two_shared_clang
             class-projection-two-shared-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
+        oreslang_contract_test(native_projection_disjoint_shared_mut_clang
+            class-projection-disjoint-shared-mut-native.atto --run 42 --clang "${ORE_CLANG}" --no-native-abi)
+        oreslang_contract_test(native_projection_disjoint_mut_mut_clang
+            class-projection-disjoint-mut-mut-native.atto --run 42 --clang "${ORE_CLANG}" --no-native-abi)
+        oreslang_contract_test(native_projection_disjoint_release_clang
+            class-projection-disjoint-release-native.atto --run 42 --clang "${ORE_CLANG}" --no-native-abi)
+        oreslang_contract_test(native_projection_sibling_read_clang
+            class-projection-sibling-read-native.atto --run 42 --clang "${ORE_CLANG}" --no-native-abi)
+        oreslang_contract_test(native_projection_sibling_read_nested_clang
+            class-projection-sibling-read-nested-native.atto --run 42 --clang "${ORE_CLANG}" --no-native-abi)
+        oreslang_contract_test(native_projection_nested_release_clang
+            class-projection-nested-release-native.atto --run 42 --clang "${ORE_CLANG}" --no-native-abi)
 
         add_test(NAME native_projection_borrow_compiler_to_clang_matrix
             COMMAND "${Python3_EXECUTABLE}"
@@ -9462,6 +9495,18 @@ if(BUILD_TESTING)
     add_test(NAME native_select_continuation_generation_fence
         COMMAND oreslang-native-select-continuation-fence-test)
     set_tests_properties(native_select_continuation_generation_fence PROPERTIES TIMEOUT 30)
+
+    add_executable(atto-native-select-continuation-multi-owner-test
+        tests/native_select_continuation_multi_owner_test.cpp)
+    target_include_directories(atto-native-select-continuation-multi-owner-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(atto-native-select-continuation-multi-owner-test PRIVATE cxx_std_17)
+    target_compile_options(atto-native-select-continuation-multi-owner-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(atto-native-select-continuation-multi-owner-test PRIVATE Threads::Threads)
+    add_test(NAME native_select_continuation_multi_owner_settlement
+        COMMAND atto-native-select-continuation-multi-owner-test)
+    set_tests_properties(native_select_continuation_multi_owner_settlement PROPERTIES TIMEOUT 60)
 endif()
 
 # C ABI bridge over the fixed two-arm NativeSelectArbiter (host-only).

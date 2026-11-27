@@ -3,6 +3,7 @@
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/ChannelGuestGate.hpp"
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/PortableUnicodeIdentifier.hpp"
 #include "oreslang/types/CoreTypeRegistry.hpp"
 #include "oreslang/frontend/PointerIntSyntax.hpp"
 #include "oreslang/frontend/NativeTelemetryLiteralV1.hpp"
@@ -47,10 +48,18 @@ bool exceptional_control(std::string_view word) {
 }
 
 bool digit(char ch) { return ch >= '0' && ch <= '9'; }
-bool identifier_start(char ch) {
-    return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_';
+bool identifier_part_at(std::string_view text, std::size_t offset) {
+    const auto scalar = frontend::unicode_at(text, offset);
+    return scalar.width != 0 && frontend::portable_name_part(scalar.value);
 }
-bool identifier_part(char ch) { return identifier_start(ch) || digit(ch); }
+bool identifier_before(std::string_view text, std::size_t offset) {
+    if (!offset) return false;
+    auto start = offset - 1;
+    while (start > 0 && (static_cast<unsigned char>(text[start]) & 0xc0u) == 0x80u) --start;
+    const auto scalar = frontend::unicode_at(text, start);
+    return scalar.width && start + scalar.width == offset &&
+           frontend::portable_name_part(scalar.value);
+}
 
 inline constexpr std::size_t kMaxNativeBlockCommentNesting = 128;
 inline constexpr std::size_t kMaxNativeTemplateNesting = 32;
@@ -271,9 +280,10 @@ public:
             at_ += 3;
             return {Kind::Identifier, "suspends", start};
         }
-        if (identifier_start(ch)) {
-            ++at_;
-            while (at_ < source_.size() && identifier_part(source_[at_])) ++at_;
+        const auto scalar = frontend::unicode_at(source_, at_);
+        if (scalar.width && frontend::portable_name_start(scalar.value)) {
+            at_ += scalar.width;
+            while (identifier_part_at(source_, at_)) at_ += frontend::unicode_at(source_, at_).width;
             // Keep 'critical-read' / 'critical-write' as ordinary
             // IDENT '-' IDENT tokens. The parser recognizes them *only*
             // in callable modifier positions: arbitrary expressions must
@@ -321,7 +331,7 @@ public:
             if (first == "nb" && source_.substr(at_, 7) == "-select") {
                 const auto end = at_ + 7;
                 if (end == source_.size() ||
-                        (source_[end] != '-' && !identifier_part(source_[end]))) {
+                        (source_[end] != '-' && !identifier_part_at(source_, end))) {
                     at_ = end;
                 }
             }
@@ -330,10 +340,14 @@ public:
             if (first == "trap" && at_ < source_.size() && source_[at_] == '!'
                     && source_.substr(at_, 2) != "!="
                     && !(source_.substr(at_, 3) == "!eq"
-                         && (at_ + 3 == source_.size() || !identifier_part(source_[at_ + 3])))) {
+                         && (at_ + 3 == source_.size() || !identifier_part_at(source_, at_ + 3)))) {
                 ++at_;
             }
             return {Kind::Identifier, source_.substr(start, at_ - start), start};
+        }
+        if (scalar.width && scalar.value == 0xacu) {
+            at_ += scalar.width;
+            return {Kind::Symbol, source_.substr(start, scalar.width), start};
         }
         if (ch == '"' || ch == '\'') {
             const char quote = ch;
@@ -389,7 +403,7 @@ public:
                 }
             }
             if (at_ < source_.size() && source_[at_] == 'd' &&
-                    (at_ + 1 == source_.size() || !identifier_part(source_[at_ + 1]))) {
+                    (at_ + 1 == source_.size() || !identifier_part_at(source_, at_ + 1))) {
                 ++at_;
                 real = true;
             }
@@ -407,7 +421,7 @@ public:
         // compatibility migration; no source-profile switch is invented here.
         if (source_.substr(at_, 3) == "!eq" &&
                 (at_ + 3 == source_.size() ||
-                 !identifier_part(source_[at_ + 3]))) {
+                 !identifier_part_at(source_, at_ + 3))) {
             at_ += 3;
             return {Kind::Symbol, source_.substr(start, 3), start};
         }
@@ -417,7 +431,7 @@ public:
         // This lexer has already skipped comments and quoted source.
         if (source_.substr(at_, 3) == "!eq") {
             const auto end = at_ + 3;
-            if (end == source_.size() || !identifier_part(source_[end])) {
+            if (end == source_.size() || !identifier_part_at(source_, end)) {
                 at_ = end;
                 return {Kind::Identifier, "neq", start};
             }
@@ -428,7 +442,7 @@ public:
         // expression kind; no reflection, interpreter or runtime dispatch.
         if (source_.substr(at_, 3) == "!eq" &&
             (at_ + 3 == source_.size() ||
-             !identifier_part(source_[at_ + 3]))) {
+             !identifier_part_at(source_, at_ + 3))) {
             at_ += 3;
             return {Kind::Symbol, source_.substr(start, 3), start};
         }
@@ -451,8 +465,8 @@ public:
         // This lexer only reaches executable tokens (not comments/strings).
         if (ch == '@') {
             std::size_t after_name = start + 1;
-            while (after_name < source_.size() && identifier_part(source_[after_name]))
-                ++after_name;
+            while (identifier_part_at(source_, after_name))
+                after_name += frontend::unicode_at(source_, after_name).width;
             const auto annotation = source_.substr(start + 1, after_name - start - 1);
             if (annotation == "Inject" || annotation == "StateBacked" ||
                     annotation == "MutableStateContainer" || annotation == "StateContainer") {
@@ -485,7 +499,7 @@ public:
             if (before >= marker.size() &&
                     source_.substr(before - marker.size(), marker.size()) == marker &&
                     (before == marker.size() ||
-                     !identifier_part(source_[before - marker.size() - 1]))) {
+                     !identifier_before(source_, before - marker.size()))) {
                 ++at_;
                 return {Kind::Symbol, source_.substr(start, 1), start};
             }
@@ -1539,6 +1553,11 @@ public:
                 program.classes.push_back(std::move(cls));
                 break;
             }
+            // define [pub] fnc/routine is not a module wrapper.
+            if (token_.text == "fnc" || token_.text == "routine") {
+                program.functions.push_back(function({}, exported));
+                continue;
+            }
             if (exported && token_.text != "class") fail("native public module wrapper is not supported in the i64 subset");
             if (accept("serial")) {
                 require("actor");
@@ -1741,6 +1760,10 @@ public:
                     cls.exported = public_class;
                     remember_class_scalar_fields(cls);
                     program.classes.push_back(std::move(cls));
+                    continue;
+                }
+                if (token_.text == "fnc" || token_.text == "routine") {
+                    program.functions.push_back(function({}, public_class));
                     continue;
                 }
                 if (public_class && token_.text != "class") fail("native pub define currently supports only class declarations");
@@ -3560,7 +3583,13 @@ private:
             value.name = extension_function_name(
                 extension_receiver_alias_, extension_method_name_);
         } else {
-            value.exported = owner.empty() ? accept("pub") : visible;
+            if (owner.empty()) {
+                const bool inline_public = accept("pub");
+                if (visible && inline_public) fail("duplicate pub modifier");
+                value.exported = visible || inline_public;
+            } else {
+                value.exported = visible;
+            }
         const bool source_async = owner.empty() && accept("async");
         // A foreign declaration has no Atto body. Never treat its source
         // spelling as a freely chosen native linker symbol.
@@ -4300,15 +4329,20 @@ private:
                 binding.name = identifier();
                 require("=");
                 binding.initializer = expression();
-                if (!binding.initializer ||
-                        binding.initializer->kind != Expression::Kind::ArrayCall ||
-                        binding.initializer->name != "split_literal" ||
-                        !binding.initializer->left ||
-                        binding.initializer->arguments.size() != 1)
-                    fail("inferred native array val requires String.split_literal(String)");
-                binding.int_array = true;
+                // Keep the owned split-literal path distinct from statically
+                // inferred scalar values; the checked type environment admits
+                // only supported scalar initializers on the latter path.
                 binding.owner_mutable = true;
-                binding.array_element_type = ScalarType::String;
+                if (binding.initializer &&
+                        binding.initializer->kind == Expression::Kind::ArrayCall &&
+                        binding.initializer->name == "split_literal" &&
+                        binding.initializer->left &&
+                        binding.initializer->arguments.size() == 1) {
+                    binding.int_array = true;
+                    binding.array_element_type = ScalarType::String;
+                } else {
+                    binding.inferred_scalar = true;
+                }
             } else if ((token_.text == "val" || token_.text == "const") &&
                     [&] { Lexer look = lexer_; const auto type = look.next();
                         return type.text == "string" || type.text == "String" ||
@@ -4506,7 +4540,15 @@ private:
                     if (spawned.declared_type.argument != spawned.actor_type)
                         fail("ActorRef<T> type mismatch with spawned actor");
                     require("(");
-                    require(")");
+                    if (token_.text != ")") fail("expected ')'");
+                    // Only this authenticated spawn boundary classifies the
+                    // next contextual 'with' as actor policy, not record update.
+                    advance(true);
+                    // Grouped actor spawn is not the legacy zero-argument
+                    // source actor binding. Do not emit a partial binding that
+                    // would erase quotas, scheduling policy or startup data.
+                    if (token_.text == "with")
+                        fail("E_SPAWN_OPTIONS_UNSUPPORTED: grouped actor spawn requires typed initialization, resource admission and runtime lowering");
                     // A source 'pipe' is a typed graph construction with
                     // atomic connections, bounded DATA, distinct supervisor
                     // CONTROL, and physical shutdown barriers. Never lower
@@ -6191,7 +6233,7 @@ private:
             expr->left = unary();
             return expr;
         }
-        if (token_.text == "!") {
+        if (token_.text == "!" || token_.text == "\xc2\xac") {
             const auto offset = token_.offset;
             advance();
             auto expr = make_expression(Expression::Kind::LogicalNot, offset);
@@ -6746,6 +6788,38 @@ private:
 
     std::unique_ptr<Expression> primary() {
         const auto offset = token_.offset;
+
+        // A closed, single-valued-break loop has no observable backedge.
+        // Keep the normal typed expression and native codegen paths in
+        // authority; reject bare names/calls and general loop CFGs.
+        if (token_.text == "loop" && peek_next().text == "{") {
+            advance();
+            require("{");
+            require("break");
+            if (token_.text == ";" || token_.text == "}")
+                fail("E_BREAK_VALUE: value loop requires a break operand");
+            auto value = expression();
+            using K = Expression::Kind;
+            switch (value->kind) {
+                case K::Integer: case K::Boolean: case K::String:
+                case K::Negate: case K::Abs: case K::LogicalNot:
+                case K::Add: case K::Subtract: case K::Multiply:
+                case K::Remainder: case K::Modulo: case K::BitXor:
+                case K::Equal: case K::NotEqual: case K::Less:
+                case K::LessEqual: case K::Greater: case K::GreaterEqual:
+                case K::LogicalAnd: case K::LogicalOr: case K::LogicalXor:
+                case K::Conditional: case K::Cast:
+                case K::ShiftLeft: case K::ShiftRight: case K::ShiftUnsignedRight:
+                    break;
+                default:
+                    fail("value-loop operand requires typed CFG lowering");
+            }
+            require(";");
+            require("}");
+            if (token_.text == "(")
+                fail("calling a computed value loop");
+            return value;
+        }
 
         // Source-to-MIR analysis runs inside the real compiler parser, but
         // never publishes an executable AST or LLVM scalar fallback.
@@ -9619,10 +9693,10 @@ private:
                 + std::to_string(token_.offset));
         }
     }
-    void advance() {
+    void advance(bool at_spawn_close = false) {
         last_token_end_ = token_.offset + token_.text.size();
         token_ = lexer_.next();
-        reject_unlowered_with_update();
+        if (!at_spawn_close) reject_unlowered_with_update();
     }
     [[noreturn]] void fail(const std::string& reason) const {
         if (token_.text == "gpu" || token_.text == "cpu" || token_.text == "quantum") {
