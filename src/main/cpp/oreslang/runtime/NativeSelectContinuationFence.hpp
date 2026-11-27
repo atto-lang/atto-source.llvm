@@ -43,15 +43,28 @@ private:
     struct State final {
         mutable std::mutex mutex;
         std::array<Slot, MaxTickets> slots{};
+        std::array<std::size_t, MaxTickets> free_indices{};
+        std::size_t free_count = MaxTickets;
+        State() noexcept {
+            for (std::size_t i = 0; i < MaxTickets; ++i)
+                free_indices[i] = MaxTickets - 1 - i;
+        }
         std::uint64_t generation = 1;
         std::uint64_t next_id = 1;
         std::size_t executing = 0;
         bool closed = false;
     };
 
-    static void clear_slot(Slot& slot) noexcept {
+    static void clear_slot(State& state, std::size_t index) noexcept {
+        auto& slot = state.slots[index];
         slot.active = false;
         slot.generation = 0;
+        state.free_indices[state.free_count++] = index;
+    }
+
+    static void clear_pending(State& state) noexcept {
+        for (std::size_t i = 0; i < MaxTickets; ++i)
+            if (state.slots[i].active) clear_slot(state, i);
     }
 
 public:
@@ -82,7 +95,7 @@ public:
                 slot.id != id_ ||
                 slot.generation != generation_)
                 return false;
-            NativeSelectContinuationFence::clear_slot(slot);
+            NativeSelectContinuationFence::clear_slot(*state, index_);
             return true;
         }
 
@@ -178,6 +191,10 @@ public:
         state_->generation = generation;
     }
 
+    // A claimed execution may retain State after the owning fence dies.
+    // Revoke all queued tickets before relinquishing the owner's reference.
+    ~NativeSelectContinuationFence() noexcept { (void)close(); }
+
     NativeSelectContinuationFence(
         const NativeSelectContinuationFence&) = delete;
     NativeSelectContinuationFence& operator=(
@@ -195,10 +212,7 @@ public:
 
     std::size_t pending_tickets() const {
         std::lock_guard<std::mutex> guard(state_->mutex);
-        std::size_t count = 0;
-        for (const auto& slot : state_->slots)
-            if (slot.active) ++count;
-        return count;
+        return MaxTickets - state_->free_count;
     }
 
     std::size_t executing() const {
@@ -208,10 +222,8 @@ public:
 
     bool retirement_ready() const {
         std::lock_guard<std::mutex> guard(state_->mutex);
-        if (!state_->closed || state_->executing != 0) return false;
-        for (const auto& slot : state_->slots)
-            if (slot.active) return false;
-        return true;
+        return state_->closed && state_->executing == 0 &&
+               state_->free_count == MaxTickets;
     }
 
     // Terminal logical close. Physical execution loans retire independently.
@@ -219,7 +231,7 @@ public:
         std::lock_guard<std::mutex> guard(state_->mutex);
         if (state_->closed) return false;
         state_->closed = true;
-        for (auto& slot : state_->slots) clear_slot(slot);
+        clear_pending(*state_);
         return true;
     }
 
@@ -230,29 +242,20 @@ public:
         if (expected_generation != state_->generation)
             throw std::logic_error("stale actor generation");
 
-        std::size_t active_count = 0;
-        for (const auto& slot : state_->slots)
-            if (slot.active) ++active_count;
-        if (active_count + state_->executing >= MaxTickets)
+        if (MaxTickets - state_->free_count + state_->executing >= MaxTickets)
             throw std::overflow_error(
                 "continuation physical capacity exhausted");
-
-        std::size_t index = MaxTickets;
-        for (std::size_t i = 0; i < MaxTickets; ++i) {
-            if (!state_->slots[i].active) {
-                index = i;
-                break;
-            }
-        }
-        if (index == MaxTickets)
+        if (state_->free_count == 0)
             throw std::overflow_error(
                 "continuation ticket capacity exhausted");
+        const auto index = state_->free_indices[state_->free_count - 1];
         if (state_->next_id ==
             std::numeric_limits<std::uint64_t>::max())
             throw std::overflow_error(
                 "continuation ticket identity exhausted");
 
         const auto id = state_->next_id++;
+        --state_->free_count;
         auto& slot = state_->slots[index];
         slot.id = id;
         slot.generation = state_->generation;
@@ -277,7 +280,7 @@ public:
             slot.generation != ticket.generation_)
             return {};
 
-        clear_slot(slot);
+        clear_slot(*state_, ticket.index_);
         ++state_->executing;
         return Execution(state_, ticket.generation_);
     }
@@ -293,7 +296,7 @@ public:
             throw std::overflow_error("actor generation exhausted");
 
         ++state_->generation;
-        for (auto& slot : state_->slots) clear_slot(slot);
+        clear_pending(*state_);
         return true;
     }
 

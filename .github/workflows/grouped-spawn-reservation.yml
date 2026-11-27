@@ -1,0 +1,34 @@
+name: Native grouped spawn reservation (host only)
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/ActorSpawnReservation.hpp'
+      - 'tests/actor_spawn_reservation_test.cpp'
+      - '.github/workflows/grouped-spawn-reservation.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  reservation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        cxx: [g++, clang++]
+        opt: [-O0, -O2]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Execute exact-head host reservation tests
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+          CXX: ${{ matrix.cxx }}
+          OPT: ${{ matrix.opt }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          "$CXX" -std=c++17 "$OPT" -Wall -Wextra -Werror -pthread -fsanitize=address,undefined -fno-sanitize-recover=all -fno-pie -no-pie -Isrc/main/cpp/oreslang/runtime tests/actor_spawn_reservation_test.cpp -o /tmp/atto-reserve
+          /tmp/atto-reserve
