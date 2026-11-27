@@ -1046,6 +1046,20 @@ int oreslang_source_actor_flush_blocking(void* opaque) {
     while (atomic_load_explicit(&instance->processed, memory_order_acquire) < target
            && !atomic_load_explicit(&instance->stop_requested, memory_order_acquire))
         ensure(pthread_cond_wait(&instance->callback_completed, &group.mutex) == 0);
+    if (atomic_load_explicit(&instance->processed, memory_order_acquire) < target) {
+        /* STOP seals admission, not the physical callback. A failed or
+         * externally stopped active callback can still publish its receipt.
+         * The existing flush waiter pins the record, VM and exact lane until
+         * we return; join waits for all flush waiters before detaching it.
+         * Drop group.mutex so the carrier can publish and reach DONE. */
+        ensure(atomic_load_explicit(&instance->stop_requested, memory_order_acquire));
+        OresNativeVM* vm = group.vm;
+        const OresNativeActorRef ref = instance->ref;
+        group_unlock();
+        ensure(ores_native_vm_wait_done(vm, ORES_NATIVE_VM_MAIN, ref));
+        group_lock();
+        ensure(source_resolve_locked(opaque, 0) == instance);
+    }
     const int completed = atomic_load_explicit(
         &instance->processed, memory_order_acquire) >= target;
     ensure(instance->flush_waiters > 0);
