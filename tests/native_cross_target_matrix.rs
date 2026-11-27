@@ -52,6 +52,8 @@ const RUNTIME_FILES: &[&str] = &[
     "ActorOwnedI64Heap.c", "NativeActorScheduler.c", "NativeOresVM.c", "NativeActorFuture.c",
     "SourceActorBootstrap.c", "NativeExecutionContextStore.c", "NativeContinuationStore.c",
     "NativeAwaitTraceBridge.c", "NativeLogicalTrace.c", "NativeRecordRegion.c", "NativeRtDomain.c",
+    // Required by admitted String-backed Result and source Task<int> guests.
+    "NativeStringRegion.c", "SourceTaskRuntime.c",
 ];
 
 struct Options {
@@ -384,10 +386,12 @@ fn main() {
             let mut args: Vec<&str> = vec!["-O2", "-x", "ir", &hll, "-x", "c"];
             args.extend(runtime_sources.iter().map(String::as_str));
             args.extend(["-std=c11", "-pthread", "-DORESLANG_SOURCE_ACTOR_TESTING", include.as_str(), "-o", hbin.as_str()]);
-            if runtime_sources.is_empty() || !matches!(run(&o.clang, &args), Some((0, _, _))) {
-                if required { fail("mandatory wide-i64 guest did not link"); }
+            let runtime_link = if runtime_sources.is_empty() { None } else { run(&o.clang, &args) };
+            if !matches!(&runtime_link, Some((0, _, _))) {
+                let diagnostic = runtime_link.map(|r| r.2).unwrap_or_else(|| "runtime not supplied".into());
+                if required { fail(&format!("mandatory wide-i64 guest did not link: {diagnostic}")); }
                 host_runtime += 1;
-                println!("NOT_COMPARED host link failed: {name}");
+                println!("NOT_COMPARED host link failed: {name}: {diagnostic}");
                 if o.runtime_dir.is_some() {
                     failures.push(format!("{name}: host link failed despite supplied runtime"));
                 }
@@ -401,6 +405,18 @@ fn main() {
         if host_code < 0 { fail(&format!("{name}: host oracle terminated by signal")); }
         if required && (host_code != 42 || !host_out.is_empty()) {
             fail("mandatory wide-i64 host guest must independently return 42 with empty stdout");
+        }
+        // Independent known-result assertions for the two formerly unlinked fixtures.
+        let expected = match name.as_str() {
+            "tests/fixtures/adt-conditional-v1/result-positive.atto" => Some(0),
+            "tests/fixtures/source-task-i64-await.atto" => Some(42),
+            _ => None,
+        };
+        if let Some(code) = expected {
+            if host_code != code || !host_out.is_empty() {
+                failures.push(format!("{name}: independent oracle expected exit {code}, empty stdout"));
+                continue;
+            }
         }
 
         for triple in &o.triples {
@@ -435,9 +451,12 @@ fn main() {
                 link.push("-pthread");
             }
             link.extend(["-o", bin.as_str()]);
-            if !matches!(run(&o.zig, &link), Some((0, _, _))) {
-                failures.push(format!("{triple} {name}: static link failed"));
-                continue;
+            match run(&o.zig, &link) {
+                Some((0, _, _)) => {},
+                other => {
+                    failures.push(format!("{triple} {name}: static link failed: {}", other.map(|r| r.2).unwrap_or_default()));
+                    continue;
+                }
             }
             require_elf(&bin, triple, true);
             let result = match o.runners.get(triple) {
