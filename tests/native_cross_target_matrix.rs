@@ -45,6 +45,13 @@ pub fnc main(): int {
   ) ? 42 : 1;
 }
 "#;
+// These two previously unlinked runtime guests are required whenever the
+// runtime lane is selected. Host rejection, fixture disappearance, or
+// an accidental libc-only path must not silently erase their coverage.
+const REQUIRED_RUNTIME_GUESTS: &[(&str, i32)] = &[
+    ("tests/fixtures/adt-conditional-v1/result-positive.atto", 0),
+    ("tests/fixtures/source-task-i64-await.atto", 42),
+];
 const SKIP_MARKERS: &[&str] = &["/fail/", "unsupported", "reject", "invalid", "negative"];
 /// The C actor runtime that compiled actor/record programs link against
 /// (same set as tests/native_kafka_scalar_execution.sh, plus records/RT).
@@ -323,6 +330,7 @@ fn main() {
         _ => fail("unknown target did not fail with exit 2 and empty IR"),
     }
     let mut required_passed = BTreeSet::new();
+    let mut required_runtime_passed = BTreeSet::new();
     let p = |name: &str| work.join(name).to_string_lossy().into_owned();
     let mut compared: BTreeMap<String, (usize, usize)> = o.triples.iter().map(|t| (t.clone(), (0, 0))).collect();
     let mut failures = Vec::new();
@@ -358,6 +366,7 @@ fn main() {
         let required = fixture == &required_fixture;
         let src = fixture.to_string_lossy().into_owned();
         let name = fixture.strip_prefix(&o.root).unwrap_or(fixture).to_string_lossy().into_owned();
+        let expected = REQUIRED_RUNTIME_GUESTS.iter().find(|(path, _)| *path == name.as_str()).map(|(_, code)| *code);
         // 1. Native oracle.
         let host_ir = match run(&o.compiler, &["--target=host", &src]) {
             Some((0, ir, _)) => ir,
@@ -407,11 +416,10 @@ fn main() {
             fail("mandatory wide-i64 host guest must independently return 42 with empty stdout");
         }
         // Independent known-result assertions for the two formerly unlinked fixtures.
-        let expected = match name.as_str() {
-            "tests/fixtures/adt-conditional-v1/result-positive.atto" => Some(0),
-            "tests/fixtures/source-task-i64-await.atto" => Some(42),
-            _ => None,
-        };
+        if expected.is_some() && o.runtime_dir.is_some() && !needs_runtime {
+            failures.push(format!("{name}: required runtime guest did not link the runtime"));
+            continue;
+        }
         if let Some(code) = expected {
             if host_code != code || !host_out.is_empty() {
                 failures.push(format!("{name}: independent oracle expected exit {code}, empty stdout"));
@@ -475,6 +483,10 @@ fn main() {
                         required_passed.insert(triple.clone());
                         println!("PASS mandatory wide-i64 guest {triple}: exit=42");
                     }
+                    if let Some(expected_code) = expected {
+                        required_runtime_passed.insert((triple.clone(), name.clone()));
+                        println!("PASS required runtime guest {triple} {name}: exit={expected_code}");
+                    }
                 },
                 Some((code, _, _)) => {
                     entry.1 += 1;
@@ -493,6 +505,13 @@ fn main() {
     for (triple, (same, diff)) in &compared {
         if !required_passed.contains(triple) {
             failures.push(format!("{triple}: mandatory wide-i64 guest did not execute successfully"));
+        }
+        if o.runtime_dir.is_some() {
+            for (fixture, _) in REQUIRED_RUNTIME_GUESTS {
+                if !required_runtime_passed.contains(&(triple.clone(), (*fixture).to_owned())) {
+                    failures.push(format!("{triple}: mandatory runtime guest {fixture} did not execute successfully"));
+                }
+            }
         }
         let link_abi = TRIPLES.iter().find(|(t, _)| t == triple).expect("selected triple").1;
         println!("IR target={triple} link target={link_abi} libc=musl: identical={same} mismatched={diff}");
