@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <utility>
 
 namespace oreslang::pointer_int_aot {
 
@@ -27,7 +28,7 @@ struct Expr {
 };
 
 struct Step {
-    enum class Kind { Write, Scalar, Close, Fill, Swap, MutableCall };
+    enum class Kind { Write, Scalar, Close, Fill, Swap, MutableCall, SlotBind, SlotDetach };
     Kind kind = Kind::Close;
     std::string name;
     std::size_t index = 0;
@@ -36,11 +37,13 @@ struct Step {
 };
 
 struct Plan {
-    enum class Form { OwnedRegion, BorrowedLocal };
+    enum class Form { OwnedRegion, BorrowedLocal, ReusableSlot };
     Form form = Form::OwnedRegion;
     // A borrowed local has separate linear handle identity and never
     // obtains the rights of an owning Pointer.alloc region.
     std::string local_handle;
+    // Reusable non-owning slots refer to these immutable local places.
+    std::vector<std::pair<std::string, std::int64_t>> slot_owners;
     std::int64_t local_initial = 0;
     // A private helper has one proven readonly singleton read as its entire body.
     std::string readonly_helper;

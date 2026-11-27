@@ -1,5 +1,9 @@
 #include "oreslang/runtime/NativeSelectContinuationFence.hpp"
 #include <array>
+#include <atomic>
+#include <barrier>
+#include <cstdint>
+#include <stdexcept>
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
@@ -78,7 +82,73 @@ static void multi_owner_settlement() {
         }
     }
 }
+static void claim_cancel_stress() {
+    using Single = oreslang::runtime::NativeSelectContinuationFence<1>;
+    constexpr std::uint64_t rounds = 100000;
+    Single fence;
+    Single::Ticket ticket;
+    Single::Execution execution;
+    bool cancelled = false;
+    std::uint32_t claim_delay = 0, cancel_delay = 0;
+    std::barrier start(3), finished(3);
+    auto delay = [](std::uint32_t n) {
+        for (std::uint32_t i = 0; i < n; ++i)
+            std::atomic_signal_fence(std::memory_order_seq_cst);
+    };
+    std::thread claimant([&] {
+        for (std::uint64_t i = 0; i < rounds; ++i) {
+            start.arrive_and_wait();
+            delay(claim_delay);
+            execution = fence.try_claim(ticket);
+            finished.arrive_and_wait();
+        }
+    });
+    std::thread canceller([&] {
+        for (std::uint64_t i = 0; i < rounds; ++i) {
+            start.arrive_and_wait();
+            delay(cancel_delay);
+            cancelled = ticket.close();
+            finished.arrive_and_wait();
+        }
+    });
+    std::uint32_t seed = 0x12345678u;
+    std::uint64_t claims = 0, cancellations = 0;
+    for (std::uint64_t generation = 1; generation <= rounds; ++generation) {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        ticket = fence.register_continuation(generation);
+        claim_delay = seed & 63u;
+        cancel_delay = (seed >> 6) & 63u;
+        start.arrive_and_wait();
+        finished.arrive_and_wait();
+        check(execution.valid() != cancelled);
+        check(!ticket.active() && !ticket.close());
+        check(!fence.try_claim(ticket).valid());
+        check(fence.pending_tickets() == 0);
+        if (execution.valid()) {
+            ++claims;
+            check(execution.generation() == generation);
+            check(fence.executing() == 1 && !fence.advance(generation));
+            bool capacity_denied = false;
+            try { (void)fence.register_continuation(generation); }
+            catch (const std::overflow_error&) { capacity_denied = true; }
+            check(capacity_denied);
+            check(execution.close() && !execution.close());
+        } else {
+            ++cancellations;
+        }
+        check(fence.executing() == 0 && fence.advance(generation));
+    }
+    claimant.join();
+    canceller.join();
+    check(claims + cancellations == rounds && claims > 0 && cancellations > 0);
+    check(fence.close() && fence.retirement_ready());
+    std::cout << "CLAIM_CANCEL_STRESS_PASS rounds=" << rounds
+              << " claims=" << claims << " cancellations=" << cancellations << '\n';
+}
 int main() {
+    claim_cancel_stress();
     multi_owner_settlement();
     std::cout << "PASS 640 native owner settlements: 320 owner destruction, 320 explicit STOP; reverse order, stale and foreign tickets denied\n";
 }

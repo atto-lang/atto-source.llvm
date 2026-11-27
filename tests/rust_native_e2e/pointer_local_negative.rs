@@ -8,6 +8,17 @@ fn local(body: &str) -> String {
 
 pub fn run(h: &mut Harness) {
     let flags = ["--experimental-pointer-int-aot"];
+    for (name, body) in [
+        ("empty_read", "val x = deref! p; return x;"),
+        ("null", "p = null; return 42;"),
+        ("double_detach", "ref! p to a; unref! p; unref! p; return 42;"),
+        ("live_rebind", "ref! p to a; ref! p to a; unref! p; return 42;"),
+        ("live_exit", "ref! p to a; return 42;"),
+        ("escape", "return p;"),
+    ] {
+        let source = format!("pub fnc main(): int {{ let a: int = 42; let mut RawPointer<int> p = RawPointer.empty<int>(); {body} }}");
+        h.negative(&format!("slot_{name}"), &source, &flags, None);
+    }
     let invalid = [
         ("missing_unref", "val Pointer<int> p = rt ref value; val answer = rt deref p; return answer;", "unref"),
         ("double_unref", "val Pointer<int> p = rt ref value; val answer = rt deref p; rt unref p; unref!p; return answer;", "expected"),

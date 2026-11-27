@@ -6272,6 +6272,15 @@ if(BUILD_TESTING)
     add_test(NAME native_pinned_continuation_loan_cancel_quiescence
              COMMAND oreslang-pinned-continuation-gate-test)
     set_tests_properties(native_pinned_continuation_loan_cancel_quiescence PROPERTIES TIMEOUT 30)
+    if(UNIX)
+        add_executable(oreslang-pinned-continuation-loopback-test tests/pinned_continuation_loopback_test.cpp)
+        target_include_directories(oreslang-pinned-continuation-loopback-test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-pinned-continuation-loopback-test PRIVATE Threads::Threads)
+        target_compile_options(oreslang-pinned-continuation-loopback-test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        add_test(NAME native_pinned_continuation_loopback_host_only
+                 COMMAND oreslang-pinned-continuation-loopback-test)
+        set_tests_properties(native_pinned_continuation_loopback_host_only PROPERTIES TIMEOUT 30)
+    endif()
     # Real actor-owned fixed-field loans must survive logical suspension
     # without permitting mutation, cancellation-time drop, or cross-actor alias.
     if(UNIX)
