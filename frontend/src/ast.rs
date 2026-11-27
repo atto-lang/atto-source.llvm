@@ -108,6 +108,9 @@ pub struct Field {
     pub ty: Type,
     pub public: bool,
     pub mode: FieldMode,
+    // Reference mutability is independent of slot rebinding.
+    pub referent_mutable: bool,
+    pub fixed_val: bool,
     pub init: Expr,
 }
 
@@ -199,6 +202,8 @@ pub struct Param {
     pub name: String,
     pub ty: Type,
     pub mutable: bool,
+    /// Explicit prefix mut requests a nonescaping exclusive call loan.
+    pub exclusive: bool,
     pub pos: Pos,
 }
 

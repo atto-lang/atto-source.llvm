@@ -1100,13 +1100,14 @@ impl Parser {
                         _ => FieldMode::Final,
                     };
                     self.advance();
-                    if self.is_word("mut") && w != "val" {
-                        self.advance();
-                    }
+                    let referent_mutable = self.is_word("mut") && w != "val";
+                    if referent_mutable { self.advance(); }
                     if matches!(self.peek(), Tok::Ident(_)) && *self.peek_at(1) == Tok::Colon {
                         return Err(self.expected("a field type before the field name"));
                     }
-                    let f = self.parse_type_first_field(public, mode)?;
+                    let mut f = self.parse_type_first_field(public, mode)?;
+                    f.field.referent_mutable = referent_mutable;
+                    f.field.fixed_val = w == "val";
                     if f.init_was_colon {
                         return Err(Diagnostic::new(
                             f.field.init.pos,
@@ -1182,6 +1183,8 @@ impl Parser {
             ty,
             public,
             mode: FieldMode::Final,
+            referent_mutable: false,
+            fixed_val: false,
             init,
         })
     }
@@ -1206,6 +1209,8 @@ impl Parser {
                 ty,
                 public,
                 mode,
+                referent_mutable: false,
+                fixed_val: false,
                 init,
             },
             init_was_colon,
@@ -1470,18 +1475,25 @@ impl Parser {
         if self.is_word("structural") {
             return Err(unsupported(pos, "structural parameters"));
         }
+        let exclusive = self.eat_word("mut");
         // compatibility form `name: type [mut]`
         if matches!(self.peek(), Tok::Ident(_)) && *self.peek_at(1) == Tok::Colon {
             let (name, pos) = self.ident("a parameter name")?;
             self.advance();
             let ty = self.parse_type()?;
             let mutable = self.eat_word("mut");
-            return self.finish_param(name, ty, mutable, pos);
+            if exclusive && mutable { return Err(Diagnostic::new(pos, "E_SYNTAX", "duplicate mut formal")); }
+            let mut param = self.finish_param(name, ty, mutable || exclusive, pos)?;
+            param.exclusive = exclusive;
+            return Ok(param);
         }
         let ty = self.parse_type()?;
         let mutable = self.eat_word("mut");
         let (name, pos) = self.ident("a parameter name")?;
-        self.finish_param(name, ty, mutable, pos)
+        if exclusive && mutable { return Err(Diagnostic::new(pos, "E_SYNTAX", "duplicate mut formal")); }
+        let mut param = self.finish_param(name, ty, mutable || exclusive, pos)?;
+        param.exclusive = exclusive;
+        Ok(param)
     }
 
     fn finish_param(&self, name: String, ty: Type, mutable: bool, pos: Pos) -> R<Param> {
@@ -1491,7 +1503,7 @@ impl Parser {
         if *self.peek() == Tok::Assign {
             return Err(unsupported(self.pos(), "default parameter values"));
         }
-        Ok(Param { name, ty, mutable, pos })
+        Ok(Param { name, ty, mutable, exclusive: false, pos })
     }
 
     // ----------------------------------------------------------- statements
@@ -1828,7 +1840,8 @@ impl Parser {
             ));
         }
         self.advance();
-        let init = if self.struct_target && self.is_word("copy") && *self.peek_at(1) == Tok::Bang {
+        let init = if self.struct_target && self.is_word("copy") && *self.peek_at(1) == Tok::Bang
+            && matches!(self.peek_at(2), Tok::Ident(_)) && *self.peek_at(3) == Tok::Semi {
             let copy_pos = self.pos();
             self.advance();
             self.advance();
@@ -2539,6 +2552,20 @@ impl Parser {
 
     fn parse_unary_inner(&mut self) -> R<Expr> {
         let pos = self.pos();
+        // The internal name cannot be spelled by the source lexer. Keep
+        // the modes distinct and preserve ordinary logical negation.
+        if self.is_word("copy") && *self.peek_at(1) == Tok::Bang {
+            let bang = self.toks[self.i + 1].pos;
+            self.advance();
+            self.advance();
+            let deep = bang.line == pos.line && bang.col == pos.col + 4
+                && *self.peek() == Tok::Bang && self.pos().line == bang.line
+                && self.pos().col == bang.col + 1;
+            if deep { self.advance(); }
+            let inner = self.parse_unary()?;
+            let name = if deep { "$copy_deep" } else { "$copy_shallow" };
+            return Ok(Expr { kind: ExprKind::Call(name.to_owned(), vec![inner]), pos });
+        }
         let op = match self.peek() {
             Tok::Minus => UnOp::Neg,
             Tok::Plus => UnOp::Plus,
@@ -2579,7 +2606,12 @@ impl Parser {
                 if *self.peek() == Tok::Dot {
                     return Err(unsupported(self.pos(), "spread arguments"));
                 }
-                args.push(self.parse_expr()?);
+                let arg_pos = self.pos();
+                let exclusive = self.eat_word("mut");
+                let arg = self.parse_expr()?;
+                args.push(if exclusive {
+                    Expr { kind: ExprKind::Call("$mut_arg".to_string(), vec![arg]), pos: arg_pos }
+                } else { arg });
                 if args.len() > MAX_PARAMS {
                     return Err(Diagnostic::new(self.pos(), "E_SOURCE_LIMIT", "too many call arguments"));
                 }
