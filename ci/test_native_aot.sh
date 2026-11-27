@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export CARGO_NET_OFFLINE=true
 test "$(git hash-object frontend/src/check.rs)" = "52a347f275792373540183678ae733adead3ec9a"
-test "$(git hash-object frontend/src/parser.rs)" = "2e5f64eee05a3adede33b11c13c57638be731314"
+test "$(git hash-object frontend/src/parser.rs)" = "eb3d7be50b16370519e275f8b18306c07aaadcd7"
 test "$(git hash-object frontend/src/lexer.rs)" = "f12cc53cf4d59f9ee4c0918ef708673e3d2031d8"
 
 cargo test --locked --offline
