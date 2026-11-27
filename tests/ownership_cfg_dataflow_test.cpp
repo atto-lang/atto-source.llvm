@@ -25,6 +25,20 @@ static bool rejected(const std::function<void()>& fn) {
 }
 
 int main() {
+    // Unicode is a spelling change, not a new alias or projection authority.
+    Graph unicode;
+    unicode.entry = {{"Φ", cell(kOwned)}, {"φ", cell(kOwned)}, {"数量.𠮷", cell(kOwned)}};
+    unicode.blocks = {{{op(Kind::Read, "Φ"), op(Kind::Read, "φ"),
+                        op(Kind::Read, "数量.𠮷")}, {}}};
+    verify(unicode);
+    unicode.entry = {{"数量", cell(kOwned)}, {"数量.𠮷", cell(kOwned)}};
+    unicode.blocks = {{{}, {}}};
+    assert(rejected([&] { verify(unicode); }));
+    for (const char* invalid : {"数量[0]", "数量.$a", "数量.¬", "\xed\xa0\x80", "数量.\xe2\x80\xae"}) {
+        unicode.entry = {{invalid, cell(kOwned)}};
+        assert(rejected([&] { verify(unicode); }));
+    }
+
     // Both incoming paths initialize the owner before the join.
     Graph both;
     both.entry = {{"x", cell(kUninitialized)}};
