@@ -1736,6 +1736,24 @@ if(BUILD_TESTING)
         COMMAND oreslang-actor-ledger-scheduler-bridge-test)
     set_tests_properties(native_actor_ledger_authenticated_scheduler_bridge
         PROPERTIES TIMEOUT 25)
+    # Actor-local logical frames coupled to the native scheduler's actual
+    # DATA/WAKE authority: still a HOST runtime proof, not compiled .atto
+    # suspends/on_message lowering or separate OS stacks.
+    add_executable(oreslang-actor-invocation-frame-bridge-test
+        tests/native_actor_invocation_frame_bridge_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-actor-invocation-frame-bridge-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-actor-invocation-frame-bridge-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-actor-invocation-frame-bridge-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-actor-invocation-frame-bridge-test PRIVATE
+        Threads::Threads)
+    add_test(NAME native_actor_invocation_frame_lease_bridge_host_only
+        COMMAND oreslang-actor-invocation-frame-bridge-test)
+    set_tests_properties(native_actor_invocation_frame_lease_bridge_host_only
+        PROPERTIES TIMEOUT 30)
+
 
     # A retained unfinished logical DATA turn must prevent later DATA
     # overtaking, while separately admitted WAKE and other actor lanes run.
