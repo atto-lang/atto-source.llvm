@@ -40,21 +40,23 @@ public:
         Lease(const Lease&) = default; // host ticket; aliases invalidated on release
         Lease& operator=(const Lease&) = default;
     };
-    FixedBufferReusePrototype() : id_(new_id()) {}
+    FixedBufferReusePrototype() : id_(new_id()) {
+        for (std::size_t i = 0; i < Slots; ++i) free_[i] = i;
+    }
     FixedBufferReusePrototype(const FixedBufferReusePrototype&) = delete;
     FixedBufferReusePrototype& operator=(const FixedBufferReusePrototype&) = delete;
     std::optional<Lease> try_acquire() {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (closed_) return std::nullopt;
-        for (std::size_t i = 0; i < Slots; ++i) {
-            auto& s = slots_[i];
-            if (s.leased || s.generation == std::numeric_limits<std::uint64_t>::max()) continue;
-            ++s.generation;
-            s.leased = true;
-            ++live_;
-            return Lease(id_, s.generation, i);
-        }
-        return std::nullopt;
+        if (closed_ || free_count_ == 0) return std::nullopt;
+        const auto i = free_[free_head_];
+        free_head_ = advance(free_head_);
+        --free_count_;
+        auto& s = slots_[i];
+        // Only reusable slots are enqueued; exhausted generations stay retired.
+        ++s.generation;
+        s.leased = true;
+        ++live_;
+        return Lease(id_, s.generation, i);
     }
     bool release(const Lease& h) {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -63,6 +65,11 @@ public:
         s->data.fill(0); // ordinary logical scrub; not cryptographic erasure
         s->leased = false;
         --live_;
+        if (s->generation != std::numeric_limits<std::uint64_t>::max()) {
+            free_[free_tail_] = h.slot_;
+            free_tail_ = advance(free_tail_);
+            ++free_count_;
+        }
         return true;
     }
     bool write(const Lease& h, std::size_t offset, std::uint8_t v) {
@@ -94,6 +101,9 @@ public:
     }
     static constexpr std::size_t backing_bytes() noexcept { return Slots * Bytes; }
 private:
+    static constexpr std::size_t advance(std::size_t i) noexcept {
+        return i == Slots - 1 ? 0 : i + 1;
+    }
     Slot* checked(const Lease& h) noexcept {
         if (h.pool_ != id_ || h.slot_ >= Slots) return nullptr;
         auto& s = slots_[h.slot_];
@@ -101,6 +111,8 @@ private:
     }
     const std::uint64_t id_;
     std::array<Slot, Slots> slots_{};
+    std::array<std::size_t, Slots> free_{};
+    std::size_t free_head_ = 0, free_tail_ = 0, free_count_ = Slots;
     std::mutex mutex_;
     std::size_t live_ = 0;
     bool closed_ = false;
