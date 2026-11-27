@@ -6,6 +6,9 @@ on:
       - 'frontend/src/parser.rs'
       - 'frontend/src/check.rs'
       - '.github/workflows/native-rebind-ssa.yml'
+  push:
+    branches:
+      - 'draft/fixed-parameter-ssa-rebind-20261126'
   workflow_dispatch:
 permissions:
   contents: read
