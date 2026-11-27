@@ -195,6 +195,8 @@ pub fn is_reserved(name: &str) -> bool {
 }
 
 pub struct Parser {
+    // Migration profile: reject unmarked simple local replacement.
+    explicit_rebinding: bool,
     toks: Vec<Token>,
     i: usize,
     depth: u32,
@@ -233,6 +235,7 @@ fn unsupported(pos: Pos, what: &str) -> Diagnostic {
 impl Parser {
     pub fn new(toks: Vec<Token>) -> Self {
         Parser {
+            explicit_rebinding: false,
             toks,
             i: 0,
             depth: 0,
@@ -241,6 +244,40 @@ impl Parser {
             type_names: Vec::new(),
             in_generator: false,
         }
+    }
+
+    /// Opt in to the new local '=' boundary while migrating legacy sources.
+    /// This does not ratify compound/increment or expression-valued set!.
+    pub fn with_explicit_rebinding(mut self) -> Self {
+        self.explicit_rebinding = true;
+        self
+    }
+
+    fn require_explicit_rebind(&self, pos: Pos) -> R<()> {
+        if self.explicit_rebinding {
+            Err(Diagnostic::new(pos, "E_EXPLICIT_REBIND",
+                "bare local reassignment is prohibited; use 'set name = value' or 'set! name = value'"))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn explicit_rebind_here(&self) -> bool {
+        self.is_word("set") && matches!(self.peek_at(1), Tok::Ident(_) | Tok::Bang)
+    }
+
+    fn parse_explicit_rebind(&mut self) -> R<Stmt> {
+        let pos = self.pos();
+        self.expect_word("set")?;
+        let bang = self.eat(&Tok::Bang);
+        let wrapped = bang && self.eat(&Tok::LParen);
+        let (name, _) = self.ident("an existing local binding name")?;
+        self.expect(Tok::Assign, "'=' after rebind target")?;
+        let value = self.parse_expr()?;
+        if wrapped {
+            self.expect(Tok::RParen, "')' after rebind expression")?;
+        }
+        Ok(Stmt::Assign { name, value, pos })
     }
 
     fn peek(&self) -> &Tok {
@@ -1276,18 +1313,10 @@ impl Parser {
             // Explicit local replacement. Keep the legacy assignment path
             // during migration; the strict edition must reject bare writes.
             // Contextual recognition preserves a callable named set.
-            Some("set") if matches!(self.peek_at(1), Tok::Ident(_) | Tok::Bang) => {
-                self.advance();
-                let bang = self.eat(&Tok::Bang);
-                let wrapped = bang && self.eat(&Tok::LParen);
-                let (name, _) = self.ident("an existing local binding name")?;
-                self.expect(Tok::Assign, "'=' after rebind target")?;
-                let value = self.parse_expr()?;
-                if wrapped {
-                    self.expect(Tok::RParen, "')' after rebind expression")?;
-                }
+            Some("set") if self.explicit_rebind_here() => {
+                let stmt = self.parse_explicit_rebind()?;
                 self.terminator()?;
-                Ok(Stmt::Assign { name, value, pos })
+                Ok(stmt)
             }
             Some("val" | "const" | "let") => {
                 let s = self.parse_binding()?;
@@ -1435,6 +1464,7 @@ impl Parser {
                     };
                     return match e.kind {
                         ExprKind::Var(name) => {
+                            self.require_explicit_rebind(at)?;
                             let value = value_of(self)?;
                             Ok(Stmt::Assign { name, value, pos })
                         }
@@ -1839,6 +1869,8 @@ impl Parser {
                 init,
                 pos,
             }))
+        } else if self.explicit_rebind_here() {
+            Some(Box::new(self.parse_explicit_rebind()?))
         } else {
             Some(Box::new(self.parse_simple_assign()?))
         };
@@ -1852,6 +1884,8 @@ impl Parser {
         let update_end = if paren { Tok::RParen } else { Tok::LBrace };
         let update = if *self.peek() == update_end || (!paren && self.is_word("do")) {
             None
+        } else if self.explicit_rebind_here() {
+            Some(Box::new(self.parse_explicit_rebind()?))
         } else {
             let upos = self.pos();
             let (name, _) = self.ident("a loop variable")?;
@@ -1861,6 +1895,7 @@ impl Parser {
                 Some(Box::new(incr(name, upos, BinOp::Sub)))
             } else {
                 self.expect(Tok::Assign, "'++', '--' or '='")?;
+                self.require_explicit_rebind(upos)?;
                 let value = self.parse_expr()?;
                 Some(Box::new(Stmt::Assign { name, value, pos: upos }))
             }
@@ -1882,6 +1917,7 @@ impl Parser {
         let pos = self.pos();
         let (name, _) = self.ident("a variable name")?;
         self.expect(Tok::Assign, "'='")?;
+        self.require_explicit_rebind(pos)?;
         let value = self.parse_expr()?;
         Ok(Stmt::Assign { name, value, pos })
     }
