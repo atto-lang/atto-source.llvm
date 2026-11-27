@@ -39,7 +39,9 @@ fnc wide_product(int left, int right): int {
 pub fnc main(): int {
   return (
     wide_product(65536, 65537) == 4295032832 &&
-    wide_product(65536, 65537) % 65537 == 0 &&
+    Integer.rem(wide_product(65536, 65537), 65537) == 0 &&
+    Integer.rem(0 - wide_product(65536, 65537) - 1, 65537) == 0 - 1 &&
+    Integer.mod(0 - wide_product(65536, 65537) - 1, 65537) == 65536 &&
     wide_product(65536, 65537) - 4294967296 == 65536 &&
     0 - wide_product(65536, 65537) < 0 - 4294967296
   ) ? 42 : 1;
@@ -329,6 +331,20 @@ fn main() {
         Some((2, out, _)) if out.is_empty() => {},
         _ => fail("unknown target did not fail with exit 2 and empty IR"),
     }
+    // Explicit target selectors must never fall through to host-only IR.
+    for triple in &o.triples {
+        let target = format!("--target={triple}");
+        for profile in ["--experimental-pointer-int-aot", "--experimental-rt-scalar-loop",
+            "--actor-region-v1-guest", "--actor-region-v2-guest",
+            "--profile=native-hard-rt", "--aot-profile=sealed-scalar-v1"] {
+            match run(&o.compiler, &[&target, profile, &required_path]) {
+                Some((2, out, diagnostic)) if out.is_empty() &&
+                    diagnostic.contains("hosted Linux cross target rejects unqualified compiler profile") => {},
+                _ => fail(&format!("{triple}: unqualified {profile} did not fail closed")),
+            }
+        }
+    }
+    println!("PASS unqualified cross-target profile rejection");
     let mut required_passed = BTreeSet::new();
     let mut required_runtime_passed = BTreeSet::new();
     let p = |name: &str| work.join(name).to_string_lossy().into_owned();
