@@ -36,6 +36,9 @@ pub const PANIC_HEAP: i32 = 3;
 pub const PANIC_GENERATOR: i32 = 4;
 /// Non-yielding generator exceeded its bounded per-pull dispatch budget.
 pub const PANIC_GENERATOR_BUDGET: i32 = 5;
+/// Logical stack exhausted in the ordinary source function graph.
+pub const PANIC_STACK: i32 = 6;
+pub const MAX_CALL_DEPTH: i32 = 1024;
 /// Fixed memory size, in 64 KiB pages, of a module that allocates objects.
 pub const HEAP_PAGES: u32 = 16;
 
@@ -186,6 +189,8 @@ struct Emit<'a> {
     /// Owned generator handles active in nested for-in loops. Function-level
     /// returns close these in reverse order before exiting.
     active_iterators: Vec<u32>,
+    calls: Vec<(usize, usize, u32)>,
+    landings: Vec<usize>,
 }
 
 impl Emit<'_> {
@@ -477,7 +482,9 @@ impl Emit<'_> {
                 for a in args {
                     self.expr(a);
                 }
+                let start = self.code.len();
                 self.call(self.l.func(*f));
+                self.calls.push((start, self.code.len(), *f));
             }
             TExpr::Builtin(b, x, y) => {
                 self.expr(x);
@@ -531,6 +538,7 @@ impl Emit<'_> {
 
                 self.op(0x07); // catch private tag 0
                 uleb(&mut self.code, 0);
+                self.landings.push(self.code.len());
                 self.op(0x1A); // drop i64 Error message (not a panic)
                 self.i32c(16);
                 self.call(self.l.helper(H_ALLOC));
@@ -961,6 +969,119 @@ fn locals_decl(types: &[Type]) -> Vec<u8> {
     out
 }
 
+/// Emitted source function, kept for the recursive-call post-pass.
+struct FnMeta {
+    /// Index into `bodies`.
+    body: usize,
+    /// Byte length of the locals declaration prefix of that body.
+    decl_len: usize,
+    /// Declared locals after the parameters (including runtime scratch).
+    locals: Vec<Type>,
+    params: u32,
+    /// `[start, end)` byte ranges of user `call`s and their callee.
+    calls: Vec<(usize, usize, u32)>,
+    /// Exception landing pads (just after `catch` / `catch_all`).
+    landings: Vec<usize>,
+}
+
+/// Bound every call that lies on a recursive cycle of the source call graph
+/// with a guest call-depth counter (`global depth`), raising [`PANIC_STACK`]
+/// before [`MAX_CALL_DEPTH`] live recursive frames. Non-recursive calls are
+/// statically bounded and left untouched. Exception unwinding skips the
+/// decrement after a call, so a function with landing pads saves the depth at
+/// entry and restores it at each pad (the pad's live frames are exactly that
+/// function and its callers). Wasm control flow uses relative label depths,
+/// so splicing instructions into a body is position-independent. Returns
+/// whether the depth global is needed.
+fn bound_recursive_calls(bodies: &mut [Vec<u8>], meta: &[FnMeta], depth: u32) -> bool {
+    let n = meta.len();
+    let adj: Vec<Vec<usize>> = meta.iter().map(|m| {
+        let mut v: Vec<usize> = m.calls.iter().map(|c| c.2 as usize).filter(|&c| c < n).collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    }).collect();
+    // reach[s][t]: t is reachable from s by at least one call edge.
+    let reach: Vec<Vec<bool>> = (0..n).map(|s| {
+        let mut seen = vec![false; n];
+        let mut work = adj[s].clone();
+        while let Some(v) = work.pop() {
+            if !seen[v] {
+                seen[v] = true;
+                work.extend(adj[v].iter().copied());
+            }
+        }
+        seen
+    }).collect();
+    // Call u -> v recurses iff v can reach u again.
+    let recursive: Vec<Vec<bool>> = meta.iter().enumerate().map(|(u, m)| {
+        m.calls.iter().map(|c| (c.2 as usize) < n && reach[c.2 as usize][u]).collect()
+    }).collect();
+    if !recursive.iter().flatten().any(|&r| r) {
+        return false;
+    }
+
+    let get = |c: &mut Vec<u8>| { c.push(0x23); uleb(c, depth as u64); };
+    let set = |c: &mut Vec<u8>| { c.push(0x24); uleb(c, depth as u64); };
+    let mut prelude = Vec::new();
+    get(&mut prelude);
+    prelude.push(0x41);
+    sleb(&mut prelude, MAX_CALL_DEPTH as i64);
+    prelude.push(0x4F); // i32.ge_u
+    prelude.extend_from_slice(&[0x04, 0x40]);
+    panic(&mut prelude, PANIC_STACK);
+    prelude.push(0x0B);
+    get(&mut prelude);
+    prelude.extend_from_slice(&[0x41, 1, 0x6A]); // + 1
+    set(&mut prelude);
+    let mut postlude = Vec::new();
+    get(&mut postlude);
+    postlude.extend_from_slice(&[0x41, 1, 0x6B]); // - 1
+    set(&mut postlude);
+
+    for (m, rec) in meta.iter().zip(&recursive) {
+        let save_slot = m.params + m.locals.len() as u32;
+        let save = !m.landings.is_empty();
+        // Insertion order for equal offsets is the order below.
+        let mut ins: Vec<(usize, Vec<u8>)> = Vec::new();
+        if save {
+            let mut prologue = Vec::new();
+            get(&mut prologue);
+            prologue.push(0x21); // local.set
+            uleb(&mut prologue, save_slot as u64);
+            ins.push((m.decl_len, prologue));
+        }
+        for (&(start, end, _), &r) in m.calls.iter().zip(rec) {
+            if r {
+                ins.push((start, prelude.clone()));
+                ins.push((end, postlude.clone()));
+            }
+        }
+        if save {
+            for &pad in &m.landings {
+                let mut restore = vec![0x20]; // local.get
+                uleb(&mut restore, save_slot as u64);
+                set(&mut restore);
+                ins.push((pad, restore));
+            }
+        }
+        if ins.is_empty() {
+            continue;
+        }
+        ins.sort_by_key(|(at, _)| *at); // stable: keeps equal-offset order
+        let body = &mut bodies[m.body];
+        for (at, bytes) in ins.into_iter().rev() {
+            body.splice(at..at, bytes);
+        }
+        if save {
+            let mut locals = m.locals.clone();
+            locals.push(Type::Bool); // i32 saved call depth, after every existing local
+            body.splice(0..m.decl_len, locals_decl(&locals));
+        }
+    }
+    true
+}
+
 pub fn emit(p: &TProgram) -> Vec<u8> {
     emit_profile(p, false)
 }
@@ -1026,6 +1147,7 @@ fn emit_profile(p: &TProgram, isolated: bool) -> Vec<u8> {
         bodies.push(b);
     }
     let main_void = p.funcs[p.main as usize].ret == Type::Void;
+    let mut fn_meta = Vec::with_capacity(p.funcs.len());
     for (i, f) in p.funcs.iter().enumerate() {
         let params: Vec<u8> = f.params.iter().map(|t| vt(*t).unwrap()).collect();
         let is_void_main = i as u32 == p.main && main_void;
@@ -1037,6 +1159,8 @@ fn emit_profile(p: &TProgram, isolated: bool) -> Vec<u8> {
             frames: Vec::new(),
             void_main: is_void_main,
             active_iterators: Vec::new(),
+            calls: Vec::new(),
+            landings: Vec::new(),
         };
         if let Some(gen_id) = p.generators.iter().position(|g| g.function == i as u32) {
             // Creator is lazy: allocate a 56-byte checked continuation frame
@@ -1055,8 +1179,23 @@ fn emit_profile(p: &TProgram, isolated: bool) -> Vec<u8> {
             e.op(0x00); // unreachable: definite-return analysis proved every path returns
         }
         e.op(0x0B);
+        fn_meta.push(FnMeta {
+            body: bodies.len(),
+            decl_len: locals_decl(&f.locals).len(),
+            locals: f.locals.clone(),
+            params: f.params.len() as u32,
+            calls: std::mem::take(&mut e.calls),
+            landings: std::mem::take(&mut e.landings),
+        });
         bodies.push(e.code);
     }
+
+    // Generator dispatch can introduce edges outside the ordinary source
+    // graph. Do not claim quota coverage for that separate runtime profile.
+    let depth_global = 1 + u32::from(p.heap) + p.globals.len() as u32
+        + u32::from(!p.generators.is_empty());
+    let depth_used = p.generators.is_empty()
+        && bound_recursive_calls(&mut bodies, &fn_meta, depth_global);
 
     // Runtime ops after source functions preserve every existing index.
     if !p.generators.is_empty() {
@@ -1078,6 +1217,8 @@ fn emit_profile(p: &TProgram, isolated: bool) -> Vec<u8> {
             frames: Vec::new(),
             void_main: false,
             active_iterators: Vec::new(),
+            calls: Vec::new(),
+            landings: Vec::new(),
         };
         for (ai, a) in p.actors.iter().enumerate() {
             e.code.extend_from_slice(&[0x20, 0]);
@@ -1171,7 +1312,7 @@ fn emit_profile(p: &TProgram, isolated: bool) -> Vec<u8> {
     // global 0: mut i32 panic_code = 0; then heap_ptr; then actor state
     let mut gsec = Vec::new();
     uleb(&mut gsec, 1 + u64::from(p.heap) + p.globals.len() as u64
-        + u64::from(!p.generators.is_empty()));
+        + u64::from(!p.generators.is_empty()) + u64::from(depth_used));
     gsec.extend_from_slice(&[I32, 0x01, 0x41, 0, 0x0B]);
     if p.heap {
         let heap_start = ((p.data.len() as i64 + 7) & !7)
@@ -1186,6 +1327,9 @@ fn emit_profile(p: &TProgram, isolated: bool) -> Vec<u8> {
     }
     if !p.generators.is_empty() {
         gsec.extend_from_slice(&[I32, 0x01, 0x41, 0, 0x0B]); // frame freelist head
+    }
+    if depth_used {
+        gsec.extend_from_slice(&[I32, 0x01, 0x41, 0, 0x0B]);
     }
     section(&mut out, 6, gsec);
 
