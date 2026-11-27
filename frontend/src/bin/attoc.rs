@@ -6,12 +6,13 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let native_c = args.first().is_some_and(|s| s == "--emit=struct-native-c");
-    if native_c { args.remove(0); }
+    let placement_c = args.first().is_some_and(|s| s == "--emit=physical-placement-c");
+    if native_c || placement_c { args.remove(0); }
     let (input, output) = match args.as_slice() {
         [input] => (input.as_str(), None),
         [input, flag, output] if flag == "-o" => (input.as_str(), Some(output.as_str())),
         _ => {
-            eprintln!("usage: attoc [--emit=struct-native-c] <input.atto> [-o output]");
+            eprintln!("usage: attoc [--emit=struct-native-c|--emit=physical-placement-c] <input.atto> [-o output]");
             return ExitCode::from(2);
         }
     };
@@ -26,7 +27,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let compiled = if native_c { atto_compiler::compile_struct_native_c(&source).map(String::into_bytes) } else { atto_compiler::compile(&source) };
+    let compiled = if placement_c { atto_compiler::compile_physical_placement_c(&source).map(String::into_bytes) } else if native_c { atto_compiler::compile_struct_native_c(&source).map(String::into_bytes) } else { atto_compiler::compile(&source) };
     let bytes = match compiled {
         Ok(bytes) => bytes,
         Err(error) => {
