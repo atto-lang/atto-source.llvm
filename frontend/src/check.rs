@@ -2309,8 +2309,8 @@ impl<'a> FnCx<'a> {
 
     fn field_assign(&mut self, target: &Expr, field: &str, value: &Expr, pos: Pos) -> R<TStmt> {
         // All descendants of one immediate root field share its identity
-        // group. A unique subtree may write scalar slots along a fully
-        // mutable public path; inner reference replacement is not admitted.
+        // group. A unique subtree may write scalar slots or replace an inner
+        // writable slot with a fresh closed tree along a mutable public path.
         if matches!(target.kind, ExprKind::Member(..)) {
             let mut members = Vec::new();
             let mut base = target;
@@ -2351,8 +2351,24 @@ impl<'a> FnCx<'a> {
                         if f.mode != FieldMode::Constructor {
                             return Err(Diagnostic::new(pos, "E_IMMUTABLE", "fixed nested field"));
                         }
-                        if !matches!(f.ty, Type::Int | Type::Bool | Type::Float | Type::Str | Type::Enum(_)) || !const_init(value) {
-                            return Err(Diagnostic::new(pos, "E_COPY_UNPROVEN", "nested write requires scalar storage and proven constant RHS"));
+                        // The entire immediate subtree is uniquely held. A
+                        // fresh same-type closed tree cannot introduce a
+                        // sibling alias, so retain its existing group after
+                        // replacing an inner slot. No existing reference,
+                        // arbitrary factory, or constructor argument is
+                        // accepted by this bounded profile.
+                        let admitted_rhs = match f.ty {
+                            Type::Int | Type::Bool | Type::Float | Type::Str | Type::Enum(_) =>
+                                const_init(value),
+                            Type::Class(child) => {
+                                let leaf = &self.g.classes[child as usize];
+                                f.referent_mutable && leaf.closed_copy_tree && matches!(&value.kind,
+                                    ExprKind::New(name, args) if name == &leaf.name && args.is_empty())
+                            }
+                            _ => false,
+                        };
+                        if !admitted_rhs {
+                            return Err(Diagnostic::new(pos, "E_COPY_UNPROVEN", "nested write requires a proven scalar RHS or fresh closed subtree"));
                         }
                         let (offset, ty) = (f.slot, f.ty);
                         let v = self.value(value)?;
