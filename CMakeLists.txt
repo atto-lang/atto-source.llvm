@@ -4026,12 +4026,20 @@ if(BUILD_TESTING)
         dispatch-invalid-nb-switch.ores
         --diagnostic "native nb match/switch is invalid: nb applies to channel/select operations, not dispatch arms")
 
-    # Java '/' produces a float even for int/int. Until native float lowering
-    # exists, reject '/' and '%' before IR rather than silently emitting i64.
-    oreslang_contract_test(native_float_division_unavailable numeric-division-float-reject.ores
-        --diagnostic "native floating division unsupported")
-    oreslang_contract_test(native_float_division_precedence_unavailable numeric-division-precedence-reject.ores
-        --diagnostic "native floating division unsupported")
+    # Signed int/int is truncating division. The first native slice admits
+    # only proven signed literals; retain the dynamic source as a refusal.
+    oreslang_contract_test(native_dynamic_division_unavailable numeric-division-float-reject.ores
+        --diagnostic "E_DIVISION_PROFILE_UNSUPPORTED")
+    oreslang_contract_test(native_literal_division_precedence numeric-division-precedence-reject.ores
+        --run 13 --clang "${ORE_CLANG}")
+    oreslang_contract_test(native_literal_division_signed numeric-division-signed.atto
+        --run 42 --clang "${ORE_CLANG}")
+    oreslang_contract_test(native_literal_division_zero numeric-division-zero.atto
+        --diagnostic "E_DIVISION_BY_ZERO")
+    oreslang_contract_test(native_literal_division_overflow numeric-division-overflow.atto
+        --diagnostic "E_DIVISION_OVERFLOW")
+    oreslang_contract_test(native_literal_division_bool numeric-division-bool.atto
+        --diagnostic "E_DIVISION_PROFILE_UNSUPPORTED")
     oreslang_contract_test(native_decimal_suffix_unavailable numeric-decimal-suffix-reject.ores
         --diagnostic "native floating-point/decimal literal unsupported")
     oreslang_contract_test(native_float_exponent_unavailable numeric-floating-exponent-reject.ores
