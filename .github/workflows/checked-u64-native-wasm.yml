@@ -4,6 +4,7 @@ on:
     paths:
       - 'tools/atto_checked_u64.cpp'
       - 'tests/checked_u64_native_wasm.test.mjs'
+      - 'tests/checked_u64_division.py'
       - 'contracts/atto-xo-checked-u64-debit-v1/**'
       - '.github/workflows/checked-u64-native-wasm.yml'
 permissions:
@@ -27,3 +28,6 @@ jobs:
         run: |
           ulimit -c 0
           node --test tests/checked_u64_native_wasm.test.mjs
+      - name: Execute bounded quotient and cross-target arithmetic checks
+        run: |
+          ATTO_U64_DIV_SOURCE="$PWD/tools/atto_checked_u64.cpp" python3 tests/checked_u64_division.py
