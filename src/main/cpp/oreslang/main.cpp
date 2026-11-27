@@ -612,15 +612,9 @@ int main(int argc, char** argv) {
             const auto source=read_regular_source(argv[2],16384,"named stage source exceeds limit",nullptr,&identity);
             require_valid_source_utf8(source);
             const auto plan=oreslang::parse_named_recursive_scalar(source);
-            const auto ir=oreslang::backend::named_recursive::emit(plan.stage);
+            const auto ir=oreslang::backend::named_recursive::emit(plan.stage,plan.input);
             if(!ir)throw std::runtime_error("E_NAMED_STAGE_GRAPH: rejected before LLVM emission");
-            // The source entry carries the literal upstream, rather than
-            // allowing the native observation adapter to substitute inputs.
-            const auto result=*ir+
-                "define i32 @atto_named_main(ptr %out) {\nentry:\n"
-                "  %status = call i32 @atto_named_scalar(i64 "+
-                std::to_string(plan.input)+", ptr %out)\n  ret i32 %status\n}\n";
-            std::cout<<result;
+            std::cout<<*ir;
             std::cout.flush();
             return std::cout?0:1;
         }catch(const std::exception& e){
