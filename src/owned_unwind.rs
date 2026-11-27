@@ -6,8 +6,6 @@ use atto_compiler::lexer::{lex,Tok,Token};
 use std::fmt::Write as _;
 use std::collections::{BTreeMap,BTreeSet};
 
-const I32:u8=0x7f;
-const I64:u8=0x7e;
 const MAX:usize=8;
 #[derive(Clone,Copy)]
 enum Stage { Body(u32), Cleanup(u32), Recover(u32) }

@@ -23,7 +23,7 @@ fn source_to_native_and_negative_admission(){
    if name=="recover"{
     let runtime=root.join("src/main/cpp/oreslang/runtime");
     run(Command::new("clang").arg(opt).args(["-fsanitize=address,undefined","-fno-sanitize-recover=all","-pthread"]).arg("-I").arg(root.join("src/main/cpp")).arg(&ir).arg(root.join("tests/owned_unwind_store_harness.c")).arg(runtime.join("NativeExecutionContextStore.c")).arg(runtime.join("NativeContinuationStore.c")).arg("-o").arg(&exe));
-    run(Command::new(&exe));
+    run(&mut Command::new(&exe));
    }
   }
  }
