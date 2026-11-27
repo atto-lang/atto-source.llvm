@@ -5593,7 +5593,7 @@ private:
         bool i32 = false;
 
         void require(const RefinedQuantity& actual, const char* category, const std::string& operation) const {
-            if (unit.scalar() && !actual.unit.scalar())
+            if (std::string_view(category) != "E_REFINEMENT_BINDING" && unit.scalar() && !actual.unit.scalar())
                 throw std::runtime_error("E_UNIT_ERASURE: " + operation + " requires dimensionless scale one");
             unit.require_compatible(actual.unit);
             if (!range.includes(actual.range))
@@ -6100,7 +6100,7 @@ private:
                 local.assignable = mutable_slot;
                 local.owner_mutable = mutable_slot;
                 RefinedQuantity type;
-                const bool inferred = strict_i64_ && !mutable_slot && peek_next().text == "=";
+                const bool inferred = !mutable_slot && peek_next().text == "=";
                 if (inferred) {
                     local.name = identifier();
                 } else if (peek_next().text == ":") {
