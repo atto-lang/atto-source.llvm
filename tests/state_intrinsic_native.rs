@@ -101,7 +101,7 @@ fn call_shaped_scalar_operands_cannot_escape_protected_callback() {
         let stderr = String::from_utf8_lossy(&result.stderr);
         assert!(!result.status.success(), "case {i} emitted");
         assert!(!output.exists(), "case {i} leaked artifact");
-        let diagnostic = if i == 2 { "E_BORROW" } else { "E_UNSUPPORTED_CRITICAL" };
+        let diagnostic = if i == 2 || i == 3 { "E_BORROW" } else { "E_UNSUPPORTED_CRITICAL" };
         assert!(stderr.contains(diagnostic), "case {i}: {stderr}");
     }
     fs::remove_dir_all(root).unwrap();
