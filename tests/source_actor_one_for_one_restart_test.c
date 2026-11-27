@@ -133,16 +133,67 @@ static void check_leaf_reuse(uint64_t cycles) {
     printf("SOURCE_ACTOR_LEAF_REUSE_PASS cycles=%" PRIu64 " sibling=42\n", cycles);
 }
 
+/* Actual PANIC + supervisor-selected successor and ordinary STOP,
+ * in a single persistent VM. More iterations than physical child slots
+ * require reclamation of both failed and successful incarnations. */
+static void check_failed_leaf_reuse(uint64_t cycles) {
+    void* sibling = oreslang_source_actor_spawn(initialize, actor_b, 1);
+    CHECK(sibling);
+    void* first = NULL;
+    for (uint64_t i = 0; i < cycles; ++i) {
+        void* leaf = oreslang_source_actor_spawn_supervised_budgeted(
+            initialize, actor_a, 1, 16, 1, 1);
+        CHECK(leaf && leaf != sibling);
+        if (!first) first = leaf;
+        CHECK(oreslang_source_actor_try_send(leaf, 7));
+        CHECK(oreslang_source_actor_flush_blocking(leaf));
+        CHECK(oreslang_source_actor_try_send(leaf, 8));
+        CHECK(oreslang_source_actor_flush_blocking(leaf));
+        OresSourceActorMessageReceipt receipt = {0};
+        CHECK(oreslang_source_actor_message_receipt(leaf, &receipt));
+        CHECK(receipt.successful_messages == 1 && receipt.failed_messages == 1);
+        void* next = oreslang_source_actor_recover_blocking(leaf);
+        CHECK(next && next != leaf && next != sibling);
+        CHECK(!oreslang_source_actor_try_send(first, 99));
+        CHECK(!oreslang_source_actor_try_send(leaf, 99));
+        CHECK(!oreslang_source_actor_recover_blocking(leaf));
+        CHECK(!oreslang_source_actor_message_receipt(leaf, &receipt));
+        CHECK(oreslang_source_actor_ready_status(leaf) == -1);
+        CHECK(oreslang_source_actor_try_send(next, 9));
+        CHECK(oreslang_source_actor_flush_blocking(next));
+        CHECK(oreslang_source_actor_message_receipt(next, &receipt));
+        CHECK(receipt.successful_messages == 1 && receipt.failed_messages == 0
+            && receipt.last_success_result == 9);
+        oreslang_source_actor_stop(next);
+        CHECK(!oreslang_source_actor_try_send(next, 99));
+        CHECK(oreslang_source_actor_test_panic_notices() == i + 1);
+        CHECK(oreslang_source_actor_test_stopped_notices() == i + 1);
+        CHECK(oreslang_source_actor_try_send(sibling, 42));
+        CHECK(oreslang_source_actor_flush_blocking(sibling));
+    }
+    oreslang_source_actor_stop(sibling);
+    CHECK(oreslang_source_actor_test_terminal_notices() == 2 * cycles + 1);
+    CHECK(oreslang_source_actor_test_panic_notices() == cycles);
+    CHECK(oreslang_source_actor_test_stopped_notices() == cycles + 1);
+    CHECK((uint64_t)atomic_load(&a_seven) == cycles);
+    CHECK((uint64_t)atomic_load(&a_nine) == cycles);
+    CHECK((uint64_t)atomic_load(&b_forty_two) == cycles);
+    printf("SOURCE_ACTOR_FAILED_LEAF_REUSE_PASS cycles=%" PRIu64 " sibling=42\n", cycles);
+}
+
 int main(int argc, char** argv) {
     const int exhaust_restart = argc == 2 && strcmp(argv[1], "--exhaust") == 0;
     const int capacity_denial = argc == 2 && strcmp(argv[1], "--capacity") == 0;
     const int reuse = argc == 2 && strcmp(argv[1], "--reuse") == 0;
     const int million = argc == 2 && strcmp(argv[1], "--reuse-million") == 0;
-    CHECK(argc == 1 || exhaust_restart || capacity_denial || reuse || million);
+    const int failed_reuse = argc == 2 && strcmp(argv[1], "--failed-reuse") == 0;
+    const int failed_million = argc == 2 && strcmp(argv[1], "--failed-reuse-million") == 0;
+    CHECK(argc == 1 || exhaust_restart || capacity_denial || reuse || million || failed_reuse || failed_million);
     atomic_init(&a_seven, 0); atomic_init(&a_nine, 0);
     atomic_init(&b_forty_two, 0);
     if (capacity_denial) { check_last_actor_capacity_denial(); return 0; }
     if (reuse || million) { check_leaf_reuse(million ? UINT64_C(1000000) : UINT64_C(256)); return 0; }
+    if (failed_reuse || failed_million) { check_failed_leaf_reuse(failed_million ? UINT64_C(1000000) : UINT64_C(256)); return 0; }
     void* a = oreslang_source_actor_spawn_supervised_budgeted(
         initialize, actor_a, 1, 16, 1, 1);
     void* b = oreslang_source_actor_spawn(initialize, actor_b, 1);
@@ -160,11 +211,11 @@ int main(int argc, char** argv) {
     CHECK(old.stop_requested);
     void* replacement = oreslang_source_actor_recover_blocking(a);
     CHECK(replacement && replacement != a && replacement != b);
-    /* Old handle is a bounded tombstone with no heap, mailbox, or frames. */
+    /* Consuming recovery retires even the old diagnostic identity. */
     CHECK(!oreslang_source_actor_try_send(a, 123));
     CHECK(!oreslang_source_actor_recover_blocking(a));
-    CHECK(oreslang_source_actor_message_receipt(a, &old));
-    CHECK(old.last_success_result == 7);
+    CHECK(!oreslang_source_actor_message_receipt(a, &old));
+    CHECK(oreslang_source_actor_ready_status(a) == -1);
     CHECK(oreslang_source_actor_try_send(replacement, 9));
     CHECK(oreslang_source_actor_flush_blocking(replacement));
     OresSourceActorMessageReceipt fresh = {0};
