@@ -243,9 +243,22 @@ if(ORESLANG_GPU_ACTOR_HOST_ONLY)
     oreslang_gpu_actor_host_test(oreslang-gpu-host-v1-quarantine
         native_gpu_actor_v1_quarantine
         tests/gpu_actor_provider_bridge_v1_test.cpp)
+    target_sources(oreslang-gpu-host-v1-quarantine PRIVATE
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    # Actual native actor scheduler WAKE delivery on an actor carrier.
+    # The provider is mocked: this test does NOT certify GPU hardware.
+    oreslang_gpu_actor_host_test(oreslang-gpu-actor-scheduler-wake-host
+        native_gpu_actor_scheduler_wake_host
+        tests/gpu_actor_scheduler_wake_host_test.cpp)
+    target_sources(oreslang-gpu-actor-scheduler-wake-host PRIVATE
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_compile_options(oreslang-gpu-actor-scheduler-wake-host PRIVATE
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
     oreslang_gpu_actor_host_test(oreslang-gpu-host-v2-opencl
         native_gpu_actor_v2_opencl_mock
         tests/gpu_actor_opencl_provider_v2_test.cpp)
+    target_sources(oreslang-gpu-host-v2-opencl PRIVATE
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
     oreslang_gpu_actor_host_test(oreslang-gpu-host-opencl-g3
         native_gpu_opencl_g3_legacy_regression
         tests/opencl_provider_g3_test.cpp)
@@ -270,7 +283,8 @@ if(ORESLANG_GPU_ACTOR_HOST_ONLY)
 
     # Build the physical probe, but never count 77 as a passing GPU test.
     add_executable(oreslang-gpu-physical-prerequisite
-        tests/gpu_actor_opencl_v2_physical_probe.cpp)
+        tests/gpu_actor_opencl_v2_physical_probe.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
     target_include_directories(oreslang-gpu-physical-prerequisite PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_features(oreslang-gpu-physical-prerequisite PRIVATE cxx_std_17)
@@ -8827,7 +8841,8 @@ endif()
 if(BUILD_TESTING)
     find_package(Threads REQUIRED)
     add_executable(oreslang-gpu-actor-provider-bridge-v1-test
-        tests/gpu_actor_provider_bridge_v1_test.cpp)
+        tests/gpu_actor_provider_bridge_v1_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
     target_include_directories(oreslang-gpu-actor-provider-bridge-v1-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_features(oreslang-gpu-actor-provider-bridge-v1-test PRIVATE cxx_std_17)
@@ -8845,7 +8860,8 @@ endif()
 if(BUILD_TESTING AND UNIX)
     find_package(Threads REQUIRED)
     add_executable(oreslang-gpu-actor-opencl-v2-host-test
-        tests/gpu_actor_opencl_provider_v2_test.cpp)
+        tests/gpu_actor_opencl_provider_v2_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
     target_include_directories(oreslang-gpu-actor-opencl-v2-host-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_features(oreslang-gpu-actor-opencl-v2-host-test PRIVATE cxx_std_17)
@@ -8857,7 +8873,8 @@ if(BUILD_TESTING AND UNIX)
     set_tests_properties(native_gpu_actor_opencl_v2_host_mock PROPERTIES TIMEOUT 30)
 
     add_executable(oreslang-gpu-actor-opencl-v2-physical-probe
-        tests/gpu_actor_opencl_v2_physical_probe.cpp)
+        tests/gpu_actor_opencl_v2_physical_probe.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
     target_include_directories(oreslang-gpu-actor-opencl-v2-physical-probe PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_compile_features(oreslang-gpu-actor-opencl-v2-physical-probe PRIVATE cxx_std_17)
