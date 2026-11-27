@@ -129,7 +129,7 @@ fn main() {
     };
     let extension = match args.next().as_deref() {
         None => "ores",
-        Some("--source-ext=atto") => "atto",
+        Some(flag) if flag == std::ffi::OsStr::new("--source-ext=atto") => "atto",
         Some(other) => {
             eprintln!("native Task borrow contract failed: unsupported extension flag {other:?}");
             std::process::exit(2);
