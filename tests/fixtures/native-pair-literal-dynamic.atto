@@ -1,0 +1,2 @@
+fnc twice(int n): int { return n + n; }
+pub fnc main(): int { const count = 21; return ("count" := twice(count)).value; }
