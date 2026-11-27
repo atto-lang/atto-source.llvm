@@ -1213,6 +1213,38 @@ mod parameter_rebind_tests {
     use super::*;
 
     #[test]
+    fn explicit_local_set_spellings_use_checked_assignment() {
+        let old = "pub fnc main(): int { let int x = 40; x = x + 2; return x; }";
+        let ir = compile_ir(old).unwrap();
+        for replacement in ["set x = x + 2", "set! x = x + 2", "set! (x = x + 2)"] {
+            let source = old.replace("x = x + 2", replacement);
+            assert_eq!(compile_ir(&source).unwrap(), ir);
+        }
+        let call = "fnc set(int n): int { return n; } pub fnc main(): int { return set(42); }";
+        assert!(compile_ir(call).is_ok());
+    }
+
+    #[test]
+    fn explicit_local_set_does_not_grant_write_authority() {
+        for (source, expected) in [
+            ("pub fnc main(): int { const int x = 40; set x = 42; return x; }", "E_IMMUTABLE"),
+            ("pub fnc main(): int { val int x = 40; set! x = 42; return x; }", "E_IMMUTABLE"),
+            ("pub fnc main(): int { set x = 42; return 0; }", "E_UNBOUND"),
+            ("pub fnc main(): int { let int x = 40; set x = true; return x; }", "E_TYPE"),
+        ] {
+            let error = compile_ir(source).unwrap_err();
+            assert!(error.contains(expected), "{source}: {error}");
+        }
+        for source in [
+            "pub fnc main(): int { let int x = 40; (set! x) = 42; return x; }",
+            "pub fnc main(): int { let int x = 40; set x.field = 42; return x; }",
+            "pub fnc main(): int { let int x = 40; set! x; return x; }",
+        ] {
+            assert!(compile_ir(source).is_err(), "{source}");
+        }
+    }
+
+    #[test]
     fn untouched_scalar_parameters_use_incoming_ssa() {
         let fixed = "fnc id(int n): int { return n; } pub fnc main(): int { return id(42); }";
         let marked = fixed.replace("int n", "rebind int n");
