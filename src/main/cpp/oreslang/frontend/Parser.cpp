@@ -307,6 +307,20 @@ public:
             // Existing nb-select recognition is intentionally unchanged
             // until native select lowering supports that grammar.
             const auto first = source_.substr(start, at_ - start);
+            // Transfer aliases require the same complete-bang ASCII separator
+            // as the Rust frontend. Comparisons and bare identifiers are inert.
+            if ((first == "take" || first == "move") &&
+                    at_ < source_.size() && source_[at_] == '!' &&
+                    source_.substr(at_, 2) != "!=" &&
+                    !(source_.substr(at_, 3) == "!eq" &&
+                      (at_ + 3 == source_.size() || !identifier_part(source_[at_ + 3])))) {
+                const auto after = at_ + 1;
+                if (after == source_.size() ||
+                        std::string_view(" \t\r\n\v\f").find(source_[after]) == std::string_view::npos)
+                    throw std::runtime_error(
+                        "E_BANG_KEYWORD_WHITESPACE: whitespace required after complete transfer bang at byte " +
+                        std::to_string(start));
+            }
             if (first == "susp")
                 return {Kind::Identifier, "suspends", start};
             // Channel<int> has a distinct result/EOF/cancellation/ownership
@@ -4504,24 +4518,53 @@ private:
                         require(")");
                     }
                     binding.new_class = true;
+                } else if (!binding.owner_mutable && token_.text != "rt" &&
+                        ![&] {
+                            if (token_.text != "take" && token_.text != "move") return false;
+                            Lexer probe = lexer_;
+                            return probe.next().text == "!";
+                        }()) {
+                    // Like const Class, immutable let may bind the existing
+                    // checked record-result path. The ownership pass still
+                    // rejects an owning array-containing result without a
+                    // mutable owner, and raw local aliases remain forbidden.
+                    binding.initializer = expression();
+                    if (binding.initializer->kind != Expression::Kind::Call &&
+                            binding.initializer->kind != Expression::Kind::Conditional &&
+                            binding.initializer->kind != Expression::Kind::ArrayCall)
+                        fail("native class initializer requires new or immutable record value");
+                    binding.record_view = true;
                 } else {
                     if (accept("rt")) {
                         require("take");
                     } else {
-                        if (token_.text != "take")
-                            fail("native class move requires explicit take! or rt take");
+                        if (token_.text != "take" && token_.text != "move")
+                            fail("native class move requires explicit take! or rt take (move! is an alias)");
                         Lexer probe = lexer_;
                         const Token bang = probe.next();
                         if (bang.text != "!" ||
                                 bang.offset != token_.offset + token_.text.size())
-                            fail("native class move requires explicit take! or rt take");
+                            fail("E_BANG_KEYWORD_WHITESPACE: take! and move! require an adjacent bang");
                         advance();
                         require("!");
                     }
                     const bool parenthesized = accept("(");
-                    binding.move_source = identifier();
+                    // Preserve the local-place move path. A fresh direct factory
+                    // call instead uses the existing owning result-region ABI.
+                    auto source = expression();
                     if (parenthesized) require(")");
-                    binding.move_class = true;
+                    if (source->kind == Expression::Kind::Variable) {
+                        binding.move_source = source->name;
+                        binding.move_class = true;
+                    } else if (source->kind == Expression::Kind::Call) {
+                        if (!binding.owner_mutable)
+                            fail("native owned factory result requires let mut owner");
+                        binding.initializer = std::move(source);
+                        binding.record_view = true;
+                        binding.explicit_factory_take = true;
+                    } else {
+                        fail("native class take requires a local owner or direct owned factory result");
+                    }
                 }
                 }
             } else {
