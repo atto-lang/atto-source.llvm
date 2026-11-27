@@ -10821,9 +10821,34 @@ Program parse_unresolved_program(std::string_view source, bool experimental_owne
         expanded=std::string(measure_source)+"\n"+std::string(source);
         source=expanded;
     }
-    Program program = Parser(source, experimental_owned_int,
-                             experimental_rt_scalar_loop, false, 0,
-                             experimental_pointer_int_aot, language_version).parse();
+    Program program;
+    try {
+        program = Parser(source, experimental_owned_int,
+                         experimental_rt_scalar_loop, false, 0,
+                         experimental_pointer_int_aot, language_version).parse();
+    } catch (const std::runtime_error& failure) {
+        if (expanded.empty()) throw;
+        // Internal offsets remain in expanded coordinates for lexer gap and
+        // adjacency checks. Map only the parser's terminal byte diagnostic.
+        std::string message(failure.what());
+        const auto marker=message.rfind(" at byte ");
+        if(marker==std::string::npos)throw;
+        const auto begin=marker+9;
+        auto end=begin;
+        std::size_t offset=0;
+        while(end<message.size() && digit(message[end])){
+            const auto d=static_cast<std::size_t>(message[end]-'0');
+            if(offset>source.size()/10 || offset*10>source.size()-d)throw;
+            offset=offset*10+d;
+            ++end;
+        }
+        if(end==begin || (end!=message.size() && !(end+1==message.size() && message[end]==')')) ||
+            offset>source.size())throw;
+        const auto prefix=measure_source.size()+1;
+        if(offset<prefix)throw std::runtime_error("E_UNIT_PRELUDE: internal catalog admission failed");
+        message.replace(begin,end-begin,std::to_string(offset-prefix));
+        throw std::runtime_error(message);
+    }
     if (experimental_rt_scalar_loop &&
             (program.functions.size() != 1 || !program.functions.front().scalar_while ||
              !program.classes.empty() || !program.actors.empty() ||
