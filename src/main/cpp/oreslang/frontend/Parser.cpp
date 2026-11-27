@@ -3,6 +3,8 @@
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/ChannelGuestGate.hpp"
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/NamedRecursiveScalarSource.hpp"
+#include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/frontend/PortableUnicodeIdentifier.hpp"
 #include "oreslang/types/CoreTypeRegistry.hpp"
 #include "oreslang/frontend/PointerIntSyntax.hpp"
@@ -1170,6 +1172,86 @@ public:
         if (language_version_ < 0 || language_version_ > 2)
             throw std::runtime_error("E_LANGUAGE_VERSION: expected 1 or 2");
         if (!experimental_pointer_int_aot_) reject_unlowered_with_update();
+    }
+
+    NamedRecursiveScalarPlan named_recursive_scalar() {
+        using namespace backend::named_recursive;
+        // Preflight the canonical token stream, so quoted data can never
+        // satisfy keyword/punctuation matches in the closed grammar.
+        auto probe=lexer_;
+        auto item=token_;
+        std::size_t count=0;
+        while(item.kind!=Kind::End){
+            if(++count>2048||item.kind==Kind::String||item.kind==Kind::Template)
+                fail("E_NAMED_STAGE_PROFILE: token budget or quoted token");
+            item=probe.next();
+        }
+        NamedRecursiveScalarPlan plan;
+        require("pub");require("fnc");require("main");require("(");require(")");
+        if(!accept(":"))require("->");
+        require("int");require("{");require_return_marker();
+        plan.input=signed_integer_literal();
+        require("|>");require("fnc");
+        const auto self=identifier();
+        require("(");require("int");const auto param=identifier();require(")");
+        if(self==param||self=="_"||param=="_"||self=="main"||self=="on"||param=="on")
+            fail("E_NAMED_STAGE_NAME: distinct lexical identifiers required");
+        if(!accept(":"))require("->");
+        require("int");require("{");require_return_marker();
+        auto& stage=plan.stage;
+        auto add=[&](Node n){
+            if(stage.nodes.size()>=128)fail("E_NAMED_STAGE_BUDGET: node limit");
+            stage.nodes.push_back(n);return stage.nodes.size()-1;
+        };
+        std::function<std::size_t(unsigned,int)> expr;
+        expr=[&](unsigned depth,int minimum)->std::size_t{
+            if(depth>16)fail("E_NAMED_STAGE_BUDGET: expression nesting");
+            std::size_t left;
+            if(token_.kind==Kind::Integer ||
+                (token_.text=="-"&&peek_next().kind==Kind::Integer)){
+                left=add({Op::literal,0,0,signed_integer_literal()});
+            }else if(accept("-")){
+                auto zero=add({Op::literal});
+                auto rhs=expr(depth+1,30);
+                left=add({Op::sub,zero,rhs});
+            }else if(accept("(")){
+                left=expr(depth+1,0);require(")");
+            }else{
+                const auto name=identifier();
+                if(name==param)left=add({Op::parameter});
+                else if(name==self){
+                    require("(");auto arg=expr(depth+1,0);require(")");
+                    left=add({Op::self,arg});
+                }else fail("E_NAMED_STAGE_CLOSED_INT: unknown lexical reference");
+            }
+            for(;;){
+                const auto op=token_.text;
+                const int precedence=op=="*"?20:op=="+"||op=="-"?10:-1;
+                if(precedence<minimum)return left;
+                advance();
+                const auto right=expr(depth+1,precedence+1);
+                left=add({op=="*"?Op::mul:op=="+"?Op::add:Op::sub,left,right});
+            }
+        };
+        if(accept("match")){
+            if(identifier()!=param)fail("E_NAMED_STAGE_MATCH: immutable parameter subject required");
+            require("over");
+            while(!accept("end")){
+                if(stage.arms.size()>=16)fail("E_NAMED_STAGE_MATCH: arm budget");
+                require("on");
+                std::optional<std::int64_t> key;
+                if(!accept("_"))key=signed_integer_literal();
+                require("->");
+                const auto body=expr(0,0);
+                stage.arms.push_back({key,body});
+                if(!accept(",")&&token_.text!="end")
+                    fail("E_NAMED_STAGE_MATCH: expected comma or end");
+            }
+        }else stage.arms.push_back({std::nullopt,expr(0,0)});
+        accept(";");require("}");accept(";");require("}");
+        if(token_.kind!=Kind::End)fail("E_NAMED_STAGE_PROFILE: standalone main required");
+        if(!valid(stage))fail("E_NAMED_STAGE_GRAPH: invalid closed scalar graph");
+        return plan;
     }
 
     Program parse() {
@@ -10562,6 +10644,13 @@ void reject_unlowered_mutex_constructor(std::string_view source,
 }
 
 } // namespace
+
+NamedRecursiveScalarPlan parse_named_recursive_scalar(std::string_view source) {
+    if(source.size()>16384 || source.find("// ores:")!=std::string_view::npos)
+        throw std::runtime_error("E_NAMED_STAGE_PROFILE: source budget or target directive");
+    require_valid_source_utf8(source);
+    return Parser(source,false,false).named_recursive_scalar();
+}
 
 Program parse_verified_namespace_source_unresolved(
         std::string_view authenticated_source) {

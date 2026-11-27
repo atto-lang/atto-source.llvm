@@ -7,6 +7,7 @@
 #include "oreslang/backend/ActorRegionV2Guest.hpp"
 #include "oreslang/backend/GpuG1AttoSaxpySource.hpp"
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/NamedRecursiveScalarSource.hpp"
 #include "oreslang/frontend/StaticFfiI64Aot.hpp"
 #include "oreslang/types/InvertedProductionSourceMir.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
@@ -600,6 +601,28 @@ int main(int argc, char** argv) {
     }
 #endif
 
+    // Explicit isolated native scalar proof: incompatible with all other
+    // targets, actor/RT policies and import or ownership capability grants.
+    // No fallback to the ordinary CLI on rejection.
+    if (argc > 1 && std::string_view(argv[1]) == "--named-recursive-scalar-v1") {
+        try {
+            if (argc!=3 || std::filesystem::path(argv[2]).extension()!=".atto")
+                throw std::invalid_argument("usage: --named-recursive-scalar-v1 source.atto");
+            const auto identity=capture_source_identity(argv[2],16384,"named stage source exceeds limit");
+            const auto source=read_regular_source(argv[2],16384,"named stage source exceeds limit",nullptr,&identity);
+            require_valid_source_utf8(source);
+            const auto plan=oreslang::parse_named_recursive_scalar(source);
+            const auto ir=oreslang::backend::named_recursive::emit(plan.stage,plan.input);
+            if(!ir)throw std::runtime_error("E_NAMED_STAGE_GRAPH: rejected before LLVM emission");
+            std::cout<<*ir;
+            std::cout.flush();
+            return std::cout?0:1;
+        }catch(const std::exception& e){
+            print_safe_diagnostic(std::cerr,e.what(),512);
+            std::cerr<<'\n';
+            return 2;
+        }
+    }
     if (argc > 1 && std::string_view(argv[1]) == "--counted-ready-v1") {
         try {
             if (argc != 3 || std::filesystem::path(argv[2]).extension() != ".atto")
