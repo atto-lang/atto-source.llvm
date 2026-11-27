@@ -73,6 +73,17 @@ try{
     const {r,c}=await compile(bad);assert.equal(r.status,1,bad);assert.equal(r.stdout,'');await assert.rejects(stat(c),{code:'ENOENT'});
   }
   console.log('LLVM_NOMINAL_ARRAY_PLACEMENT_NEGATIVE_PASS count=12');
+  for(const alias of ['make','new']){
+    const src=nominalSource.replaceAll('Payload(', 'Payload.'+alias+'(');
+    const {r,c}=await compile(src);assert.equal(r.status,0,r.stderr);
+    assert.equal(await readFile(c,'utf8'),nominalGenerated);
+    const bin=c+'.alias';const link=run('clang',['-std=c11','-Wall','-Wextra','-Werror','-fsanitize=undefined','-fno-sanitize-recover=all','-O2',c,nominalHost,'-o',bin]);assert.equal(link.status,0,link.stderr);assert.equal(run(bin,[]).status,0);
+    console.log('LLVM_NOMINAL_CONSTRUCTOR_ALIAS_NATIVE_PASS',alias);
+  }
+  for(const bad of [nominalSource.replace('Payload(10,2)','Payload.fake(10,2)'),nominalSource.replace('Payload(10,2)','Other.make(10,2)'),nominalSource.replace('Payload(10,2)','Payload.new(10)'),nominalSource.replace('Payload(10,2)','Payload.make(10,128)'),nominalSource.replace('new Packet(','new Packet.make(')]){
+    const {r,c}=await compile(bad);assert.equal(r.status,1,bad);assert.equal(r.stdout,'');await assert.rejects(stat(c),{code:'ENOENT'});
+  }
+  console.log('LLVM_NOMINAL_CONSTRUCTOR_ALIAS_NEGATIVE_PASS count=5');
   const nested=fixtures[1],flat=fixtures[0];
   for(const [source,from,to] of [
     [flat,'-3, 40, 5','128, 40, 5'],[flat,'ref! p','ref!p'],[flat,'ref! p','ref ! p'],
