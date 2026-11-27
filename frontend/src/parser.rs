@@ -1273,6 +1273,22 @@ impl Parser {
             self.word_at(0).map(str::to_owned)
         };
         match word.as_deref() {
+            // Explicit local replacement. Keep the legacy assignment path
+            // during migration; the strict edition must reject bare writes.
+            // Contextual recognition preserves a callable named set.
+            Some("set") if matches!(self.peek_at(1), Tok::Ident(_) | Tok::Bang) => {
+                self.advance();
+                let bang = self.eat(&Tok::Bang);
+                let wrapped = bang && self.eat(&Tok::LParen);
+                let (name, _) = self.ident("an existing local binding name")?;
+                self.expect(Tok::Assign, "'=' after rebind target")?;
+                let value = self.parse_expr()?;
+                if wrapped {
+                    self.expect(Tok::RParen, "')' after rebind expression")?;
+                }
+                self.terminator()?;
+                Ok(Stmt::Assign { name, value, pos })
+            }
             Some("val" | "const" | "let") => {
                 let s = self.parse_binding()?;
                 self.terminator()?;
