@@ -5,10 +5,22 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Instruction.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Module.h"
 
 namespace oreslang {
+// During IR construction a block may be empty or contain ordinary
+// instructions but no terminator yet. LLVM 23 getTerminator() assumes
+// well-formedness and asserts; in release builds probing it can mistake
+// a non-terminator for a completed block and skip live statements.
+inline bool native_block_has_terminator(const llvm::BasicBlock* block) {
+    return block && !block->empty() && block->back().isTerminator();
+}
+
 inline llvm::Type* native_pointer_type(llvm::LLVMContext& context, llvm::Type* pointee) {
     // Pointers are opaque from LLVM 17: getPointerTo() already returned this
     // `ptr` type, and it is deprecated (-Werror) from LLVM 21.
@@ -19,6 +31,21 @@ inline llvm::Type* native_pointer_type(llvm::LLVMContext& context, llvm::Type* p
     (void)context;
     return pointee->getPointerTo();
 #endif
+}
+
+// CreateGlobalStringPtr is unavailable in LLVM 23. Preserve its original
+// first-byte pointer contract for older typed-pointer and modern opaque-pointer
+// builds. CreateGlobalString retains the NUL terminator, private linkage and
+// constant unnamed address; no runtime allocation or instruction is introduced.
+inline llvm::Constant* native_global_string_ptr(llvm::IRBuilder<>& builder,
+                                                llvm::StringRef bytes,
+                                                const llvm::Twine& name) {
+    auto* global = builder.CreateGlobalString(bytes, name);
+    llvm::Constant* zero = builder.getInt32(0);
+    llvm::Constant* indices[] = {zero, zero};
+    return llvm::ConstantExpr::getInBoundsGetElementPtr(
+        global->getValueType(), global,
+        llvm::ArrayRef<llvm::Constant*>(indices));
 }
 
 inline void native_lifetime_start(llvm::IRBuilder<>& builder, llvm::Value* ptr,

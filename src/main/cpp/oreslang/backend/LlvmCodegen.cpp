@@ -227,7 +227,7 @@ llvm::Value* lower(const Expression& expr,
                     // Literal message (enforced by the sum resolver) to stderr, then the
                     // same abort path as unwrap. Java appends ": <payload>"; this slice does not.
                     const std::string message = expr.arguments[0]->name + "\n";
-                    auto* text = builder.CreateGlobalStringPtr(message, "expect.message");
+                    auto* text = native_global_string_ptr(builder, message, "expect.message");
                     auto write = function->getParent()->getOrInsertFunction("write", llvm::FunctionType::get(
                         i64, {builder.getInt32Ty(), builder.getPtrTy(), i64}, false));
                     builder.CreateCall(write, {builder.getInt32(2), text, llvm::ConstantInt::get(i64, message.size())});
@@ -243,7 +243,10 @@ llvm::Value* lower(const Expression& expr,
         case Expression::Kind::RecordConstruct: {
             if (!moves || !moves->record_classes || !moves->record_schemas)
                 throw std::runtime_error("record construction lacks typed root region");
-            const auto& cls = *moves->record_classes->at(expr.name);
+            const auto record = moves->record_classes->find(expr.name);
+            if (record == moves->record_classes->end() || !record->second)
+                throw std::runtime_error("native record construction lacks class metadata for '" + expr.name + "'");
+            const auto& cls = *record->second;
             if (moves->layouts->at(expr.name).owns_arrays) throw std::runtime_error("owning constructor requires destination ownership");
             std::unordered_map<std::string, llvm::Value*> parameters;
             for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
@@ -286,7 +289,7 @@ llvm::Value* lower(const Expression& expr,
         }
         case Expression::Kind::String: {
             auto* module = builder.GetInsertBlock()->getModule();
-            auto* bytes = builder.CreateGlobalStringPtr(expr.name, "string.literal");
+            auto* bytes = native_global_string_ptr(builder, expr.name, "string.literal");
             auto runtime = module->getOrInsertFunction("ores_string_literal",
                 llvm::FunctionType::get(i64, {bytes->getType(), i64}, false));
             return builder.CreateCall(runtime, {bytes, llvm::ConstantInt::get(i64, expr.name.size())}, "string.handle");
@@ -319,7 +322,11 @@ llvm::Value* lower(const Expression& expr,
             if (!expr.resolved_class.empty()) {
                 if (!moves || !moves->record_classes || !moves->record_schemas)
                     throw std::runtime_error("record value lacks root-region provenance");
-                const auto& cls = *moves->record_classes->at(expr.resolved_class);
+                const auto record = moves->record_classes->find(expr.resolved_class);
+                if (record == moves->record_classes->end() || !record->second)
+                    throw std::runtime_error("native record value '" + expr.name +
+                        "' lacks class metadata for '" + expr.resolved_class + "'");
+                const auto& cls = *record->second;
                 if (moves->layouts->at(expr.resolved_class).owns_arrays) throw std::runtime_error("owning aggregate value requires destination transfer");
                 auto* values = entry_alloca(builder, i64, llvm::ConstantInt::get(i64, cls.fields.size()), "return.record.fields");
                 for (std::size_t i = 0; i < cls.fields.size(); ++i) {
@@ -2567,7 +2574,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                         result = (result << 8) | id.bytes[k];
                     return result;
                 };
-                auto* literal = builder.CreateGlobalStringPtr(
+                auto* literal = native_global_string_ptr(builder, 
                     effect.telemetry_operation, "atto.telemetry.log.literal");
                 auto* siteCall = builder.CreateCall(telemetryLog, {
                     llvm::ConstantInt::get(i64, lane(rid, 0)),
@@ -2723,7 +2730,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         lower_arm = [&](const std::vector<Statement>& arm) {
             const auto scope_start = active_scopes.size();
             for (const auto& action : arm) {
-                if (builder.GetInsertBlock()->getTerminator()) break;
+                if (native_block_has_terminator(builder.GetInsertBlock())) break;
                 if (action.kind == Statement::Kind::ForEach || action.kind == Statement::Kind::ForIndex || action.kind == Statement::Kind::Conditional || action.kind == Statement::Kind::Return || action.kind == Statement::Kind::UsingTelemetrySpan || action.kind == Statement::Kind::Loop || action.kind == Statement::Kind::Break || action.kind == Statement::Kind::Continue) {
                     lower_control(action); continue;
                 }
@@ -2739,7 +2746,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             }
             while (active_scopes.size() > scope_start) {
                 const auto scope = active_scopes.back(); active_scopes.pop_back();
-                if (!builder.GetInsertBlock()->getTerminator()) end_scope(scope);
+                if (!native_block_has_terminator(builder.GetInsertBlock())) end_scope(scope);
                 else forget_scope(scope);
             }
         };
@@ -2764,7 +2771,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 loop_targets.emplace_back(header, exit);
                 lower_arm(stmt.then_statements);
                 loop_targets.pop_back();
-                if (!builder.GetInsertBlock()->getTerminator())
+                if (!native_block_has_terminator(builder.GetInsertBlock()))
                     builder.CreateBr(header);
                 builder.SetInsertPoint(exit);
                 return;
@@ -2773,7 +2780,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 if (!has_native_telemetry || !telemetryBegin.getCallee()
                         || !telemetryEnd.getCallee())
                     throw std::runtime_error("LLVM native telemetry ABI missing");
-                llvm::Value* name = builder.CreateGlobalStringPtr(
+                llvm::Value* name = native_global_string_ptr(builder, 
                     stmt.telemetry_operation, "atto.telemetry.operation");
                 llvm::Value* token = builder.CreateCall(
                     telemetryBegin,
@@ -2782,7 +2789,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 active_telemetry_scopes.push_back(token);
                 lower_arm(stmt.then_statements);
                 active_telemetry_scopes.pop_back();
-                if (!builder.GetInsertBlock()->getTerminator())
+                if (!native_block_has_terminator(builder.GetInsertBlock()))
                     builder.CreateCall(telemetryEnd, {token});
                 return;
             }
@@ -2808,7 +2815,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 auto* condition = lower(*stmt.condition, builder, i64, storage, field_storage, declarations, &region_moves);
                 builder.CreateCondBr(builder.CreateICmpNE(condition, llvm::ConstantInt::get(i64, 0)), body, exit);
                 builder.SetInsertPoint(body); lower_arm(stmt.then_statements);
-                if (!builder.GetInsertBlock()->getTerminator()) {
+                if (!native_block_has_terminator(builder.GetInsertBlock())) {
                     auto* next = lower(*stmt.loop_step, builder, i64, storage, field_storage, declarations, &region_moves);
                     builder.CreateStore(next, counter.address); builder.CreateBr(header);
                 }
@@ -2830,7 +2837,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 auto* element = builder.CreateCall(arrayGet, {selected, handle, index});
                 auto scope = scoped_value(*stmt.branch_local, element); active_scopes.push_back(scope);
                 lower_arm(stmt.then_statements); active_scopes.pop_back();
-                if (!builder.GetInsertBlock()->getTerminator()) {
+                if (!native_block_has_terminator(builder.GetInsertBlock())) {
                     end_scope(scope);
                     auto* next = builder.CreateAdd(index, llvm::ConstantInt::get(i64, 1));
                     auto* tail = builder.GetInsertBlock(); builder.CreateBr(header); index->addIncoming(next, tail);
@@ -2848,8 +2855,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             auto* no = llvm::BasicBlock::Create(context, "if.else", function);
             auto* join = llvm::BasicBlock::Create(context, "if.merge", function);
             builder.CreateCondBr(builder.CreateICmpNE(condition, llvm::ConstantInt::get(i64, 0)), yes, no);
-            builder.SetInsertPoint(yes); lower_arm(stmt.then_statements); const bool yes_live = !builder.GetInsertBlock()->getTerminator(); if (yes_live) builder.CreateBr(join);
-            builder.SetInsertPoint(no); lower_arm(stmt.else_statements); const bool no_live = !builder.GetInsertBlock()->getTerminator(); if (no_live) builder.CreateBr(join);
+            builder.SetInsertPoint(yes); lower_arm(stmt.then_statements); const bool yes_live = !native_block_has_terminator(builder.GetInsertBlock()); if (yes_live) builder.CreateBr(join);
+            builder.SetInsertPoint(no); lower_arm(stmt.else_statements); const bool no_live = !native_block_has_terminator(builder.GetInsertBlock()); if (no_live) builder.CreateBr(join);
             builder.SetInsertPoint(join); if (!yes_live && !no_live) builder.CreateUnreachable();
         };
         if (fn.caught_throw_value) {
@@ -2882,7 +2889,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 deferred_effects.push_back(&stmt);
                 continue;
             }
-            if (builder.GetInsertBlock()->getTerminator()) break;
+            if (native_block_has_terminator(builder.GetInsertBlock())) break;
             if (stmt.kind == Statement::Kind::ScopedLocal) {
                 const auto& local = *stmt.branch_local;
                 auto* value = (local.initializer && !local.int_array)
@@ -3253,7 +3260,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 if (!fn.returns_void) builder.CreateStore(value, return_snapshot);
                 builder.CreateBr(cleanup);
             };
-            if (!builder.GetInsertBlock()->getTerminator()) {
+            if (!native_block_has_terminator(builder.GetInsertBlock())) {
                 for (const auto& guard : fn.early_returns) {
                     llvm::Value* conditionValue = nullptr;
                     if (guard.condition) {
@@ -4076,7 +4083,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             builder.SetInsertPoint(failed);
             builder.CreateRet(llvm::ConstantInt::get(i32, 1));
             builder.SetInsertPoint(publish);
-            auto* fmt = builder.CreateGlobalStringPtr("%lld\n", "strict.i64.format");
+            auto* fmt = native_global_string_ptr(builder, "%lld\n", "strict.i64.format");
             auto print = module.getOrInsertFunction("printf",
                 llvm::FunctionType::get(i32, {fmt->getType()}, true));
             auto* written = builder.CreateCall(print, {fmt, result});
