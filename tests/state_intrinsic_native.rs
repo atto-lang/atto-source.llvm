@@ -77,3 +77,31 @@ fn nominal_state_field_denials_never_emit_artifacts() {
     }
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn call_shaped_scalar_operands_cannot_escape_protected_callback() {
+    let root = std::env::temp_dir().join(format!("atto-state-call-denial-{}", std::process::id()));
+    fs::create_dir(&root).unwrap();
+    let compiler = env!("CARGO_BIN_EXE_atto-llvm");
+    let cases = [
+        BASE.replace("s.count + value", "s.count + value(1)")
+            .replace("pub fnc main()", "fnc value(int x): int { return x; }\npub fnc main()"),
+        BASE.replace("s.count + value", "s.count + s.count()"),
+        BASE.replace("s.count + value", "s.count + await value"),
+        BASE.replace("s.count + value", "s.count + self.current()"),
+        BASE.replace("-> s.count", "-> s.count()"),
+    ];
+    for (i, source) in cases.iter().enumerate() {
+        assert_ne!(source, BASE);
+        let input = root.join(format!("bad-{i}.atto"));
+        let output = root.join(format!("bad-{i}.ll"));
+        fs::write(&input, source).unwrap();
+        let result = Command::new(compiler).arg(&input).arg("-o").arg(&output)
+            .arg("--emit-llvm").output().unwrap();
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(!result.status.success(), "case {i} emitted");
+        assert!(!output.exists(), "case {i} leaked artifact");
+        assert!(stderr.contains("E_UNSUPPORTED_CRITICAL"), "case {i}: {stderr}");
+    }
+    fs::remove_dir_all(root).unwrap();
+}
