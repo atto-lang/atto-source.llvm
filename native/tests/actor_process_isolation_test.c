@@ -96,6 +96,11 @@ int main(int argc, char **argv) {
     assert(argc >= 1 && argv[0][0] == '/');
     const char *exe = argv[0];
     atto_actor_exit_notice n = run(exe, "pagefault", 5000);
+    if (n.kind != ATTO_ACTOR_EXIT_SIGNAL || n.signal_number != SIGSEGV) {
+        fprintf(stderr, "protected-page worker: kind=%d exit=%d signal=%d os_error=%d (%s)\n",
+                (int)n.kind, n.exit_code, n.signal_number, n.os_error,
+                strerror(n.os_error));
+    }
     assert(n.kind == ATTO_ACTOR_EXIT_SIGNAL && n.signal_number == SIGSEGV);
     /* The process supervising this worker is still alive and can launch
      * another actor after a fatal child SIGSEGV. */
