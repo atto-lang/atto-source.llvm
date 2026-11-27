@@ -64,4 +64,16 @@ jobs:
           if target/release/atto-llvm "$work/fixed-set-reject.atto" -o "$work/fixed-set-reject.ll" --emit-llvm >"$work/fixed-set-reject.log" 2>&1; then exit 1; fi
           grep -q E_IMMUTABLE "$work/fixed-set-reject.log"
           test ! -e "$work/fixed-set-reject.ll"
+          printf '%s\n' 'pub fnc main(): int { let x = 0; for (set x = 40; x < 42; set! (x = x + 1)) {} return x; }' > "$work/strict-loop.atto"
+          printf '%s\n' 'pub fnc main(): int { let x = 40; x = 42; return x; }' > "$work/strict-reject.atto"
+          target/release/atto-llvm "$work/strict-loop.atto" -o "$work/strict-loop.ll" --emit-llvm --explicit-rebinding
+          for opt in 0 2; do
+            clang -x ir -O"$opt" -o "$work/strict-loop-$opt" "$work/strict-loop.ll"
+            status=0
+            timeout 10s "$work/strict-loop-$opt" || status=$?
+            test "$status" = 42
+          done
+          if target/release/atto-llvm "$work/strict-reject.atto" -o "$work/strict-reject.ll" --emit-llvm --explicit-rebinding >"$work/strict-reject.log" 2>&1; then exit 1; fi
+          grep -q E_EXPLICIT_REBIND "$work/strict-reject.log"
+          test ! -e "$work/strict-reject.ll"
           sha256sum "$work/"*.ll
