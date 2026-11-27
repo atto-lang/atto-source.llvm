@@ -1,0 +1,83 @@
+# Source-owned private repository: no cross-org checkout or credentials.
+# A zero-step job means RUNNER_ADMISSION, never a passing guest compiler test.
+name: AttoLang LLVM canonical hosted core O0 O2 parity
+on:
+  pull_request:
+    paths:
+      # Compiler/runtime-only changes must never silently skip native parity.
+      - 'src/main/**'
+      - 'stdlib/**'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - '.github/workflows/atto-hosted-core-llvm.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  hosted-core-native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact PR head, no persisted credentials
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact source head and pristine tree
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet --exit-code
+          git diff --cached --quiet --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          echo "ATTO_HOSTED_CORE_GUEST_HEAD=$EXPECTED_HEAD"
+          echo "ATTO_HOSTED_CORE_GUEST_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Check canonical guest source hash and embedded byte identity
+        shell: bash
+        run: bash tests/atto_hosted_core_parity.sh --source-only
+      - name: Install Clang and actual compiler prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang llvm-dev
+      - name: Build LLVM compiler, source policy test and no-GC auditor
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --parallel 2 --target oreslang-llvmc oreslang-core-library-sources-test oreslang-no-gc-ir-audit-build
+          ctest --test-dir build --output-on-failure --no-tests=error -R '^native_core_library_registry_provider_policy$'
+          test -x build/oreslang-llvmc
+          test -x build/oreslang-no-gc-ir-audit
+      - name: Compile and run six hosted native guests, reject four invalid sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tests/atto_hosted_core_parity.sh --run | tee "$RUNNER_TEMP/hosted-core-receipts.txt"
+          test "$(grep -c '^ATTO_LLVM_HOSTED_CORE_NATIVE_HOST_OBSERVED|' "$RUNNER_TEMP/hosted-core-receipts.txt")" -eq 6
+          test "$(grep -c '^ATTO_LLVM_HOSTED_CORE_NEGATIVE_HOST_OBSERVED|' "$RUNNER_TEMP/hosted-core-receipts.txt")" -eq 4
+          grep -Fq 'ATTO_LLVM_HOSTED_CORE_GUEST_PARITY_EXECUTED|positive=3|optimizations=2|native=6|negative=4|' "$RUNNER_TEMP/hosted-core-receipts.txt"
+      - name: Verify unchanged exact head after real native execution
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet --exit-code
+          git diff --cached --quiet --exit-code
+          echo "ATTO_HOSTED_CORE_VERIFIED_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Store host-observed receipts separately from guest TestKit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: atto-llvm-hosted-core-o0-o2
+          path: ${{ runner.temp }}/hosted-core-receipts.txt
+          if-no-files-found: warn

@@ -68,9 +68,12 @@ inline bool is_reserved_alloc_import(std::string_view raw) noexcept {
 }
 
 inline bool is_reserved_compiler_library_import(std::string_view raw) noexcept {
-    // Admit only hosted scalar helpers and bounded M1/M2 test-ledger modules.
-    // The full ores.std/testing callable TestSuite remains fail-closed.
+    // Closed hosted modules: canonical core + scalar TestKit M1/M2 only.
+    // Unlisted ores.std names and full testing TestSuite remain fail-closed.
     return is_reserved_core_import(raw) || is_reserved_alloc_import(raw) ||
+        raw == "ores.std/core" || raw == "ores.std/core.atto" ||
+        raw == "ores.std/core.ores" || raw == "std/core" ||
+        raw == "std/core.atto" || raw == "std/core.ores" ||
         raw == "ores.std/testing/scalar" ||
         raw == "ores.std/testing/scalar.atto" ||
         raw == "ores.std/testing/scalar.ores" ||
@@ -103,6 +106,59 @@ inline const CoreLibrarySource* find_compiler_library_source(std::string_view ra
         "numeric",
         "@ores.core/numeric.ores",
         kNumericSource,
+        0u
+    };
+
+    // Byte-identical to Java/GraalVM canonical stdlib/core.atto (Git blob
+    // d2cd9b8e0cd3e3bb3ee6a5f9cebf9ab3312c44f4).
+    static constexpr std::string_view kHostedCoreSource =
+R"ATTO_HOSTED_CORE(// Oreslang-owned core-library smoke module.
+//
+// Core stdlib semantics live in Oreslang source. Host Java may load this file,
+// but Java interop is forbidden inside packaged std/* modules.
+
+define module core as
+
+  pub fnc min_int(int left, int right): int {
+    if left < right; do
+      return left;
+    else
+      return right;
+    fi
+  }
+
+  pub fnc max_int(int left, int right): int {
+    if left > right; do
+      return left;
+    else
+      return right;
+    fi
+  }
+
+  pub fnc clamp_int(int value, int lower, int upper): int {
+    if lower > upper; do
+      return lower;
+    fi
+
+    if value < lower; do
+      return lower;
+    else
+      if value > upper; do
+        return upper;
+      else
+        return value;
+      fi
+    fi
+  }
+
+end
+)ATTO_HOSTED_CORE";
+    static constexpr CoreLibrarySource kHostedCore{
+        CompilerLibraryTier::Std,
+        "ores.std/core",
+        "core",
+        "@std/core.ores",
+        kHostedCoreSource,
         0u
     };
 
@@ -463,6 +519,10 @@ end
         kTestingM2Source,
         0u
     };
+    if (raw == "ores.std/core" || raw == "ores.std/core.atto" ||
+        raw == "ores.std/core.ores" || raw == "std/core" ||
+        raw == "std/core.atto" || raw == "std/core.ores")
+        return &kHostedCore;
     if (raw == "ores.std/testing/m2" ||
         raw == "ores.std/testing/m2.atto" ||
         raw == "ores.std/testing/m2.ores")
