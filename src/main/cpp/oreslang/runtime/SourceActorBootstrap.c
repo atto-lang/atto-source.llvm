@@ -191,6 +191,11 @@ int oreslang_source_actor_frame_pop(void) {
 }
 
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
+static atomic_int test_flush_done_waiters;
+int oreslang_source_actor_test_flush_done_waiters(void) {
+    return atomic_load_explicit(&test_flush_done_waiters, memory_order_acquire);
+}
+
 static atomic_int test_hold_initialization;
 static atomic_int test_initialization_entered;
 static atomic_int test_hold_readiness_publication;
@@ -1055,9 +1060,15 @@ int oreslang_source_actor_flush_blocking(void* opaque) {
         ensure(atomic_load_explicit(&instance->stop_requested, memory_order_acquire));
         OresNativeVM* vm = group.vm;
         const OresNativeActorRef ref = instance->ref;
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+        atomic_fetch_add_explicit(&test_flush_done_waiters, 1, memory_order_release);
+#endif
         group_unlock();
         ensure(ores_native_vm_wait_done(vm, ORES_NATIVE_VM_MAIN, ref));
         group_lock();
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+        atomic_fetch_sub_explicit(&test_flush_done_waiters, 1, memory_order_release);
+#endif
         ensure(source_resolve_locked(opaque, 0) == instance);
     }
     const int completed = atomic_load_explicit(
