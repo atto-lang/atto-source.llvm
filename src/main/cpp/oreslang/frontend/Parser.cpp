@@ -4526,6 +4526,11 @@ private:
                         fail("ActorRef<T> type mismatch with spawned actor");
                     require("(");
                     require(")");
+                    // Grouped actor spawn is not the legacy zero-argument
+                    // source actor binding. Do not emit a partial binding that
+                    // would erase quotas, scheduling policy or startup data.
+                    if (token_.text == "with")
+                        fail("E_SPAWN_OPTIONS_UNSUPPORTED: grouped actor spawn requires typed initialization, resource admission and runtime lowering");
                     // A source 'pipe' is a typed graph construction with
                     // atomic connections, bounded DATA, distinct supervisor
                     // CONTROL, and physical shutdown barriers. Never lower
