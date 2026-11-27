@@ -3,8 +3,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export CARGO_NET_OFFLINE=true
-test "$(git hash-object frontend/src/check.rs)" = "6611fe198e084da4a49ee21b9294f857c26d5430"
-test "$(git hash-object frontend/src/parser.rs)" = "4d6e118bf32ea4b3b373b081960c126aa091ba7a"
+test "$(git hash-object frontend/src/check.rs)" = "3e984a4a9574fe800f3a24f35e950de61cb95d05"
+test "$(git hash-object frontend/src/parser.rs)" = "ae1e341fd0894af208ab2db7d6293a7330256154"
 test "$(git hash-object frontend/src/lexer.rs)" = "f12cc53cf4d59f9ee4c0918ef708673e3d2031d8"
 
 cargo test --locked --offline
@@ -215,6 +215,7 @@ if find "$work" -type f -name '*.atto-stage-*.tmp' | grep -q .; then
 fi
 echo "PASS atomic output, failure preservation, and cleanup"
 
+bash ci/test_int_membership_native.sh
 bash ci/test_guard_dual_form_native.sh
 bash ci/test_safe_signed_division_native.sh
 
