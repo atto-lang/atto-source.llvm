@@ -240,7 +240,14 @@ impl PointParser<'_> {
     fn arguments(&mut self,owners:&[Decl],id:usize,depth:usize,values:&mut Vec<i64>)->Result<(),String>{
         if depth>=8{return Err(err());}
         let owner=owners.get(id).ok_or_else(err)?;
-        self.word(&owner.name)?;self.need(Token::Punct(b'('))?;
+        self.word(&owner.name)?;
+        // Placement root retains new T(...) at storage. Only nested value
+        // expressions admit the two constructor aliases of the resolved owner.
+        if depth>0 && self.p.take(Token::Punct(b'.'))? {
+            if self.word_is("make"){self.word("make")?;}
+            else{self.word("new")?;}
+        }
+        self.need(Token::Punct(b'('))?;
         for (i,(_,kind)) in owner.fields.iter().enumerate(){
             if i>0{self.need(Token::Punct(b','))?;}
             match kind{
