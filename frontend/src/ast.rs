@@ -361,6 +361,14 @@ pub enum ExprKind {
     Trap(Box<Expr>),
     Binary(BinOp, Box<Expr>, Box<Expr>),
     Ternary(Box<Expr>, Box<Expr>, Box<Expr>),
+    /// Pure, non-suspending inline task in the current LLVM scalar profile.
+    /// The return value belongs to this expression, not its containing function.
+    /// Unproven suspension, cleanup and ownership profiles fail closed.
+    InlineTask {
+        declared: Option<Type>,
+        prelude: Vec<Stmt>,
+        result: Option<Box<Expr>>,
+    },
     /// Postfix `?`: unwrap Ok/Some or propagate Err/None from the caller.
     Propagate(Box<Expr>),
     /// `name(args)` or the qualified builtins `stdio.print` / `stdio.println`.
