@@ -23,14 +23,7 @@ jobs:
           cmake --build build --parallel 2
       - name: Real LLVM canonical-if source CTest (not full StateGraph parity)
         run: |
-          ctest --test-dir build --output-on-failure --no-tests=error -R '^stategraph_canonical_then_native_guest
-
-      - name: Compile and execute exact-head StateGraph scalar and canonical-source guests
-        env:
-          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: bash scripts/test-stategraph-native-llvm.sh
-
-
+          ctest --test-dir build --output-on-failure --no-tests=error -R '^stategraph_canonical_then_native_guest$'
       - name: Compile and execute exact-head StateGraph scalar and canonical-source guests
         env:
           EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
