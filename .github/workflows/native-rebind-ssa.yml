@@ -104,3 +104,63 @@ jobs:
           grep -q E_EXPLICIT_REBIND "$work/bare-counter.log"
           test ! -e "$work/bare-counter.ll"
           sha256sum "$work/"*.ll
+          printf '%s\n' 'pub fnc main(): int { return match 42 over on _ as int z -> z end; }' > "$work/alias-typed.atto"
+          target/release/atto-llvm "$work/alias-typed.atto" -o "$work/alias-typed.ll" --emit-llvm
+          for opt in 0 2; do
+            clang -x ir -O"$opt" -o "$work/alias-typed-$opt" "$work/alias-typed.ll"
+            status=0
+            timeout 10s "$work/alias-typed-$opt" || status=$?
+            test "$status" = 42
+          done
+          printf '%s\n' 'pub fnc main(): int { return match 42 over on _ as const z -> z end; }' > "$work/alias-const.atto"
+          target/release/atto-llvm "$work/alias-const.atto" -o "$work/alias-const.ll" --emit-llvm
+          for opt in 0 2; do
+            clang -x ir -O"$opt" -o "$work/alias-const-$opt" "$work/alias-const.ll"
+            status=0
+            timeout 10s "$work/alias-const-$opt" || status=$?
+            test "$status" = 42
+          done
+          printf '%s\n' 'pub fnc main(): int { let int n = 20; let int r = 0; do match n over on _ as rebind int z -> { z = z + 2; r = z; } end return n + r; }' > "$work/alias-local.atto"
+          target/release/atto-llvm "$work/alias-local.atto" -o "$work/alias-local.ll" --emit-llvm
+          for opt in 0 2; do
+            clang -x ir -O"$opt" -o "$work/alias-local-$opt" "$work/alias-local.ll"
+            status=0
+            timeout 10s "$work/alias-local-$opt" || status=$?
+            test "$status" = 42
+          done
+          printf '%s\n' 'pub fnc main(): int { return match 42 over on 42 as rebind z when z == 42 -> { z = z + 1; return z; } on _ -> 0 end; }' > "$work/alias-guard.atto"
+          target/release/atto-llvm "$work/alias-guard.atto" -o "$work/alias-guard.ll" --emit-llvm
+          for opt in 0 2; do
+            clang -x ir -O"$opt" -o "$work/alias-guard-$opt" "$work/alias-guard.ll"
+            status=0
+            timeout 10s "$work/alias-guard-$opt" || status=$?
+            test "$status" = 43
+          done
+          printf '%s\n' 'pub fnc main(): int { return match 42 over on 41 as z when z == 42 -> 0, on _ as const z -> z end; }' > "$work/alias-fallback.atto"
+          target/release/atto-llvm "$work/alias-fallback.atto" -o "$work/alias-fallback.ll" --emit-llvm
+          for opt in 0 2; do
+            clang -x ir -O"$opt" -o "$work/alias-fallback-$opt" "$work/alias-fallback.ll"
+            status=0
+            timeout 10s "$work/alias-fallback-$opt" || status=$?
+            test "$status" = 42
+          done
+          printf '%s\n' 'pub fnc main(): int { do match 42 over on _ as int z -> { z = 0; } end return 0; }' > "$work/alias-fixed.atto"
+          if target/release/atto-llvm "$work/alias-fixed.atto" -o "$work/alias-fixed.ll" --emit-llvm >"$work/alias-fixed.log" 2>&1; then exit 1; fi
+          grep -q E_IMMUTABLE "$work/alias-fixed.log"
+          test ! -e "$work/alias-fixed.ll"
+          printf '%s\n' 'pub fnc main(): int { return match 42 over on _ as bool z -> 0 end; }' > "$work/alias-type.atto"
+          if target/release/atto-llvm "$work/alias-type.atto" -o "$work/alias-type.ll" --emit-llvm >"$work/alias-type.log" 2>&1; then exit 1; fi
+          grep -q E_TYPE "$work/alias-type.log"
+          test ! -e "$work/alias-type.ll"
+          printf '%s\n' 'pub fnc main(): int { return match 42 over on _ as rebind rebind int z -> z end; }' > "$work/alias-duplicate.atto"
+          if target/release/atto-llvm "$work/alias-duplicate.atto" -o "$work/alias-duplicate.ll" --emit-llvm >"$work/alias-duplicate.log" 2>&1; then exit 1; fi
+          grep -q E_SYNTAX "$work/alias-duplicate.log"
+          test ! -e "$work/alias-duplicate.ll"
+          printf '%s\n' 'pub fnc main(): int { return match 42 over on _ as mut z -> 0 end; }' > "$work/alias-mut.atto"
+          if target/release/atto-llvm "$work/alias-mut.atto" -o "$work/alias-mut.ll" --emit-llvm >"$work/alias-mut.log" 2>&1; then exit 1; fi
+          grep -q E_UNSUPPORTED "$work/alias-mut.log"
+          test ! -e "$work/alias-mut.ll"
+          printf '%s\n' 'pub fnc main(): int { do match 42 over on _ as rebind z -> {} end return z; }' > "$work/alias-scope.atto"
+          if target/release/atto-llvm "$work/alias-scope.atto" -o "$work/alias-scope.ll" --emit-llvm >"$work/alias-scope.log" 2>&1; then exit 1; fi
+          grep -q E_UNBOUND "$work/alias-scope.log"
+          test ! -e "$work/alias-scope.ll"

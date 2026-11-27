@@ -1270,6 +1270,20 @@ mod parameter_rebind_tests {
     use super::*;
 
     #[test]
+    fn scalar_match_aliases() {
+        compile_ir("pub fnc main(): int { return match 42 over on _ as int z -> z end; }").expect("alias-typed");
+        compile_ir("pub fnc main(): int { return match 42 over on _ as const z -> z end; }").expect("alias-const");
+        compile_ir("pub fnc main(): int { let int n = 20; let int r = 0; do match n over on _ as rebind int z -> { z = z + 2; r = z; } end return n + r; }").expect("alias-local");
+        compile_ir("pub fnc main(): int { return match 42 over on 42 as rebind z when z == 42 -> { z = z + 1; return z; } on _ -> 0 end; }").expect("alias-guard");
+        compile_ir("pub fnc main(): int { return match 42 over on 41 as z when z == 42 -> 0, on _ as const z -> z end; }").expect("alias-fallback");
+        assert!(compile_ir("pub fnc main(): int { do match 42 over on _ as int z -> { z = 0; } end return 0; }").unwrap_err().contains("E_IMMUTABLE"), "alias-fixed");
+        assert!(compile_ir("pub fnc main(): int { return match 42 over on _ as bool z -> 0 end; }").unwrap_err().contains("E_TYPE"), "alias-type");
+        assert!(compile_ir("pub fnc main(): int { return match 42 over on _ as rebind rebind int z -> z end; }").unwrap_err().contains("E_SYNTAX"), "alias-duplicate");
+        assert!(compile_ir("pub fnc main(): int { return match 42 over on _ as mut z -> 0 end; }").unwrap_err().contains("E_UNSUPPORTED"), "alias-mut");
+        assert!(compile_ir("pub fnc main(): int { do match 42 over on _ as rebind z -> {} end return z; }").unwrap_err().contains("E_UNBOUND"), "alias-scope");
+    }
+
+    #[test]
     fn explicit_counter_and_compound_updates() {
         let strict = |source| compile_ir_with_binding_profile(source, LibraryProfile::Hosted, true);
         let positives = [
