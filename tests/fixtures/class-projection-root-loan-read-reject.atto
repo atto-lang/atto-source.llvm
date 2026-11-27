@@ -1,0 +1,9 @@
+define class Pair as
+  pub let int left = 20;
+  pub let int right = 22;
+end
+fnc inspect(borrow mut Pair a, int b): int { return a.left + b; }
+pub fnc main(): int {
+  let mut Pair pair = new Pair();
+  return inspect(rt mut borrow pair, pair.right);
+}
