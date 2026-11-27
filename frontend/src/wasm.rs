@@ -962,6 +962,21 @@ fn locals_decl(types: &[Type]) -> Vec<u8> {
 }
 
 pub fn emit(p: &TProgram) -> Vec<u8> {
+    emit_profile(p, false)
+}
+
+pub(crate) fn emit_isolated_core(p: &TProgram) -> Result<Vec<u8>, crate::Diagnostic> {
+    let main = &p.funcs[p.main as usize];
+    if p.heap || p.strings || !p.data.is_empty() || !p.imports.is_empty()
+        || !p.actors.is_empty() || !p.generators.is_empty() || !p.globals.is_empty()
+        || p.guest_eh || main.ret != Type::Int || !main.params.is_empty() {
+        return Err(crate::Diagnostic::new(crate::Pos { line: 1, col: 1 },
+            "E_ISOLATED_CORE_PROFILE", "requires zero-import scalar () -> int without heap, actor, generator, or guest EH"));
+    }
+    Ok(emit_profile(p, true))
+}
+
+fn emit_profile(p: &TProgram, isolated: bool) -> Vec<u8> {
     let heap_global = 1;
     let str_base = if p.heap { H_ALLOC + 1 } else { H_ALLOC };
     let layout = Layout {
@@ -1094,6 +1109,19 @@ pub fn emit(p: &TProgram) -> Vec<u8> {
         bodies.push(c);
     }
 
+    // The isolated host cannot observe panic_code. Preserve failure as a
+    // genuine Wasm trap rather than exposing a successful scalar sentinel.
+    let isolated_main = if isolated {
+        let index = p.imports.len() as u32 + func_types.len() as u32;
+        func_types.push(types.idx(Sig(vec![], vec![I64])));
+        let mut code = vec![0, 0x10]; // no locals; call original entry
+        uleb(&mut code, layout.func(p.main) as u64);
+        code.extend_from_slice(&[0x23, 0, 0x04, 0x40, 0x00, 0x0B, 0x0B]);
+        // global.get panic_code; if nonzero unreachable; return existing i64.
+        bodies.push(code);
+        Some(index)
+    } else { None };
+
     // The tag has no JS import/export. Each instance gets its own identity,
     // so no host exception or foreign guest tag can be forged as an ordinary
     // Atto throw. Unaffected modules retain their original section layout.
@@ -1121,7 +1149,7 @@ pub fn emit(p: &TProgram) -> Vec<u8> {
     }
     section(&mut out, 3, fsec);
 
-    let has_memory = !p.data.is_empty() || p.heap || p.strings || has_actors;
+    let has_memory = isolated || !p.data.is_empty() || p.heap || p.strings || has_actors;
     if has_memory {
         // Fixed and non-growable: strings, the object heap, or a private
         // 64 KiB actor memory even for scalar-only actors.
@@ -1162,13 +1190,15 @@ pub fn emit(p: &TProgram) -> Vec<u8> {
     section(&mut out, 6, gsec);
 
     let mut exp = Vec::new();
-    uleb(&mut exp, 2 + u64::from(has_memory) + if has_actors { 2 } else { 0 });
+    uleb(&mut exp, 1 + u64::from(!isolated) + u64::from(has_memory) + if has_actors { 2 } else { 0 });
     name(&mut exp, "main");
     exp.push(0x00);
-    uleb(&mut exp, layout.func(p.main) as u64);
-    name(&mut exp, "panic_code");
-    exp.push(0x03);
-    uleb(&mut exp, 0);
+    uleb(&mut exp, isolated_main.unwrap_or_else(|| layout.func(p.main)) as u64);
+    if !isolated {
+        name(&mut exp, "panic_code");
+        exp.push(0x03);
+        uleb(&mut exp, 0);
+    }
     if has_memory {
         name(&mut exp, "memory");
         exp.push(0x02);
@@ -1234,6 +1264,7 @@ pub fn emit(p: &TProgram) -> Vec<u8> {
         all.push("atto.actor_init".into());
         all.push("atto.actor_receive".into());
     }
+    if isolated { all.push("atto.isolated_main".into()); }
     let mut sub = Vec::new();
     uleb(&mut sub, all.len() as u64);
     for (i, n) in all.iter().enumerate() {

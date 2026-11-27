@@ -6,12 +6,13 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let native_c = args.first().is_some_and(|s| s == "--emit=struct-native-c");
-    if native_c { args.remove(0); }
+    let isolated = args.first().is_some_and(|s| s == "--isolated-core");
+    if native_c || isolated { args.remove(0); }
     let (input, output) = match args.as_slice() {
         [input] => (input.as_str(), None),
         [input, flag, output] if flag == "-o" => (input.as_str(), Some(output.as_str())),
         _ => {
-            eprintln!("usage: attoc [--emit=struct-native-c] <input.atto> [-o output]");
+            eprintln!("usage: attoc [--emit=struct-native-c | --isolated-core] <input.atto> [-o output]");
             return ExitCode::from(2);
         }
     };
@@ -26,7 +27,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let compiled = if native_c { atto_compiler::compile_struct_native_c(&source).map(String::into_bytes) } else { atto_compiler::compile(&source) };
+    let compiled = if native_c { atto_compiler::compile_struct_native_c(&source).map(String::into_bytes) } else if isolated { atto_compiler::compile_isolated_core(&source) } else { atto_compiler::compile(&source) };
     let bytes = match compiled {
         Ok(bytes) => bytes,
         Err(error) => {
