@@ -4529,11 +4529,24 @@ private:
                     // Only this authenticated spawn boundary classifies the
                     // next contextual 'with' as actor policy, not record update.
                     advance(true);
-                    // Grouped actor spawn is not the legacy zero-argument
-                    // source actor binding. Do not emit a partial binding that
-                    // would erase quotas, scheduling policy or startup data.
-                    if (token_.text == "with")
-                        fail("E_SPAWN_OPTIONS_UNSUPPORTED: grouped actor spawn requires typed initialization, resource admission and runtime lowering");
+                    // Empty grouped options request no overrides. Preserve the
+                    // normal typed spawn binding and deny any nonempty section.
+                    if (accept("with")) {
+                        if (!accept("{"))
+                            fail("E_SPAWN_OPTIONS_UNSUPPORTED: grouped actor spawn requires typed initialization, resource admission and runtime lowering");
+                        std::unordered_set<std::string> sections;
+                        while (!accept("}")) {
+                            const auto section = token_.text;
+                            if (section != "schedule" && section != "resources" && section != "init")
+                                fail("E_SPAWN_OPTION_SECTION: unknown grouped spawn section");
+                            if (!sections.insert(section).second)
+                                fail("E_SPAWN_OPTION_DUPLICATE: duplicate grouped spawn section");
+                            advance();
+                            require("{");
+                            if (!accept("}"))
+                                fail("E_SPAWN_OPTIONS_UNSUPPORTED: grouped actor spawn requires typed initialization, resource admission and runtime lowering");
+                        }
+                    }
                     // A source 'pipe' is a typed graph construction with
                     // atomic connections, bounded DATA, distinct supervisor
                     // CONTROL, and physical shutdown barriers. Never lower
