@@ -181,6 +181,40 @@ static void check_failed_leaf_reuse(uint64_t cycles) {
     printf("SOURCE_ACTOR_FAILED_LEAF_REUSE_PASS cycles=%" PRIu64 " sibling=42\n", cycles);
 }
 
+/* STOP consumes the failed reference without requesting recovery.
+ * Keep another actor alive so leaked children/tombstones cannot be hidden
+ * by group teardown. More iterations than physical child slots. */
+static void check_failed_stop_reuse(void) {
+    const uint64_t cycles = 256;
+    void* sibling = oreslang_source_actor_spawn(initialize, actor_b, 1);
+    CHECK(sibling);
+    for (uint64_t i = 0; i < cycles; ++i) {
+        void* leaf = oreslang_source_actor_spawn_supervised_budgeted(
+            initialize, actor_a, 1, 16, 1, 1);
+        CHECK(leaf && leaf != sibling);
+        CHECK(oreslang_source_actor_try_send(leaf, 7));
+        CHECK(oreslang_source_actor_flush_blocking(leaf));
+        CHECK(oreslang_source_actor_try_send(leaf, 8));
+        CHECK(oreslang_source_actor_flush_blocking(leaf));
+        oreslang_source_actor_stop(leaf);
+        OresSourceActorMessageReceipt stale = {0};
+        CHECK(!oreslang_source_actor_message_receipt(leaf, &stale));
+        CHECK(!oreslang_source_actor_try_send(leaf, 99));
+        CHECK(!oreslang_source_actor_recover_blocking(leaf));
+        CHECK(oreslang_source_actor_test_panic_notices() == i + 1);
+        CHECK(oreslang_source_actor_test_stopped_notices() == 0);
+        CHECK(oreslang_source_actor_try_send(sibling, 42));
+        CHECK(oreslang_source_actor_flush_blocking(sibling));
+    }
+    oreslang_source_actor_stop(sibling);
+    CHECK(oreslang_source_actor_test_terminal_notices() == cycles + 1);
+    CHECK(oreslang_source_actor_test_panic_notices() == cycles);
+    CHECK(oreslang_source_actor_test_stopped_notices() == 1);
+    CHECK((uint64_t)atomic_load(&a_nine) == 0);
+    CHECK((uint64_t)atomic_load(&b_forty_two) == cycles);
+    puts("SOURCE_ACTOR_FAILED_STOP_REUSE_PASS cycles=256 orphan=0 sibling=42");
+}
+
 int main(int argc, char** argv) {
     const int exhaust_restart = argc == 2 && strcmp(argv[1], "--exhaust") == 0;
     const int capacity_denial = argc == 2 && strcmp(argv[1], "--capacity") == 0;
@@ -188,11 +222,13 @@ int main(int argc, char** argv) {
     const int million = argc == 2 && strcmp(argv[1], "--reuse-million") == 0;
     const int failed_reuse = argc == 2 && strcmp(argv[1], "--failed-reuse") == 0;
     const int failed_million = argc == 2 && strcmp(argv[1], "--failed-reuse-million") == 0;
-    CHECK(argc == 1 || exhaust_restart || capacity_denial || reuse || million || failed_reuse || failed_million);
+    const int failed_stop_reuse = argc == 2 && strcmp(argv[1], "--failed-stop-reuse") == 0;
+    CHECK(argc == 1 || exhaust_restart || capacity_denial || reuse || million || failed_reuse || failed_million || failed_stop_reuse);
     atomic_init(&a_seven, 0); atomic_init(&a_nine, 0);
     atomic_init(&b_forty_two, 0);
     if (capacity_denial) { check_last_actor_capacity_denial(); return 0; }
     if (reuse || million) { check_leaf_reuse(million ? UINT64_C(1000000) : UINT64_C(256)); return 0; }
+    if (failed_stop_reuse) { check_failed_stop_reuse(); return 0; }
     if (failed_reuse || failed_million) { check_failed_leaf_reuse(failed_million ? UINT64_C(1000000) : UINT64_C(256)); return 0; }
     void* a = oreslang_source_actor_spawn_supervised_budgeted(
         initialize, actor_a, 1, 16, 1, 1);
