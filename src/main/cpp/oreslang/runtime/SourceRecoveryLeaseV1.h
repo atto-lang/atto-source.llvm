@@ -19,10 +19,16 @@ static inline int ores_source_recovery_claim(OresSourceRecoveryLeaseV1* lease,
     return 1;
 }
 
+/* Pure identity comparison, under the same caller-owned mutex as claim. */
+static inline int ores_source_recovery_matches(const OresSourceRecoveryLeaseV1* lease,
+        size_t slot, uint64_t generation, uint64_t correlation) {
+    return lease->held && lease->slot == slot
+        && lease->generation == generation && lease->correlation == correlation;
+}
+
 static inline int ores_source_recovery_release(OresSourceRecoveryLeaseV1* lease,
         size_t slot, uint64_t generation, uint64_t correlation) {
-    if (!lease->held || lease->slot != slot || lease->generation != generation
-            || lease->correlation != correlation) return 0;
+    if (!ores_source_recovery_matches(lease, slot, generation, correlation)) return 0;
     *lease = (OresSourceRecoveryLeaseV1){0};
     return 1;
 }
