@@ -4185,7 +4185,7 @@ private:
                         Lexer right = sum_look;
                         const auto separator = right.next();
                         if (separator.text == ":" && token_.text == "const") return true;
-                        if (separator.text != "as" && separator.text != ":") return false;
+                        if (separator.text != "as") return false;
                         const auto type = right.next();
                         return (type.text == "int" || type.text == "bool" ||
                                 type.text == "string" || type.text == "String") &&
