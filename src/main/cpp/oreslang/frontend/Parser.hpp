@@ -64,6 +64,8 @@ struct Expression {
     ScalarType cast_target = ScalarType::I64; // checked, identity-only native scalar cast
     mutable std::string resolved_class;
     std::string name;
+    // Preserve source receiver through native endpoint admission, before lowering.
+    std::string console_receiver;
     std::unique_ptr<Expression> left;
     std::unique_ptr<Expression> right;
     // Conditional is the native scalar form of Oreslang's lazy `? :`.
