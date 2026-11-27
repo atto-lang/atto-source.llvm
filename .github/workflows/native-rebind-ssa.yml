@@ -45,7 +45,8 @@ jobs:
           printf '%s\n' 'fnc bump(int n): int { n = n + 2; return n; } pub fnc main(): int { return bump(40); }' > "$work/reject.atto"
           printf '%s\n' 'pub fnc main(): int { let int x = 39; set x = x + 1; set! x = x + 1; set! (x = x + 1); return x; }' > "$work/explicit-set.atto"
           printf '%s\n' 'pub fnc main(): int { const int x = 40; set! x = 42; return x; }' > "$work/fixed-set-reject.atto"
-          for name in fixed marked rebound explicit-set; do
+          printf '%s\n' 'pub fnc main(): int { let x = 40; let x = x + 1; set x = x + 1; return x; }' > "$work/shadow.atto"
+          for name in fixed marked rebound explicit-set shadow; do
             target/release/atto-llvm "$work/$name.atto" -o "$work/$name.ll" --emit-llvm
             for opt in 0 2; do
               clang -x ir -O"$opt" -o "$work/$name-$opt" "$work/$name.ll"
