@@ -22,6 +22,7 @@ input_paths=(
   tests/native_source_input_admission.cpp
   tests/fixtures/native-class-string
   scripts/compile-aot.sh
+  scripts/audit_no_gc_ir.rs
   scripts/verify-native-class-string-macos.sh
   .github/workflows/llvm19-23-native-class-string-macos.yml
 )
@@ -57,7 +58,12 @@ printf "Source commit: %s\nSource tree: %s\nLLVM: %s\n" "$(git rev-parse HEAD)" 
 build="$root/build-class-string-llvm$version"
 cmake -S . -B "$build" -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
   -DLLVM_DIR="$prefix/lib/cmake/llvm" -DORE_CLANG="$prefix/bin/clang"
-cmake --build "$build" --target oreslang-llvmc oreslang-native-class-string-parity-build oreslang-native-source-input-admission-test --parallel 2
+cmake --build "$build" --target oreslang-llvmc oreslang-native-class-string-parity-build oreslang-native-source-input-admission-test oreslang-no-gc-ir-audit-build oreslang-no-gc-ir-audit-tests-build --parallel 2
+# The standalone AOT driver is fail-closed without the real auditor. Bind it
+# to this exact build directory rather than an unrelated default build.
+export ORES_NO_GC_IR_AUDIT="$build/oreslang-no-gc-ir-audit"
+test -x "$ORES_NO_GC_IR_AUDIT"
+ctest --test-dir "$build" -R "^native_no_gc_ir_audit_unit$" --output-on-failure --no-tests=error
 # Exercise the source-file and import admission boundary in this same
 # exact-commit matrix, not only in isolated developer-side CTest runs.
 # A release pass on LLVM 19 cannot stand in for ASan/UBSan qualification.
