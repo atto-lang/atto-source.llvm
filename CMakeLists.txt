@@ -3973,6 +3973,11 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_do_match_wildcard_only
         dispatch-do-match-wildcard-only-run.ores --ir "return.snapshot.slot")
     if(ORE_CLANG)
+        add_test(NAME native_delimited_procedural_dispatch_runtime
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/delimited_procedural_dispatch.py"
+                "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}")
+        set_tests_properties(native_delimited_procedural_dispatch_runtime PROPERTIES TIMEOUT 120)
         oreslang_contract_test(native_dispatch_signed_min_literal_runtime
             dispatch-signed-min-pattern-run.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_value_match_arm_result_runtime
