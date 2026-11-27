@@ -17,8 +17,11 @@ for opt in 0 2; do
 done
 for bad in 'pub fnc main(): int { return ¬1 ? 42 : 0; }' 'pub fnc main(): int { return 未定義; }' 'pub fnc main(): int { return true¬ ? 42 : 0; }' 'pub fnc main(): int { return true ¬eq false ? 42 : 0; }'; do
   printf '%s\n' "$bad" > "$tmp/bad.atto"
-  if timeout 30 "$compiler" --target=host "$tmp/bad.atto" > "$tmp/bad.ll" 2>"$tmp/bad.err"; then
-    echo "unexpected invalid source admission" >&2
+  status=0
+  timeout 30 "$compiler" --target=host "$tmp/bad.atto" > "$tmp/bad.ll" 2>"$tmp/bad.err" || status=$?
+  if test "$status" -ne 1; then
+    echo "expected normal compiler diagnostic exit 1, observed $status" >&2
+    cat "$tmp/bad.err" >&2
     exit 1
   fi
   test ! -s "$tmp/bad.ll"
