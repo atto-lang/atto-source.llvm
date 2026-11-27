@@ -142,11 +142,11 @@ int main() {
         "with schedule(max_parallelism=2)",
         "with { unknown {} }"
     }) {
-        denied(std::string(valid_actor) + "\n pub fnc main(): int { const ActorRef<Worker> w = spawn Worker() " +
+        denied(std::string(valid_actor) + "\n pub fnc main(): int { const w: ActorRef<Worker> = spawn Worker() " +
                suffix + "; return 0; }", "E_SPAWN_OPTIONS_UNSUPPORTED");
     }
     auto legacy_spawn = parse_program(std::string(valid_actor) +
-        "\n pub fnc main(): int { const ActorRef<Worker> w = spawn Worker(); return 0; }");
+        "\n pub fnc main(): int { const w: ActorRef<Worker> = spawn Worker(); return 0; }");
     check(legacy_spawn.actors.size() == 1);
     return 0;
 }
