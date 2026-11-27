@@ -71,6 +71,90 @@ def carrier_contract(review_pr=None):
 
 
 class LlvmPrivateCiV3Test(unittest.TestCase):
+
+    def test_atto_migration_identity_does_not_enable_private_source_export(self):
+        # Migration source identity is not permission to publish any source.
+        self.assertEqual(v3.SOURCE_REPO, "atto-lang/atto-source.llvm")
+        self.assertEqual(v3.SOURCE_REPO_ID, 1448700962)
+        with (
+            patch.object(v3, "require_atomic_ref_rollback",
+                         side_effect=REAL_PRODUCTION_ROLLBACK_GUARD),
+            patch.object(v3, "gh_api") as github_api,
+            patch.object(v3, "run_bounded_gh") as command,
+        ):
+            with self.assertRaisesRegex(v3.Denied, "private CI export disabled"):
+                v3.publish(
+                    "streempilot-test/browser-studio-e2e",
+                    834,
+                    "9" * 40,
+                    "ci/test-plans/llvm-pr834.json",
+                )
+            github_api.assert_not_called()
+            command.assert_not_called()
+
+    def test_migrated_source_pr_requires_exact_atto_head_repo(self):
+        sha = "e" * 40
+        base = {
+            "number": 834,
+            "state": "open",
+            "head": {"sha": sha, "repo": {
+                "full_name": v3.SOURCE_REPO, "id": v3.SOURCE_REPO_ID,
+            }},
+            "base": {"ref": "main", "repo": {
+                "full_name": v3.SOURCE_REPO, "id": v3.SOURCE_REPO_ID,
+            }},
+        }
+        route = f"repos/{v3.SOURCE_REPO}/pulls/834"
+        with patch.object(v3, "gh_api", return_value=base) as github_api:
+            self.assertEqual(v3.verify_source_pr(834, sha), 1448700962)
+            github_api.assert_called_once_with(route)
+        forged = dict(base)
+        forged["head"] = {
+            "sha": sha,
+            "repo": {"full_name": "ores-truffle-oreslang/oreslang-source.llvm"},
+        }
+        with patch.object(v3, "gh_api", return_value=forged) as github_api:
+            with self.assertRaisesRegex(v3.Denied, "not exact open PR head"):
+                v3.verify_source_pr(834, sha)
+            github_api.assert_called_once_with(route)
+
+    def test_migrated_source_pr_rejects_repo_id_and_base_origin_tampering(self):
+        sha = "e" * 40
+        correct = {
+            "number": 834, "state": "open",
+            "head": {"sha": sha, "repo": {
+                "full_name": v3.SOURCE_REPO, "id": v3.SOURCE_REPO_ID,
+            }},
+            "base": {"ref": v3.SOURCE_BRANCH, "repo": {
+                "full_name": v3.SOURCE_REPO, "id": v3.SOURCE_REPO_ID,
+            }},
+        }
+        for kind, modify in (
+            ("head id", lambda p: p["head"]["repo"].update(id=1410897874)),
+            ("head id missing", lambda p: p["head"]["repo"].pop("id")),
+            ("head id string", lambda p: p["head"]["repo"].update(id=str(v3.SOURCE_REPO_ID))),
+            ("base id", lambda p: p["base"]["repo"].update(id=1410897874)),
+            ("base id missing", lambda p: p["base"]["repo"].pop("id")),
+            ("base name", lambda p: p["base"]["repo"].update(
+                full_name="ores-truffle-oreslang/oreslang-source.llvm"
+            )),
+            ("base repo missing", lambda p: p["base"].pop("repo")),
+            ("base ref", lambda p: p["base"].update(ref="not-main")),
+        ):
+            with self.subTest(kind=kind):
+                # New shallow nested dictionaries for every independent case.
+                import copy
+                adversarial = copy.deepcopy(correct)
+                modify(adversarial)
+                with patch.object(v3, "gh_api", return_value=adversarial) as api:
+                    with self.assertRaisesRegex(
+                        v3.Denied, "not exact open PR head"
+                    ):
+                        v3.verify_source_pr(834, sha)
+                    api.assert_called_once_with(
+                        f"repos/{v3.SOURCE_REPO}/pulls/834"
+                    )
+
     def test_2048_blob_capacity_acceptance_and_2049_pre_fetch_denial(self):
         # Entirely synthetic, source-free tree metadata and identical test
         # blobs. No GitHub transfer, source checkout or real carrier access.
@@ -1028,9 +1112,9 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                     "state": "open",
                     "head": {
                         "sha": "9" * 40,
-                        "repo": {"full_name": v3.SOURCE_REPO},
+                        "repo": {"full_name": v3.SOURCE_REPO, "id": v3.SOURCE_REPO_ID},
                     },
-                    "base": {"ref": "main"},
+                    "base": {"ref": "main", "repo": {"full_name": v3.SOURCE_REPO, "id": v3.SOURCE_REPO_ID}},
                 }
             if route == f"repos/{v3.SOURCE_REPO}/git/commits/" + "9" * 40:
                 return {"sha": "9" * 40, "tree": {"sha": SOURCE_TREE}}
@@ -1117,8 +1201,8 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                     return {
                         "number": 669, "state": "open",
                         "head": {"sha": "9" * 40,
-                                 "repo": {"full_name": v3.SOURCE_REPO}},
-                        "base": {"ref": "main"},
+                                 "repo": {"full_name": v3.SOURCE_REPO, "id": v3.SOURCE_REPO_ID}},
+                        "base": {"ref": "main", "repo": {"full_name": v3.SOURCE_REPO, "id": v3.SOURCE_REPO_ID}},
                     }
                 if route == f"repos/{v3.SOURCE_REPO}/git/commits/" + "9" * 40:
                     return {"sha": "9" * 40,
@@ -1208,9 +1292,9 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                     "state": "open",
                     "head": {
                         "sha": "9" * 40,
-                        "repo": {"full_name": v3.SOURCE_REPO},
+                        "repo": {"full_name": v3.SOURCE_REPO, "id": v3.SOURCE_REPO_ID},
                     },
-                    "base": {"ref": "main"},
+                    "base": {"ref": "main", "repo": {"full_name": v3.SOURCE_REPO, "id": v3.SOURCE_REPO_ID}},
                 }
             if "/git/commits/" in route:
                 return {"sha": "9" * 40, "tree": {"sha": SOURCE_TREE}}
@@ -1240,9 +1324,9 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                     "state": "open",
                     "head": {
                         "sha": "9" * 40,
-                        "repo": {"full_name": v3.SOURCE_REPO},
+                        "repo": {"full_name": v3.SOURCE_REPO, "id": v3.SOURCE_REPO_ID},
                     },
-                    "base": {"ref": "main"},
+                    "base": {"ref": "main", "repo": {"full_name": v3.SOURCE_REPO, "id": v3.SOURCE_REPO_ID}},
                 }
             if "/git/commits/" in route:
                 return {"sha": "9" * 40, "tree": {"sha": SOURCE_TREE}}
@@ -1279,9 +1363,9 @@ class LlvmPrivateCiV3Test(unittest.TestCase):
                     "state": "open",
                     "head": {
                         "sha": "9" * 40,
-                        "repo": {"full_name": v3.SOURCE_REPO},
+                        "repo": {"full_name": v3.SOURCE_REPO, "id": v3.SOURCE_REPO_ID},
                     },
-                    "base": {"ref": "main"},
+                    "base": {"ref": "main", "repo": {"full_name": v3.SOURCE_REPO, "id": v3.SOURCE_REPO_ID}},
                 }
             if "/git/commits/" in route:
                 return {"sha": "9" * 40, "tree": {"sha": SOURCE_TREE}}
