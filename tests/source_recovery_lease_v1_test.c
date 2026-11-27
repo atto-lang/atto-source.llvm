@@ -4,7 +4,7 @@
 #define CHECK(x) do { if (!(x)) abort(); } while (0)
 int main(void) {
     OresSourceRecoveryLeaseV1 lease = {0};
-    for (uint64_t i = 1; i <= 100000; ++i) {
+    for (uint64_t i = 1; i <= 1000000; ++i) {
         const size_t slot = (size_t)(i % 63);
         CHECK(ores_source_recovery_can_close(&lease, 0));
         CHECK(!ores_source_recovery_can_close(&lease, 1));
@@ -28,5 +28,17 @@ int main(void) {
         CHECK(ores_source_recovery_can_close(&lease, 0));
         CHECK(!ores_source_recovery_can_close(&lease, 1));
     }
-    puts("PASS RECOVERY_LEASE_CYCLES=100000 STALE_RELEASE_DENIED=1 IDLE_CLOSE_FENCED=1");
+    /* Full-width identity boundary; comparison must not wrap. */
+    CHECK(ores_source_recovery_claim(&lease, 0, UINT64_MAX, UINT64_MAX));
+    CHECK(ores_source_recovery_matches(&lease, 0, UINT64_MAX, UINT64_MAX));
+    CHECK(!ores_source_recovery_matches(&lease, 0, UINT64_MAX - 1, UINT64_MAX));
+    CHECK(!ores_source_recovery_matches(&lease, 0, UINT64_MAX, UINT64_MAX - 1));
+    CHECK(!ores_source_recovery_release(&lease, 0, UINT64_MAX - 1, UINT64_MAX));
+    CHECK(!ores_source_recovery_release(&lease, 0, UINT64_MAX, UINT64_MAX - 1));
+    CHECK(!ores_source_recovery_release(&lease, 0, 0, 0));
+    CHECK(!ores_source_recovery_can_close(&lease, 0));
+    CHECK(ores_source_recovery_release(&lease, 0, UINT64_MAX, UINT64_MAX));
+    CHECK(!ores_source_recovery_matches(&lease, 0, UINT64_MAX, UINT64_MAX));
+    CHECK(ores_source_recovery_can_close(&lease, 0));
+    puts("PASS RECOVERY_LEASE_CYCLES=1000000 STALE_RELEASE_DENIED=1 IDLE_CLOSE_FENCED=1");
 }
