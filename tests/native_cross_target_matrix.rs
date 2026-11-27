@@ -300,6 +300,38 @@ fn run(program: &str, args: &[&str]) -> Option<(i32, Vec<u8>, String)> {
     Some((code, out.stdout, String::from_utf8_lossy(&out.stderr).into_owned()))
 }
 
+// Only this reviewed, exact repository path is an intentional abort guest.
+// All other processes retain the ordinary fail-closed signal/timeout policy.
+const EXPECTED_PANIC_FIXTURE: &str = "tests/fixtures/atto_parity_syntax/expect_err.atto";
+fn run_guest(program: &str, args: &[&str], expected_panic: bool) -> Option<(i32, Vec<u8>, String)> {
+    if !expected_panic { return run(program, args); }
+    use std::os::unix::process::ExitStatusExt;
+    let out = Command::new("timeout")
+        .args(["--kill-after=5s", "--", "120s"])
+        .arg(program).args(args).output()
+        .unwrap_or_else(|e| fail(&format!("cannot start expected panic guest {program}: {e}")));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let mut lines = stderr.lines();
+    let message = lines.next() == Some("parity assertion failed");
+    let mut qemu_abort = false;
+    let mut timeout_abort = false;
+    let mut clean = true;
+    for line in lines {
+        match line {
+            "qemu: uncaught target signal 6 (Aborted) - core dumped" if !qemu_abort => qemu_abort = true,
+            "timeout: the monitored command dumped core" if !timeout_abort => timeout_abort = true,
+            _ => clean = false,
+        }
+    }
+    let abort = out.status.signal() == Some(6) ||
+        (out.status.code() == Some(134) && qemu_abort);
+    if !abort || !message || !clean || out.stdout != b"before\nPARITY_FAIL|differs\n" {
+        fail(&format!("{program} {args:?}: expected exact panic, observed status={:?}, stdout={:?}, stderr={stderr}", out.status, out.stdout));
+    }
+    // Canonicalize the proven abort, not arbitrary signal exits.
+    Some((134, out.stdout, "parity assertion failed\n".into()))
+}
+
 fn fixtures(root: &Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
     let mut stack = vec![root.join("tests/fixtures")];
@@ -348,6 +380,7 @@ fn main() {
     }
     println!("PASS unqualified cross-target profile rejection");
     let mut required_passed = BTreeSet::new();
+    let mut expected_panic_passed = BTreeSet::new();
     let mut required_runtime_passed = BTreeSet::new();
     let p = |name: &str| work.join(name).to_string_lossy().into_owned();
     let mut compared: BTreeMap<String, (usize, usize)> = o.triples.iter().map(|t| (t.clone(), (0, 0))).collect();
@@ -428,8 +461,9 @@ fn main() {
             needs_runtime = true;
             runtime_linked += 1;
         }
+        let expected_panic = name == EXPECTED_PANIC_FIXTURE;
         println!("EXEC host oracle {i}: {name}");
-        let Some((host_code, host_out, _)) = run(&hbin, &[]) else { fail(&format!("{name}: host binary did not start")) };
+        let Some((host_code, host_out, _)) = run_guest(&hbin, &[], expected_panic) else { fail(&format!("{name}: host binary did not start")) };
 
         if host_code < 0 { fail(&format!("{name}: host oracle terminated by signal")); }
         if required && (host_code != 42 || !host_out.is_empty()) {
@@ -492,14 +526,19 @@ fn main() {
                 Some(prefix) => {
                     let mut args: Vec<&str> = prefix[1..].iter().map(String::as_str).collect();
                     args.push(&bin);
-                    run(&prefix[0], &args)
+                    run_guest(&prefix[0], &args, expected_panic)
                 }
-                None => run(&bin, &[]),
+                None => run_guest(&bin, &[], expected_panic),
             };
             let entry = compared.get_mut(triple).expect("triple");
             match result {
                 Some((code, out, _)) if code == host_code && out == host_out => {
-                    entry.0 += 1;
+                    if expected_panic {
+                        expected_panic_passed.insert(triple.clone());
+                        println!("PASS intentional panic guest {triple} {name}: drained stdout + diagnosed abort");
+                    } else {
+                        entry.0 += 1;
+                    }
                     if required {
                         required_passed.insert(triple.clone());
                         println!("PASS mandatory wide-i64 guest {triple}: exit=42");
@@ -528,6 +567,9 @@ fn main() {
             failures.push(format!("{triple}: mandatory wide-i64 guest did not execute successfully"));
         }
         if o.runtime_dir.is_some() {
+            if !expected_panic_passed.contains(triple) {
+                failures.push(format!("{triple}: mandatory intentional panic guest did not execute successfully"));
+            }
             for (fixture, _) in REQUIRED_RUNTIME_GUESTS {
                 if !required_runtime_passed.contains(&(triple.clone(), (*fixture).to_owned())) {
                     failures.push(format!("{triple}: mandatory runtime guest {fixture} did not execute successfully"));
