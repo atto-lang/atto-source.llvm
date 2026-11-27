@@ -328,13 +328,23 @@ struct ActorInfo {
 }
 
 /// Program-wide declaration tables shared by every body check.
-fn constant_default(value: &DefaultLiteral, ty: Type, tmp: u32, pos: Pos) -> R<TE> {
+fn constant_default(value: &DefaultLiteral, ty: Type, tmp: u32, pos: Pos, data: &mut Vec<u8>) -> R<TE> {
     match (value, ty) {
         (DefaultLiteral::Int(n), Type::Int) => Ok(TE { ty, e: TExpr::I64(*n) }),
         (DefaultLiteral::Int(n), Type::OptionInt) => Ok(TE { ty, e: TExpr::AdtNew {
             tag: 1, payload: Some(Box::new(TE { ty: Type::Int, e: TExpr::I64(*n) })), tmp,
         }}),
-        (DefaultLiteral::None, Type::OptionInt) => Ok(TE { ty, e: TExpr::AdtNew {
+        (DefaultLiteral::Str(s), Type::OptionStr) => {
+            if data.len().checked_add(s.len()).is_none_or(|n| n > MAX_STRING_DATA) {
+                return Err(Diagnostic::new(pos, "E_SOURCE_LIMIT", "too much string literal data"));
+            }
+            let offset = data.len() as u32;
+            data.extend_from_slice(s.as_bytes());
+            Ok(TE { ty, e: TExpr::AdtNew { tag: 1,
+                payload: Some(Box::new(TE { ty: Type::Str, e: TExpr::StrConst(offset, s.len() as u32) })), tmp,
+            }})
+        }
+        (DefaultLiteral::None, Type::OptionInt | Type::OptionStr) => Ok(TE { ty, e: TExpr::AdtNew {
             tag: 0, payload: None, tmp,
         }}),
         _ => Err(type_err(pos, "default literal does not match formal type")),
@@ -781,7 +791,7 @@ pub fn check(p: &Program) -> R<TProgram> {
             // This bounded profile only admits exact, concrete Copy-like
             // caller types. Never select a generator or nominal owner by guess.
             let admitted = |t: Type| matches!(t, Type::Int | Type::Bool | Type::Float
-                | Type::Str | Type::OptionInt | Type::OptionResultIntStr);
+                | Type::Str | Type::OptionInt | Type::OptionStr | Type::OptionResultIntStr);
             let family = overloads.entry(key.clone()).or_insert_with(|| vec![first.clone()]);
             if f.name == "main" || f.is_generator || family.iter().any(|s| p.funcs[s.0 as usize].is_generator)
                 || !params.iter().copied().all(admitted)
@@ -806,12 +816,12 @@ pub fn check(p: &Program) -> R<TProgram> {
     let mut presence_families: BTreeMap<String, Vec<(u32, Vec<crate::call_presence_v2::Formal>, Type)>> = BTreeMap::new();
     for f in &p.funcs {
         for q in &f.params {
-            if (q.none_default.is_some() && (q.ty != Type::OptionInt || q.mutable))
+            if (q.none_default.is_some() && (!matches!(q.ty, Type::OptionInt | Type::OptionStr) || q.mutable))
                 || (q.omission_default.is_some() && (!q.omittable || q.mutable))
-                || (q.omittable && !matches!(q.ty, Type::OptionInt | Type::OptionResultIntStr) && q.omission_default.is_none()) {
+                || (q.omittable && !matches!(q.ty, Type::OptionInt | Type::OptionStr | Type::OptionResultIntStr) && q.omission_default.is_none()) {
                 return Err(type_err(q.pos, "invalid default metadata"));
             }
-            if let Some(value) = &q.omission_default { constant_default(value, q.ty, 0, q.pos)?; }
+            if let Some(value) = &q.omission_default { constant_default(value, q.ty, 0, q.pos, &mut Vec::new())?; }
         }
         if f.params.iter().any(|q| q.omittable || q.none_default.is_some() || q.omission_default.is_some()) {
             if f.name == "main" || f.is_generator || f.params.len() + f.params.iter().filter(|q| q.omittable).count() > crate::parser::MAX_PARAMS {
@@ -822,8 +832,8 @@ pub fn check(p: &Program) -> R<TProgram> {
     }
     for (i, f) in p.funcs.iter().enumerate() {
         if let Some(family) = presence_families.get_mut(&f.name) {
-            if f.is_generator || f.params.iter().any(|q| !matches!(q.ty, Type::Int | Type::Bool | Type::Float | Type::Str | Type::OptionInt | Type::OptionResultIntStr)) || f.params.iter().any(|q| q.omittable &&
-                (q.mutable || (!matches!(q.ty, Type::OptionInt | Type::OptionResultIntStr) && !(q.ty == Type::Int && q.omission_default.is_some())))) {
+            if f.is_generator || f.params.iter().any(|q| !matches!(q.ty, Type::Int | Type::Bool | Type::Float | Type::Str | Type::OptionInt | Type::OptionStr | Type::OptionResultIntStr)) || f.params.iter().any(|q| q.omittable &&
+                (q.mutable || (!matches!(q.ty, Type::OptionInt | Type::OptionStr | Type::OptionResultIntStr) && !(q.ty == Type::Int && q.omission_default.is_some())))) {
                 return Err(Diagnostic::new(f.pos, "E_UNSUPPORTED", "unsupported omittable overload family"));
             }
             let formals = f.params.iter().map(|q| Ok(crate::call_presence_v2::Formal {
@@ -1100,7 +1110,7 @@ pub fn check(p: &Program) -> R<TProgram> {
         for (j, q) in f.params.iter().enumerate() {
             let omitted_slot = if q.omittable { let s = flag; flag += 1; Some(s) } else { None };
             if let Some(default) = &q.none_default {
-                if q.ty != Type::OptionInt || q.mutable {
+                if !matches!(q.ty, Type::OptionInt | Type::OptionStr) || q.mutable {
                     return Err(type_err(q.pos, "unsupported None default formal"));
                 }
                 if body.1.len() >= MAX_LOCALS {
@@ -1108,7 +1118,7 @@ pub fn check(p: &Program) -> R<TProgram> {
                 }
                 let tmp = named.len() as u32 + body.1.len() as u32;
                 body.1.push(q.ty);
-                let value = constant_default(default, q.ty, tmp, q.pos)?;
+                let value = constant_default(default, q.ty, tmp, q.pos, &mut data)?;
                 let is_none = TE { ty: Type::Bool, e: TExpr::AdtIs {
                     obj: Box::new(TE { ty: q.ty, e: TExpr::Local(j as u32) }), tag: 0,
                 }};
@@ -1893,7 +1903,7 @@ impl<'a> FnCx<'a> {
     fn match_stmt(&mut self, subject: &Expr, arms: &[MatchArm], pos: Pos) -> R<TStmt> {
         let subj = self.value(subject)?;
         let sty = subj.ty;
-        if matches!(sty, Type::OptionInt | Type::ResultIntStr | Type::OptionResultIntStr) {
+        if matches!(sty, Type::OptionInt | Type::OptionStr | Type::ResultIntStr | Type::OptionResultIntStr) {
             return self.match_adt(subj, arms, pos);
         }
         if !matches!(sty, Type::Int | Type::Bool | Type::Enum(_) | Type::Float | Type::Str) {
@@ -2101,6 +2111,8 @@ impl<'a> FnCx<'a> {
                         (Type::ResultIntStr, "Err") => (1, Some(Type::Str)),
                         (Type::OptionInt, "None") => (0, None),
                         (Type::OptionInt, "Some") => (1, Some(Type::Int)),
+                        (Type::OptionStr, "None") => (0, None),
+                        (Type::OptionStr, "Some") => (1, Some(Type::Str)),
                         (Type::OptionResultIntStr, "None") => (0, None),
                         (Type::OptionResultIntStr, "Some") => (1, Some(Type::ResultIntStr)),
                         _ => return Err(type_err(arm.pos,
@@ -2299,6 +2311,8 @@ impl<'a> FnCx<'a> {
             (Type::ResultIntStr, "Err") => (1, Some(Type::Str)),
             (Type::OptionInt, "None") => (0, None),
             (Type::OptionInt, "Some") => (1, Some(Type::Int)),
+            (Type::OptionStr, "None") => (0, None),
+            (Type::OptionStr, "Some") => (1, Some(Type::Str)),
             (Type::OptionResultIntStr, "None") => (0, None),
             (Type::OptionResultIntStr, "Some") => (1, Some(Type::ResultIntStr)),
             _ => return Err(type_err(e.pos,
@@ -2413,7 +2427,7 @@ impl<'a> FnCx<'a> {
                 let value = self.consume(inner)?;
                 let success_tag = match value.ty {
                     Type::ResultIntStr => 0,
-                    Type::OptionInt => 1,
+                    Type::OptionInt | Type::OptionStr => 1,
                     _ => return Err(type_err(e.pos,
                         format!("postfix '?' requires Option<int> or Result<int,string>, found {}", self.tn(value.ty)))),
                 };
@@ -2421,10 +2435,11 @@ impl<'a> FnCx<'a> {
                     return Err(type_err(e.pos,
                         format!("postfix '?' can propagate {} only from a function returning the same type; found {}", self.tn(value.ty), self.tn(self.ret))));
                 }
+                let payload_ty = if value.ty == Type::OptionStr { Type::Str } else { Type::Int };
                 let tmp = self.temp(value.ty, e.pos)?;
                 Ok(TE { e: TExpr::AdtPropagate {
                     source: Box::new(value), tmp, success_tag
-                }, ty: Type::Int })
+                }, ty: payload_ty })
             }
             // receivers that are not names recurse; keep that path thin
             ExprKind::Member(base, name) if !matches!(base.kind, ExprKind::Var(_) | ExprKind::SelfRef) => {
@@ -2611,7 +2626,7 @@ impl<'a> FnCx<'a> {
                             ),
                         ));
                     }
-                    if matches!(a.ty, Type::Class(_) | Type::ActorRef(_) | Type::OptionInt | Type::ResultIntStr | Type::OptionResultIntStr) {
+                    if matches!(a.ty, Type::Class(_) | Type::ActorRef(_) | Type::OptionInt | Type::OptionStr | Type::ResultIntStr | Type::OptionResultIntStr) {
                         return Err(Diagnostic::new(
                             pos,
                             "E_UNSUPPORTED",
@@ -3245,6 +3260,7 @@ impl<'a> FnCx<'a> {
             ExprKind::Call(name, args) if name == "Some" && args.len() == 1 => {
                 match self.overload_item(&args[0])? {
                     Item::Typed(Type::Int) => Type::OptionInt,
+                    Item::Typed(Type::Str) => Type::OptionStr,
                     Item::Typed(Type::ResultIntStr) => Type::OptionResultIntStr,
                     _ => return Err(type_err(arg.pos, "unsupported Some payload for typed overload")),
                 }
@@ -3404,7 +3420,7 @@ impl<'a> FnCx<'a> {
                     Origin::ExplicitHole(_) | Origin::Absent => {
                         if let Some(default) = self.g.omission_defaults[idx as usize][j].clone() {
                             let tmp = if formal.ty == Type::Int { 0 } else { self.temp(formal.ty, pos)? };
-                            typed.push(constant_default(&default, formal.ty, tmp, pos)?);
+                            typed.push(constant_default(&default, formal.ty, tmp, pos, self.data)?);
                         } else {
                             let none = Expr { kind: ExprKind::Var("None".into()), pos };
                             typed.push(self.consume_expected(&none, formal.ty)?);

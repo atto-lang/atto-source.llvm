@@ -26,6 +26,7 @@ pub enum Type {
     /// First executable ADT profiles; their payloads use the checked module heap.
     /// Other generic instantiations reject without emitting an artifact.
     OptionInt,
+    OptionStr,
     ResultIntStr,
     /// First nested ADT profile: Some(Result<int,string>) or None.
     /// Generic ADT instantiations remain deliberately restricted.
@@ -45,6 +46,7 @@ impl Type {
             Type::Float => "float",
             Type::Str => "string",
             Type::OptionInt => "Option<int>",
+            Type::OptionStr => "Option<string>",
             Type::ResultIntStr => "Result<int,string>",
             Type::OptionResultIntStr => "Option<Result<int,string>>",
             Type::GeneratorInt => "Generator<int>",
@@ -197,6 +199,7 @@ pub struct Func {
 #[derive(Clone, Debug)]
 pub enum DefaultLiteral {
     Int(i64),
+    Str(String),
     None,
 }
 
