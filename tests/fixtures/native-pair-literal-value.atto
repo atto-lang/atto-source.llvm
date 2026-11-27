@@ -1,0 +1,1 @@
+pub fnc main(): int { return (unknown_key := 42).value; }
