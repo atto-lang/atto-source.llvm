@@ -462,7 +462,7 @@ impl Emit<'_> {
                     BinOp::Ge => self.op(0x59),
                     BinOp::Eq => self.op(if int { 0x51 } else { 0x46 }),
                     BinOp::Ne => self.op(if int { 0x52 } else { 0x47 }),
-                    BinOp::Div => unreachable!("division not admitted by checker"),
+                    BinOp::Div => self.op(0x7f), // i64.div_s: statically safe divisor
                 }
             }
             TExpr::Ternary(c, a, b) => {
