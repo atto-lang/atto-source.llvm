@@ -866,7 +866,7 @@ fn main() {
         let owning_int = r#"define class ArrayOwnerFixture as pub val Array<int> values;end
           fnc create():ArrayOwnerFixture{val Array<int> a=new Array<int>();a.add(42);return new ArrayOwnerFixture(a);}
           pub routine main():int{val ArrayOwnerFixture value=create();return value.values.get(0)==42?0:1;}"#;
-        for (source, expected) in [
+        for (case_index, (source, expected)) in [
             (include_str!("fixtures/native-class-string/ordered-routing-locals.ores"), "enter;enter;initialize;finish;done;"),
             (include_str!("fixtures/native-class-string/routing-option-capture.ores"), ""),
             (include_str!("fixtures/native-class-string/nested-owned-capture.ores"), "id\n"),
@@ -876,17 +876,26 @@ fn main() {
             (owning_int, ""),
             (include_str!("fixtures/native-class-string/record-return.ores"), "segment\nlocal\n"),
             (include_str!("fixtures/native-class-string/owned-aggregate-return.ores"), "/foo/:id\nid\n"),
-        ] {
-            let path = scratch.0.join("standalone.ores");
-            let binary = scratch.0.join("standalone");
+        ].into_iter().enumerate() {
+            let path = scratch.0.join(format!("standalone-{case_index}.ores"));
+            let binary = scratch.0.join(format!("standalone-{case_index}"));
+            assert!(!binary.exists(), "stale standalone case {case_index}");
             fs::write(&path, source).unwrap();
             let built = run(Command::new(driver)
                 .env("ORESLANG_LLVMC", fs::canonicalize(&compiler).unwrap())
                 .env("CLANG", &clang).arg(&path).arg(&binary));
-            assert!(built.status.success(), "AOT driver: {}", String::from_utf8_lossy(&built.stderr));
+            assert!(built.status.success(), "AOT driver case {case_index}: {}", String::from_utf8_lossy(&built.stderr));
+            let published = fs::symlink_metadata(&binary).unwrap_or_else(|error| panic!(
+                "AOT case {case_index}: driver succeeded without published executable at {binary:?}: {error}; stdout={:?}; stderr={:?}",
+                String::from_utf8_lossy(&built.stdout), String::from_utf8_lossy(&built.stderr)));
+            assert!(published.is_file() && published.len() > 0, "AOT case {case_index}: invalid published file");
+            let canonical_binary = fs::canonicalize(&binary).unwrap();
             fs::remove_file(&path).unwrap();
-            let executed = run(Command::new(&binary).env_clear().env("PATH", ""));
-            assert_eq!(executed.status.code(), Some(0), "source-free AOT: {}", String::from_utf8_lossy(&executed.stderr));
+            assert!(!path.exists(), "AOT source was not removed");
+            let executed = Command::new(&canonical_binary).env_clear().env("PATH", "").output()
+                .unwrap_or_else(|error| panic!("source-free AOT case {case_index}: launch failed at {canonical_binary:?}: {error}; published bytes={}; still present={}",
+                    published.len(), canonical_binary.exists()));
+            assert_eq!(executed.status.code(), Some(0), "source-free AOT case {case_index}: {}", String::from_utf8_lossy(&executed.stderr));
             assert_eq!(executed.stdout, expected.as_bytes());
             assert!(executed.stderr.is_empty());
             standalone_runs += 1;
