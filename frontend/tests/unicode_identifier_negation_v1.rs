@@ -55,3 +55,15 @@ fn invalid_unicode_not_has_real_type_diagnostic() {
         assert_eq!(compile(source).unwrap_err().code, "E_TYPE");
     }
 }
+
+#[test]
+fn short_circuit_punctuation_cannot_be_split_by_trivia() {
+    for operator in ["& &", "&/* gap */&", "&\n&", "| |", "|/* gap */|", "|\n|"] {
+        let source = format!("pub fnc main(): int {{ return (true {operator} false) ? 42 : 0; }}");
+        assert!(compile(&source).is_err(), "split operator admitted: {operator:?}");
+    }
+    for operator in ["&&", "||"] {
+        let source = format!("pub fnc main(): int {{ return (true {operator} false) ? 42 : 0; }}");
+        assert!(compile(&source).is_ok(), "contiguous operator rejected: {operator}");
+    }
+}

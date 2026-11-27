@@ -5,13 +5,14 @@ use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
-    let isolated = args.first().map(String::as_str) == Some("--isolated-core");
-    if isolated { args.remove(0); }
+    let native_c = args.first().is_some_and(|s| s == "--emit=struct-native-c");
+    let isolated = args.first().is_some_and(|s| s == "--isolated-core");
+    if native_c || isolated { args.remove(0); }
     let (input, output) = match args.as_slice() {
         [input] => (input.as_str(), None),
         [input, flag, output] if flag == "-o" => (input.as_str(), Some(output.as_str())),
         _ => {
-            eprintln!("usage: attoc [--isolated-core] <input.atto> [-o out.wasm]");
+            eprintln!("usage: attoc [--emit=struct-native-c | --isolated-core] <input.atto> [-o output]");
             return ExitCode::from(2);
         }
     };
@@ -26,8 +27,8 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let compiled = if isolated { atto_compiler::compile_isolated_core(&source) } else { atto_compiler::compile(&source) };
-    let wasm = match compiled {
+    let compiled = if native_c { atto_compiler::compile_struct_native_c(&source).map(String::into_bytes) } else if isolated { atto_compiler::compile_isolated_core(&source) } else { atto_compiler::compile(&source) };
+    let bytes = match compiled {
         Ok(bytes) => bytes,
         Err(error) => {
             eprintln!("{input}:{error}");
@@ -46,7 +47,7 @@ fn main() -> ExitCode {
                     return ExitCode::from(2);
                 }
             };
-            if file.write_all(&wasm).is_err() || file.sync_all().is_err() {
+            if file.write_all(&bytes).is_err() || file.sync_all().is_err() {
                 drop(file);
                 let _ = std::fs::remove_file(path);
                 eprintln!("{path}: output artifact write failed");
@@ -54,7 +55,7 @@ fn main() -> ExitCode {
             }
         }
         None => {
-            if std::io::stdout().write_all(&wasm).is_err() {
+            if std::io::stdout().write_all(&bytes).is_err() {
                 eprintln!("cannot write compiler output");
                 return ExitCode::from(2);
             }
