@@ -28,6 +28,8 @@ struct FunctionEmitter<'a> {
     terminated: bool,
     block_name: String,
     slots: Vec<Type>,
+    // Only copied scalar parameters whose slots are never written use incoming SSA.
+    direct_params: Vec<bool>,
 }
 
 impl<'a> FunctionEmitter<'a> {
@@ -40,10 +42,39 @@ impl<'a> FunctionEmitter<'a> {
             }
         }
         scalar_type(func.ret)?;
+        let mut direct_params: Vec<bool> = func.params.iter()
+            .map(|ty| program.actors.is_empty() && matches!(*ty, Type::Int | Type::Bool))
+            .collect();
+        Self::scan_parameter_writes(&func.body, &mut direct_params);
         Ok(Self {
             program, func, out: String::new(), counter: 0,
-            terminated: false, block_name: String::new(), slots,
+            terminated: false, block_name: String::new(), slots, direct_params,
         })
+    }
+
+    // Audit every statement in lexical/branch bodies. Unknown IR is
+    // conservatively memory-backed; the existing emitter still rejects it.
+    fn scan_parameter_writes(body: &[TStmt], direct: &mut [bool]) {
+        for stmt in body {
+            match stmt {
+                TStmt::Set(slot, _) => {
+                    if let Some(value) = direct.get_mut(*slot as usize) {
+                        *value = false;
+                    }
+                }
+                TStmt::Block(nested) => Self::scan_parameter_writes(nested, direct),
+                TStmt::If(arms, fallback) => {
+                    for (_, nested) in arms {
+                        Self::scan_parameter_writes(nested, direct);
+                    }
+                    if let Some(nested) = fallback {
+                        Self::scan_parameter_writes(nested, direct);
+                    }
+                }
+                TStmt::GlobalSet(_, _) | TStmt::Expr(_) | TStmt::Return(_) => {}
+                _ => direct.fill(false),
+            }
+        }
     }
 
     fn id(&mut self, prefix: &str) -> String {
@@ -106,6 +137,9 @@ impl<'a> FunctionEmitter<'a> {
             TExpr::Local(slot) => {
                 let idx = *slot as usize;
                 let ty = scalar_type(*self.slots.get(idx).ok_or("E_INTERNAL: bad local slot")?)?;
+                if self.direct_params.get(idx) == Some(&true) {
+                    return Ok(format!("%arg{idx}"));
+                }
                 let tmp = self.id("v");
                 self.instr(format!("%{tmp} = load {ty}, ptr %local{idx}"));
                 Ok(format!("%{tmp}"))
@@ -332,6 +366,9 @@ impl<'a> FunctionEmitter<'a> {
             TStmt::Set(slot, value) => {
                 let idx = *slot as usize;
                 let ty = scalar_type(*self.slots.get(idx).ok_or("E_INTERNAL: bad set slot")?)?;
+                if self.direct_params.get(idx) == Some(&true) {
+                    return Err("E_INTERNAL: write to incoming SSA-only parameter".into());
+                }
                 let x = self.expr(value)?;
                 self.instr(format!("store {ty} {x}, ptr %local{idx}"));
             }
@@ -410,6 +447,9 @@ impl<'a> FunctionEmitter<'a> {
         self.label("entry");
         let all_slots = self.slots.clone();
         for (idx, ty) in all_slots.into_iter().enumerate() {
+            if self.direct_params.get(idx) == Some(&true) {
+                continue;
+            }
             let llty = scalar_type(ty)?;
             self.instr(format!("%local{idx} = alloca {llty}"));
             if idx < self.func.params.len() {
@@ -1194,5 +1234,40 @@ mod attached_actor_state_native_no_ir {
                 "full guarded Counter actor startup/message lowering is not proven");
             assert!(!error.is_empty());
         }
+    }
+}
+
+#[cfg(test)]
+mod incoming_scalar_ssa_tests {
+    use super::compile_ir;
+
+    #[test]
+    fn fixed_parameter_has_no_binding_stack_slot() {
+        let source = "fnc id(int n): int { return n; } pub fnc main(): int { return id(42); }";
+        let ir = compile_ir(source).expect("fixed scalar call");
+        assert!(ir.contains("ret i64 %arg0"), "{ir}");
+        assert!(!ir.contains("alloca"), "{ir}");
+    }
+
+    #[test]
+    fn unmodified_legacy_mut_parameter_is_still_ssa() {
+        let a = "fnc id(int n): int { return n; } pub fnc main(): int { return id(42); }";
+        let b = a.replace("int n", "int mut n");
+        assert_eq!(compile_ir(a).unwrap(), compile_ir(&b).unwrap());
+    }
+
+    #[test]
+    fn conditional_write_retains_slot_and_caller_value() {
+        let source = "fnc bump(int mut n): int { if n > 0 then n = n + 2; fi return n; } pub fnc main(): int { val int n = 20; return bump(n) + n; }";
+        let ir = compile_ir(source).expect("legacy writable copied scalar");
+        assert!(ir.contains("%local0 = alloca i64"), "{ir}");
+        assert!(ir.contains("store i64 %arg0, ptr %local0"), "{ir}");
+        assert!(ir.contains("load i64, ptr %local0"), "{ir}");
+    }
+
+    #[test]
+    fn fixed_parameter_assignment_still_rejected() {
+        let source = "fnc bump(int n): int { n = n + 2; return n; } pub fnc main(): int { return bump(40); }";
+        assert!(compile_ir(source).is_err());
     }
 }
