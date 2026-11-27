@@ -8,6 +8,7 @@ from pathlib import Path
 import signal
 import subprocess
 import tempfile
+from native_http_startup import wait_for_listener
 
 async def response(reader):
     raw = await asyncio.wait_for(reader.readuntil(b'\r\n\r\n'), 10)
@@ -79,9 +80,7 @@ def main():
     with tempfile.TemporaryFile(mode='w+') as log:
         process = subprocess.Popen([str(args.server.resolve()), '0', '128', '4'], stdout=subprocess.PIPE, stderr=log, text=True)
         try:
-            line = process.stdout.readline()
-            if not line.startswith('LISTENING '): raise AssertionError(line)
-            port = int(dict(item.split('=') for item in line.split()[1:])['port'])
+            port = wait_for_listener(process)
             accepted, malformed = asyncio.run(exercise(port))
             process.send_signal(signal.SIGTERM)
             out, _ = process.communicate(timeout=20)

@@ -13,6 +13,7 @@ p.add_argument('--cxx', required=True)
 p.add_argument('--root', type=Path, required=True)
 p.add_argument('--sanitize', action='store_true')
 a = p.parse_args()
+subprocess.run([sys.executable, str(a.root / 'tests/test_native_http_startup.py')], check=True, timeout=20)
 with tempfile.TemporaryDirectory(prefix='ores-native-http-') as temporary:
     env = dict(os.environ, ORESLANG_LLVMC=str(Path(a.compiler).resolve()), CLANG=a.clang, CXX=a.cxx,
                SANITIZE='1' if a.sanitize else '0')

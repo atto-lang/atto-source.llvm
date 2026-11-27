@@ -1,0 +1,22 @@
+name: Native HTTP harness startup regression
+on:
+  push:
+    branches: ['test/native-http-bounded-startup-20261127']
+  pull_request:
+    paths:
+      - 'tests/native_http_startup.py'
+      - 'tests/test_native_http_startup.py'
+      - 'tests/native_http_actor_e2e.py'
+      - 'tests/native_http_build_and_test.py'
+      - '.github/workflows/native-http-startup-regression.yml'
+permissions:
+  contents: read
+jobs:
+  host-startup-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - run: python3 tests/test_native_http_startup.py -v
