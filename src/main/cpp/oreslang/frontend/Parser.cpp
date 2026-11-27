@@ -3927,6 +3927,10 @@ private:
         if (owner.empty() && arrow_return_type && token_.text == "return")
             fail("native compact end-delimited callable requires '::' before same-line body");
         require("{");
+        if (stored_pair_binding_ahead()) {
+            stored_pair_body(value, owner);
+            return value;
+        }
         auto array_effect_ahead = [&] {
             return peek_next().text == "." && std::any_of(value.locals.begin(), value.locals.end(),
                 [&](const LocalBinding& local) { return local.int_array && local.name == token_.text; });
@@ -6727,8 +6731,210 @@ private:
         return expr;
     }
 
+    // Deliberately bounded stored Pair profile: flat, source-local int main,
+    // no imports or other declarations. Literal key metadata plus a unique
+    // checked scalar local, never a raw i64 pretending to be a Pair.
+    struct StoredPair {
+        std::string key;
+        std::string slot;
+        std::string qualifier;
+    };
+    bool stored_pair_binding_ahead() {
+        if (token_.kind != Kind::Identifier ||
+                (token_.text != "const" && token_.text != "val" && token_.text != "let"))
+            return false;
+        Lexer look = lexer_;
+        const Token name = look.next();
+        if (name.kind != Kind::Identifier || reserved(name.text)) return false;
+        const Token op = look.next();
+        if (name.text == "Pair" && op.kind == Kind::Symbol && op.text == "<")
+            return true;
+        if (op.kind != Kind::Symbol) return false;
+        if (op.text == ":=") return true;
+        if (op.text != "=") return false;
+        const Token key = look.next(), sep = look.next();
+        if ((key.kind == Kind::Identifier || key.kind == Kind::String) &&
+                sep.kind == Kind::Symbol && sep.text == ":=") return true;
+        // Distinguish an escaping literal factory from the previously admitted
+        // immediate .value/.second projection. Inspect balanced token groups,
+        // never text inside comments or quoted data.
+        if (key.kind != Kind::Identifier || key.text != "Pair" ||
+                sep.kind != Kind::Symbol || sep.text != ".") return false;
+        const Token method = look.next(), open = look.next();
+        if (method.kind != Kind::Identifier || method.text != "of" ||
+                open.kind != Kind::Symbol || open.text != "(") return false;
+        std::size_t depth = 1;
+        for (Token t = look.next(); t.kind != Kind::End; t = look.next()) {
+            if (t.kind != Kind::Symbol) continue;
+            if (t.text == "(" && ++depth > 128)
+                fail("E_SOURCE_LIMIT: stored Pair factory nesting");
+            if (t.text == ")" && --depth == 0) {
+                const Token next = look.next();
+                return next.kind == Kind::Symbol && next.text == ";";
+            }
+        }
+        return false;
+    }
+
+    void require_stored_pair_source_profile(const Function& value, const std::string& owner) {
+        if (!owner.empty() || value.name != "main" || !value.exported ||
+                value.returns_void || value.return_type != ScalarType::I64 ||
+                !value.parameters.empty() || !value.generic_parameters.empty() ||
+                value.async_source_i64 || value.has_declared_effects)
+            fail("E_PAIR_STORAGE_UNSUPPORTED: bounded Pair requires public zero-argument int main");
+        Lexer scan(source_, unsafe_base_offset_, experimental_pointer_int_aot_);
+        const std::pair<Kind, std::string_view> header[] = {
+            {Kind::Identifier,"pub"},{Kind::Identifier,"fnc"},{Kind::Identifier,"main"},
+            {Kind::Symbol,"("},{Kind::Symbol,")"},{Kind::Symbol,":"},
+            {Kind::Identifier,"int"},{Kind::Symbol,"{"}
+        };
+        for (const auto& part : header) {
+            const Token item = scan.next();
+            if (item.kind != part.first || item.text != part.second)
+                fail("E_PAIR_SCOPE_UNSUPPORTED: only one flat source-local main is admitted");
+        }
+    }
+
+    void check_stored_pair_scalar_tree(const Expression& expr, std::size_t depth = 1) {
+        require_expression_depth(depth, expr);
+        using K = Expression::Kind;
+        switch (expr.kind) {
+            case K::Integer: case K::Boolean: case K::String: break;
+            case K::Variable:
+                if (std::none_of(stored_pair_locals_.begin(), stored_pair_locals_.end(),
+                        [&](const auto& item) { return item.second.slot == expr.name; }))
+                    fail("E_UNBOUND: unresolved value operand in stored Pair profile");
+                break;
+            case K::Negate: case K::Abs: case K::LogicalNot:
+            case K::Add: case K::Subtract: case K::Multiply:
+            case K::Remainder: case K::Modulo: case K::BitXor:
+            case K::Equal: case K::NotEqual: case K::Less: case K::LessEqual:
+            case K::Greater: case K::GreaterEqual: case K::LogicalAnd:
+            case K::LogicalOr: case K::LogicalXor: case K::Conditional: case K::Cast:
+            case K::ShiftLeft: case K::ShiftRight: case K::ShiftUnsignedRight:
+                break;
+            default:
+                fail("E_PAIR_STORAGE_UNSUPPORTED: effectful or escaping scalar tree");
+        }
+        auto child = [&](const std::unique_ptr<Expression>& e) {
+            if (e) check_stored_pair_scalar_tree(*e, depth + 1);
+        };
+        child(expr.left); child(expr.right); child(expr.condition);
+        child(expr.condition_lhs); child(expr.condition_rhs);
+        child(expr.when_true); child(expr.when_false);
+        if (!expr.arguments.empty())
+            fail("E_PAIR_STORAGE_UNSUPPORTED: call arguments are not local scalar storage");
+    }
+
+    std::string stored_pair_key() {
+        if (token_.kind == Kind::String) {
+            auto key = string_literal(token_.text); advance(); return key;
+        }
+        return identifier();
+    }
+
+    void stored_pair_body(Function& value, const std::string& owner) {
+        require_stored_pair_source_profile(value, owner);
+        struct Clear {
+            std::unordered_map<std::string, StoredPair>& pairs;
+            ~Clear() { pairs.clear(); }
+        } clear{stored_pair_locals_};
+        if (!stored_pair_locals_.empty())
+            fail("E_PAIR_SCOPE_UNSUPPORTED: nested Pair profile");
+        std::size_t ordinal = 0;
+        while (stored_pair_binding_ahead()) {
+            if (ordinal >= 64) fail("E_SOURCE_LIMIT: stored Pair local limit");
+            const auto offset = token_.offset;
+            const std::string qualifier(token_.text);
+            advance();
+            const bool typed_alias = token_.kind == Kind::Identifier && token_.text == "Pair"
+                && peek_next().kind == Kind::Symbol && peek_next().text == "<";
+            if (typed_alias) {
+                require("Pair"); require("<"); require("int"); require(">");
+            }
+            const auto name = identifier();
+            if (name == "Pair" || name == "Entry")
+                fail("E_PAIR_SCOPE_UNSUPPORTED: competing builtin name");
+            const auto previous = stored_pair_locals_.find(name);
+            if (previous != stored_pair_locals_.end() &&
+                    (qualifier != "let" || previous->second.qualifier != "let"))
+                fail("E_DUPLICATE: duplicate stored Pair binding");
+            std::string key;
+            std::unique_ptr<Expression> payload;
+            if (typed_alias) {
+                require("=");
+                const auto origin = identifier();
+                const auto found = stored_pair_locals_.find(origin);
+                if (found == stored_pair_locals_.end())
+                    fail("E_PAIR_TYPE: expected initialized Pair<int> alias");
+                if (qualifier == "const" && found->second.qualifier != "const")
+                    fail("E_PAIR_CONSTEXPR: const alias requires constant source");
+                key = found->second.key;
+                payload = make_expression(Expression::Kind::Variable, offset);
+                payload->name = found->second.slot;
+            } else if (accept(":=")) {
+                key = name;
+                payload = expression();
+            } else {
+                require("=");
+                if (token_.kind == Kind::Identifier && token_.text == "Pair" &&
+                        peek_next().kind == Kind::Symbol && peek_next().text == ".") {
+                    require("Pair"); require("."); require("of"); require("(");
+                    if (token_.kind != Kind::String)
+                        fail("E_PAIR_KEY_TYPE: factory key requires a static string");
+                    key = stored_pair_key();
+                    require(","); payload = expression(); require(")");
+                } else {
+                    key = stored_pair_key();
+                    require(":="); payload = expression();
+                }
+            }
+            if (token_.kind == Kind::Symbol && token_.text == ":=")
+                fail("E_PAIR_CHAIN: Pair construction is nonassociative");
+            require(";");
+            check_stored_pair_scalar_tree(*payload);
+            if (qualifier == "const" && !native_const_scalar_tree(*payload, value.locals))
+                fail("E_PAIR_CONSTEXPR: constant Pair requires constant payload");
+            LocalBinding binding;
+            binding.name = "$pair$" + std::to_string(ordinal++);
+            binding.offset = offset;
+            binding.scalar_type = ScalarType::I64;
+            binding.owner_mutable = qualifier != "const"; // const-proof metadata only
+            binding.initializer = std::move(payload);
+            // Publish only after the initializer was parsed and checked against
+            // the prior lexical environment. let creates a fresh hidden slot.
+            stored_pair_locals_.insert_or_assign(name, StoredPair{std::move(key), binding.name, qualifier});
+            value.locals.push_back(std::move(binding));
+        }
+        if (!accept("return"))
+            fail("E_PAIR_STORAGE_UNSUPPORTED: flat Pair profile requires terminal return");
+        value.result = expression();
+        check_stored_pair_scalar_tree(*value.result);
+        require(";"); require("}");
+        if (token_.kind != Kind::End)
+            fail("E_PAIR_SCOPE_UNSUPPORTED: additional source declarations are not admitted");
+    }
+
     std::unique_ptr<Expression> primary() {
         const auto offset = token_.offset;
+        if (token_.kind == Kind::Identifier) {
+            const auto found = stored_pair_locals_.find(std::string(token_.text));
+            if (found != stored_pair_locals_.end()) {
+                advance();
+                if (!accept("."))
+                    fail("E_PAIR_ESCAPE_UNSUPPORTED: Pair cannot become a scalar or escape");
+                if (accept("key")) {
+                    auto key = make_expression(Expression::Kind::String, offset);
+                    key->name = found->second.key;
+                    return key;
+                }
+                if (!accept("value"))
+                    fail("E_PAIR_PROJECTION_UNSUPPORTED: only key and value are admitted");
+                auto payload = make_expression(Expression::Kind::Variable, offset);
+                payload->name = found->second.slot;
+                return payload;
+            }
+        }
         if (starts_grouped_pair_literal()) return grouped_pair_literal_projection(offset);
         if (token_.kind == Kind::Identifier && token_.text == "Pair") {
             Lexer probe = lexer_;
@@ -9616,6 +9822,7 @@ private:
         throw std::runtime_error(reason + " at byte " + std::to_string(token_.offset));
     }
 
+    std::unordered_map<std::string, StoredPair> stored_pair_locals_;
     bool inline_pair_scope_checked_ = false;
     std::unordered_map<std::string, ForwardType> forwards_;
     std::unordered_map<std::string, std::string> actor_forwards_;
