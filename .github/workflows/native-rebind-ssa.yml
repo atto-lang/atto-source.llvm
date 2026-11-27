@@ -58,6 +58,26 @@ jobs:
               test "$status" = 42
             done
           done
+          # Canonical v2: migration profile must require set at formal writes.
+          printf '%s\n' 'fnc bump(rebind int n): int { set n = n + 2; return n; } pub fnc main(): int { val int n = 20; return bump(n) + n; }' > "$work/canonical-rebind.atto"
+          printf '%s\n' 'fnc bump(int n): int { set n = n + 2; return n; } pub fnc main(): int { return bump(40); }' > "$work/canonical-fixed-reject.atto"
+          target/release/atto-llvm "$work/canonical-rebind.atto" -o "$work/canonical-rebind.ll" --emit-llvm --explicit-rebinding
+          for opt in 0 2; do
+            clang -x ir -O"$opt" -o "$work/canonical-rebind-$opt" "$work/canonical-rebind.ll"
+            status=0
+            timeout 10s "$work/canonical-rebind-$opt" || status=$?
+            test "$status" = 42
+          done
+          for name in fixed marked; do
+            target/release/atto-llvm "$work/$name.atto" -o "$work/canonical-$name.ll" --emit-llvm --explicit-rebinding
+          done
+          cmp "$work/canonical-fixed.ll" "$work/canonical-marked.ll"
+          for name in rebound canonical-fixed-reject; do
+            if target/release/atto-llvm "$work/$name.atto" -o "$work/v2-$name.ll" --emit-llvm --explicit-rebinding >"$work/v2-$name.log" 2>&1; then exit 1; fi
+            test ! -e "$work/v2-$name.ll"
+          done
+          grep -q E_EXPLICIT_REBIND "$work/v2-rebound.log"
+          grep -q E_IMMUTABLE "$work/v2-canonical-fixed-reject.log"
           cmp "$work/fixed.ll" "$work/marked.ll"
           grep -q 'ret i64 %arg0' "$work/fixed.ll"
           if grep -q 'alloca' "$work/fixed.ll"; then exit 1; fi

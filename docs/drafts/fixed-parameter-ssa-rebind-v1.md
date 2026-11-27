@@ -19,3 +19,7 @@ Status: proposal only; no compiler implementation or execution claimed. Keep dra
 ## Backend-specific implementation and evidence
 
 Keep incoming pointer/scalar SSA arguments; use phi nodes at joins. Inspect pre- and post-optimization LLVM IR and native disassembly for parameter-only alloca/load/store and redundant retain/release; preserve ABI attributes only when proven (fixed is not noalias).
+
+## Canonical v2 update
+
+[Spec #318](https://github.com/atto-lang/atto-spec/pull/318) requires `set` for writes to rebindable formals. The native CI lane now tests the explicit-rebinding migration profile, compares unused-marker IR and rejects bare or fixed formal writes without artifacts. Legacy tests remain compatibility-only. [Conformance #736](https://github.com/atto-lang/atto-platform-conformance/pull/736). Object reference and conditional borrow parity remain unverified.
