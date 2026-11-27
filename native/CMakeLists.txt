@@ -165,3 +165,13 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   endif()
 endif()
 add_test(NAME tenant_bytes_host_reference COMMAND atto_tenant_bytes_host_test)
+
+# Parametric bundle semantics host component, not guest execution.
+add_executable(atto_parametric_bundle_host_test tests/parametric_bundle_refinement_test.cpp)
+target_include_directories(atto_parametric_bundle_host_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include/atto")
+target_compile_features(atto_parametric_bundle_host_test PRIVATE cxx_std_17)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(atto_parametric_bundle_host_test PRIVATE -Wall -Wextra -Werror -pedantic)
+endif()
+add_test(NAME parametric_bundle_host_reference COMMAND atto_parametric_bundle_host_test)
+set_tests_properties(parametric_bundle_host_reference PROPERTIES TIMEOUT 15)
