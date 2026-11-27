@@ -1,0 +1,112 @@
+name: LLVM wasm32 actor continuation negative admission v0
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/main.cpp'
+      - 'tests/wasm32_actor_continuation_negative_v0.py'
+      - 'tests/fixtures/wasm32-actor-suspended-negative-v0.atto'
+      - 'tests/fixtures/wasm32-actor-bounded-recursion-v1.atto'
+      - 'CMakeLists.txt'
+      - '.github/workflows/wasm-actor-continuation-deny-v0.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compiler-no-guest-continuation-admission:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout original immutable PR head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Pin exact HEAD, tree and byte-identical suspension negative
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          test "$(git hash-object tests/fixtures/wasm32-actor-suspended-negative-v0.atto)" = "aebd40549e88b49c906fd3fa2b0569ec7800deec"
+          test "$(git hash-object tests/fixtures/wasm32-actor-bounded-recursion-v1.atto)" = "947781cddf09d8e3e08c51cff2b7d8960e2d4750"
+          echo "ATTO_WASM_CONTINUATION_NEGATIVE_HEAD=$EXPECTED_HEAD"
+          echo "ATTO_WASM_CONTINUATION_NEGATIVE_TREE=$(git rev-parse 'HEAD^{tree}')"
+
+      - name: Install required real LLVM compiler build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y clang llvm-dev cmake build-essential python3
+          clang --version | head -n 1
+
+      - name: Build native compiler from exact source HEAD
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --target oreslang-llvmc --parallel 2
+          test -x build/oreslang-llvmc
+          sha256sum build/oreslang-llvmc
+
+      - name: Run actual negative suspension flags and positive recursion baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -I tests/wasm32_actor_continuation_negative_v0.py \
+            --compiler "$PWD/build/oreslang-llvmc" \
+            --negative "$PWD/tests/fixtures/wasm32-actor-suspended-negative-v0.atto" \
+            --baseline "$PWD/tests/fixtures/wasm32-actor-bounded-recursion-v1.atto" \
+            2>&1 | tee "$RUNNER_TEMP/llvm-wasm-guest-continuation-v0.log"
+          grep -F "PASS: explicit guest suspension/continuation admission denied; synchronous actor recursion unaffected" \
+            "$RUNNER_TEMP/llvm-wasm-guest-continuation-v0.log"
+
+      - name: Verify exact executable source identity and honest guest hold
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          python3 -I - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          root=pathlib.Path(os.environ["RUNNER_TEMP"])
+          log=(root/"llvm-wasm-guest-continuation-v0.log").read_text()
+          marker="PASS: explicit guest suspension/continuation admission denied; synchronous actor recursion unaffected"
+          if log.splitlines().count(marker)!=1:
+              raise SystemExit("exact-source compiler negative tests did not execute")
+          sha=lambda p:hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()
+          head=subprocess.check_output(("git","rev-parse","HEAD"),text=True).strip()
+          tree=subprocess.check_output(("git","rev-parse","HEAD^{tree}"),text=True).strip()
+          if head!=os.environ["EXPECTED_HEAD"]:raise SystemExit("HEAD drift")
+          receipt={
+              "schema":"attolang.llvm.wasm_actor_continuation_denial_v0",
+              "head_sha":head,"tree_sha":tree,
+              "run_id":int(os.environ["GITHUB_RUN_ID"]),
+              "run_attempt":int(os.environ["GITHUB_RUN_ATTEMPT"]),
+              "compiler_sha256":sha("build/oreslang-llvmc"),
+              "suspended_fixture_blob":"aebd40549e88b49c906fd3fa2b0569ec7800deec",
+              "compiler_guest_suspension_negative_executed":True,
+              "checked_synchronous_recursion_ir_executed":True,
+              "guest_resume_compiler_backed_executed":False,
+              "actual_guest_suspension_executed":False,
+              "cross_backend_parity_verified":False
+          }
+          (root/"llvm-wasm-guest-continuation-v0-receipt.json").write_text(
+              json.dumps(receipt,indent=2,sort_keys=True)+"\n")
+          PY
+
+      - name: Upload native compiler-owned negative evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: llvm-wasm-no-guest-continuation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/llvm-wasm-guest-continuation-v0.log
+            ${{ runner.temp }}/llvm-wasm-guest-continuation-v0-receipt.json
+          if-no-files-found: error
+          retention-days: 7
