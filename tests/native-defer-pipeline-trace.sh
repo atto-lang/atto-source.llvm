@@ -21,8 +21,8 @@ for opt in 0 2; do
     set -e
     printf 'guest O%s exit=%s collector=%s\n' "$opt" "${statuses[0]}" "${statuses[1]}"
     test "${statuses[0]}" = 42
-test "${statuses[1]}" = 0
-    printf '1\n2\n7\n10\n' > "$work/expected"
+    test "${statuses[1]}" = 0
+    printf '1\n2\ntrue\n7\n10\n' > "$work/expected"
     cmp "$work/expected" "$work/stdout-O$opt"
     printf 'NATIVE_DEFER_PIPELINE_PASS O%s\n' "$opt"
     sha256sum "$work/guest.ll" "$work/guest-O$opt"
