@@ -35,17 +35,12 @@ fnc wide_product(int left, int right): int {
   return left * right;
 }
 pub fnc main(): int {
-  let int wide = wide_product(65536, 65537);
-  if wide == 4295032832 then
-    if wide / 65536 == 65537 then
-      if wide - 4294967296 == 65536 then
-        if 0 - wide < 0 - 4294967296 then
-          return 42;
-        fi
-      fi
-    fi
-  fi
-  return 1;
+  return (
+    wide_product(65536, 65537) == 4295032832 &&
+    wide_product(65536, 65537) / 65536 == 65537 &&
+    wide_product(65536, 65537) - 4294967296 == 65536 &&
+    0 - wide_product(65536, 65537) < 0 - 4294967296
+  ) ? 42 : 1;
 }
 "#;
 const SKIP_MARKERS: &[&str] = &["/fail/", "unsupported", "reject", "invalid", "negative"];
@@ -360,11 +355,17 @@ fn main() {
         let src = fixture.to_string_lossy().into_owned();
         let name = fixture.strip_prefix(&o.root).unwrap_or(fixture).to_string_lossy().into_owned();
         // 1. Native oracle.
-        let Some((0, host_ir, _)) = run(&o.compiler, &["--target=host", &src]) else {
-            if required { fail("mandatory wide-i64 guest rejected by host compiler"); }
-            host_rejected += 1;
-            println!("NOT_COMPARED host emission rejected: {name}");
-            continue;
+        let host_ir = match run(&o.compiler, &["--target=host", &src]) {
+            Some((0, ir, _)) => ir,
+            other => {
+                let (status, _, diagnostic) = other.unwrap_or((-1, Vec::new(), String::new()));
+                if required {
+                    fail(&format!("mandatory wide-i64 guest rejected by host compiler (exit {status}): {diagnostic}"));
+                }
+                host_rejected += 1;
+                println!("NOT_COMPARED host emission rejected: {name} (exit {status}): {diagnostic}");
+                continue;
+            }
         };
         if host_ir.is_empty() {
             if required { fail("mandatory wide-i64 guest produced empty IR"); }
