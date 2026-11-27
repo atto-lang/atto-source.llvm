@@ -1,0 +1,29 @@
+name: Checked u64 LLVM and Wasm scalar candidate
+on:
+  pull_request:
+    paths:
+      - 'tools/atto_checked_u64.cpp'
+      - 'tests/checked_u64_native_wasm.test.mjs'
+      - 'contracts/atto-xo-checked-u64-debit-v1/**'
+      - '.github/workflows/checked-u64-native-wasm.yml'
+permissions:
+  contents: read
+jobs:
+  checked-guests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Require native compiler and freestanding wasm linker
+        run: |
+          clang --version
+          clang++ --version
+          wasm-ld --version
+          node --version
+      - name: Compile and execute real guests
+        run: |
+          ulimit -c 0
+          node --test tests/checked_u64_native_wasm.test.mjs
