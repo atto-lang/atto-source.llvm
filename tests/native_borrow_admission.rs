@@ -83,8 +83,8 @@ fn check_case_with_suffix(
     let stderr_path = root.join(format!("{name}.stderr"));
     // Snapshot the parent after creating the harness-owned log files.
     // A failed compiler must not leave artifacts alongside its fixture.
-    let stdout_file = fs::File::create(&stdout_path).unwrap();
-    let stderr_file = fs::File::create(&stderr_path).unwrap();
+    let stdout_file = fs::OpenOptions::new().read(true).write(true).create_new(true).open(&stdout_path).unwrap();
+    let stderr_file = fs::OpenOptions::new().read(true).write(true).create_new(true).open(&stderr_path).unwrap();
     // Capture file names alone are not sufficient provenance: a malicious
     // compiler can replace an existing log with a symlink or another file.
     // Keep the original open descriptions alive during execution. Size
@@ -136,9 +136,9 @@ fn check_case_with_suffix(
     }
     // The running-process check can race a compiler that exits immediately.
     // Enforce the output budget again before reading any potentially huge file.
-    for stream_path in [&stdout_path, &stderr_path] {
+    for file in &capture_handles {
         assert!(
-            fs::metadata(stream_path).unwrap().len() <= 1024 * 1024,
+            file.metadata().unwrap().len() <= 1024 * 1024,
             "{name}: compiler exceeded final output budget"
         );
     }
