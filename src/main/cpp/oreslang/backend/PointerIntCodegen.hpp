@@ -76,6 +76,13 @@ inline std::string emit_verified_ir(const Plan& plan) {
         return builder.CreateInBoundsGEP(array, allocation,
             {builder.getInt64(0), builder.getInt64(index)}, "pointer.int.slot");
     };
+    if (plan.form == Plan::Form::ReusableSlot) {
+        for (std::size_t i = 0; i < plan.slot_owners.size(); ++i) {
+            const auto& [name, value] = plan.slot_owners[i];
+            builder.CreateStore(builder.getInt64(value), slot(i));
+            scalar_values.emplace(name, builder.getInt64(value));
+        }
+    }
     std::function<llvm::Value*(const Expr&)> lower;
     lower = [&](const Expr& expr) -> llvm::Value* {
         switch (expr.kind) {
@@ -126,6 +133,10 @@ inline std::string emit_verified_ir(const Plan& plan) {
             break;
         case Step::Kind::Scalar:
             scalar_values.emplace(step.name, lower(*step.value));
+            break;
+        case Step::Kind::SlotBind:
+        case Step::Kind::SlotDetach:
+            // The independently validated local slot has no runtime identity.
             break;
         case Step::Kind::Close:
             if (plan.form == Plan::Form::BorrowedLocal) {

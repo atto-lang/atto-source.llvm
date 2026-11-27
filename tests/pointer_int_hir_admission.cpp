@@ -330,4 +330,52 @@ int main() {
     validate_ownership(local);
     assert(local.ownership_admitted);
     std::cout << "POINTER_LOCAL_HIR_ADVERSARIAL_REJECTIONS=5\n";
+    Plan slot;
+    slot.form = Plan::Form::ReusableSlot;
+    slot.local_handle = "p";
+    slot.slot_owners = {{"a", 40}, {"b", 2}};
+    slot.count = 2;
+    auto bind = [&](std::size_t i) {
+        Step s; s.kind = Step::Kind::SlotBind; s.index = i;
+        slot.steps.push_back(std::move(s));
+    };
+    auto read = [&](std::size_t i, const char* name, std::int64_t known) {
+        Step s; s.kind = Step::Kind::Scalar; s.name = name;
+        s.value = read_slot(i, known); slot.steps.push_back(std::move(s));
+    };
+    auto detach = [&] {
+        Step s; s.kind = Step::Kind::SlotDetach; slot.steps.push_back(std::move(s));
+    };
+    bind(0); read(0, "first", 40); detach();
+    bind(1); read(1, "second", 2); detach();
+    slot.result = std::make_unique<Expr>();
+    slot.result->kind = Expr::Kind::Add;
+    slot.result->lhs = variable("first", 40);
+    slot.result->rhs = variable("second", 2);
+    slot.result->known = 42;
+    validate_ownership(slot);
+    assert(slot.ownership_admitted);
+    slot.steps[1].value->index = 1;
+    must_reject("read must match current slot binding", [&] { verify_plan(slot); });
+    slot.steps[1].value->index = 0;
+    slot.steps[2].kind = Step::Kind::SlotBind;
+    must_reject("live slot rebind", [&] { verify_plan(slot); });
+    slot.steps[2].kind = Step::Kind::SlotDetach;
+    slot.steps[3].index = 2;
+    must_reject("out-of-bounds bind", [&] { verify_plan(slot); });
+    slot.steps[3].index = 1;
+    slot.steps[4].value->known = 99;
+    must_reject("forged slot read value", [&] { verify_plan(slot); });
+    slot.steps[4].value->known = 2;
+    slot.steps.pop_back();
+    must_reject("live slot on exit", [&] { verify_plan(slot); });
+    detach();
+    slot.form = Plan::Form::OwnedRegion;
+    must_reject("slot metadata in owning region", [&] { verify_plan(slot); });
+    slot.form = Plan::Form::ReusableSlot;
+    slot.result->lhs->name = "p";
+    must_reject("slot value escape", [&] { verify_plan(slot); });
+    slot.result->lhs->name = "first";
+    verify_plan(slot);
+    std::cout << "POINTER_SLOT_HIR_ADVERSARIAL_REJECTIONS=7\n";
 }
