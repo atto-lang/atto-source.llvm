@@ -315,7 +315,7 @@ struct MethodInfo {
 struct ClassInfo {
     name: String,
     immutable_leaf: bool,
-    closed_scalar_leaf: bool,
+    closed_copy_tree: bool,
     fields: Vec<FieldInfo>,
     methods: Vec<MethodInfo>,
     new_idx: u32,
@@ -816,12 +816,34 @@ pub fn check(p: &Program) -> R<TProgram> {
     // Only fixed scalar storage with no constructor/methods is a closed
     // immutable leaf. A nominal reference or a fixed outer slot alone is
     // never proof of transitive immutability.
-    let closed_scalar_leaves: Vec<bool> = p.classes.iter().map(|c| {
+    let mut closed_copy_trees: Vec<bool> = p.classes.iter().map(|c| {
         c.ctor.is_none() && c.methods.is_empty() && c.fields.iter().all(|f|
             !f.referent_mutable && const_init(&f.init)
                 && res(f.ty).is_ok_and(|t| matches!(t,
                     Type::Int | Type::Bool | Type::Float | Type::Str | Type::Enum(_))))
     }).collect();
+    // Closed fresh-only tree witness, at most three object levels and
+    // 64 objects per root. No reference injection or cyclic constructors.
+    let mut sizes: Vec<usize> = closed_copy_trees.iter().map(|ok| usize::from(*ok)).collect();
+    for _ in 0..2 {
+        let prior = sizes.clone();
+        for (ci, c) in p.classes.iter().enumerate() {
+            if prior[ci] != 0 || c.ctor.is_some() || !c.methods.is_empty() { continue; }
+            let mut size = 1usize;
+            let valid = c.fields.iter().all(|f| match res(f.ty) {
+                Ok(Type::Int | Type::Bool | Type::Float | Type::Str | Type::Enum(_)) =>
+                    !f.referent_mutable && const_init(&f.init),
+                Ok(Type::Class(child)) if (f.referent_mutable || f.fixed_val) && prior[child as usize] != 0 => {
+                    size = size.saturating_add(prior[child as usize]);
+                    matches!(&f.init.kind, ExprKind::New(name, args)
+                        if name == &class_names[child as usize] && args.is_empty())
+                }
+                _ => false,
+            });
+            if valid && size <= 64 { sizes[ci] = size; }
+        }
+    }
+    for (ci, size) in sizes.iter().enumerate() { closed_copy_trees[ci] = *size != 0; }
     let immutable_leaves: Vec<bool> = p.classes.iter().map(|c| {
         c.ctor.is_none() && c.methods.is_empty() && c.fields.iter().all(|f|
             f.mode == FieldMode::Final && !f.referent_mutable && const_init(&f.init)
@@ -842,7 +864,7 @@ pub fn check(p: &Program) -> R<TProgram> {
             let ok = match ty {
                 Type::Int | Type::Bool => true,
                 Type::Float | Type::Str | Type::Enum(_) => !actor,
-                Type::Class(ci) => !actor && ((!f.referent_mutable && immutable_leaves[ci as usize]) || ((f.referent_mutable || f.fixed_val) && closed_scalar_leaves[ci as usize]))
+                Type::Class(ci) => !actor && ((!f.referent_mutable && immutable_leaves[ci as usize]) || ((f.referent_mutable || f.fixed_val) && closed_copy_trees[ci as usize]))
                     && matches!(&f.init.kind, ExprKind::New(name, args)
                         if name == &class_names[ci as usize] && args.is_empty()),
                 _ => false,
@@ -877,8 +899,8 @@ pub fn check(p: &Program) -> R<TProgram> {
     for (ci, c) in p.classes.iter().enumerate() {
         let fields = fields_of(&c.name, &c.fields, false, 0)?;
         if fields.iter().any(|f| matches!(f.ty, Type::Class(child) if f.referent_mutable || (f.fixed_val && !immutable_leaves[child as usize])))
-            && (c.ctor.is_some() || !c.methods.is_empty()) {
-            return Err(Diagnostic::new(c.pos, "E_COPY_UNPROVEN", "mutable nested root requires a closed constructor-free, method-free layout"));
+            && !closed_copy_trees[ci] {
+            return Err(Diagnostic::new(c.pos, "E_COPY_UNPROVEN", "mutable nested root requires a bounded fresh-only tree"));
         }
         let mut methods = methods_of(&c.name, &c.methods, &c.fields)?;
         let new_idx = take();
@@ -898,7 +920,7 @@ pub fn check(p: &Program) -> R<TProgram> {
         classes.push(ClassInfo {
             name: c.name.clone(),
             immutable_leaf: immutable_leaves[ci],
-            closed_scalar_leaf: closed_scalar_leaves[ci],
+            closed_copy_tree: closed_copy_trees[ci],
             fields,
             methods,
             new_idx,
@@ -1407,7 +1429,7 @@ fn actor_type_ok(g: &Globals, actor: &str, t: Type, pos: Pos) -> R<()> {
 fn field_init(g: &Globals, f: &Field, ty: Type, owner: &str, actor: bool, imports: &mut Vec<Import>, data: &mut Vec<u8>) -> R<TE> {
     if let Type::Class(ci) = ty {
         let info = &g.classes[ci as usize];
-        if !actor && ((!f.referent_mutable && info.immutable_leaf) || ((f.referent_mutable || f.fixed_val) && info.closed_scalar_leaf)) && matches!(&f.init.kind,
+        if !actor && ((!f.referent_mutable && info.immutable_leaf) || ((f.referent_mutable || f.fixed_val) && info.closed_copy_tree)) && matches!(&f.init.kind,
             ExprKind::New(name, args) if name == &info.name && args.is_empty()) {
             return Ok(TE { e: TExpr::Call(info.new_idx, Vec::new()), ty });
         }
@@ -2251,41 +2273,59 @@ impl<'a> FnCx<'a> {
     }
 
     fn field_assign(&mut self, target: &Expr, field: &str, value: &Expr, pos: Pos) -> R<TStmt> {
-        if let ExprKind::Member(base, member) = &target.kind {
+        // All descendants of one immediate root field share its identity
+        // group. A unique subtree may write scalar slots along a fully
+        // mutable public path; inner reference replacement is not admitted.
+        if matches!(target.kind, ExprKind::Member(..)) {
+            let mut members = Vec::new();
+            let mut base = target;
+            while let ExprKind::Member(parent, member) = &base.kind {
+                members.push(member.as_str());
+                base = parent;
+            }
             if let ExprKind::Var(name) = &base.kind {
                 if let Some((root, Type::Class(ci), mutable)) = self.lookup(name).map(|l| (l.slot, l.ty, l.mutable)) {
-                    let outer = &self.g.classes[ci as usize];
-                    if let Some(edge) = outer.fields.iter().find(|f| f.name == *member) {
-                        if let Type::Class(child) = edge.ty {
-                            if edge.referent_mutable && self.g.classes[child as usize].closed_scalar_leaf {
-                                if !self.nested_linear || self.owner != Owner::TopLevel || !mutable ||
-                                    !self.fresh_copy_roots.contains(&root) || self.moved.contains(&root) ||
-                                    !self.nested_unique(root, edge.slot) {
-                                    return Err(Diagnostic::new(pos, "E_COPY_READONLY", "nested referent has no independent write authority"));
-                                }
-                                if !edge.public { return Err(Diagnostic::new(pos, "E_PRIVATE", "private outer field")); }
-                                let leaf = &self.g.classes[child as usize];
-                                let f = leaf.fields.iter().find(|f| f.name == field).ok_or_else(||
-                                    Diagnostic::new(pos, "E_UNBOUND", "unknown nested field"))?;
-                                if !f.public { return Err(Diagnostic::new(pos, "E_PRIVATE", "private nested field")); }
-                                if f.mode != FieldMode::Constructor {
-                                    return Err(Diagnostic::new(pos, "E_IMMUTABLE", "fixed nested field"));
-                                }
-                                if !const_init(value) {
-                                    return Err(Diagnostic::new(pos, "E_COPY_UNPROVEN", "nested write RHS requires a proven constant expression"));
-                                }
-                                let (edge_offset, offset, ty) = (edge.slot, f.slot, f.ty);
-                                let v = self.value(value)?;
-                                if v.ty != ty { return Err(type_err(value.pos, "nested field assignment type mismatch")); }
-                                if !self.nested_unique(root, edge_offset) || self.moved.contains(&root) {
-                                    return Err(Diagnostic::new(pos, "E_COPY_READONLY", "nested field RHS invalidated authority"));
-                                }
-                                return Ok(TStmt::FieldSet {
-                                    obj: TE { e: TExpr::FieldGet { obj: Box::new(TE { e: TExpr::Local(root), ty: Type::Class(ci) }), offset: edge_offset }, ty: Type::Class(child) },
-                                    offset, ty, value: v,
-                                });
-                            }
+                    let mut current = ci;
+                    let mut obj = TE { e: TExpr::Local(root), ty: Type::Class(ci) };
+                    let mut top_offset = None;
+                    let mut proven = true;
+                    for member in members.into_iter().rev() {
+                        let Some(edge) = self.g.classes[current as usize].fields.iter().find(|f| f.name == member) else { proven = false; break; };
+                        let Type::Class(child) = edge.ty else { proven = false; break; };
+                        if !edge.referent_mutable || !self.g.classes[child as usize].closed_copy_tree {
+                            proven = false; break;
                         }
+                        if !edge.public {
+                            return Err(Diagnostic::new(pos, "E_PRIVATE", "private nested path"));
+                        }
+                        top_offset.get_or_insert(edge.slot);
+                        obj = TE { e: TExpr::FieldGet { obj: Box::new(obj), offset: edge.slot }, ty: Type::Class(child) };
+                        current = child;
+                    }
+                    if let Some(edge_offset) = top_offset.filter(|_| proven) {
+                        if !self.nested_linear || self.owner != Owner::TopLevel || !mutable ||
+                            !self.fresh_copy_roots.contains(&root) || self.moved.contains(&root) ||
+                            !self.nested_unique(root, edge_offset) {
+                            return Err(Diagnostic::new(pos, "E_COPY_READONLY", "nested referent has no independent write authority"));
+                        }
+                        let f = self.g.classes[current as usize].fields.iter().find(|f| f.name == field).ok_or_else(||
+                            Diagnostic::new(pos, "E_UNBOUND", "unknown nested field"))?;
+                        if !f.public {
+                            return Err(Diagnostic::new(pos, "E_PRIVATE", "private nested field"));
+                        }
+                        if f.mode != FieldMode::Constructor {
+                            return Err(Diagnostic::new(pos, "E_IMMUTABLE", "fixed nested field"));
+                        }
+                        if !matches!(f.ty, Type::Int | Type::Bool | Type::Float | Type::Str | Type::Enum(_)) || !const_init(value) {
+                            return Err(Diagnostic::new(pos, "E_COPY_UNPROVEN", "nested write requires scalar storage and proven constant RHS"));
+                        }
+                        let (offset, ty) = (f.slot, f.ty);
+                        let v = self.value(value)?;
+                        if v.ty != ty { return Err(type_err(value.pos, "nested field assignment type mismatch")); }
+                        if !self.nested_unique(root, edge_offset) || self.moved.contains(&root) {
+                            return Err(Diagnostic::new(pos, "E_COPY_READONLY", "nested field RHS invalidated authority"));
+                        }
+                        return Ok(TStmt::FieldSet { obj, offset, ty, value: v });
                     }
                 }
             }
@@ -2319,7 +2359,7 @@ impl<'a> FnCx<'a> {
                                     Type::Class(child) => {
                                         let leaf = &self.g.classes[child as usize];
                                         ((!f.referent_mutable && leaf.immutable_leaf) ||
-                                            (self.nested_linear && f.referent_mutable && leaf.closed_scalar_leaf)) && matches!(&value.kind,
+                                            (self.nested_linear && f.referent_mutable && leaf.closed_copy_tree)) && matches!(&value.kind,
                                             ExprKind::New(n, args) if n == &leaf.name && args.is_empty())
                                     }
                                     _ => false,
