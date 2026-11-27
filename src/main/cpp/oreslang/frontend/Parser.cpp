@@ -5526,6 +5526,13 @@ private:
         return factor;
     }
 
+    QuantityUnit read_declared_dimension() {
+        const auto name = identifier();
+        const auto found = quantity_dimensions_.find(name);
+        if (found == quantity_dimensions_.end()) fail("E_UNIT_NAME: unknown or forward dimension");
+        return found->second;
+    }
+
     void quantity_declaration() {
         require("define");
         const bool dimension = accept("dimension");
@@ -5536,8 +5543,23 @@ private:
         if (quantity_dimensions_.count(name) || quantity_units_.count(name))
             fail("E_UNIT_DUPLICATE: quantity name '" + name + "' is already declared");
         if (dimension) {
+            auto vector = QuantityUnit::base(name);
+            if (accept("=")) {
+                if (strict_i64_) fail("E_VERIFY_UNSUPPORTED: compound dimension pilot is not strict-profile admitted");
+                vector = read_declared_dimension();
+                unsigned factors = 1;
+                while (token_.text == "*" || token_.text == "/") {
+                    const bool divide = accept("/");
+                    if (!divide) require("*");
+                    if (++factors > 128) fail("E_UNIT_LIMIT: compound dimension factor budget exceeded");
+                    vector = vector.combine(read_declared_dimension(), divide);
+                }
+                if (vector.powers().empty()) fail("E_UNIT_DIMENSION: empty vector requires explicit nominal kind admission");
+                for (const auto& entry : quantity_dimensions_)
+                    if (entry.second.same_dimension(vector)) fail("E_UNIT_DIMENSION: equal vectors require explicit nominal kind admission");
+            }
             require(";");
-            quantity_dimensions_.emplace(name, QuantityUnit::base(name));
+            quantity_dimensions_.emplace(name, std::move(vector));
             return;
         }
         require(":");
