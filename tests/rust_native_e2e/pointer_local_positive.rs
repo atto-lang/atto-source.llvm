@@ -4,6 +4,7 @@ use super::Harness;
 // executable guest tests, with an independent ASan/UBSan guest run.
 pub fn run(h: &mut Harness) {
     let flags = ["--experimental-pointer-int-aot"];
+    h.positive("placement_point_reuse_42", "define struct Point { int x; int y; } with { constructor(int x, int y) { self.x = x; self.y = y; } } pub fnc main(): int { let Storage<Point> s = alloc! Point; let mut RawPointer<Point> p = RawPointer.empty<Point>(); new Point(40, 1) at s; ref! p to s; val first = (deref! p).x; unref! p; destroy! s; new Point(99, 2) at s; ref! p to s; val second = (deref! p).y; unref! p; destroy! s; free! s; return first + second; }", &flags, 42, true, None);
     h.positive("slot_rebind_42", "pub fnc main(): int { let a: int = 40; let b: int = 2; let mut RawPointer<int> p = RawPointer.empty<int>(); ref! p to a; val first = deref! p; unref! p; ref! p to b; val second = deref! p; unref! p; return first + second; }", &flags, 42, true, None);
     h.positive("slot_empty_42", "pub fnc main(): int { let mut RawPointer<int> p = RawPointer.empty<int>(); return 42; }", &flags, 42, true, None);
     h.positive("slot_survivor_42", "pub fnc main(): int { let a: int = 42; let mut RawPointer<int> p = RawPointer.empty<int>(); ref! p to a; unref! p; return a; }", &flags, 42, true, None);

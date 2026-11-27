@@ -8,6 +8,20 @@ fn local(body: &str) -> String {
 
 pub fn run(h: &mut Harness) {
     let flags = ["--experimental-pointer-int-aot"];
+    let placement = "define struct Point { int x; int y; } with { constructor(int x, int y) { self.x = x; self.y = y; } } pub fnc main(): int { let Storage<Point> s = alloc! Point; let mut RawPointer<Point> p = RawPointer.empty<Point>(); ";
+    for (name,body) in [
+        ("read_empty", "val first = (deref! p).x; free! s; return first;"),
+        ("bind_empty", "ref! p to s; free! s; return p;"),
+        ("double_construct", "new Point(40, 2) at s; new Point(1, 2) at s; destroy! s; free! s; return p;"),
+        ("destroy_bound", "new Point(40, 2) at s; ref! p to s; destroy! s; free! s; return p;"),
+        ("free_live", "new Point(40, 2) at s; free! s; return p;"),
+        ("free_twice", "free! s; free! s; return p;"),
+        ("field_escape", "new Point(40, 2) at s; ref! p to s; val first = (deref! p).z; unref! p; destroy! s; free! s; return first;"),
+        ("leak", "new Point(40, 2) at s; ref! p to s; val first = (deref! p).x; unref! p; destroy! s; return first;"),
+        ("null_clear", "new Point(40, 2) at s; ref! p to s; p = null; destroy! s; free! s; return p;"),
+    ] {
+        h.negative(&format!("placement_{name}"), &format!("{placement}{body} }}"), &flags, None);
+    }
     for (name, body) in [
         ("empty_read", "val x = deref! p; return x;"),
         ("null", "p = null; return 42;"),

@@ -106,7 +106,79 @@ inline void verify_slot_plan(const Plan& plan) {
     (void)eval(eval, *plan.result, 0);
 }
 
+
+inline bool placement_copy_name(const std::string& n) {
+    // Closed profile accepts lowercase ASCII scalar identifiers only.
+    if (n.empty() || n.size() > 64 || n[0] < 'a' || n[0] > 'z') return false;
+    for (char c : n) if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_')) return false;
+    const std::string reserved[] = {"s","p","x","y","main","int","let","val","mut","return","ref","deref","unref","new","at","alloc","destroy","free","define","struct","with","constructor","self","null","true","false","pub","fnc","await","suspends","susp","rt","if","else","end","while","for","class","actor","spawn","task","select","defer","recover","copy","borrow","take","share","drop","move","pin","import","export","use","namespace","module","const","unsafe","to","empty","void","panic","trap","throw","raise"};
+    for (const auto& r : reserved) if (n == r) return false;
+    return true;
+}
+inline void verify_placement_point(const Plan& p) {
+    if (p.owner != "s" || p.local_handle != "p" || p.count != 2 ||
+        p.local_initial || !p.slot_owners.empty() || !p.steps.empty() ||
+        !p.readonly_helper.empty() || !p.readonly_parameter.empty() ||
+        !p.mutable_helper.empty() || !p.mutable_parameter.empty() ||
+        !p.mutable_scalar_parameter.empty() || p.mutable_write ||
+        p.placement_steps.empty() || p.placement_steps.size() > 32 || !p.result)
+        ownership_error("invalid Point storage authority");
+    enum class State { Empty, Live, Freed };
+    State state = State::Empty;
+    unsigned generation = 0;
+    std::optional<unsigned> bound;
+    std::array<std::int64_t,2> fields{};
+    std::unordered_map<std::string,std::int64_t> scalars;
+    for (const auto& s : p.placement_steps) {
+        if (s.kind != PlacementStep::Kind::Construct && (s.x || s.y))
+            ownership_error("forged construction operands");
+        if (s.kind != PlacementStep::Kind::CopyField && (s.field || !s.name.empty()))
+            ownership_error("forged field metadata");
+        switch (s.kind) {
+        case PlacementStep::Kind::Construct:
+            if (state != State::Empty || bound || s.x < 0 || s.y < 0)
+                ownership_error("construct requires uninitialized unique storage");
+            fields = {s.x,s.y}; ++generation; state = State::Live; break;
+        case PlacementStep::Kind::Bind:
+            if (state != State::Live || bound) ownership_error("bind requires live Point and empty slot");
+            bound = generation; break;
+        case PlacementStep::Kind::CopyField:
+            if (state != State::Live || !bound || *bound != generation || s.field >= 2 ||
+                !placement_copy_name(s.name) || !scalars.emplace(s.name,fields[s.field]).second)
+                ownership_error("invalid Point field projection");
+            break;
+        case PlacementStep::Kind::Detach:
+            if (!bound || state != State::Live || *bound != generation)
+                ownership_error("detach requires live binding");
+            bound.reset(); break;
+        case PlacementStep::Kind::Destroy:
+            if (state != State::Live || bound) ownership_error("destroy requires no live slot");
+            state = State::Empty; break;
+        case PlacementStep::Kind::Free:
+            if (state != State::Empty || bound) ownership_error("free requires empty storage");
+            state = State::Freed; break;
+        default: ownership_error("unknown Point storage step");
+        }
+    }
+    if (state != State::Freed || bound) ownership_error("Point storage not released");
+    auto scalar = [&](const Expr& e) -> std::int64_t {
+        if (e.index || e.lhs || e.rhs || e.kind != Expr::Kind::Variable ||
+            !scalars.count(e.name) || scalars.at(e.name) != e.known)
+            ownership_error("forged Point result");
+        return e.known;
+    };
+    if (p.result->kind == Expr::Kind::Variable) { (void)scalar(*p.result); return; }
+    const auto& e = *p.result;
+    if (e.kind != Expr::Kind::Add || e.index || !e.name.empty() || !e.lhs || !e.rhs)
+        ownership_error("invalid Point return");
+    std::int64_t sum = 0;
+    if (__builtin_add_overflow(scalar(*e.lhs),scalar(*e.rhs),&sum) || sum != e.known)
+        ownership_error("Point result overflow or forged annotation");
+}
+
 inline void verify_plan(const Plan& plan) {
+    if (plan.form == Plan::Form::PlacementPoint) { verify_placement_point(plan); return; }
+    if (!plan.placement_steps.empty()) ownership_error("placement metadata outside Point profile");
     if (plan.form == Plan::Form::ReusableSlot) { verify_slot_plan(plan); return; }
     if (!plan.slot_owners.empty()) ownership_error("slot metadata outside reusable slot authority");
     const bool borrowed_local = plan.form == Plan::Form::BorrowedLocal;

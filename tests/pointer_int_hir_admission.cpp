@@ -378,4 +378,24 @@ int main() {
     slot.result->lhs->name = "first";
     verify_plan(slot);
     std::cout << "POINTER_SLOT_HIR_ADVERSARIAL_REJECTIONS=7\n";
+    using PS=oreslang::pointer_int_aot::PlacementStep;
+    Plan point;point.form=Plan::Form::PlacementPoint;point.count=2;point.owner="s";point.local_handle="p";
+    point.placement_steps={{PS::Kind::Construct,40,2,0,{}},{PS::Kind::Bind,0,0,0,{}},
+        {PS::Kind::CopyField,0,0,1,"answer"},{PS::Kind::Detach,0,0,0,{}},
+        {PS::Kind::Destroy,0,0,0,{}},{PS::Kind::Free,0,0,0,{}}};
+    point.result=std::make_unique<Expr>();point.result->kind=Expr::Kind::Variable;
+    point.result->name="answer";point.result->known=2;
+    verify_plan(point);
+    point.placement_steps[2].field=2;
+    must_reject("placement forged field",[&]{verify_plan(point);});
+    point.placement_steps[2].field=1;
+    point.placement_steps[3].kind=PS::Kind::Destroy;
+    must_reject("placement destroy bound",[&]{verify_plan(point);});
+    point.placement_steps[3].kind=PS::Kind::Detach;
+    point.result->known=3;
+    must_reject("placement forged scalar annotation",[&]{verify_plan(point);});
+    point.result->known=2;
+    point.placement_steps.pop_back();
+    must_reject("placement missing free",[&]{verify_plan(point);});
+    std::cout << "PLACEMENT_POINT_HIR_ADVERSARIAL_REJECTIONS=4\n";
 }
