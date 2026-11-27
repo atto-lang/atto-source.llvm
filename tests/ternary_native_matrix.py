@@ -49,7 +49,8 @@ pub fnc main(): int {
 """, 42),
     "local-initializer": ("""
 pub fnc main(): int {
-  const answer: int = 7 == 7 ? 40 : 1;
+  // This test observes a runtime PHI, not a compile-time const fold.
+  val int answer = 7 == 7 ? 40 : 1;
   return answer + 2;
 }
 """, 42),
