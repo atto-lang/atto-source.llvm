@@ -29,7 +29,7 @@ int main() {
             const auto& h = leases[k];
             check(pool.backing_slot(h) == k && !foreign.release(h));
             for (std::size_t j = 0; j < 64; ++j) check(pool.read(h,j) == 0);
-            check(pool.write(h, 0, 123) && pool.write(h, 63, 255));
+            for (std::size_t j = 0; j < 64; ++j) check(pool.write(h, j, static_cast<std::uint8_t>(j + 1)));
             check(!pool.write(h,64,1) && !pool.read(h,64));
         }
         for (const auto& h : leases) {
@@ -43,19 +43,32 @@ int main() {
     auto fresh = pool.try_acquire(); check(fresh && !pool.write(*old,0,1));
     check(pool.release(*fresh));
     // Thread startup allocations are outside the measured window.
+    std::atomic<unsigned> ready{0}, done{0};
+    std::atomic<bool> start{false};
     std::array<std::thread, 4> threads;
     for (auto& t : threads) t = std::thread([&] {
+        ready.fetch_add(1);
+        while (!start.load()) std::this_thread::yield();
         for (int i = 0; i < 10000; ++i) {
             auto h = pool.try_acquire();
             if (!h) { --i; std::this_thread::yield(); continue; }
-            check(pool.read(*h,0) == 0 && pool.write(*h,0,7) && pool.release(*h));
+            for (std::size_t j = 0; j < 64; ++j) check(pool.read(*h,j) == 0 && pool.write(*h,j,7));
+            check(pool.release(*h));
         }
+        done.fetch_add(1);
     });
+    while (ready.load() != threads.size()) std::this_thread::yield();
+    const auto concurrent_before = allocations.load();
+    start.store(true);
+    while (done.load() != threads.size()) std::this_thread::yield();
+    const auto concurrent_after = allocations.load();
     for (auto& t : threads) t.join();
+    check(concurrent_before == concurrent_after);
     check(pool.outstanding() == 0);
     auto last = pool.try_acquire(); check(last.has_value());
     pool.close_admission(); check(!pool.try_acquire() && pool.release(*last));
     check(pool.outstanding() == 0);
     std::cout << "HOST_ONLY completed_cycles=1000000 global_new_delta=" << after-before
-              << " concurrent_cycles=40000 retained_payload_bytes=" << Pool::backing_bytes() << '\n';
+              << " concurrent_cycles=40000 concurrent_new_delta=" << concurrent_after-concurrent_before
+              << " retained_payload_bytes=" << Pool::backing_bytes() << '\n';
 }
