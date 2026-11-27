@@ -258,7 +258,7 @@ try{
     assert.deepEqual(await readFile(again),bytes,name+' deterministic native source');
     for(const opt of ['-O0','-O2']){
       const ir=join(work,name+opt+'.ll'),exe=join(work,name+opt);
-      let r=run(clang,['-std=gnu11',opt,'-S','-emit-llvm',c,'-o',ir]);assert.equal(r.status,0,name+': '+r.stderr);
+      let r=run(clang,['-std=gnu11',opt,'-fsanitize=undefined','-fno-sanitize-recover=all','-S','-emit-llvm',c,'-o',ir]);assert.equal(r.status,0,name+': '+r.stderr);
       assert.match(await readFile(ir,'utf8'),/define[^\n]*@atto_guest_main\(/);
       r=run(clang,[opt,'-fsanitize=undefined','-fno-sanitize-recover=all',ir,host,'-o',exe]);assert.equal(r.status,0,name+': '+r.stderr);
       r=run(exe,[]);assert.equal(r.status,0,name+': '+r.stderr);assert.equal(r.stdout,expected,name+opt);
