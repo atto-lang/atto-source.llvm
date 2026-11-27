@@ -3692,7 +3692,61 @@ private:
         if (token_.text == "gpu" || token_.text == "cpu" || token_.text == "quantum") {
             fail("native execution domain lowering unsupported");
         }
-        if (token_.text == "suspends" || token_.text == "suspend") {
+        if (token_.text == "suspends" || token_.text == "susp") {
+            // Closed root only: lower directly to the existing checked
+            // one-producer/one-observer scheduler ABI, never actor or FFI.
+            if (!owner.empty() || source_async || value.foreign_import || !value.exported)
+                fail("native suspends declaration requires suspension-aware borrow checking and LLVM continuation lowering");
+            advance();
+            require("fnc"); require("main"); value.name = "main";
+            require("("); require(")"); require(":"); require("int"); require("{");
+            const auto binding = token_.text;
+            if (binding != "val" && binding != "let" && binding != "const")
+                fail("E_UNSUPPORTED: closed root requires a typed TaskFuture or Future binding");
+            advance();
+            const bool principal = token_.text == "TaskFuture";
+            if (!principal && token_.text != "Future")
+                fail("E_UNSUPPORTED: closed root requires TaskFuture<int> or Future<int>");
+            if (binding == "const") fail("E_CONST: runtime task handle cannot be constant");
+            advance(); require("<"); require("int"); require(">");
+            SourceTaskI64Binding task;
+            task.offset = token_.offset;
+            task.name = identifier();
+            require("="); require("task"); require("<"); require("int"); require(">");
+            require("{"); require_return_marker(); task.result = expression();
+            require(";"); require("}"); require(";");
+            if (!native_capture_free_task_tree(*task.result))
+                fail("native Task<int> v1 producer must be capture-free and scalar");
+            // Parse a bounded second-observation diagnostic path; it never
+            // returns an executable AST or creates a second observer.
+            if (token_.text == "val" || token_.text == "let") {
+                advance(); require("int");
+                const auto local = identifier();
+                if (local == task.name) fail("Task await result cannot shadow its Task binding");
+                require("="); require("await");
+                if (identifier() != task.name) fail("E_UNSUPPORTED: unknown Task observer");
+                require(";"); require_return_marker();
+                if (token_.text == local) { advance(); require("+"); }
+                require("await");
+                if (identifier() != task.name) fail("E_UNSUPPORTED: unknown Task observer");
+                require(";"); require("}");
+                fail("E_TASK_RESULT_CONSUMED: Task result cannot be observed twice");
+            }
+            require_return_marker(); require("await");
+            if (identifier() != task.name) fail("E_UNSUPPORTED: unknown Task observer");
+            require(";"); require("}");
+            task.awaited = true;
+            LocalBinding joined;
+            joined.offset = task.offset;
+            joined.name = "$closed_task_result";
+            joined.task_await_name = task.name;
+            value.locals.push_back(std::move(joined));
+            value.result = make_expression(Expression::Kind::Variable, task.offset);
+            value.result->name = "$closed_task_result";
+            value.source_tasks.push_back(std::move(task));
+            return value;
+        }
+        if (token_.text == "suspend") {
             fail("native suspends declaration requires suspension-aware borrow checking and LLVM continuation lowering");
         }
         // Check compound READ/WRITE modes before handling legacy critical,
