@@ -195,6 +195,8 @@ pub fn is_reserved(name: &str) -> bool {
 }
 
 pub struct Parser {
+    // Migration profile: reject unmarked simple local replacement.
+    explicit_rebinding: bool,
     toks: Vec<Token>,
     i: usize,
     depth: u32,
@@ -299,6 +301,7 @@ fn guard_failure_returns(stmts: &[Stmt]) -> bool {
 impl Parser {
     pub fn new(toks: Vec<Token>) -> Self {
         Parser {
+            explicit_rebinding: false,
             toks,
             i: 0,
             depth: 0,
@@ -309,6 +312,80 @@ impl Parser {
             struct_target: false,
             struct_value_bindings: None,
         }
+    }
+
+    /// Opt in to the new local '=' boundary while migrating legacy sources.
+    /// This does not ratify compound/increment or expression-valued set!.
+    pub fn with_explicit_rebinding(mut self) -> Self {
+        self.explicit_rebinding = true;
+        self
+    }
+
+    fn require_explicit_rebind(&self, pos: Pos) -> R<()> {
+        if self.explicit_rebinding {
+            Err(Diagnostic::new(pos, "E_EXPLICIT_REBIND",
+                "bare local reassignment is prohibited; use 'set name = value' or 'set! name = value'"))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn explicit_rebind_here(&self) -> bool {
+        self.is_word("set") && matches!(self.peek_at(1),
+            Tok::Ident(_) | Tok::Bang | Tok::PlusPlus | Tok::MinusMinus)
+    }
+
+    fn parse_explicit_rebind(&mut self) -> R<Stmt> {
+        let pos = self.pos();
+        self.expect_word("set")?;
+        let bang = self.eat(&Tok::Bang);
+        let wrapped = bang && self.eat(&Tok::LParen);
+        let prefix = if self.eat(&Tok::PlusPlus) { Some(BinOp::Add) }
+            else if self.eat(&Tok::MinusMinus) { Some(BinOp::Sub) }
+            else { None };
+        let (name, _) = self.ident("an existing local binding name")?;
+        let stmt = if let Some(op) = prefix {
+            incr(name, pos, op)
+        } else if self.eat(&Tok::PlusPlus) {
+            incr(name, pos, BinOp::Add)
+        } else if self.eat(&Tok::MinusMinus) {
+            incr(name, pos, BinOp::Sub)
+        } else {
+            let compound = if self.eat(&Tok::PlusAssign) {
+                Some(BinOp::Add)
+            } else {
+                // Existing lexer emits two tokens for these compounds.
+                // Require physical adjacency, not merely token adjacency.
+                let at = self.pos();
+                let next = self.toks.get(self.i + 1).map(|t| t.pos);
+                let op = match self.peek() {
+                    Tok::Minus => Some(BinOp::Sub),
+                    Tok::Star => Some(BinOp::Mul),
+                    Tok::Slash => Some(BinOp::Div),
+                    _ => None,
+                };
+                if op.is_some() && *self.peek_at(1) == Tok::Assign
+                    && next.is_some_and(|p| p.line == at.line && p.col == at.col + 1) {
+                    self.advance();
+                    self.advance();
+                    op
+                } else {
+                    self.expect(Tok::Assign, "'=', increment or compound update after rebind target")?;
+                    None
+                }
+            };
+            let rhs = self.parse_expr()?;
+            let value = if let Some(op) = compound {
+                Expr { kind: ExprKind::Binary(op,
+                    Box::new(Expr { kind: ExprKind::Var(name.clone()), pos }),
+                    Box::new(rhs)), pos }
+            } else { rhs };
+            Stmt::Assign { name, value, pos }
+        };
+        if wrapped {
+            self.expect(Tok::RParen, "')' after rebind expression")?;
+        }
+        Ok(stmt)
     }
 
     fn peek(&self) -> &Tok {
@@ -1071,7 +1148,7 @@ impl Parser {
                     }
                     self.advance();
                     self.expect(Tok::LParen, "'('")?;
-                    let params = self.parse_params()?;
+                    let params = self.parse_params(false)?;
                     let body = self.parse_block()?;
                     m.ctor = Some(Constructor { pos: mpos, params, body });
                 }
@@ -1222,7 +1299,7 @@ impl Parser {
         if self.is_word("self") {
             return Err(unsupported(self.pos(), "explicit 'self' receivers"));
         }
-        let params = self.parse_params()?;
+        let params = self.parse_params(true)?;
         if *self.peek() == Tok::LParen {
             return Err(unsupported(self.pos(), "curried method parameter lists"));
         }
@@ -1295,7 +1372,7 @@ impl Parser {
     }
 
     /// Parameters after `(` up to and including `)`.
-    fn parse_params(&mut self) -> R<Vec<Param>> {
+    fn parse_params(&mut self, allow_rebind: bool) -> R<Vec<Param>> {
         let mut params: Vec<Param> = Vec::new();
         if *self.peek() != Tok::RParen {
             loop {
@@ -1306,7 +1383,7 @@ impl Parser {
                         format!("more than {MAX_PARAMS} parameters"),
                     ));
                 }
-                let p = self.parse_param()?;
+                let p = self.parse_param(allow_rebind)?;
                 if params.iter().any(|q| q.name == p.name) {
                     return Err(Diagnostic::new(
                         p.pos,
@@ -1433,7 +1510,7 @@ impl Parser {
             return Err(unsupported(self.pos(), "generic functions"));
         }
         self.expect(Tok::LParen, "'('")?;
-        let params = self.parse_params()?;
+        let params = self.parse_params(true)?;
         let ret = if let Some(ty) = prefix_type {
             if matches!(self.peek(), Tok::Arrow | Tok::Colon) {
                 return Err(Diagnostic::new(self.pos(), "E_SYNTAX",
@@ -1465,23 +1542,50 @@ impl Parser {
         })
     }
 
-    fn parse_param(&mut self) -> R<Param> {
+    fn parse_param(&mut self, allow_rebind: bool) -> R<Param> {
         let pos = self.pos();
+        // Contextual marker; a name or nominal type named rebind stays legal.
+        let explicit_rebind = self.is_word("rebind")
+            && matches!(self.peek_at(1), Tok::Ident(_))
+            && (matches!(self.peek_at(2), Tok::Colon | Tok::Lt | Tok::LParen)
+                || (matches!(self.peek_at(2), Tok::Ident(_))
+                    && (self.word_at(1) != Some("mut")
+                        || matches!(self.peek_at(3), Tok::Ident(_) | Tok::Lt))));
+        if explicit_rebind {
+            self.advance();
+            if !allow_rebind {
+                return Err(unsupported(pos, "rebind constructor parameters"));
+            }
+            if self.is_word("rebind") && self.word_at(2).is_some() {
+                return Err(Diagnostic::new(pos, "E_SYNTAX", "duplicate rebind marker"));
+            }
+            if self.is_word("mut") {
+                return Err(unsupported(pos, "rebind with writable referent access"));
+            }
+        }
         if self.is_word("structural") {
             return Err(unsupported(pos, "structural parameters"));
         }
-        // compatibility form `name: type [mut]`
-        if matches!(self.peek(), Tok::Ident(_)) && *self.peek_at(1) == Tok::Colon {
-            let (name, pos) = self.ident("a parameter name")?;
-            self.advance();
-            let ty = self.parse_type()?;
-            let mutable = self.eat_word("mut");
-            return self.finish_param(name, ty, mutable, pos);
+        let (name, ty, legacy_mut, name_pos) =
+            if matches!(self.peek(), Tok::Ident(_)) && *self.peek_at(1) == Tok::Colon {
+                let (name, name_pos) = self.ident("a parameter name")?;
+                self.advance();
+                if explicit_rebind && self.is_word("mut") {
+                    return Err(unsupported(pos, "rebind with writable referent access"));
+                }
+                let ty = self.parse_type()?;
+                let legacy_mut = self.eat_word("mut");
+                (name, ty, legacy_mut, name_pos)
+            } else {
+                let ty = self.parse_type()?;
+                let legacy_mut = self.eat_word("mut");
+                let (name, name_pos) = self.ident("a parameter name")?;
+                (name, ty, legacy_mut, name_pos)
+            };
+        if explicit_rebind && (legacy_mut || !matches!(ty, Type::Int | Type::Bool)) {
+            return Err(unsupported(pos, "rebind outside the native copied scalar subset"));
         }
-        let ty = self.parse_type()?;
-        let mutable = self.eat_word("mut");
-        let (name, pos) = self.ident("a parameter name")?;
-        self.finish_param(name, ty, mutable, pos)
+        self.finish_param(name, ty, explicit_rebind || legacy_mut, name_pos)
     }
 
     fn finish_param(&self, name: String, ty: Type, mutable: bool, pos: Pos) -> R<Param> {
@@ -1592,6 +1696,14 @@ impl Parser {
             self.word_at(0).map(str::to_owned)
         };
         match word.as_deref() {
+            // Explicit local replacement. Keep the legacy assignment path
+            // during migration; the strict edition must reject bare writes.
+            // Contextual recognition preserves a callable named set.
+            Some("set") if self.explicit_rebind_here() => {
+                let stmt = self.parse_explicit_rebind()?;
+                self.terminator()?;
+                Ok(stmt)
+            }
             Some("val" | "const" | "let") => {
                 let s = self.parse_binding()?;
                 self.terminator()?;
@@ -1710,6 +1822,7 @@ impl Parser {
                 // Restrict it to locals: field/index targets need once-only lvalue lowering.
                 if *self.peek() == Tok::PlusAssign {
                     let at = self.pos();
+                    self.require_explicit_rebind(at)?;
                     self.advance();
                     let value = self.parse_expr()?;
                     self.terminator()?;
@@ -1741,6 +1854,7 @@ impl Parser {
                     };
                     return match e.kind {
                         ExprKind::Var(name) => {
+                            self.require_explicit_rebind(at)?;
                             let value = value_of(self)?;
                             Ok(Stmt::Assign { name, value, pos })
                         }
@@ -1970,6 +2084,7 @@ impl Parser {
             let apos = self.pos();
             self.expect_word("on")?;
             let pattern = self.parse_pattern()?;
+            let pattern = self.parse_scalar_match_alias(pattern)?;
             let guard = if self.eat_word("when") {
                 Some(self.parse_expr()?)
             } else {
@@ -2045,6 +2160,7 @@ impl Parser {
             } else {
                 self.parse_pattern()?
             };
+            let pattern = self.parse_scalar_match_alias(pattern)?;
             let guard = if self.eat_word("when") { Some(self.parse_expr()?) } else { None };
             if *self.peek() == Tok::Assign && *self.peek_at(1) == Tok::Gt {
                 return Err(Diagnostic::new(
@@ -2078,6 +2194,32 @@ impl Parser {
             return Err(Diagnostic::new(pos, "E_SYNTAX", "match requires at least one arm"));
         }
         Ok(Stmt::Match { subject, arms, pos })
+    }
+
+    /// No cast or ownership action; the checker verifies the actual subject type.
+    fn parse_scalar_match_alias(&mut self, pattern: Pattern) -> R<Pattern> {
+        if !self.eat_word("as") { return Ok(pattern); }
+        let pos = self.pos();
+        if !matches!(&pattern, Pattern::Wild | Pattern::Int(_) | Pattern::Bool(_)) {
+            return Err(unsupported(pos, "non-scalar or compound match alias pattern"));
+        }
+        let mut rebind = self.is_word("rebind") && self.word_at(1).is_some_and(|w| w != "when");
+        if rebind { self.advance(); }
+        if self.is_word("mut") { return Err(unsupported(pos, "match alias referent mutation")); }
+        if rebind && (self.is_word("const") || self.is_word("val") || self.is_word("let") ||
+            (self.is_word("rebind") && self.word_at(1).is_some_and(|w| w != "when"))) {
+            return Err(Diagnostic::new(pos, "E_SYNTAX", "duplicate or conflicting alias modifier"));
+        }
+        if self.eat_word("const") || self.eat_word("val") { /* fixed runtime alias */ }
+        else if self.eat_word("let") { rebind = true; }
+        if self.is_word("mut") { return Err(unsupported(pos, "match alias referent mutation")); }
+        let ty = if self.word_at(1).is_some_and(|w| w != "when") || *self.peek_at(1) == Tok::Lt {
+            Some(self.parse_type()?)
+        } else { None };
+        let (name, _) = self.ident("a match alias name")?;
+        if name == "_" { return Err(unsupported(pos, "discard as a whole-subject alias")); }
+        if self.is_word("as") { return Err(Diagnostic::new(self.pos(), "E_SYNTAX", "duplicate match alias")); }
+        Ok(Pattern::Alias { inner: Box::new(pattern), name, ty, rebind })
     }
 
     /// Java Parser.parsePattern, restricted to the forms this compiler lowers.
@@ -2193,6 +2335,8 @@ impl Parser {
                 init,
                 pos,
             }))
+        } else if self.explicit_rebind_here() {
+            Some(Box::new(self.parse_explicit_rebind()?))
         } else {
             Some(Box::new(self.parse_simple_assign()?))
         };
@@ -2206,15 +2350,20 @@ impl Parser {
         let update_end = if paren { Tok::RParen } else { Tok::LBrace };
         let update = if *self.peek() == update_end || (!paren && self.is_word("do")) {
             None
+        } else if self.explicit_rebind_here() {
+            Some(Box::new(self.parse_explicit_rebind()?))
         } else {
             let upos = self.pos();
             let (name, _) = self.ident("a loop variable")?;
             if self.eat(&Tok::PlusPlus) {
+                self.require_explicit_rebind(upos)?;
                 Some(Box::new(incr(name, upos, BinOp::Add)))
             } else if self.eat(&Tok::MinusMinus) {
+                self.require_explicit_rebind(upos)?;
                 Some(Box::new(incr(name, upos, BinOp::Sub)))
             } else {
                 self.expect(Tok::Assign, "'++', '--' or '='")?;
+                self.require_explicit_rebind(upos)?;
                 let value = self.parse_expr()?;
                 Some(Box::new(Stmt::Assign { name, value, pos: upos }))
             }
@@ -2236,6 +2385,7 @@ impl Parser {
         let pos = self.pos();
         let (name, _) = self.ident("a variable name")?;
         self.expect(Tok::Assign, "'='")?;
+        self.require_explicit_rebind(pos)?;
         let value = self.parse_expr()?;
         Ok(Stmt::Assign { name, value, pos })
     }

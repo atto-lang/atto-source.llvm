@@ -28,6 +28,10 @@ struct FunctionEmitter<'a> {
     terminated: bool,
     block_name: String,
     slots: Vec<Type>,
+    // Parameters with no typed writes remain incoming SSA values.
+    direct_params: Vec<bool>,
+    // Innermost loop's break and continue destinations.
+    loop_targets: Vec<(String, String)>,
 }
 
 impl<'a> FunctionEmitter<'a> {
@@ -40,10 +44,42 @@ impl<'a> FunctionEmitter<'a> {
             }
         }
         scalar_type(func.ret)?;
+        let mut direct_params = vec![true; func.params.len()];
+        Self::scan_parameter_writes(&func.body, &mut direct_params);
         Ok(Self {
             program, func, out: String::new(), counter: 0,
-            terminated: false, block_name: String::new(), slots,
+            terminated: false, block_name: String::new(), slots, direct_params,
+            loop_targets: Vec::new(),
         })
+    }
+
+    // Keep the admission conservative: unknown statement forms force
+    // memory-backed parameters, even though the current emitter rejects them.
+    fn scan_parameter_writes(body: &[TStmt], direct: &mut [bool]) {
+        for stmt in body {
+            match stmt {
+                TStmt::Set(slot, _) => {
+                    if let Some(value) = direct.get_mut(*slot as usize) {
+                        *value = false;
+                    }
+                }
+                TStmt::Block(nested) => Self::scan_parameter_writes(nested, direct),
+                TStmt::If(arms, fallback) => {
+                    for (_, nested) in arms {
+                        Self::scan_parameter_writes(nested, direct);
+                    }
+                    if let Some(nested) = fallback {
+                        Self::scan_parameter_writes(nested, direct);
+                    }
+                }
+                TStmt::Loop { body, update, .. } => {
+                    Self::scan_parameter_writes(body, direct);
+                    Self::scan_parameter_writes(update, direct);
+                }
+                TStmt::GlobalSet(_, _) | TStmt::Expr(_) | TStmt::Return(_) | TStmt::Break | TStmt::Continue => {}
+                _ => direct.fill(false),
+            }
+        }
     }
 
     fn id(&mut self, prefix: &str) -> String {
@@ -106,6 +142,9 @@ impl<'a> FunctionEmitter<'a> {
             TExpr::Local(slot) => {
                 let idx = *slot as usize;
                 let ty = scalar_type(*self.slots.get(idx).ok_or("E_INTERNAL: bad local slot")?)?;
+                if self.direct_params.get(idx) == Some(&true) {
+                    return Ok(format!("%arg{idx}"));
+                }
                 let tmp = self.id("v");
                 self.instr(format!("%{tmp} = load {ty}, ptr %local{idx}"));
                 Ok(format!("%{tmp}"))
@@ -332,6 +371,9 @@ impl<'a> FunctionEmitter<'a> {
             TStmt::Set(slot, value) => {
                 let idx = *slot as usize;
                 let ty = scalar_type(*self.slots.get(idx).ok_or("E_INTERNAL: bad set slot")?)?;
+                if self.direct_params.get(idx) == Some(&true) {
+                    return Err("E_INTERNAL: write to SSA-only parameter".into());
+                }
                 let x = self.expr(value)?;
                 self.instr(format!("store {ty} {x}, ptr %local{idx}"));
             }
@@ -395,6 +437,53 @@ impl<'a> FunctionEmitter<'a> {
                 }
                 self.label(&end_label);
             }
+            TStmt::Loop { cond, body, update } => {
+                // Do not accidentally enable actor loops before a native
+                // scheduler-cooperation and isolation witness exists.
+                if !self.program.actors.is_empty() {
+                    return Err("E_UNSUPPORTED_NATIVE_STMT: actor loop cooperation not verified".into());
+                }
+                let head = self.id("loop_head");
+                let work = self.id("loop_body");
+                let next = self.id("loop_update");
+                let done = self.id("loop_end");
+                self.branch(&head);
+                self.label(&head);
+                if let Some(test) = cond {
+                    let value = self.expr(test)?;
+                    self.instr(format!("br i1 {value}, label %{work}, label %{done}"));
+                    self.terminated = true;
+                } else {
+                    self.branch(&work);
+                }
+                self.label(&work);
+                self.loop_targets.push((done.clone(), next.clone()));
+                let result = self.block(body);
+                self.loop_targets.pop();
+                result?;
+                if !self.terminated {
+                    self.branch(&next);
+                }
+                self.label(&next);
+                self.block(update)?;
+                if !self.terminated {
+                    self.branch(&head);
+                }
+                self.label(&done);
+            }
+            TStmt::Break | TStmt::Continue => {
+                let (done, next) = self.loop_targets.last()
+                    .ok_or("E_INTERNAL: loop control outside native loop")?;
+                let target = if matches!(statement, TStmt::Break) { done } else { next }.clone();
+                self.branch(&target);
+            }
+            TStmt::Unreachable => {
+                // Typed match exhaustiveness emits this synthetic terminal.
+                // Trap rather than introduce LLVM UB on a violated invariant.
+                self.instr("call void @llvm.trap()");
+                self.instr("unreachable");
+                self.terminated = true;
+            }
             _ => return Err(format!("E_UNSUPPORTED_NATIVE_STMT: {statement:?}")),
         }
         Ok(())
@@ -410,6 +499,9 @@ impl<'a> FunctionEmitter<'a> {
         self.label("entry");
         let all_slots = self.slots.clone();
         for (idx, ty) in all_slots.into_iter().enumerate() {
+            if self.direct_params.get(idx) == Some(&true) {
+                continue;
+            }
             let llty = scalar_type(ty)?;
             self.instr(format!("%local{idx} = alloca {llty}"));
             if idx < self.func.params.len() {
@@ -645,6 +737,10 @@ pub fn compile_ir(source: &str) -> Result<String, String> {
 }
 
 fn compile_ir_with_profile(source: &str, profile: LibraryProfile) -> Result<String, String> {
+    compile_ir_with_binding_profile(source, profile, false)
+}
+
+fn compile_ir_with_binding_profile(source: &str, profile: LibraryProfile, explicit_rebinding: bool) -> Result<String, String> {
     if source.len() > atto_compiler::SOURCE_CAP {
         return Err("E_SOURCE_LIMIT: native Atto input exceeds 64 KiB".into());
     }
@@ -675,10 +771,14 @@ fn compile_ir_with_profile(source: &str, profile: LibraryProfile) -> Result<Stri
     }
     let (toks, linked_http) = link_registered_http_import(toks, profile)?;
     let mut program = if target_native::requires_target_link(&toks) {
+        if explicit_rebinding {
+            return Err("E_UNSUPPORTED: explicit binding profile not yet supported by target-link frontend".into());
+        }
         target_native::lower(&toks)?
     } else {
-        atto_compiler::parser::Parser::new(toks).parse_program()
-            .map_err(|e|e.to_string())?
+        let parser = atto_compiler::parser::Parser::new(toks);
+        let mut parser = if explicit_rebinding { parser.with_explicit_rebinding() } else { parser };
+        parser.parse_program().map_err(|e|e.to_string())?
     };
     if let Some(library) = linked_http {
         // Merge independently checked source units at the AST boundary, not
@@ -916,7 +1016,9 @@ fn validate_native_artifact(path: &std::path::Path) -> Result<(), String> {
 }
 
 fn cli() -> Result<(), String> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let explicit_rebinding = args.last().is_some_and(|a| a == "--explicit-rebinding");
+    if explicit_rebinding { args.pop(); }
     let (src, out, emit_only, profile) = match args.as_slice() {
         [src, flag, out] if flag == "-o" => (src, out, false, LibraryProfile::Hosted),
         [src, flag, out, mode] if flag == "-o" && mode == "--emit-llvm" =>
@@ -925,14 +1027,14 @@ fn cli() -> Result<(), String> {
             if flag == "-o" && mode == "--emit-llvm" && profile == "--freestanding-core" =>
             (src, out, true, LibraryProfile::FreestandingCore),
         _ => return Err(
-            "usage: atto-llvm input.atto -o output [--emit-llvm [--freestanding-core]]".into()
+            "usage: atto-llvm input.atto -o output [--emit-llvm [--freestanding-core]] [--explicit-rebinding]".into()
         ),
     };
     if !src.ends_with(".atto") {
         return Err("E_SOURCE: input must have the .atto extension".into());
     }
     let content = std::fs::read_to_string(src).map_err(|e|format!("E_INPUT: {e}"))?;
-    let ir = compile_ir_with_profile(&content, profile)?;
+    let ir = compile_ir_with_binding_profile(&content, profile, explicit_rebinding)?;
     let (staged, mut stage_file) = OutputStage::create(
         std::path::Path::new(src), std::path::Path::new(out)
     )?;
@@ -1194,5 +1296,155 @@ mod attached_actor_state_native_no_ir {
                 "full guarded Counter actor startup/message lowering is not proven");
             assert!(!error.is_empty());
         }
+    }
+}
+
+
+#[cfg(test)]
+mod parameter_rebind_tests {
+    use super::*;
+
+    #[test]
+    fn scalar_match_aliases() {
+        compile_ir("pub fnc main(): int { return match 42 over on z when z == 42 -> z, on _ -> 0 end; }").expect("ordinary-guard-binder");
+        compile_ir("pub fnc main(): int { return match 42 over on 41 as z when (z + 9223372036854775807) == 0 -> 0, on _ as const z -> z end; }").expect("guard-lazy-overflow");
+        compile_ir("pub fnc main(): int { return match 42 over on _ as int z -> z end; }").expect("alias-typed");
+        compile_ir("pub fnc main(): int { return match 42 over on _ as const z -> z end; }").expect("alias-const");
+        compile_ir("pub fnc main(): int { let int n = 20; let int r = 0; do match n over on _ as rebind int z -> { z = z + 2; r = z; } end return n + r; }").expect("alias-local");
+        compile_ir("pub fnc main(): int { return match 42 over on 42 as rebind z when z == 42 -> { z = z + 1; return z; } on _ -> 0 end; }").expect("alias-guard");
+        compile_ir("pub fnc main(): int { return match 42 over on 41 as z when z == 42 -> 0, on _ as const z -> z end; }").expect("alias-fallback");
+        assert!(compile_ir("pub fnc main(): int { do match 42 over on _ as int z -> { z = 0; } end return 0; }").unwrap_err().contains("E_IMMUTABLE"), "alias-fixed");
+        assert!(compile_ir("pub fnc main(): int { return match 42 over on _ as bool z -> 0 end; }").unwrap_err().contains("E_TYPE"), "alias-type");
+        assert!(compile_ir("pub fnc main(): int { return match 42 over on _ as rebind rebind int z -> z end; }").unwrap_err().contains("E_SYNTAX"), "alias-duplicate");
+        assert!(compile_ir("pub fnc main(): int { return match 42 over on _ as mut z -> 0 end; }").unwrap_err().contains("E_UNSUPPORTED"), "alias-mut");
+        assert!(compile_ir("pub fnc main(): int { do match 42 over on _ as rebind z -> {} end return z; }").unwrap_err().contains("E_UNBOUND"), "alias-scope");
+    }
+
+    #[test]
+    fn explicit_counter_and_compound_updates() {
+        let strict = |source| compile_ir_with_binding_profile(source, LibraryProfile::Hosted, true);
+        let positives = [
+            "pub fnc main(): int { let x = 40; set x++; set ++x; return x; }",
+            "pub fnc main(): int { let x = 44; set x--; set --x; return x; }",
+            "pub fnc main(): int { let x = 20; set x += 2; set x -= 1; set x *= 2; return x; }",
+            "pub fnc main(): int { let x = 32; for let i = 0; i < 10; set i++ { set x++; } return x; }",
+            "pub fnc main(): int { let x = 32; for (let i = 10; i > 0; set --i) { set x++; } return x; }",
+            "pub fnc main(): int { let x = 32; for let i = 0; i < 10; set i += 2 { set x += 2; } return x; }",
+        ];
+        let negatives = [
+            "pub fnc main(): int { let x = 40; x++; return x; }",
+            "pub fnc main(): int { let x = 40; x += 2; return x; }",
+            "pub fnc main(): int { let x = 40; ++x; return x; }",
+            "pub fnc main(): int { for let i = 0; i < 10; i++ {} return 42; }",
+            "pub fnc main(): int { for let i = 0; i < 10; let i++ {} return 42; }",
+            "pub fnc main(): int { const x = 40; set x++; return x; }",
+            "pub fnc main(): int { set ++x; return 42; }",
+            "pub fnc main(): int { let x = true; set x++; return 42; }",
+            "pub fnc main(): int { let x = 40; set x - = 2; return x; }",
+            "pub fnc main(): int { let x = 40; set x * /* gap */ = 2; return x; }",
+            "pub fnc main(): int { let x = 40; set ++x++; return x; }",
+        ];
+        for source in positives { strict(source).unwrap_or_else(|e| panic!("{source}: {e}")); }
+        for source in negatives { assert!(strict(source).is_err(), "{source}"); }
+    }
+
+    #[test]
+    fn explicit_binding_profile_rejects_bare_local_writes_without_changing_legacy() {
+        let strict = |source| compile_ir_with_binding_profile(source, LibraryProfile::Hosted, true);
+        let old = "pub fnc main(): int { let int x = 40; x = x + 2; return x; }";
+        assert!(compile_ir(old).is_ok());
+        assert!(strict(old).unwrap_err().contains("E_EXPLICIT_REBIND"));
+        let new = old.replace("x = x + 2", "set x = x + 2");
+        assert_eq!(strict(&new).unwrap(), compile_ir(old).unwrap());
+        for source in [
+            "pub fnc main(): int { let int x = 0; for (x = 1; x < 2; x++) {} return x; }",
+            "pub fnc main(): int { let int x = 0; for (; x < 2; x = x + 1) {} return x; }",
+        ] {
+            assert!(strict(source).unwrap_err().contains("E_EXPLICIT_REBIND"), "{source}");
+        }
+        let loop_source = "pub fnc main(): int { let int x = 0; for (set x = 40; x < 42; set! (x = x + 1)) {} return x; }";
+        strict(loop_source).expect("strict scalar loop must lower to native IR");
+        let fixed = "pub fnc main(): int { const int x = 40; set x = 42; return x; }";
+        assert!(strict(fixed).unwrap_err().contains("E_IMMUTABLE"));
+    }
+
+    #[test]
+    fn copied_scalar_let_shadow_creates_distinct_slots() {
+        let source = "pub fnc main(): int { let x = 40; let x = x + 1; set x = x + 1; return x; }";
+        let ir = compile_ir(source).unwrap();
+        assert!(ir.contains("%local0 = alloca i64"), "{ir}");
+        assert!(ir.contains("%local1 = alloca i64"), "{ir}");
+        let type_change = "pub fnc main(): int { let x = 40; let x = true; if x then return 42; else return 0; fi }";
+        assert!(compile_ir(type_change).is_ok());
+        for source in [
+            "pub fnc main(): int { const x = 1; const x = 2; return x; }",
+            "pub fnc main(): int { const x = 1; let x = 2; return x; }",
+            "pub fnc main(): int { let x = 1; const x = 2; return x; }",
+            "pub fnc main(): int { let x = 1; let x = true; set x = 2; return 42; }",
+        ] {
+            assert!(compile_ir(source).is_err(), "{source}");
+        }
+    }
+
+    #[test]
+    fn explicit_local_set_spellings_use_checked_assignment() {
+        let old = "pub fnc main(): int { let int x = 40; x = x + 2; return x; }";
+        let ir = compile_ir(old).unwrap();
+        for replacement in ["set x = x + 2", "set! x = x + 2", "set! (x = x + 2)"] {
+            let source = old.replace("x = x + 2", replacement);
+            assert_eq!(compile_ir(&source).unwrap(), ir);
+        }
+        let call = "fnc set(int n): int { return n; } pub fnc main(): int { return set(42); }";
+        assert!(compile_ir(call).is_ok());
+    }
+
+    #[test]
+    fn explicit_local_set_does_not_grant_write_authority() {
+        for (source, expected) in [
+            ("pub fnc main(): int { const int x = 40; set x = 42; return x; }", "E_IMMUTABLE"),
+            ("pub fnc main(): int { val int x = 40; set! x = 42; return x; }", "E_IMMUTABLE"),
+            ("pub fnc main(): int { set x = 42; return 0; }", "E_UNBOUND"),
+            ("pub fnc main(): int { let int x = 40; set x = true; return x; }", "E_TYPE"),
+        ] {
+            let error = compile_ir(source).unwrap_err();
+            assert!(error.contains(expected), "{source}: {error}");
+        }
+        for source in [
+            "pub fnc main(): int { let int x = 40; (set! x) = 42; return x; }",
+            "pub fnc main(): int { let int x = 40; set x.field = 42; return x; }",
+            "pub fnc main(): int { let int x = 40; set! x; return x; }",
+        ] {
+            assert!(compile_ir(source).is_err(), "{source}");
+        }
+    }
+
+    #[test]
+    fn untouched_scalar_parameters_use_incoming_ssa() {
+        let fixed = "fnc id(int n): int { return n; } pub fnc main(): int { return id(42); }";
+        let marked = fixed.replace("int n", "rebind int n");
+        let ir = compile_ir(fixed).unwrap();
+        assert_eq!(ir, compile_ir(&marked).unwrap());
+        assert!(ir.contains("ret i64 %arg0"), "{ir}");
+        assert!(!ir.contains("alloca"), "{ir}");
+    }
+
+    #[test]
+    fn written_parameter_keeps_checked_local_slot() {
+        for formal in ["rebind int n", "rebind n: int"] {
+            let source = format!("fnc bump({formal}): int {{ n = n + 1; return n; }} pub fnc main(): int {{ return bump(41); }}");
+            let ir = compile_ir(&source).unwrap();
+            assert!(ir.contains("%local0 = alloca i64"), "{ir}");
+            assert!(ir.contains("llvm.sadd.with.overflow.i64"), "{ir}");
+            assert!(ir.contains("load i64, ptr %local0"), "{ir}");
+        }
+        let error = compile_ir("fnc bump(int n): int { n = n + 1; return n; } pub fnc main(): int { return bump(41); }").unwrap_err();
+        assert!(error.contains("E_IMMUTABLE"), "{error}");
+    }
+
+    #[test]
+    fn nested_parameter_writes_are_not_elided() {
+        let source = "fnc bump(rebind int n): int { if n eq 41 then n = 42; fi return n; } pub fnc main(): int { return bump(41); }";
+        let ir = compile_ir(source).unwrap();
+        assert!(ir.contains("%local0 = alloca i64"), "{ir}");
     }
 }

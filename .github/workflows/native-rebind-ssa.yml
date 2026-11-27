@@ -1,0 +1,212 @@
+name: Native scalar rebind and SSA evidence
+on:
+  pull_request:
+    paths:
+      - 'src/main.rs'
+      - 'frontend/src/parser.rs'
+      - 'frontend/src/check.rs'
+      - '.github/workflows/native-rebind-ssa.yml'
+  push:
+    branches:
+      - 'draft/fixed-parameter-ssa-rebind-20261126'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-rebind:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact checkout
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
+          test "$(git write-tree)" = "$(git rev-parse HEAD^{tree})"
+          git rev-parse HEAD HEAD^{tree}
+          git ls-tree HEAD frontend/src/parser.rs frontend/src/check.rs src/main.rs
+          rustc --version
+          clang --version
+      - name: Compiler tests and build
+        run: |
+          cargo test --offline --locked parameter_rebind_tests
+          cargo build --offline --locked --release --bin atto-llvm
+      - name: Execute actual native guests
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          printf '%s\n' 'fnc id(int n): int { return n; } pub fnc main(): int { return id(42); }' > "$work/fixed.atto"
+          printf '%s\n' 'fnc id(rebind int n): int { return n; } pub fnc main(): int { return id(42); }' > "$work/marked.atto"
+          printf '%s\n' 'fnc bump(rebind int n): int { n = n + 2; return n; } pub fnc main(): int { val int n = 20; return bump(n) + n; }' > "$work/rebound.atto"
+          printf '%s\n' 'fnc bump(int n): int { n = n + 2; return n; } pub fnc main(): int { return bump(40); }' > "$work/reject.atto"
+          printf '%s\n' 'pub fnc main(): int { let int x = 39; set x = x + 1; set! x = x + 1; set! (x = x + 1); return x; }' > "$work/explicit-set.atto"
+          printf '%s\n' 'pub fnc main(): int { const int x = 40; set! x = 42; return x; }' > "$work/fixed-set-reject.atto"
+          printf '%s\n' 'pub fnc main(): int { let x = 40; let x = x + 1; set x = x + 1; return x; }' > "$work/shadow.atto"
+          for name in fixed marked rebound explicit-set shadow; do
+            target/release/atto-llvm "$work/$name.atto" -o "$work/$name.ll" --emit-llvm
+            for opt in 0 2; do
+              clang -x ir -O"$opt" -o "$work/$name-$opt" "$work/$name.ll"
+              status=0
+              timeout 10s "$work/$name-$opt" || status=$?
+              test "$status" = 42
+            done
+          done
+          cmp "$work/fixed.ll" "$work/marked.ll"
+          grep -q 'ret i64 %arg0' "$work/fixed.ll"
+          if grep -q 'alloca' "$work/fixed.ll"; then exit 1; fi
+          if target/release/atto-llvm "$work/reject.atto" -o "$work/reject.ll" --emit-llvm >"$work/reject.log" 2>&1; then exit 1; fi
+          grep -q E_IMMUTABLE "$work/reject.log"
+          test ! -e "$work/reject.ll"
+          if target/release/atto-llvm "$work/fixed-set-reject.atto" -o "$work/fixed-set-reject.ll" --emit-llvm >"$work/fixed-set-reject.log" 2>&1; then exit 1; fi
+          grep -q E_IMMUTABLE "$work/fixed-set-reject.log"
+          test ! -e "$work/fixed-set-reject.ll"
+          printf '%s\n' 'pub fnc main(): int { let x = 0; for (set x = 40; x < 42; set! (x = x + 1)) {} return x; }' > "$work/strict-loop.atto"
+          printf '%s\n' 'pub fnc main(): int { let x = 40; x = 42; return x; }' > "$work/strict-reject.atto"
+          target/release/atto-llvm "$work/strict-loop.atto" -o "$work/strict-loop.ll" --emit-llvm --explicit-rebinding
+          for opt in 0 2; do
+            clang -x ir -O"$opt" -o "$work/strict-loop-$opt" "$work/strict-loop.ll"
+            status=0
+            timeout 10s "$work/strict-loop-$opt" || status=$?
+            test "$status" = 42
+          done
+          printf '%s\n' 'pub fnc main(): int { let x = 0; let n = 0; for (set x = 0; x < 10; set x = x + 1) { if x == 2 then continue; fi if x == 5 then break; fi set n = n + 10; } return n + 2; }' > "$work/strict-control.atto"
+          target/release/atto-llvm "$work/strict-control.atto" -o "$work/strict-control.ll" --emit-llvm --explicit-rebinding
+          for opt in 0 2; do
+            clang -x ir -O"$opt" -o "$work/strict-control-$opt" "$work/strict-control.ll"
+            status=0
+            timeout 10s "$work/strict-control-$opt" || status=$?
+            test "$status" = 42
+          done
+          if target/release/atto-llvm "$work/strict-reject.atto" -o "$work/strict-reject.ll" --emit-llvm --explicit-rebinding >"$work/strict-reject.log" 2>&1; then exit 1; fi
+          grep -q E_EXPLICIT_REBIND "$work/strict-reject.log"
+          test ! -e "$work/strict-reject.ll"
+          printf '%s\n' 'pub fnc main(): int { let x = 40; set x++; set ++x; return x; }' > "$work/inc.atto"
+          printf '%s\n' 'pub fnc main(): int { let x = 44; set x--; set --x; return x; }' > "$work/dec.atto"
+          printf '%s\n' 'pub fnc main(): int { let x = 20; set x += 2; set x -= 1; set x *= 2; return x; }' > "$work/compound.atto"
+          printf '%s\n' 'pub fnc main(): int { let x = 32; for let i = 0; i < 10; set i++ { set x++; } return x; }' > "$work/counter.atto"
+          printf '%s\n' 'pub fnc main(): int { let x = 32; for (let i = 10; i > 0; set --i) { set x++; } return x; }' > "$work/descending.atto"
+          printf '%s\n' 'pub fnc main(): int { let x = 32; for let i = 0; i < 10; set i += 2 { set x += 2; } return x; }' > "$work/stride.atto"
+          for name in inc dec compound counter descending stride; do
+            target/release/atto-llvm "$work/$name.atto" -o "$work/$name.ll" --emit-llvm --explicit-rebinding
+            for opt in 0 2; do
+              clang -x ir -O"$opt" -o "$work/$name-$opt" "$work/$name.ll"
+              status=0
+              timeout 10s "$work/$name-$opt" || status=$?
+              test "$status" = 42
+            done
+          done
+          printf '%s\n' 'pub fnc main(): int { for let i = 0; i < 10; i++ {} return 42; }' > "$work/bare-counter.atto"
+          if target/release/atto-llvm "$work/bare-counter.atto" -o "$work/bare-counter.ll" --emit-llvm --explicit-rebinding >"$work/bare-counter.log" 2>&1; then exit 1; fi
+          grep -q E_EXPLICIT_REBIND "$work/bare-counter.log"
+          test ! -e "$work/bare-counter.ll"
+          sha256sum "$work/"*.ll
+          printf '%s\n' 'pub fnc main(): int { return match 42 over on _ as int z -> z end; }' > "$work/alias-typed.atto"
+          target/release/atto-llvm "$work/alias-typed.atto" -o "$work/alias-typed.ll" --emit-llvm
+          for opt in 0 2; do
+            clang -x ir -O"$opt" -o "$work/alias-typed-$opt" "$work/alias-typed.ll"
+            status=0
+            timeout 10s "$work/alias-typed-$opt" || status=$?
+            test "$status" = 42
+          done
+          printf '%s\n' 'pub fnc main(): int { return match 42 over on _ as const z -> z end; }' > "$work/alias-const.atto"
+          target/release/atto-llvm "$work/alias-const.atto" -o "$work/alias-const.ll" --emit-llvm
+          for opt in 0 2; do
+            clang -x ir -O"$opt" -o "$work/alias-const-$opt" "$work/alias-const.ll"
+            status=0
+            timeout 10s "$work/alias-const-$opt" || status=$?
+            test "$status" = 42
+          done
+          printf '%s\n' 'pub fnc main(): int { let int n = 20; let int r = 0; do match n over on _ as rebind int z -> { z = z + 2; r = z; } end return n + r; }' > "$work/alias-local.atto"
+          target/release/atto-llvm "$work/alias-local.atto" -o "$work/alias-local.ll" --emit-llvm
+          for opt in 0 2; do
+            clang -x ir -O"$opt" -o "$work/alias-local-$opt" "$work/alias-local.ll"
+            status=0
+            timeout 10s "$work/alias-local-$opt" || status=$?
+            test "$status" = 42
+          done
+          printf '%s\n' 'pub fnc main(): int { return match 42 over on 42 as rebind z when z == 42 -> { z = z + 1; return z; } on _ -> 0 end; }' > "$work/alias-guard.atto"
+          target/release/atto-llvm "$work/alias-guard.atto" -o "$work/alias-guard.ll" --emit-llvm
+          for opt in 0 2; do
+            clang -x ir -O"$opt" -o "$work/alias-guard-$opt" "$work/alias-guard.ll"
+            status=0
+            timeout 10s "$work/alias-guard-$opt" || status=$?
+            test "$status" = 43
+          done
+          printf '%s\n' 'pub fnc main(): int { return match 42 over on 41 as z when z == 42 -> 0, on _ as const z -> z end; }' > "$work/alias-fallback.atto"
+          target/release/atto-llvm "$work/alias-fallback.atto" -o "$work/alias-fallback.ll" --emit-llvm
+          for opt in 0 2; do
+            clang -x ir -O"$opt" -o "$work/alias-fallback-$opt" "$work/alias-fallback.ll"
+            status=0
+            timeout 10s "$work/alias-fallback-$opt" || status=$?
+            test "$status" = 42
+          done
+          printf '%s\n' 'pub fnc main(): int { do match 42 over on _ as int z -> { z = 0; } end return 0; }' > "$work/alias-fixed.atto"
+          if target/release/atto-llvm "$work/alias-fixed.atto" -o "$work/alias-fixed.ll" --emit-llvm >"$work/alias-fixed.log" 2>&1; then exit 1; fi
+          grep -q E_IMMUTABLE "$work/alias-fixed.log"
+          test ! -e "$work/alias-fixed.ll"
+          printf '%s\n' 'pub fnc main(): int { return match 42 over on _ as bool z -> 0 end; }' > "$work/alias-type.atto"
+          if target/release/atto-llvm "$work/alias-type.atto" -o "$work/alias-type.ll" --emit-llvm >"$work/alias-type.log" 2>&1; then exit 1; fi
+          grep -q E_TYPE "$work/alias-type.log"
+          test ! -e "$work/alias-type.ll"
+          printf '%s\n' 'pub fnc main(): int { return match 42 over on _ as rebind rebind int z -> z end; }' > "$work/alias-duplicate.atto"
+          if target/release/atto-llvm "$work/alias-duplicate.atto" -o "$work/alias-duplicate.ll" --emit-llvm >"$work/alias-duplicate.log" 2>&1; then exit 1; fi
+          grep -q E_SYNTAX "$work/alias-duplicate.log"
+          test ! -e "$work/alias-duplicate.ll"
+          printf '%s\n' 'pub fnc main(): int { return match 42 over on _ as mut z -> 0 end; }' > "$work/alias-mut.atto"
+          if target/release/atto-llvm "$work/alias-mut.atto" -o "$work/alias-mut.ll" --emit-llvm >"$work/alias-mut.log" 2>&1; then exit 1; fi
+          grep -q E_UNSUPPORTED "$work/alias-mut.log"
+          test ! -e "$work/alias-mut.ll"
+          printf '%s\n' 'pub fnc main(): int { do match 42 over on _ as rebind z -> {} end return z; }' > "$work/alias-scope.atto"
+          if target/release/atto-llvm "$work/alias-scope.atto" -o "$work/alias-scope.ll" --emit-llvm >"$work/alias-scope.log" 2>&1; then exit 1; fi
+          grep -q E_UNBOUND "$work/alias-scope.log"
+          test ! -e "$work/alias-scope.ll"
+          # Exact shared fixture bytes, verified before every real guest compilation.
+          while read -r name blob outcome; do
+            source="contracts/incoming-scalar-bindings-v1/$name.atto"
+            test "$(git hash-object --no-filters "$source")" = "$blob"
+            output="$work/shared-$name.ll"
+            rm -f "$output"
+            if [[ "$outcome" =~ ^[0-9]+$ ]]; then
+              target/release/atto-llvm "$source" -o "$output" --emit-llvm
+              for opt in 0 2; do
+                clang -x ir -O"$opt" -o "$work/shared-$name-$opt" "$output"
+                status=0
+                timeout 10s "$work/shared-$name-$opt" || status=$?
+                test "$status" = "$outcome"
+              done
+            else
+              if target/release/atto-llvm "$source" -o "$output" --emit-llvm >"$work/shared-$name.log" 2>&1; then exit 1; fi
+              grep -Fq "$outcome" "$work/shared-$name.log"
+              test ! -e "$output"
+            fi
+          done <<'SHARED_BINDINGS'
+          incoming-alias-typed a468f12a990b9e228b3dda649ba839526d3a32f9 42
+          incoming-alias-rebind 389e63ac3aea25b4f20d2baac14908d98809b57a 42
+          incoming-alias-fixed-reject 3f8fbcd373405d950a16bcc2779d78d46027f493 E_IMMUTABLE
+          incoming-alias-type-reject f92cd4e128cafdface1a1e0eb8abd3cb0d14698f E_TYPE
+          incoming-alias-duplicate-reject c35ceb04f96e8aab70efded4d6ba09854167a390 E_SYNTAX
+          scalar-name-first acd7353fb5b0d17e48dffad206210e770304a2f8 23
+          SHARED_BINDINGS
+          printf '%s\n' 'pub fnc main(): int { return match 42 over on z when z == 42 -> z, on _ -> 0 end; }' > "$work/ordinary-guard-binder.atto"
+          target/release/atto-llvm "$work/ordinary-guard-binder.atto" -o "$work/ordinary-guard-binder.ll" --emit-llvm
+          for opt in 0 2; do
+            clang -x ir -O"$opt" -o "$work/ordinary-guard-binder-$opt" "$work/ordinary-guard-binder.ll"
+            status=0
+            timeout 10s "$work/ordinary-guard-binder-$opt" || status=$?
+            test "$status" = 42
+          done
+          printf '%s\n' 'pub fnc main(): int { return match 42 over on 41 as z when (z + 9223372036854775807) == 0 -> 0, on _ as const z -> z end; }' > "$work/guard-lazy-overflow.atto"
+          target/release/atto-llvm "$work/guard-lazy-overflow.atto" -o "$work/guard-lazy-overflow.ll" --emit-llvm
+          for opt in 0 2; do
+            clang -x ir -O"$opt" -o "$work/guard-lazy-overflow-$opt" "$work/guard-lazy-overflow.ll"
+            status=0
+            timeout 10s "$work/guard-lazy-overflow-$opt" || status=$?
+            test "$status" = 42
+          done
