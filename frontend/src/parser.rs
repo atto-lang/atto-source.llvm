@@ -230,6 +230,59 @@ fn unsupported(pos: Pos, what: &str) -> Diagnostic {
     Diagnostic::new(pos, "E_UNSUPPORTED", format!("{what} is not supported by the browser compiler yet"))
 }
 
+fn lazy_guard_predicate(expr: Expr) -> Expr {
+    let pos = expr.pos;
+    match expr.kind {
+        ExprKind::Binary(BinOp::And, left, right) => Expr {
+            kind: ExprKind::Ternary(
+                Box::new(lazy_guard_predicate(*left)),
+                Box::new(lazy_guard_predicate(*right)),
+                Box::new(Expr { kind: ExprKind::Bool(false), pos })),
+            pos,
+        },
+        ExprKind::Binary(BinOp::Or, left, right) => Expr {
+            kind: ExprKind::Ternary(
+                Box::new(lazy_guard_predicate(*left)),
+                Box::new(Expr { kind: ExprKind::Bool(true), pos }),
+                Box::new(lazy_guard_predicate(*right))),
+            pos,
+        },
+        kind => Expr { kind, pos },
+    }
+}
+
+/// Conservative guard preflight: no path may escape through an explicit
+/// throw, break, or continue before the required function return. The typed
+/// checker still validates return types and exceptional effects separately.
+fn guard_has_nonreturn_control_exit(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(|stmt| match stmt {
+        Stmt::Throw(..) | Stmt::Break(..) | Stmt::Continue(..) => true,
+        Stmt::Block(body) => guard_has_nonreturn_control_exit(body),
+        Stmt::If { arms, otherwise, .. } =>
+            arms.iter().any(|(_, body)| guard_has_nonreturn_control_exit(body))
+                || otherwise.as_ref().is_some_and(|body| guard_has_nonreturn_control_exit(body)),
+        Stmt::Match { arms, .. } =>
+            arms.iter().any(|arm| guard_has_nonreturn_control_exit(&arm.body)),
+        Stmt::While { body, .. } | Stmt::Loop { body, .. }
+        | Stmt::For { body, .. } | Stmt::ForIn { body, .. } =>
+            guard_has_nonreturn_control_exit(body),
+        _ => false,
+    })
+}
+
+fn guard_failure_returns(stmts: &[Stmt]) -> bool {
+    match stmts.last() {
+        Some(Stmt::Return(..)) => true,
+        Some(Stmt::Block(body)) => guard_failure_returns(body),
+        Some(Stmt::If { arms, otherwise: Some(fallback), .. }) => {
+            !arms.is_empty()
+                && arms.iter().all(|(_, body)| guard_failure_returns(body))
+                && guard_failure_returns(fallback)
+        }
+        _ => false,
+    }
+}
+
 impl Parser {
     pub fn new(toks: Vec<Token>) -> Self {
         Parser {
@@ -363,6 +416,10 @@ impl Parser {
     }
 
     fn parse_type(&mut self) -> R<Type> {
+        self.parse_type_with_return_marker(false)
+    }
+
+    fn parse_type_with_return_marker(&mut self, allow_return_marker: bool) -> R<Type> {
         let pos = self.pos();
         let name = match self.peek() {
             Tok::Ident(s) => s.clone(),
@@ -432,7 +489,9 @@ impl Parser {
             // A class or enum name; the checker resolves it.
             n => Type::Named(self.type_name(n.to_string(), pos)),
         };
-        if matches!(self.peek(), Tok::Lt | Tok::LBracket | Tok::Question | Tok::Pipe) {
+        let return_marker = allow_return_marker && *self.peek() == Tok::Lt
+            && *self.peek_at(1) == Tok::Minus;
+        if !return_marker && matches!(self.peek(), Tok::Lt | Tok::LBracket | Tok::Question | Tok::Pipe) {
             return Err(unsupported(self.pos(), "generic, optional, union and sequence types"));
         }
         Ok(ty)
@@ -689,7 +748,7 @@ impl Parser {
             };
             // Admit the inert susp marker on an actor's attached receive
             // entrypoint. Any actually suspended body must still be rejected.
-            if actor && self.is_word("susp") && self.word_at(1) == Some("receive")
+            if actor && self.is_word("suspends") && self.word_at(1) == Some("receive")
                 && *self.peek_at(2) == Tok::LParen
             {
                 self.advance();
@@ -1034,7 +1093,7 @@ impl Parser {
         let start = self.pos();
         self.eat_word("pub");
         // Header-level susp does not make unsupported await/resume code legal.
-        let _susp = self.eat_word("susp");
+        let _susp = self.eat_word("suspends");
         if self.is_word("private") {
             return Err(unsupported(self.pos(), "'private' visibility"));
         }
@@ -1076,7 +1135,7 @@ impl Parser {
             false
         };
         let prefix_type = if return_first {
-            let ty = self.parse_type()?;
+            let ty = self.parse_type_with_return_marker(true)?;
             self.consume_return_first_marker()?;
             Some(ty)
         } else {
@@ -1295,7 +1354,9 @@ impl Parser {
                 }
                 let at_end = matches!(self.peek(), Tok::Semi | Tok::RBrace)
                     || matches!(self.word_at(0), Some("fi" | "end" | "done" | "elif" | "elseif" | "else"));
-                let value = if at_end { None } else { Some(self.parse_expr()?) };
+                let explicit_void = self.is_word("void");
+                if explicit_void { self.advance(); }
+                let value = if at_end || explicit_void { None } else { Some(self.parse_expr()?) };
                 if self.in_generator && value.is_some() {
                     return Err(Diagnostic::new(pos, "E_RETURN",
                         "generators may terminate with 'return;' but cannot return a value"));
@@ -1311,6 +1372,7 @@ impl Parser {
                 self.terminator()?;
                 Ok(Stmt::Throw(error, pos))
             }
+            Some("guard") => self.parse_guard(),
             Some("if") => self.parse_if(),
             Some("while") => {
                 self.advance();
@@ -1480,6 +1542,39 @@ impl Parser {
         self.advance();
         let init = self.parse_expr()?;
         Ok(Stmt::Bind { kind, name, ty, init, pos })
+    }
+
+    /// AttoLang dual-form early-exit guard. Both surface spellings lower
+    /// through the same checked negated If statement. Unsupported payload
+    /// narrowing remains checked elsewhere and must never be invented.
+    fn parse_guard(&mut self) -> R<Stmt> {
+        let pos = self.pos();
+        self.expect_word("guard")?;
+        let predicate = lazy_guard_predicate(self.parse_cond_head()?);
+        let failure = if *self.peek() == Tok::LBrace {
+            // An enclosing keyword if owns its following else/fi.
+            // A stray else outside that context remains a syntax error.
+            self.parse_block()?
+        } else if self.eat_word("else") {
+            let block = self.parse_stmts_until(&["end"])?;
+            self.expect_word("end")?;
+            block
+        } else {
+            return Err(Diagnostic::new(self.pos(), "E_GUARD",
+                "guard requires '{ ... }' or 'else ... end' failure block"));
+        };
+        if guard_has_nonreturn_control_exit(&failure) || !guard_failure_returns(&failure) {
+            return Err(Diagnostic::new(pos, "E_GUARD",
+                "guard failure block must explicitly return on all reachable paths"));
+        }
+        Ok(Stmt::If {
+            arms: vec![(
+                Expr { kind: ExprKind::Unary(UnOp::Not, Box::new(predicate)), pos },
+                failure,
+            )],
+            otherwise: None,
+            pos,
+        })
     }
 
     fn parse_if(&mut self) -> R<Stmt> {
@@ -1887,13 +1982,13 @@ impl Parser {
 
     fn parse_cond_and(&mut self) -> R<Expr> {
         let mut links = 0;
-        let mut left = self.parse_equality()?;
+        let mut left = self.parse_logical_or()?;
         while *self.peek() == Tok::Comma {
             let pos = self.pos();
             self.advance();
             self.grow(1)?;
             links += 1;
-            let right = self.parse_equality()?;
+            let right = self.parse_logical_or()?;
             left = Expr {
                 kind: ExprKind::Binary(BinOp::And, Box::new(left), Box::new(right)),
                 pos,
@@ -1913,8 +2008,61 @@ impl Parser {
         r
     }
 
+    /// Short-circuit logical operators are distinct from comma/pipe condition
+    /// operators, which are eagerly evaluated. The lexer deliberately keeps
+    /// paired pipes as two tokens: initial || still starts a zero-arg lambda.
+    /// In infix position only, a pair is logical OR.
+    fn parse_logical_or(&mut self) -> R<Expr> {
+        let mut left = self.parse_logical_and()?;
+        let mut links = 0;
+        while *self.peek() == Tok::Pipe && *self.peek_at(1) == Tok::Pipe {
+            let pos = self.pos();
+            self.advance();
+            self.advance();
+            self.grow(1)?;
+            links += 1;
+            let right = self.parse_logical_and()?;
+            left = Expr {
+                kind: ExprKind::Ternary(
+                    Box::new(left),
+                    Box::new(Expr { kind: ExprKind::Bool(true), pos }),
+                    Box::new(right),
+                ),
+                pos,
+            };
+        }
+        self.height -= links;
+        Ok(left)
+    }
+
+    /// a && b lowers to a ? b : false. The normal typed ternary emitter
+    /// evaluates a exactly once and b only when a is true. No eager builtin
+    /// and no changed meaning for unary & (reserved ownership/borrow form).
+    fn parse_logical_and(&mut self) -> R<Expr> {
+        let mut left = self.parse_equality()?;
+        let mut links = 0;
+        while *self.peek() == Tok::Amp && *self.peek_at(1) == Tok::Amp {
+            let pos = self.pos();
+            self.advance();
+            self.advance();
+            self.grow(1)?;
+            links += 1;
+            let right = self.parse_equality()?;
+            left = Expr {
+                kind: ExprKind::Ternary(
+                    Box::new(left),
+                    Box::new(right),
+                    Box::new(Expr { kind: ExprKind::Bool(false), pos }),
+                ),
+                pos,
+            };
+        }
+        self.height -= links;
+        Ok(left)
+    }
+
     fn parse_ternary(&mut self) -> R<Expr> {
-        let mut c = self.parse_equality()?;
+        let mut c = self.parse_logical_or()?;
         // Functional pipeline: value |> f |> g(extra) lowers to g(f(value), extra).
         // Only ordinary named functions are admitted: no computed callees,
         // receiver calls or actor piping. This preserves argument evaluation
@@ -2078,7 +2226,7 @@ impl Parser {
         let op = match self.peek() {
             Tok::Minus => UnOp::Neg,
             Tok::Plus => UnOp::Plus,
-            Tok::Bang => UnOp::Not,
+            Tok::Bang | Tok::UnicodeNot => UnOp::Not,
             Tok::Amp => return Err(unsupported(pos, "borrow expressions")),
             Tok::PlusPlus | Tok::MinusMinus => {
                 return Err(Diagnostic::new(
@@ -2395,6 +2543,7 @@ fn describe(t: &Tok) -> String {
                 Tok::YieldStar => "yield*",
                 Tok::Slash => "/",
                 Tok::Bang => "!",
+                Tok::UnicodeNot => "¬",
                 Tok::Question => "?",
                 Tok::Pipe => "|",
                 Tok::PipeGt => "|>",

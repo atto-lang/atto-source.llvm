@@ -3,6 +3,7 @@
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/ChannelGuestGate.hpp"
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/PortableUnicodeIdentifier.hpp"
 #include "oreslang/types/CoreTypeRegistry.hpp"
 #include "oreslang/frontend/PointerIntSyntax.hpp"
 #include "oreslang/frontend/NativeTelemetryLiteralV1.hpp"
@@ -47,10 +48,18 @@ bool exceptional_control(std::string_view word) {
 }
 
 bool digit(char ch) { return ch >= '0' && ch <= '9'; }
-bool identifier_start(char ch) {
-    return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_';
+bool identifier_part_at(std::string_view text, std::size_t offset) {
+    const auto scalar = frontend::unicode_at(text, offset);
+    return scalar.width != 0 && frontend::portable_name_part(scalar.value);
 }
-bool identifier_part(char ch) { return identifier_start(ch) || digit(ch); }
+bool identifier_before(std::string_view text, std::size_t offset) {
+    if (!offset) return false;
+    auto start = offset - 1;
+    while (start > 0 && (static_cast<unsigned char>(text[start]) & 0xc0u) == 0x80u) --start;
+    const auto scalar = frontend::unicode_at(text, start);
+    return scalar.width && start + scalar.width == offset &&
+           frontend::portable_name_part(scalar.value);
+}
 
 inline constexpr std::size_t kMaxNativeBlockCommentNesting = 128;
 inline constexpr std::size_t kMaxNativeTemplateNesting = 32;
@@ -271,9 +280,10 @@ public:
             at_ += 3;
             return {Kind::Identifier, "suspends", start};
         }
-        if (identifier_start(ch)) {
-            ++at_;
-            while (at_ < source_.size() && identifier_part(source_[at_])) ++at_;
+        const auto scalar = frontend::unicode_at(source_, at_);
+        if (scalar.width && frontend::portable_name_start(scalar.value)) {
+            at_ += scalar.width;
+            while (identifier_part_at(source_, at_)) at_ += frontend::unicode_at(source_, at_).width;
             // Keep 'critical-read' / 'critical-write' as ordinary
             // IDENT '-' IDENT tokens. The parser recognizes them *only*
             // in callable modifier positions: arbitrary expressions must
@@ -321,7 +331,7 @@ public:
             if (first == "nb" && source_.substr(at_, 7) == "-select") {
                 const auto end = at_ + 7;
                 if (end == source_.size() ||
-                        (source_[end] != '-' && !identifier_part(source_[end]))) {
+                        (source_[end] != '-' && !identifier_part_at(source_, end))) {
                     at_ = end;
                 }
             }
@@ -330,10 +340,14 @@ public:
             if (first == "trap" && at_ < source_.size() && source_[at_] == '!'
                     && source_.substr(at_, 2) != "!="
                     && !(source_.substr(at_, 3) == "!eq"
-                         && (at_ + 3 == source_.size() || !identifier_part(source_[at_ + 3])))) {
+                         && (at_ + 3 == source_.size() || !identifier_part_at(source_, at_ + 3)))) {
                 ++at_;
             }
             return {Kind::Identifier, source_.substr(start, at_ - start), start};
+        }
+        if (scalar.width && scalar.value == 0xacu) {
+            at_ += scalar.width;
+            return {Kind::Symbol, source_.substr(start, scalar.width), start};
         }
         if (ch == '"' || ch == '\'') {
             const char quote = ch;
@@ -389,7 +403,7 @@ public:
                 }
             }
             if (at_ < source_.size() && source_[at_] == 'd' &&
-                    (at_ + 1 == source_.size() || !identifier_part(source_[at_ + 1]))) {
+                    (at_ + 1 == source_.size() || !identifier_part_at(source_, at_ + 1))) {
                 ++at_;
                 real = true;
             }
@@ -407,7 +421,7 @@ public:
         // compatibility migration; no source-profile switch is invented here.
         if (source_.substr(at_, 3) == "!eq" &&
                 (at_ + 3 == source_.size() ||
-                 !identifier_part(source_[at_ + 3]))) {
+                 !identifier_part_at(source_, at_ + 3))) {
             at_ += 3;
             return {Kind::Symbol, source_.substr(start, 3), start};
         }
@@ -417,7 +431,7 @@ public:
         // This lexer has already skipped comments and quoted source.
         if (source_.substr(at_, 3) == "!eq") {
             const auto end = at_ + 3;
-            if (end == source_.size() || !identifier_part(source_[end])) {
+            if (end == source_.size() || !identifier_part_at(source_, end)) {
                 at_ = end;
                 return {Kind::Identifier, "neq", start};
             }
@@ -428,7 +442,7 @@ public:
         // expression kind; no reflection, interpreter or runtime dispatch.
         if (source_.substr(at_, 3) == "!eq" &&
             (at_ + 3 == source_.size() ||
-             !identifier_part(source_[at_ + 3]))) {
+             !identifier_part_at(source_, at_ + 3))) {
             at_ += 3;
             return {Kind::Symbol, source_.substr(start, 3), start};
         }
@@ -451,8 +465,8 @@ public:
         // This lexer only reaches executable tokens (not comments/strings).
         if (ch == '@') {
             std::size_t after_name = start + 1;
-            while (after_name < source_.size() && identifier_part(source_[after_name]))
-                ++after_name;
+            while (identifier_part_at(source_, after_name))
+                after_name += frontend::unicode_at(source_, after_name).width;
             const auto annotation = source_.substr(start + 1, after_name - start - 1);
             if (annotation == "Inject" || annotation == "StateBacked" ||
                     annotation == "MutableStateContainer" || annotation == "StateContainer") {
@@ -485,7 +499,7 @@ public:
             if (before >= marker.size() &&
                     source_.substr(before - marker.size(), marker.size()) == marker &&
                     (before == marker.size() ||
-                     !identifier_part(source_[before - marker.size() - 1]))) {
+                     !identifier_before(source_, before - marker.size()))) {
                 ++at_;
                 return {Kind::Symbol, source_.substr(start, 1), start};
             }
@@ -1539,8 +1553,7 @@ public:
                 program.classes.push_back(std::move(cls));
                 break;
             }
-            // define [pub] fnc/routine is a callable declaration, not a
-            // public module wrapper. Reuse the normal checked callable path.
+            // define [pub] fnc/routine is not a module wrapper.
             if (token_.text == "fnc" || token_.text == "routine") {
                 program.functions.push_back(function({}, exported));
                 continue;
@@ -4316,15 +4329,20 @@ private:
                 binding.name = identifier();
                 require("=");
                 binding.initializer = expression();
-                if (!binding.initializer ||
-                        binding.initializer->kind != Expression::Kind::ArrayCall ||
-                        binding.initializer->name != "split_literal" ||
-                        !binding.initializer->left ||
-                        binding.initializer->arguments.size() != 1)
-                    fail("inferred native array val requires String.split_literal(String)");
-                binding.int_array = true;
+                // Keep the owned split-literal path distinct from statically
+                // inferred scalar values; the checked type environment admits
+                // only supported scalar initializers on the latter path.
                 binding.owner_mutable = true;
-                binding.array_element_type = ScalarType::String;
+                if (binding.initializer &&
+                        binding.initializer->kind == Expression::Kind::ArrayCall &&
+                        binding.initializer->name == "split_literal" &&
+                        binding.initializer->left &&
+                        binding.initializer->arguments.size() == 1) {
+                    binding.int_array = true;
+                    binding.array_element_type = ScalarType::String;
+                } else {
+                    binding.inferred_scalar = true;
+                }
             } else if ((token_.text == "val" || token_.text == "const") &&
                     [&] { Lexer look = lexer_; const auto type = look.next();
                         return type.text == "string" || type.text == "String" ||
@@ -5980,18 +5998,40 @@ private:
     std::unique_ptr<Expression> product() {
         auto left = unary();
         while (token_.text == "*" || token_.text == "/" || token_.text == "%") {
-            // Java defines int/int division as a FLOAT result; this native
-            // source compiler lowers expressions only to signed i64. Reject
-            // at the operator before either lowering or emitting partial IR.
-            if (token_.text == "/")
-                fail("native floating division unsupported: int/int yields float in Java; "
-                     "LLVM float typing and zero-divisor semantics are not implemented");
+            // The merged Atto contract defines signed int/int as truncating
+            // integer division. Admit only operands proven literal and safe
+            // before emission; dynamic typed error lowering is a separate gate.
             if (token_.text == "%")
                 fail("'%' is reserved and is not AttoLang source syntax; "
                      "use Integer.rem(a, b) or Integer.mod(a, b)");
+            const bool division = token_.text == "/";
             const auto offset = token_.offset;
             advance();
             auto right = unary();
+            if (division) {
+                const auto signed_literal = [](const Expression& value)
+                        -> std::optional<std::int64_t> {
+                    using K = Expression::Kind;
+                    if (value.kind == K::Integer) return value.integer;
+                    if (value.kind == K::Negate && value.left &&
+                            value.left->kind == K::Integer &&
+                            value.left->integer != std::numeric_limits<std::int64_t>::min())
+                        return -value.left->integer;
+                    return std::nullopt;
+                };
+                const auto a = signed_literal(*left);
+                const auto b = signed_literal(*right);
+                if (!a || !b)
+                    fail("E_DIVISION_PROFILE_UNSUPPORTED: dynamic signed division requires checked typed error lowering");
+                if (*b == 0)
+                    fail("E_DIVISION_BY_ZERO: signed integer divisor is zero");
+                if (*a == std::numeric_limits<std::int64_t>::min() && *b == -1)
+                    fail("E_DIVISION_OVERFLOW: signed integer quotient exceeds i64");
+                auto quotient = make_expression(Expression::Kind::Integer, offset);
+                quotient->integer = *a / *b;
+                left = std::move(quotient);
+                continue;
+            }
             auto expr = make_expression(Expression::Kind::Multiply, offset);
             expr->left = std::move(left);
             expr->right = std::move(right);
@@ -6185,7 +6225,7 @@ private:
             expr->left = unary();
             return expr;
         }
-        if (token_.text == "!") {
+        if (token_.text == "!" || token_.text == "\xc2\xac") {
             const auto offset = token_.offset;
             advance();
             auto expr = make_expression(Expression::Kind::LogicalNot, offset);
