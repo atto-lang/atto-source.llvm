@@ -1,0 +1,1 @@
+pub fnc main(): int { const x = y := 42; return if x.key == "y" then x.value else 99 fi; }
