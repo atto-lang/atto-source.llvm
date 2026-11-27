@@ -5955,6 +5955,12 @@ if(BUILD_TESTING)
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_reserved_java_keywords.py"
             "$<TARGET_FILE:oreslang-llvmc>")
+    # Focused unsafe admission is independently reportable. The full keyword
+    # parity suite remains registered and mandatory; no failure is hidden.
+    add_test(NAME native_unsafe_g0_admission
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_reserved_java_keywords.py"
+            "$<TARGET_FILE:oreslang-llvmc>" --unsafe-only)
     oreslang_contract_test(reject_static_select unsupported-static-select.ores --diagnostic "native async/channel/select boundary unsupported")
     oreslang_contract_test(reject_dynamic_select_plan unsupported-dynamic-select-plan.ores --diagnostic "native async/channel/select boundary unsupported")
     # Until typed descriptor ownership and atomic selection land, source
