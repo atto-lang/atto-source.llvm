@@ -1,4 +1,5 @@
 #include "oreslang/runtime/ActorStateReadWriteGate.hpp"
+#include "actor_state_terminal_matrix.hpp"
 
 #include <atomic>
 #include <stdexcept>
@@ -10,6 +11,7 @@ using Gate = ActorStateReadWriteGate;
 #define CHECK(x) do { if (!(x)) throw std::runtime_error("failed: " #x); } while (false)
 
 int main() {
+    check_actor_state_terminal_matrix();
     Gate gate;
     const auto a = gate.request(Gate::Mode::Read);
     const auto b = gate.request(Gate::Mode::Read);
