@@ -134,17 +134,25 @@ int main() {
            + std::string(valid_actor), "expected 'actor'");
     // Grouped or legacy spawn policies must not become plain ActorRef bindings.
     for (const auto* suffix : {
-        "with {}",
         "with { schedule { max_parallelism = 2; affinity = sticky; } }",
         "with { resources { heap_size = 67108864; stack_size = 65536; mailbox_capacity = 1024; } }",
         "with { init { name = \"worker-1\"; seed = 42; } }",
-        "/* comment */ with { init {} }",
-        "with schedule(max_parallelism=2)",
-        "with { unknown {} }"
+        "with schedule(max_parallelism=2)"
     }) {
         denied(std::string(valid_actor) + "\n pub fnc main(): int { val w: ActorRef<Worker> = spawn Worker() " +
                suffix + "; return 0; }", "E_SPAWN_OPTIONS_UNSUPPORTED");
     }
+    for (const auto* suffix : {"with {}", "with { schedule {} resources {} init {} }",
+                               "/* comment */ with { init {} }"}) {
+        auto program = parse_program(std::string(valid_actor) +
+            "\n pub fnc main(): int { val w: ActorRef<Worker> = spawn Worker() " +
+            suffix + "; w.stop(); return 0; }");
+        check(program.actors.size() == 1);
+    }
+    denied(std::string(valid_actor) + "\n pub fnc main(): int { val w = spawn Worker() with { unknown {} }; return 0; }",
+           "E_SPAWN_OPTION_SECTION");
+    denied(std::string(valid_actor) + "\n pub fnc main(): int { val w = spawn Worker() with { init {} init {} }; return 0; }",
+           "E_SPAWN_OPTION_DUPLICATE");
     auto legacy_spawn = parse_program(std::string(valid_actor) +
         "\n pub fnc main(): int { val w: ActorRef<Worker> = spawn Worker(); w.stop(); return 0; }");
     check(legacy_spawn.actors.size() == 1);
