@@ -18,6 +18,8 @@ import subprocess
 import sys
 import tempfile
 
+from atto_library_case_guard import validate_corpus, validate_case, rejection_valid
+
 RUNTIME = ["NativeRecordRegion.c", "NativeStringRegion.c", "NativeIntArrayRegion.c"]
 
 
@@ -54,6 +56,7 @@ def main():
     runtime_dir = root / "src/main/cpp/oreslang/runtime"
     include = root / "src/main/cpp"
     cases = sorted((root / "tests/atto_libraries").glob("*.atto"))
+    validate_corpus(cases)
     failures = []
     with tempfile.TemporaryDirectory(prefix="atto-libs-") as tmp:
         tmp = pathlib.Path(tmp)
@@ -65,15 +68,14 @@ def main():
             objects.append(str(obj))
         for case in cases:
             meta = headers(case)
+            validate_case(case.name, meta)
             compiled = subprocess.run([args.compiler, *meta["flags"], case.name],
                                       cwd=case.parent, capture_output=True, text=True, timeout=120)
             if meta.get("reject"):
                 missing = [e for e in meta["errors"] if e not in compiled.stderr]
-                if compiled.returncode == 0 or missing:
+                if not rejection_valid(compiled, meta['errors']):
                     failures.append(f"{case.name}: expected rejection containing "
                                     f"{missing!r}, got rc={compiled.returncode} {compiled.stderr.strip()[:300]}")
-                elif compiled.stdout:
-                    failures.append(f"{case.name}: rejected source emitted IR")
                 else:
                     print(f"PASS {case.name} (rejected)")
                 continue
@@ -87,7 +89,7 @@ def main():
             subprocess.run([args.clang, "-Wno-override-module", "-x", "ir", str(ir), "-c", "-o", str(obj)], check=True)
             subprocess.run([args.clang, str(obj), *objects, "-o", str(exe)], check=True)
             ran = subprocess.run([str(exe)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
-            out = ran.stdout.decode("utf-8", "replace")
+            out = ran.stdout.decode("utf-8", "strict")
             if ran.returncode != meta.get("exit", 0):
                 failures.append(f"{case.name}: exit {ran.returncode} != {meta.get('exit', 0)}")
             elif "stdout" in meta and out != meta["stdout"]:

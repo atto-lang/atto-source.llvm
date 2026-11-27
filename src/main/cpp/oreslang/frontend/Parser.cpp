@@ -208,7 +208,7 @@ bool reserved(std::string_view name) {
         "nlex", "trap", "actor", "isoactor", "def", "fnc", "routine",
         "while", "for", "of", "loop", "block", "break", "continue", "yield",
         "super", "elseif", "elif", "switch", "match", "matches", "is",
-        "default", "eq", "neq", "Xor", "nb", "select", "readch", "writech",
+        "default", "eq", "neq", "And", "Or", "Xor", "nb", "select", "readch", "writech",
         "cb", "shared", "untrusted", "type", "types", "typeof",
         "interface", "trait", "struct", "impl", "abstract", "void", "Iterator", "AsyncIterator",
         "static", "pub", "private", "return", "defer", "throw", "raise",
@@ -264,6 +264,13 @@ public:
         }
         const std::size_t start = at_;
         const char ch = source_[at_];
+        // Exact non-letter UTF-8 aliases share the existing suspension
+        // effect and native admission gates. Never rewrite source trivia.
+        if (source_.substr(at_, 3) == "\xE2\xA7\x96" ||
+                source_.substr(at_, 3) == "\xE2\x88\x82") {
+            at_ += 3;
+            return {Kind::Identifier, "suspends", start};
+        }
         if (identifier_start(ch)) {
             ++at_;
             while (at_ < source_.size() && identifier_part(source_[at_])) ++at_;
@@ -274,6 +281,8 @@ public:
             // Existing nb-select recognition is intentionally unchanged
             // until native select lowering supports that grammar.
             const auto first = source_.substr(start, at_ - start);
+            if (first == "susp")
+                return {Kind::Identifier, "suspends", start};
             // Channel<int> has a distinct result/EOF/cancellation/ownership
             // representation. Reject the exact nominal type before any
             // scalar i64 LLVM lowering can reinterpret it as integers or
@@ -423,6 +432,11 @@ public:
             at_ += 3;
             return {Kind::Symbol, source_.substr(start, 3), start};
         }
+        // Longest contiguous caret token first; do not accept spaced ^^ =.
+        if (source_.substr(at_, 3) == "^^=") {
+            at_ += 3;
+            return {Kind::Symbol, source_.substr(start, 3), start};
+        }
         // Contiguous comparison/logical operators are single tokens, matching
         // the Java/Graal precedence grammar.
         for (std::string_view op : {"->", "::", "|>", "<|", "==", "!=", "<=", ">=", "&&", "||", "^^"}) {
@@ -487,7 +501,10 @@ public:
         // rejects them before IR exactly like any other unexpected symbol.
         // '^' is the caret return marker. '&' stays an unsupported token:
         // there is no address-of, and the lexer rejects it before parsing.
-        if (std::string_view("(){}[],:;+-*/%=.<>@?!^").find(ch) != std::string_view::npos) {
+        // Single pipe is a token for explicit unsupported actor union diagnostics.
+        // This does not admit union lowering or scalar bitwise OR; longest-match
+        // pipeline and Boolean operators have already been handled above.
+        if (std::string_view("(){}[],:;+-*/%=.<>@?!^|").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -1083,7 +1100,8 @@ public:
                     bool experimental_rt_scalar_loop,
                     bool verified_namespace_metadata_only = false,
                     std::size_t unsafe_base_offset = 0,
-                    bool experimental_pointer_int_aot = false, int language_version = 0)
+                    bool experimental_pointer_int_aot = false, int language_version = 0,
+                    bool relative_import_unit = false)
         : source_(source),
           lexer_(source, unsafe_base_offset, experimental_pointer_int_aot),
           token_(lexer_.next()),
@@ -1092,7 +1110,8 @@ public:
           experimental_rt_scalar_loop_(experimental_rt_scalar_loop),
           language_version_(language_version),
           verified_namespace_metadata_only_(verified_namespace_metadata_only),
-          experimental_pointer_int_aot_(experimental_pointer_int_aot) {
+          experimental_pointer_int_aot_(experimental_pointer_int_aot),
+          relative_import_unit_(relative_import_unit) {
         if (language_version_ < 0 || language_version_ > 2)
             throw std::runtime_error("E_LANGUAGE_VERSION: expected 1 or 2");
         if (!experimental_pointer_int_aot_) reject_unlowered_with_update();
@@ -1245,7 +1264,9 @@ public:
         if (token_.text == "use" && peek_next().text == "namespace")
             advance();
         if (accept("namespace")) {
-            program.namespace_name = identifier();
+            // The canonical core/types name is contextual in this header only.
+            if (token_.kind == Kind::Identifier && accept("types")) program.namespace_name = "types";
+            else program.namespace_name = identifier();
             require(";");
         }
         while (token_.text == "import" || token_.text == "export") {
@@ -1767,7 +1788,21 @@ public:
             // No imports, namespace cross-file linking, actors, closures or
             // source FFI can acquire identity/dispatch authority here.
             const bool checked_scalar_main = namespace_checked_scalar_main(program);
-            if (!checked_scalar_main)
+            // Only the existing explicit relative-file function linker may
+            // consume this contextual core/types source identity. The
+            // standalone parser and final resolver retain their existing gates.
+            const bool linked_types = relative_import_unit_ &&
+                program.namespace_name == "types" &&
+                program.module.empty() && program.imports.empty() &&
+                program.namespace_imports.empty() && program.exports.empty() &&
+                program.classes.empty() && program.actors.empty() &&
+                program.sum_types.empty() && program.contracts.empty() &&
+                program.conforms.empty() && program.type_only_declarations.empty() &&
+                program.type_constraint_descriptors.empty() &&
+                program.inverted_structs.empty() && !program.inverted_main &&
+                !program.pointer_int_plan && program.cooperative_loops.empty() &&
+                program.generators.empty() && !program.functions.empty();
+            if (!checked_scalar_main && !linked_types)
                 fail("NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: only standalone checked literal-arithmetic i64 main is native-lowered; multi-file actor namespaces remain gated");
         }
         if (!provisional_kinds.empty())
@@ -4869,7 +4904,16 @@ private:
                     continue;
                 }
                 auto target = primary();
-                if (target->kind == Expression::Kind::Variable && accept("=")) {
+                if (target->kind == Expression::Kind::Variable && token_.text == "^^=") {
+                    const auto offset = token_.offset;
+                    advance();
+                    statement.kind = Statement::Kind::ScalarWrite;
+                    statement.receiver = target->name;
+                    auto rhs = make_expression(Expression::Kind::BitXor, offset);
+                    rhs->left = std::move(target);
+                    rhs->right = expression();
+                    statement.expression = std::move(rhs);
+                } else if (target->kind == Expression::Kind::Variable && accept("=")) {
                     statement.kind = Statement::Kind::ScalarWrite;
                     statement.receiver = target->name; statement.expression = expression();
                 } else if (target->kind == Expression::Kind::Field && accept("=")) {
@@ -5545,7 +5589,18 @@ private:
                                                value.actor_sends.size() - 1});
                 continue;
             }
-            if (action->kind == Expression::Kind::Variable && accept("=")) {
+            // Restrict compound XOR to scalar local names. Existing ScalarWrite
+            // type/mutability checks and BitXor lowering remain authoritative.
+            if (action->kind == Expression::Kind::Variable && token_.text == "^^=") {
+                const auto offset = token_.offset;
+                advance();
+                statement.kind = Statement::Kind::ScalarWrite;
+                statement.receiver = action->name;
+                auto rhs = make_expression(Expression::Kind::BitXor, offset);
+                rhs->left = std::move(action);
+                rhs->right = expression();
+                statement.expression = std::move(rhs);
+            } else if (action->kind == Expression::Kind::Variable && accept("=")) {
                 statement.kind = Statement::Kind::ScalarWrite;
                 statement.receiver = action->name; statement.expression = expression();
             } else if (action->kind == Expression::Kind::Field && accept("=")) {
@@ -5656,6 +5711,10 @@ private:
             while (accept("|>")) {
                 if (++stages > kMaxNativePipelineStages)
                     fail("pipeline exceeds 128 stages");
+                if (token_.text == "match") {
+                    value = value_match_expression(std::move(value));
+                    continue;
+                }
                 auto stage = primary();
                 if (stage->kind != Expression::Kind::Variable &&
                         stage->kind != Expression::Kind::Call)
@@ -5751,26 +5810,11 @@ private:
     }
 
     std::unique_ptr<Expression> logical_or() {
-        auto left = logical_xor();
+        auto left = logical_and();
         while (token_.text == "||") {
             const auto offset = token_.offset;
             advance();
             auto expr = make_expression(Expression::Kind::LogicalOr, offset);
-            expr->left = std::move(left);
-            expr->right = logical_xor();
-            left = std::move(expr);
-        }
-        return left;
-    }
-
-    std::unique_ptr<Expression> logical_xor() {
-        auto left = logical_and();
-        // The lexer emits adjacent ^^ as one token; single ^ remains invalid.
-        // LLVM's existing LogicalXor lowering is eager and bool-only.
-        while (token_.text == "^^") {
-            const auto offset = token_.offset;
-            advance();
-            auto expr = make_expression(Expression::Kind::LogicalXor, offset);
             expr->left = std::move(left);
             expr->right = logical_and();
             left = std::move(expr);
@@ -5778,14 +5822,29 @@ private:
         return left;
     }
 
-    std::unique_ptr<Expression> logical_and() {
+    std::unique_ptr<Expression> integer_xor() {
         auto left = equality();
+        // Adjacent ^^ is signed-i64 XOR. Equality binds more tightly,
+        // as in the current Java grammar; named Xor remains Boolean.
+        while (token_.text == "^^") {
+            const auto offset = token_.offset;
+            advance();
+            auto expr = make_expression(Expression::Kind::BitXor, offset);
+            expr->left = std::move(left);
+            expr->right = equality();
+            left = std::move(expr);
+        }
+        return left;
+    }
+
+    std::unique_ptr<Expression> logical_and() {
+        auto left = integer_xor();
         while (token_.text == "&&") {
             const auto offset = token_.offset;
             advance();
             auto expr = make_expression(Expression::Kind::LogicalAnd, offset);
             expr->left = std::move(left);
-            expr->right = equality();
+            expr->right = integer_xor();
             left = std::move(expr);
         }
         return left;
@@ -5942,11 +6001,14 @@ private:
             const auto offset = token_.offset;
             advance();
             auto payload = unary(); // prefix precedence, evaluated once
-            // Only closed, synchronous i64 expressions are admitted. No
-            // source-level ordinary throw is possible in this grammar;
-            // future effects require real exception/cleanup lowering.
-            if (!native_trap_pure_integer(*payload))
-                fail("native trap operand unsupported: only pure integer literals and checked arithmetic are lowered");
+            // Admit existing Result references and nested traps for nominal
+            // resolution, without admitting calls, allocations or effects.
+            // The resolver erases the redundant trap only for checked Result
+            // values; scalar variables and owned compound payloads stay closed.
+            if (!native_trap_pure_integer(*payload) &&
+                    payload->kind != Expression::Kind::Variable &&
+                    !(payload->kind == Expression::Kind::SumConstruct && payload->trap_origin))
+                fail("native trap operand unsupported: only pure integer literals and checked arithmetic are lowered, or existing Result values");
             auto result = make_expression(Expression::Kind::SumConstruct, offset);
             result->name = "Ok"; // trap yields Result<int, Error> (spec ch. 7)
             result->trap_origin = true;
@@ -6255,14 +6317,30 @@ private:
         return {native_dispatch_equal(*projection, *literal), std::move(field), key};
     }
 
-    std::unique_ptr<Expression> value_match_expression() {
+    std::unique_ptr<Expression> value_match_expression(std::unique_ptr<Expression> injected = nullptr) {
         const auto offset = token_.offset;
         require("match");
         consume_optional_value_match_result_type();
-        auto subject = expression();
+        const bool pipeline = static_cast<bool>(injected);
+        auto subject = pipeline ? std::move(injected) : expression();
+        // Conditional lowering clones its subject. Until a dedicated match
+        // temporary exists, admit only trivial immutable-observation forms
+        // in pipeline position, not calls, arithmetic or compound stages.
+        if (pipeline && subject->kind != Expression::Kind::Integer &&
+                subject->kind != Expression::Kind::Boolean &&
+                subject->kind != Expression::Kind::Variable)
+            fail("native pipeline match requires a literal or local subject until once-only lowering exists");
         if (!native_pure_scalar_tree(*subject))
             fail("native value match subject must be a replay-safe scalar expression");
         require("over");
+        const bool braced = accept("{");
+        const std::string_view close = braced ? "}" : "end";
+        auto arm_value = [&]() {
+            auto result = token_.text == "{"
+                ? dispatch_value_arm("native value match") : expression();
+            if (!accept(",")) accept(";");
+            return result;
+        };
 
         struct Arm {
             std::unique_ptr<Expression> condition;
@@ -6273,20 +6351,50 @@ private:
         std::unique_ptr<Expression> fallback;
         std::unordered_set<std::string> seen;
         std::string structural_field;
+        bool wildcard_fallback = false;
+        bool exhaustive_type_fallback = false;
 
-        while (token_.text != "end") {
+        while (token_.text != close) {
             if (arms.size() + (fallback ? 1u : 0u) >= 32)
                 fail("native value match arm limit exceeded (32)");
             // All three spellings designate one fallback, evaluated after concrete arms.
             const bool bare_default = accept("default");
-            if (!bare_default) require("on");
-            if (bare_default || accept("default") || accept("_")) {
+            if (!bare_default && token_.text != "is") require("on");
+            // Keep established ordinary value-match fallback spelling and
+            // precedence. The restricted new pipeline profile keeps its
+            // explicitly tested final-fallback syntax.
+            if (pipeline && !bare_default && token_.text == "default")
+                fail("native value match fallback must use 'default ->' without 'on'");
+            const bool on_default = !bare_default && accept("default");
+            const bool wildcard = !bare_default && !on_default && accept("_");
+            if (bare_default || on_default || wildcard) {
                 if (fallback)
                     fail("native value match can contain only one default arm");
                 if (token_.text == "when" || token_.text == "as")
                     fail("native value match default arm cannot have a guard or binding");
                 require("->");
-                fallback = dispatch_value_arm("native value match");
+                wildcard_fallback = wildcard;
+                fallback = arm_value();
+                continue;
+            }
+            if (fallback && (pipeline || exhaustive_type_fallback || token_.text == "is"))
+                fail(wildcard_fallback ? "native value match wildcard arm must be last"
+                                       : "native value match default arm must be last");
+            if (accept("is")) {
+                // Only literal subjects have an exact type at this parser stage.
+                // Do not infer a local's type or drop an effectful scrutinee.
+                const bool proven_int = subject->kind == Expression::Kind::Integer;
+                const bool proven_bool = subject->kind == Expression::Kind::Boolean;
+                if (!((proven_int && accept("int")) || (proven_bool && accept("bool"))))
+                    fail("native type match requires a statically proven int or bool literal subject");
+                if (token_.text == "as" || token_.text == "when")
+                    fail("native scalar type match binding/guard requires dedicated pattern lowering");
+                require("->");
+                // The statically proven type exhausts all remaining values.
+                // Prior literal tests retain source priority.
+                wildcard_fallback = true;
+                exhaustive_type_fallback = true;
+                fallback = arm_value();
                 continue;
             }
             if (token_.text == "structural" || token_.text == "struct")
@@ -6303,7 +6411,7 @@ private:
                 require("->");
                 arms.push_back({
                     std::move(field_test.condition),
-                    dispatch_value_arm("native structural field match"),
+                    arm_value(),
                     "field:" + field_test.field + ":" + field_test.key
                 });
                 continue;
@@ -6325,11 +6433,13 @@ private:
             require("->");
             arms.push_back({
                 native_dispatch_equal(*subject, *constant),
-                dispatch_value_arm("native value match"),
+                arm_value(),
                 key
             });
         }
-        require("end");
+        require(close);
+        if (pipeline && arms.empty() && subject->kind == Expression::Kind::Variable)
+            fail("native pipeline match default-only local requires checked subject evaluation");
 
         // Bool true/false is statically exhaustive; other scalar matches need
         // an explicit wildcard so there is always an ARM_RESULT value.
@@ -6901,18 +7011,49 @@ private:
             field->name = identifier();
             return field;
         }
-        // Boolean xor is the builtin Xor(a, b); both arguments are always evaluated.
-        if (token_.kind == Kind::Identifier && token_.text == "Xor" && peek_next().text == "(") {
+        // Restricted native core gates. Until resolved intrinsic shadowing is
+        // implemented these spellings are reserved, not arbitrary user calls.
+        if (token_.kind == Kind::Identifier &&
+                (token_.text == "And" || token_.text == "Or" || token_.text == "Xor") &&
+                peek_next().text == "(") {
+            const auto name = token_.text;
+            const auto kind = name == "And" ? Expression::Kind::LogicalAnd :
+                name == "Or" ? Expression::Kind::LogicalOr : Expression::Kind::LogicalXor;
             advance();
             require("(");
-            auto call = make_expression(Expression::Kind::LogicalXor, offset);
-            call->left = expression();
-            require(",");
-            call->right = expression();
+            const bool pack = accept("[");
+            std::vector<std::unique_ptr<Expression>> operands;
+            if (!(pack ? token_.text == "]" : token_.text == ")")) {
+                do {
+                    if (operands.size() >= 32)
+                        fail("native Boolean reduction exceeds 32 operands");
+                    auto item = expression();
+                    // Only effect-free Boolean literals are admitted in this
+                    // pack slice; never turn effectful array construction lazy.
+                    if (pack && item->kind != Expression::Kind::Boolean)
+                        fail("native Boolean array pack requires literal bool elements; general array reduction unsupported");
+                    operands.push_back(std::move(item));
+                } while (accept(","));
+            }
+            if (pack) require("]");
             require(")");
-            return call;
+            if (!pack && operands.size() < 2)
+                fail("native Boolean reduction requires at least two scalar operands");
+            if (operands.empty()) {
+                auto identity = make_expression(Expression::Kind::Boolean, offset);
+                identity->boolean = name == "And";
+                return identity;
+            }
+            auto result = std::move(operands.front());
+            for (std::size_t i = 1; i < operands.size(); ++i) {
+                auto call = make_expression(kind, offset);
+                call->left = std::move(result);
+                call->right = std::move(operands[i]);
+                result = std::move(call);
+            }
+            return result;
         }
-        // Named integer operations replace the reserved %, ^ and ^^ operators.
+        // Named integer operations remain available; % is not source arithmetic.
         // A user module named Integer keeps its ordinary qualified calls.
         if (token_.kind == Kind::Identifier && token_.text == "Integer" &&
                 peek_next().text == "." && !module_names_.count("Integer")) {
@@ -9521,6 +9662,7 @@ private:
     // Restricted host-only AST pass, never set by the ordinary CLI parser.
     bool verified_namespace_metadata_only_ = false;
     bool experimental_pointer_int_aot_ = false;
+    bool relative_import_unit_ = false;
     // Type-only declarations retain source alias identity until checked
     // catalog validation and extension-call rewriting complete.
     std::unordered_map<std::string, std::string> scalar_alias_targets_;
@@ -9691,7 +9833,7 @@ void resolve_future_pipeline_contracts(Program& program) {
 // Lexer::next() excludes comments and quoted literals from this check.
 void reject_unlowered_mutex_constructor(std::string_view source,
                                        bool experimental_pointer_int_aot) {
-    Lexer scan(source, experimental_pointer_int_aot);
+    Lexer scan(source, /*unsafe_base_offset=*/0, experimental_pointer_int_aot);
     Token preceding{Kind::End, {}, 0};
     bool expect_angle = false;
     bool within_generic = false;
@@ -9743,11 +9885,12 @@ Program parse_verified_namespace_source_unresolved(
 
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int,
                       bool experimental_rt_scalar_loop, bool experimental_pointer_int_aot,
-                      int language_version) {
+                      int language_version, bool relative_import_unit) {
     reject_unlowered_mutex_constructor(source, experimental_pointer_int_aot);
     Program program = Parser(source, experimental_owned_int,
                              experimental_rt_scalar_loop, false, 0,
-                             experimental_pointer_int_aot, language_version).parse();
+                             experimental_pointer_int_aot, language_version,
+                             relative_import_unit).parse();
     if (experimental_rt_scalar_loop &&
             (program.functions.size() != 1 || !program.functions.front().scalar_while ||
              !program.classes.empty() || !program.actors.empty() ||
@@ -9769,10 +9912,9 @@ void resolve_and_validate_program(Program& program) {
     }
     // Export directives bind after full-file parsing; package-scoped names
     // remain non-public until the package-aware native linker enforces them.
-    std::unordered_set<std::string> export_names;
+    std::unordered_map<std::string, std::size_t> export_indices;
+    std::vector<FileExport> resolved_exports;
     for (const auto& entry : program.exports) {
-        if (!export_names.insert(entry.name).second)
-            throw std::runtime_error("EXPORT_DUPLICATE: " + entry.name);
         bool class_target = false, function_target = false;
         for (const auto& cls : program.classes)
             if (cls.name == entry.name) class_target = true;
@@ -9785,6 +9927,15 @@ void resolve_and_validate_program(Program& program) {
         if ((entry.kind == FileExport::Kind::Class && !class_target) ||
             (entry.kind == FileExport::Kind::Fnc && !function_target))
             throw std::runtime_error("EXPORT_KIND_MISMATCH: " + entry.name);
+        const auto [it, inserted] = export_indices.emplace(entry.name, resolved_exports.size());
+        if (!inserted) {
+            if (resolved_exports[it->second].visibility != entry.visibility)
+                throw std::runtime_error("EXPORT_VISIBILITY_CONFLICT: " + entry.name);
+            continue; // Both directives independently resolve to the same local binding.
+        }
+        auto resolved = entry;
+        resolved.kind = class_target ? FileExport::Kind::Class : FileExport::Kind::Fnc;
+        resolved_exports.push_back(std::move(resolved));
         if (class_target) {
             for (auto& cls : program.classes) if (cls.name == entry.name) {
                 if (entry.visibility == FileExport::Visibility::Package && cls.exported)
@@ -9799,6 +9950,7 @@ void resolve_and_validate_program(Program& program) {
             }
         }
     }
+    program.exports = std::move(resolved_exports);
     // Narrow standalone two-i64 inverted source only. The independent
     // verified-MIR pass rejects all other source metadata and effects before
     // any lowering. The normal function pipeline remains unchanged.

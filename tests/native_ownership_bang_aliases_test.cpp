@@ -1,4 +1,5 @@
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/types/NativeScalarTypes.hpp"
 #include <openssl/sha.h>
 
 #include <filesystem>
@@ -170,6 +171,33 @@ static void reject_with_diagnostic(std::string_view source,
 int main(int argc, char** argv) {
     if (argc != 2) throw std::runtime_error("expected canonical .atto fixture directory");
     const std::string root(argv[1]);
+    // Compiler-created ASTs must independently validate absolute-value
+    // operand types, not rely solely on parser or codegen checks.
+    {
+        auto program = oreslang::parse_unresolved_program(
+            "pub fnc main(): int { return 42; }");
+        auto& expr = *program.functions.at(0).result;
+        expr.left = std::make_unique<Expression>();
+        expr.left->kind = Expression::Kind::Integer;
+        expr.left->integer = -42;
+        expr.kind = Expression::Kind::Abs;
+        oreslang::validate_native_scalar_types(program);
+        expr.left->kind = Expression::Kind::Boolean;
+        bool rejected = false;
+        try { oreslang::validate_native_scalar_types(program); }
+        catch (const std::runtime_error& error) {
+            rejected = std::string_view(error.what()).find("abs requires int") != std::string_view::npos;
+        }
+        if (!rejected) throw std::runtime_error("unchecked Abs accepted boolean");
+        expr.left.reset();
+        rejected = false;
+        try { oreslang::validate_native_scalar_types(program); }
+        catch (const std::runtime_error& error) {
+            rejected = std::string_view(error.what()).find("abs requires an operand") != std::string_view::npos;
+        }
+        if (!rejected) throw std::runtime_error("unchecked Abs accepted missing operand");
+    }
+
     // Each executable contract.py/Clang fixture is also bound to an immutable
     // Git blob in this compiler-owned checker: ordinary CTest source reads
     // alone are not a provenance assertion.

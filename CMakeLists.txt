@@ -667,6 +667,10 @@ target_include_directories(oreslang-llvmc PRIVATE
 add_definitions(${LLVM_DEFINITIONS})
 llvm_map_components_to_libnames(ORE_LLVM_LIBS core support)
 target_link_libraries(oreslang-llvmc PRIVATE ${ORE_LLVM_LIBS})
+option(ATTO_TEST_INTERFACE_CONSUMER "Enable fixed interface consumer test CLI" OFF)
+if(ATTO_TEST_INTERFACE_CONSUMER)
+  target_compile_definitions(oreslang-llvmc PRIVATE ATTO_TEST_INTERFACE_CONSUMER=1)
+endif()
 
 include(CTest)
 
@@ -2898,6 +2902,22 @@ if(BUILD_TESTING)
         set_tests_properties(native_ownership_bang_aliases_parser_and_checker
             PROPERTIES TIMEOUT 30)
 
+        add_executable(oreslang-native-suspension-effect-aliases-test
+            tests/native_suspension_effect_aliases_test.cpp
+            src/main/cpp/oreslang/frontend/Parser.cpp
+            src/main/cpp/oreslang/frontend/MethodResolver.cpp
+            src/main/cpp/oreslang/types/NativeScalarTypes.cpp
+            src/main/cpp/oreslang/types/OwnershipChecker.cpp)
+        target_include_directories(oreslang-native-suspension-effect-aliases-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp" "${LLVM_INCLUDE_DIRS}")
+        target_link_libraries(oreslang-native-suspension-effect-aliases-test PRIVATE
+            OpenSSL::Crypto ${ORE_LLVM_LIBS})
+        target_compile_options(oreslang-native-suspension-effect-aliases-test PRIVATE
+            $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror>)
+        add_test(NAME native_suspension_effect_aliases_parser
+            COMMAND oreslang-native-suspension-effect-aliases-test)
+        set_tests_properties(native_suspension_effect_aliases_parser PROPERTIES TIMEOUT 30)
+
         add_executable(oreslang-messagepack-wire-v2-test
             tests/messagepack_wire_v2_test.cpp)
         target_include_directories(oreslang-messagepack-wire-v2-test PRIVATE
@@ -4478,6 +4498,15 @@ if(BUILD_TESTING)
         --diagnostic "ATTO_TASK_E_ACTOR_LOWERING_PENDING")
     oreslang_contract_test(native_actor_task_await_method_staged_no_ir
         source-actor-task-await-method-staged.atto
+        --diagnostic "ATTO_TASK_E_ACTOR_LOWERING_PENDING")
+    oreslang_contract_test(native_actor_task_await_short_staged_no_ir
+        source-actor-task-await-short-staged.atto
+        --diagnostic "ATTO_TASK_E_ACTOR_LOWERING_PENDING")
+    oreslang_contract_test(native_actor_task_await_hourglass_staged_no_ir
+        source-actor-task-await-hourglass-staged.atto
+        --diagnostic "ATTO_TASK_E_ACTOR_LOWERING_PENDING")
+    oreslang_contract_test(native_actor_task_await_partial_staged_no_ir
+        source-actor-task-await-partial-staged.atto
         --diagnostic "ATTO_TASK_E_ACTOR_LOWERING_PENDING")
     oreslang_contract_test(native_actor_task_await_capture_reject
         source-actor-task-await-capture-reject.atto
@@ -9402,6 +9431,18 @@ if(BUILD_TESTING)
         COMMAND oreslang-native-selectable-i64-future-test)
     set_tests_properties(native_selectable_i64_future_terminal_readiness PROPERTIES TIMEOUT 30)
 
+    add_executable(oreslang-native-counted-i64-cursor-test
+        tests/native_counted_i64_cursor_test.cpp)
+    target_include_directories(oreslang-native-counted-i64-cursor-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-counted-i64-cursor-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-native-counted-i64-cursor-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(oreslang-native-counted-i64-cursor-test PRIVATE Threads::Threads)
+    add_test(NAME native_counted_i64_cursor_exact_batch
+        COMMAND oreslang-native-counted-i64-cursor-test)
+    set_tests_properties(native_counted_i64_cursor_exact_batch PROPERTIES TIMEOUT 30)
+
     add_executable(oreslang-native-select-continuation-fence-test
         tests/native_select_continuation_fence_test.cpp)
     target_include_directories(oreslang-native-select-continuation-fence-test PRIVATE
@@ -10239,4 +10280,18 @@ if(BUILD_TESTING)
   add_test(NAME native_actor_slab_heap_golden_v2
     COMMAND oreslang-actor-slab-heap-golden-v2-test
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/actor_slab_heap_golden_v2.txt")
+endif()
+
+# Atto-XO identical-source financial arithmetic guests; not a host-only check.
+if(BUILD_TESTING AND UNIX)
+    add_test(NAME atto_xo_checked_debit_native_guest
+        COMMAND "${CMAKE_COMMAND}"
+          "-DCORPUS=${CMAKE_CURRENT_SOURCE_DIR}/contracts/atto-xo-checked-debit-v1/cases.tsv"
+          "-DCOMPILER=$<TARGET_FILE:oreslang-llvmc>"
+          "-DCLANG=${ATTO_SCALAR50_CLANG}"
+          "-DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/atto-xo-checked-debit-native"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/atto_xo_checked_debit_native.cmake")
+    set_tests_properties(atto_xo_checked_debit_native_guest
+        PROPERTIES TIMEOUT 300 LABELS "native-guest;checked-i64;atto-parity"
+        RUN_SERIAL TRUE)
 endif()

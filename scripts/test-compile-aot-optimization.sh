@@ -101,7 +101,7 @@ chmod 700 "$tmp/unavailable-link-auditor/readelf"
 if PATH="$tmp/unavailable-link-auditor:$PATH" "$root/scripts/compile-aot.sh" "$source" "$tmp/bin/preserved" > "$tmp/link-refused.out" 2> "$tmp/link-refused.err"; then
     echo 'linked-image admission failure was bypassed' >&2; exit 1
 fi
-grep -Fq 'LINKED_GC_AUDIT_UNSUPPORTED_FORMAT' "$tmp/link-refused.err" || {
+grep -Fq 'LINKED_GC_AUDIT_UNVERIFIABLE: readelf failed' "$tmp/link-refused.err" || {
     cat "$tmp/link-refused.err" >&2
     echo 'linked-image rejection failed for another reason' >&2; exit 1
 }
@@ -125,7 +125,9 @@ for candidate in direct hardlink symlink; do
     if "$root/scripts/compile-aot.sh" "$source" "$output" > "$tmp/alias-$candidate.out" 2> "$tmp/alias-$candidate.err"; then
         echo "no-GC auditor $candidate alias was accepted" >&2; exit 1
     fi
-    grep -Fq 'must not alias' "$tmp/alias-$candidate.err" || {
+    expected='must not alias'
+    if [[ "$candidate" == symlink ]]; then expected='E_ARTIFACT_PUBLICATION: output must be absent or a regular non-symlink file'; fi
+    grep -Fq "$expected" "$tmp/alias-$candidate.err" || {
         echo "auditor $candidate alias rejected for wrong reason" >&2; exit 1;
     }
     [[ "$(sha256sum "$ORES_NO_GC_IR_AUDIT" | cut -d' ' -f1)" == "$auditor_sha" ]] || {

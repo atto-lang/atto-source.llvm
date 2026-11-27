@@ -47,12 +47,15 @@ class Loader {
     std::unordered_map<std::string, std::optional<std::string>> import_environment;
     bool owned, scalar_loop, host, foreign_i64_granted;
     int language_version = 0;
+    bool stable_local_scalar_modules = false;
     std::uint32_t root_provider_bits = 0;
 public:
     Loader(bool owned, bool scalar_loop, bool host,
-           std::uint32_t admitted_provider_bits, bool foreign_grant, int language_version)
+           std::uint32_t admitted_provider_bits, bool foreign_grant, int language_version,
+           bool stable_local_scalar_modules)
         : owned(owned), scalar_loop(scalar_loop), host(host), foreign_i64_granted(foreign_grant),
-          language_version(language_version), root_provider_bits(admitted_provider_bits) {}
+          language_version(language_version), stable_local_scalar_modules(stable_local_scalar_modules),
+          root_provider_bits(admitted_provider_bits) {}
     Program run(const std::string& path, std::string text, SourceIdentity identity) {
         read_bytes = text.size();
         visit(fs::canonical(path), std::move(text), identity, 0, false,
@@ -64,6 +67,49 @@ public:
         for (const auto& unit : units) {
             if (!unit->program.namespace_imports.empty())
                 fail(*unit, "NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: native loader requires verified v2 namespace package linking");
+        }
+        if (stable_local_scalar_modules) {
+            // Restricted local source graph, not a package lock or verified
+            // namespace interface. Reject ambiguous module ownership before
+            // changing any physical names. Standalone provider compilation
+            // already emits module.member symbols in this exact ABI slice.
+            if (!host || owned || scalar_loop || foreign_i64_granted ||
+                    units.size()<2 || !units.front()->program.module.empty())
+                fail(*units.front(), "stable local scalar modules require an unwrapped hosted consumer");
+            std::unordered_set<std::string> module_names;
+            for (std::size_t index=0; index<units.size(); ++index) {
+                auto& unit=*units[index];
+                auto& p=unit.program;
+                if (unit.compiler_owned_library || !p.namespace_name.empty() ||
+                    !p.namespace_imports.empty() || !p.classes.empty() ||
+                    !p.actors.empty() || !p.sum_types.empty() ||
+                    !p.generators.empty() || !p.cooperative_loops.empty() ||
+                    !p.contracts.empty() || !p.conforms.empty() ||
+                    !p.type_only_declarations.empty() ||
+                    !p.type_constraint_descriptors.empty() || p.pointer_int_plan ||
+                    !p.inverted_structs.empty() || p.inverted_main ||
+                    p.functions.size()!=1)
+                    fail(unit, "stable local scalar module profile only admits one scalar function per unit");
+                const auto& fn=p.functions.front();
+                if (!fn.exported || fn.foreign_import || fn.returns_void ||
+                    fn.return_type!=ScalarType::I64 || !fn.parameters.empty() ||
+                    !fn.generic_parameters.empty() || !fn.return_class.empty() ||
+                    !fn.return_sum.empty() || fn.async_source_i64 ||
+                    fn.has_declared_effects || !fn.source_tasks.empty() ||
+                    !fn.future_pipelines.empty() || !fn.c_export_u32_symbol.empty())
+                    fail(unit, "stable local scalar module profile requires public synchronous i64()");
+                if (!index) {
+                    if (fn.name!="main") fail(unit, "stable local scalar consumer requires main");
+                    for (const auto& imp:p.imports)
+                        if (imp.selected_class || imp.selected_function)
+                            fail(unit, "stable local scalar profile requires direct module imports");
+                    continue;
+                }
+                if (!p.imports.empty() || p.module.empty() ||
+                    fn.name=="main" || !module_names.insert(p.module).second)
+                    fail(unit, "stable local scalar profile rejects nested imports or duplicate module identity");
+                unit.prefix=p.module+".";
+            }
         }
         if (units.front()->program.imports.empty()) {
             auto root = std::move(units.front()->program);
@@ -182,7 +228,8 @@ private:
         // selected version across the resolved import graph.
         try { unit->program = parse_unresolved_program(
             text, owned, scalar_loop, false,
-            unit->compiler_owned_library ? 0 : language_version); }
+            unit->compiler_owned_library ? 0 : language_version,
+            /*relative_import_unit=*/index != 0); }
         catch (const std::exception& error) {
             // Preserve historical diagnostics for a standalone entry unit.
             if (!index) throw;
@@ -555,9 +602,9 @@ private:
 Program load_native_program(const std::string& path, std::string source, SourceIdentity identity,
                             bool owned, bool scalar_loop, bool host,
                             std::uint32_t admitted_provider_bits, bool foreign_i64_granted,
-                            int language_version) {
+                            int language_version, bool stable_local_scalar_modules) {
     return Loader(owned, scalar_loop, host, admitted_provider_bits, foreign_i64_granted,
-                  language_version)
+                  language_version, stable_local_scalar_modules)
         .run(path, std::move(source), identity);
 }
 frontend::VerifiedNamespaceSourceSnapshotV2 admit_native_namespace_sources_v2(

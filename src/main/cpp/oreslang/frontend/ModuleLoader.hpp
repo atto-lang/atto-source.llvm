@@ -17,7 +17,8 @@ Program load_native_program(const std::string& source_path, std::string source,
                             bool experimental_rt_scalar_loop, bool host_target,
                             std::uint32_t admitted_provider_bits = 0u,
                             bool foreign_i64_granted = false,
-                            int language_version = 0);
+                            int language_version = 0,
+                            bool stable_local_scalar_modules = false);
 
 // Explicit host-side preparatory admission; NOT the guest compile path.
 // The inventory and both digest pins are supplied by an independently
