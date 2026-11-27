@@ -6683,9 +6683,10 @@ private:
         require(")");
         if (!accept("."))
             fail("E_PAIR_ESCAPE_UNSUPPORTED: native owned Pair ABI is not implemented");
-        if (token_.text != "second")
-            fail("E_PAIR_PROJECTION_UNSUPPORTED: only i64 second projection is admitted");
-        require("second");
+        // Canonical v3 value property. Retain the old second spelling only
+        // as compatibility for this existing narrow native profile.
+        if (!accept("value") && !accept("second"))
+            fail("E_PAIR_PROJECTION_UNSUPPORTED: only i64 value projection is admitted");
         // Existing identity-only scalar cast validates the actual type and
         // denies nominal/aggregate handles; no numeric coercion is added.
         auto expr = make_expression(Expression::Kind::Cast, offset);
