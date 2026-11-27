@@ -159,13 +159,43 @@ fn elf_identity(bytes: &[u8], triple: &str, executable: bool) -> bool {
             return false;
         }
     }
-    if executable { kind == 2 || kind == 3 } else { kind == 1 }
+    if executable {
+        return kind == 2 || kind == 3;
+    }
+    // Relocatable object structural preflight, matching the shared target
+    // profiles contract. Reject host fallbacks and truncated/overflowing
+    // section tables before passing an object to the linker. Extended ELF
+    // section numbering is outside this bounded gate.
+    if kind != 1 { return false; }
+    let word = |offset: usize| -> u64 {
+        if class == 1 {
+            u64::from(u32::from_le_bytes(bytes[offset..offset + 4].try_into().expect("ELF32 word")))
+        } else {
+            u64::from_le_bytes(bytes[offset..offset + 8].try_into().expect("ELF64 word"))
+        }
+    };
+    let half = |offset: usize| -> u16 {
+        u16::from_le_bytes(bytes[offset..offset + 2].try_into().expect("ELF half"))
+    };
+    let (phoff, shoff, phnum, shentsize, shnum, shstrndx, section_size) =
+        if class == 1 { (28, 32, 44, 46, 48, 50, 40u16) }
+        else { (32, 40, 56, 58, 60, 62, 64u16) };
+    let start = word(shoff);
+    let count = half(shnum);
+    let names = half(shstrndx);
+    if word(24) != 0 || word(phoff) != 0 || half(phnum) != 0 ||
+        start < header_len as u64 || count == 0 || names == 0 ||
+        names >= count || half(shentsize) != section_size {
+        return false;
+    }
+    start.checked_add(u64::from(count) * u64::from(section_size))
+        .is_some_and(|end| end <= bytes.len() as u64)
 }
 
 fn require_elf(path: &str, triple: &str, executable: bool) {
     let bytes = fs::read(path).unwrap_or_else(|e| fail(&format!("{path}: {e}")));
     if !elf_identity(&bytes, triple, executable) {
-        fail(&format!("{triple}: wrong ELF class, byte order, machine, type, header or ABI flags: {path}"));
+        fail(&format!("{triple}: wrong ELF class, byte order, machine, type, header, section table or ABI flags: {path}"));
     }
 }
 
@@ -179,17 +209,41 @@ fn check_identity_guard() {
             "armv7-unknown-linux-gnueabihf" => (1, 40, 52),
             _ => fail("unhandled guard fixture"),
         };
-        let mut h = vec![0u8; len];
+        let section_size = if class == 1 { 40usize } else { 64usize };
+        let mut h = vec![0u8; len + 2 * section_size];
         h[..4].copy_from_slice(b"\x7fELF");
         h[4] = class; h[5] = 1; h[6] = 1; h[16] = 1;
         h[18..20].copy_from_slice(&machine.to_le_bytes());
         h[20..24].copy_from_slice(&1u32.to_le_bytes());
         let size_offset = if class == 1 { 40 } else { 52 };
         h[size_offset..size_offset + 2].copy_from_slice(&(len as u16).to_le_bytes());
+        let (shoff, shentsize, shnum, shstrndx) =
+            if class == 1 { (32, 46, 48, 50) } else { (40, 58, 60, 62) };
+        if class == 1 {
+            h[shoff..shoff + 4].copy_from_slice(&(len as u32).to_le_bytes());
+        } else {
+            h[shoff..shoff + 8].copy_from_slice(&(len as u64).to_le_bytes());
+        }
+        h[shentsize..shentsize + 2].copy_from_slice(&(section_size as u16).to_le_bytes());
+        h[shnum..shnum + 2].copy_from_slice(&2u16.to_le_bytes());
+        h[shstrndx..shstrndx + 2].copy_from_slice(&1u16.to_le_bytes());
         if machine == 40 {
             h[36..40].copy_from_slice(&0x0500_0000u32.to_le_bytes());
         }
         assert!(elf_identity(&h, triple, false));
+        assert!(!elf_identity(&h[..h.len() - 1], triple, false));
+        let mut invalid = h.clone();
+        let word_size = if class == 1 { 4 } else { 8 };
+        invalid[shoff..shoff + word_size].fill(0xff);
+        assert!(!elf_identity(&invalid, triple, false));
+        for offset in [shentsize, shnum, shstrndx] {
+            let mut invalid = h.clone();
+            invalid[offset..offset + 2].fill(0);
+            assert!(!elf_identity(&invalid, triple, false));
+        }
+        let mut invalid = h.clone();
+        invalid[24] = 1;
+        assert!(!elf_identity(&invalid, triple, false));
         let mut invalid = h.clone();
         invalid[20..24].copy_from_slice(&0u32.to_le_bytes());
         assert!(!elf_identity(&invalid, triple, false));
