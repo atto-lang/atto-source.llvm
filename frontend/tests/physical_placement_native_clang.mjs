@@ -55,6 +55,38 @@ try{
     const {r,c}=await compile(pair(lhs,rhs));assert.equal(r.status,1,r.stderr);assert.equal(r.stdout,'');await assert.rejects(stat(c),{code:'ENOENT'});
   }
   console.log('LLVM_CHECKED_SUB_PLACEMENT_NEGATIVE_PASS count=5');
+  const runtime=fixtures[1].replace('main()','main(i8 tag_in, int count_in, i8 flag_in, i16 tail_in)').replace('Packet(-3, Payload(40, -2), 7)','Packet(tag_in, Payload(count_in, flag_in), tail_in)');
+  const {r:runtimeResult,c:runtimeC}=await compile(runtime);assert.equal(runtimeResult.status,0,runtimeResult.stderr);
+  const runtimeHost=join(root,'runtime-host.c');
+  await writeFile(runtimeHost,`#include <stdint.h>
+#include <assert.h>
+extern int32_t atto_placement_entry_args(int64_t,int64_t,int64_t,int64_t,int64_t*);
+int main(void){for(int i=0;i<100;i++){
+  int64_t out=777;
+  assert(atto_placement_entry_args(-3,40,-2,7,&out)==0 && out==42);
+  assert(atto_placement_entry_args(0,-10,1,2,&out)==0 && out==-7);
+  assert(atto_placement_entry_args(0,INT64_MIN,0,0,&out)==0 && out==INT64_MIN);
+  out=777;
+  assert(atto_placement_entry_args(128,40,-2,7,&out)==1 && out==777);
+  assert(atto_placement_entry_args(0,40,-129,7,&out)==1 && out==777);
+  assert(atto_placement_entry_args(0,40,1,32768,&out)==1 && out==777);
+  assert(atto_placement_entry_args(0,INT64_MAX,1,0,&out)==1 && out==777);
+  assert(atto_placement_entry_args(-1,INT64_MIN,0,0,&out)==1 && out==777);
+  assert(atto_placement_entry_args(0,40,0,2,0)==2);
+}return 0;}`);
+  for(const opt of ['-O0','-O2']){
+    const bin=runtimeC+'.'+opt.slice(1),ir=bin+'.ll';
+    const emitted=run('clang',['-std=c11','-Wall','-Wextra','-Werror',opt,'-S','-emit-llvm',runtimeC,'-o',ir]);assert.equal(emitted.status,0,emitted.stderr);
+    const llvm=await readFile(ir,'utf8');assert.match(llvm,/llvm.sadd.with.overflow.i64/);assert.match(llvm,/store volatile i8/);
+    const link=run('clang',['-std=c11','-Wall','-Wextra','-Werror','-fsanitize=undefined','-fno-sanitize-recover=all',opt,runtimeC,runtimeHost,'-o',bin]);assert.equal(link.status,0,link.stderr);
+    const guest=run(bin,[]);assert.equal(guest.status,0,guest.stderr);
+    console.log('LLVM_RUNTIME_PLACEMENT_NATIVE_PASS',JSON.stringify({opt,success:300,failure:500,null_output:100}));
+  }
+  for(const [from,to] of [['i8 tag_in','int tag_in'],['i8 flag_in','i8 tag_in'],['Payload(count_in, flag_in)','Payload(count_in, missing)'],['Packet(tag_in,','Packet(count_in,'],['val a =','val tag_in ='],['i16 tail_in','i16 tail_in, int extra']]){
+    const bad=runtime.replace(from,to);assert.notEqual(bad,runtime);
+    const {r,c}=await compile(bad);assert.equal(r.status,1,r.stderr);assert.equal(r.stdout,'');await assert.rejects(stat(c),{code:'ENOENT'});
+  }
+  console.log('LLVM_RUNTIME_PLACEMENT_NEGATIVE_PASS count=6');
   const nested=fixtures[1],flat=fixtures[0];
   for(const [source,from,to] of [
     [flat,'-3, 40, 5','128, 40, 5'],[flat,'ref! p','ref!p'],[flat,'ref! p','ref ! p'],
