@@ -30,6 +30,8 @@ const TRIPLES: &[(&str, &str)] = &[
 ];
 // Independent semantic oracle: a truncated i32 computation cannot satisfy
 // the >32-bit comparisons even if it preserves the final exit-code byte.
+// Use integer remainder: `/` is a float-producing operator and is a separate
+// currently unsupported LLVM feature, not an integer-width oracle.
 const REQUIRED_WIDE_SOURCE: &str = r#"
 fnc wide_product(int left, int right): int {
   return left * right;
@@ -37,7 +39,7 @@ fnc wide_product(int left, int right): int {
 pub fnc main(): int {
   return (
     wide_product(65536, 65537) == 4295032832 &&
-    wide_product(65536, 65537) / 65536 == 65537 &&
+    wide_product(65536, 65537) % 65537 == 0 &&
     wide_product(65536, 65537) - 4294967296 == 65536 &&
     0 - wide_product(65536, 65537) < 0 - 4294967296
   ) ? 42 : 1;
