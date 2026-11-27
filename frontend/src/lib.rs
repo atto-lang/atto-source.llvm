@@ -19,6 +19,7 @@ pub mod generator_frame;
 pub mod lexer;
 pub mod parser;
 mod struct_value_guest;
+mod contextual_specialization;
 mod native_scalar_c;
 mod physical_layout;
 mod physical_placement;
@@ -62,6 +63,11 @@ fn compile_target(source: &str, native_c: bool, isolated: bool) -> Result<Vec<u8
         ));
     }
     let toks = lexer::lex(source)?;
+    // Context binding is a bounded source-local scalar Wasm candidate only.
+    // Keep the explicit native-C profile closed until it has an independent guest gate.
+    let toks = if !native_c && contextual_specialization::present(&toks) {
+        contextual_specialization::lower(toks)?
+    } else { toks };
     if let Some(pos) = directed_pipe::unlowered_pos(&toks) {
         return Err(Diagnostic::new(pos, "E_UNSUPPORTED_CONTINUOUS_PIPE",
             "typed pipe/rpipe DATA graph is planned but no guest transport or PipeHandle exists"));
