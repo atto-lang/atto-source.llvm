@@ -1845,6 +1845,13 @@ impl<'a> FnCx<'a> {
                         None,
                     )
                 }
+                Pattern::StaticTypes(types) => {
+                    if !types.contains(&sty) {
+                        return Err(Diagnostic::new(arm.pos, "E_MATCH",
+                            "unreachable type arm: subject has no listed static scalar type"));
+                    }
+                    (None, None, None)
+                }
                 Pattern::InInts(values) => {
                     if sty != Type::Int {
                         return Err(type_err(arm.pos, "int membership requires an int subject"));

@@ -35,6 +35,10 @@ reject() {
 }
 pass 'pub fnc main(): int { return match 2 over in [0,1,2] -> 42, on _ -> 0 end; }'
 pass 'pub fnc main(): int { return match 7 over in [0,1,2] -> 0, on _ -> 42 end; }'
+pass 'pub fnc main(): int { return match 7 over is in [int,string] -> 42 end; }'
+pass 'pub fnc main(): int { return match true over is in [int,bool] -> 42 end; }'
+pass 'pub fnc main(): int { return match 2 over on 0 -> 0, is in [int,bool] -> 42 end; }'
+pass 'pub fnc main(): int { return match 2 over is in [int,bool] when false -> 0, is int -> 42 end; }'
 pass 'pub fnc main(): int { return match 2 over on 2 -> 42, in [1,2,3] -> 0, on _ -> 0 end; }'
 pass 'pub fnc main(): int { return match 2 over in [1,2] when false -> 0, in [1,2] -> 42, on _ -> 0 end; }'
 pass 'pub fnc main(): int { return match (-9223372036854775807 - 1) over in [-9223372036854775808,0] -> 42, on _ -> 0 end; }'
@@ -44,6 +48,11 @@ reject 'pub fnc main(): int { return match 2 over in [2,2] -> 42, on _ -> 0 end;
 reject 'pub fnc main(): int { return match 2 over in [1,2] -> 42, on 2 -> 0, on _ -> 0 end; }' E_MATCH
 reject 'pub fnc main(): int { return match 2 over in [1,2] -> 42 end; }' E_MATCH
 reject 'pub fnc main(): int { return match 2 over in values -> 42, on _ -> 0 end; }' E_UNSUPPORTED
-test "$positive" = 6
-test "$negative" = 5
+reject 'pub fnc main(): int { return match 7 over is in [] -> 42 end; }' E_SYNTAX
+reject 'pub fnc main(): int { return match 7 over is in [int,int] -> 42 end; }' E_MATCH
+reject 'pub fnc main(): int { return match 7 over is in [string,String] -> 42 end; }' E_MATCH
+reject 'pub fnc main(): int { return match 7 over is in [int,42] -> 42 end; }' E_UNSUPPORTED
+reject 'pub fnc main(): int { return match 7 over is in [int,bool] -> 42, on _ -> 0 end; }' E_MATCH
+test "$positive" = 10
+test "$negative" = 10
 echo "INT_MEMBERSHIP_NATIVE_GUEST_PASS positive=$positive negative=$negative"

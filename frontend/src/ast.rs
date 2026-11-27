@@ -287,6 +287,8 @@ pub enum Pattern {
     Int(i64),
     /// Bounded constant integer membership, not an array-valued pattern.
     InInts(Vec<i64>),
+    /// Statically checked scalar type alternatives.
+    StaticTypes(Vec<Type>),
     Bool(bool),
     /// lower-case name: binds the subject
     Bind(String),

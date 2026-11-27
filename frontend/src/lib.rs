@@ -9,6 +9,8 @@
 pub mod ast;
 /// Pure bounded typed-IR DATA send-effect closure, shared with peer frontend.
 pub mod actor_send_effect_graph;
+/// Resolved call graph parking analysis, shared with Rust backend; no guest lowering.
+pub mod runtime_parking_effects;
 pub mod check;
 pub mod diag;
 pub mod directed_pipe;
@@ -18,6 +20,8 @@ pub mod lexer;
 pub mod parser;
 mod struct_value_guest;
 mod native_scalar_c;
+mod physical_layout;
+mod physical_placement;
 pub mod target_syntax;
 pub mod target_typed;
 pub mod wasm;
@@ -42,6 +46,11 @@ pub fn compile_isolated_core(source: &str) -> Result<Vec<u8>, Diagnostic> {
 /// The caller must compile/link this text; this is not the independent C++ frontend.
 pub fn compile_struct_native_c(source: &str) -> Result<String, Diagnostic> {
     String::from_utf8(compile_target(source, true, false)?).map_err(|_| native_scalar_c::unsupported())
+}
+
+/// Explicit closed source-defined physical placement -> native C/Clang lane.
+pub fn compile_physical_placement_c(source:&str)->Result<String,Diagnostic>{
+    physical_placement::compile(source)
 }
 
 fn compile_target(source: &str, native_c: bool, isolated: bool) -> Result<Vec<u8>, Diagnostic> {
