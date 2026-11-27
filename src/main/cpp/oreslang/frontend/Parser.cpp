@@ -4175,9 +4175,22 @@ private:
             // val fallback: const name: int = e == const int name = e.
             // Independent lookahead: sum_look stays at the first token for
             // the let-mut and scalar-alias checks below.
-            const bool type_right_const = token_.text == "const" &&
+            // Name-first 'as' is a type annotation, not a postfix cast.
+            // Admit only the existing primitive scalar profile for val/let;
+            // preserve the existing const colon route and capability paths.
+            const bool type_right_const =
+                    (token_.text == "const" || token_.text == "val" || token_.text == "let") &&
                     sum_first.kind == Kind::Identifier &&
-                    [&] { Lexer right = sum_look; return right.next().text == ":"; }();
+                    [&] {
+                        Lexer right = sum_look;
+                        const auto separator = right.next();
+                        if (separator.text == ":" && token_.text == "const") return true;
+                        if (separator.text != "as" && separator.text != ":") return false;
+                        const auto type = right.next();
+                        return (type.text == "int" || type.text == "bool" ||
+                                type.text == "string" || type.text == "String") &&
+                                right.next().text == "=";
+                    }();
             if (token_.text == "let" && sum_first.text == "mut") sum_first = sum_look.next();
             // Java: `val Count c = 42;` with `type Count = int;` is the same
             // scalar local as `val c: Count = 42;`. Only a declared scalar alias
@@ -4195,7 +4208,7 @@ private:
                 binding.owner_mutable = mode != "const"; binding.assignable = mode == "let";
                 if (type_right_const) {
                     binding.name = identifier();
-                    require(":");
+                    if (!accept("as")) require(":");
                 }
                 if (alias_prefixed) {
                     binding.pending_type_alias = std::string(token_.text);
