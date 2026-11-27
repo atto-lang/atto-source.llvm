@@ -6224,16 +6224,31 @@ private:
             require("then");
             if (token_.text == "break" || token_.text == "continue" || token_.text == "return")
                 fail("value if/ifnot/unless branch must produce a value; use 'do if' for control flow");
-            auto yes = expression();
+            auto result = make_expression(Expression::Kind::Conditional, offset);
+            result->condition = std::move(predicate);
+            result->when_true = expression();
+            auto* tail = result.get();
+            // The existing typed conditional join checks both arms and emits
+            // only the selected runtime arm. Extend that tree rather than
+            // constructing an eager select or duplicating a predicate.
+            for (std::size_t count = 0; token_.text == "elif"; ++count) {
+                if (count == 16) fail("native value elif chain exceeds 16 elif arms");
+                const auto branch_offset = token_.offset;
+                require("elif");
+                auto next = make_expression(Expression::Kind::Conditional, branch_offset);
+                next->condition = expression();
+                require("then");
+                if (token_.text == "break" || token_.text == "continue" || token_.text == "return")
+                    fail("value if/ifnot/unless branch must produce a value; use 'do if' for control flow");
+                next->when_true = expression();
+                tail->when_false = std::move(next);
+                tail = tail->when_false.get();
+            }
             require("else");
             if (token_.text == "break" || token_.text == "continue" || token_.text == "return")
                 fail("value if/ifnot/unless branch must produce a value; use 'do if' for control flow");
-            auto no = expression();
+            tail->when_false = expression();
             require("fi");
-            auto result = make_expression(Expression::Kind::Conditional, offset);
-            result->condition = std::move(predicate);
-            result->when_true = std::move(yes);
-            result->when_false = std::move(no);
             return result;
         }
         auto condition = logical_or();
