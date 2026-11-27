@@ -24,6 +24,8 @@ pub(super) fn bodies(p: &TProgram, l: &Layout) -> Vec<(Sig, Vec<u8>)> {
         frames: Vec::new(),
         void_main: false,
         active_iterators: Vec::new(),
+        calls: Vec::new(),
+        landings: Vec::new(),
     };
 
     // new(type_id: i32, arg: i64) -> i64 generation-fenced handle.
