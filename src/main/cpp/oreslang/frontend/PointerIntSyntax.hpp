@@ -4,6 +4,8 @@
 // identifiers. These M2a HIR nodes are published only after ownership checks.
 #include "oreslang/types/PointerIntHIR.hpp"
 #include <array>
+#include <algorithm>
+#include <optional>
 #include <charconv>
 #include <cctype>
 #include <cstdint>
@@ -82,6 +84,11 @@ public:
         }
         need("pub"); need("fnc"); need("main"); need("("); need(")");
         need(":"); need("int"); need("{");
+        if (std::any_of(tokens_.begin(), tokens_.end(), [](const Token& t) { return t.text == "RawPointer"; })) {
+            if (!readonly_helper_.empty() || !mutable_helper_.empty())
+                reject("slot profile forbids helper functions", token().offset);
+            return parse_slot();
+        }
         // Use the canonical lexer for both owning and local-ref modes.
         if (token().text == "let" && at_ + 1 < tokens_.size() &&
                 tokens_[at_ + 1].text != "mut")
@@ -225,6 +232,101 @@ private:
             reject("ownership bang must be adjacent to " +
                    std::string(operation), token().offset);
         need("!");
+    }
+
+
+    Plan parse_slot() {
+        Plan plan;
+        plan.form = Plan::Form::ReusableSlot;
+        auto name = [&]() {
+            const auto id = identifier();
+            if (!std::all_of(id.begin(), id.end(), ident_continue) ||
+                id == "RawPointer" || id == "Pointer" || id == "main" ||
+                id == "int" || id == "return" || id == "let" || id == "mut" ||
+                id == "val" || id == "ref" || id == "deref" || id == "unref" ||
+                id == "null" || id == "true" || id == "false" || id == "to" ||
+                id == "empty" || id == "await" || id == "rt" || id == "pub" ||
+                id == "fnc" || id == "if" || id == "else" || id == "end")
+                reject("reserved or invalid slot identifier", token().offset);
+            return id;
+        };
+        while (token().text == "let" && tokens_.at(at_ + 1).text != "mut") {
+            need("let");
+            const auto owner = name();
+            if (plan.slot_owners.size() >= 16 || known_locals_.count(owner))
+                reject("duplicate local or owner budget", token().offset);
+            need(":"); need("int"); need("=");
+            const auto n = unsigned_literal();
+            if (n > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+                reject("signed integer overflow", token().offset);
+            need(";");
+            plan.slot_owners.emplace_back(owner, static_cast<std::int64_t>(n));
+            known_locals_.emplace(owner, static_cast<std::int64_t>(n));
+        }
+        plan.count = plan.slot_owners.size();
+        need("let"); need("mut"); need("RawPointer"); need("<"); need("int"); need(">");
+        plan.local_handle = name();
+        if (known_locals_.count(plan.local_handle)) reject("slot shadows owner", token().offset);
+        need("="); need("RawPointer"); need("."); need("empty"); need("<"); need("int"); need(">");
+        need("("); need(")"); need(";");
+        std::optional<std::size_t> bound;
+        while (token().text != "return") {
+            if (plan.steps.size() >= 32) reject("slot operation budget", token().offset);
+            Step step;
+            if (token().text == "ref") {
+                local_operation("ref"); need(plan.local_handle); need("to");
+                const auto owner = name();
+                if (bound) reject("detach bound slot before rebinding", token().offset);
+                std::size_t index = 0;
+                while (index < plan.count && plan.slot_owners[index].first != owner) ++index;
+                if (index == plan.count) reject("bind requires initialized local owner", token().offset);
+                bound = index; step.kind = Step::Kind::SlotBind; step.index = index;
+            } else if (take("val")) {
+                step.kind = Step::Kind::Scalar;
+                step.name = name();
+                if (step.name == plan.local_handle || known_locals_.count(step.name))
+                    reject("duplicate scalar or slot shadow", token().offset);
+                need("=");
+                if (token().text != "deref") reject("expected deref!", token().offset);
+                local_operation("deref"); need(plan.local_handle);
+                if (!bound) reject("read of empty slot", token().offset);
+                step.value = std::make_unique<Expr>();
+                step.value->kind = Expr::Kind::Read; step.value->index = *bound;
+                step.value->known = plan.slot_owners[*bound].second;
+                known_locals_.emplace(step.name, step.value->known);
+            } else if (token().text == "unref") {
+                local_operation("unref"); need(plan.local_handle);
+                if (!bound) reject("detach of empty slot", token().offset);
+                bound.reset(); step.kind = Step::Kind::SlotDetach;
+            } else {
+                reject("unsupported slot effect; null assignment forbidden", token().offset);
+            }
+            need(";");
+            plan.steps.push_back(std::move(step));
+        }
+        if (bound) reject("live slot on return", token().offset);
+        need("return");
+        // Only literals and known Copy scalars, with a bounded + / - chain.
+        auto scalar = [&]() {
+            if (token().number) return atom();
+            const auto id = name();
+            const auto it = known_locals_.find(id);
+            if (it == known_locals_.end()) reject("slot escape or unknown scalar", token().offset);
+            auto e = std::make_unique<Expr>();
+            e->kind = Expr::Kind::Variable; e->name = id; e->known = it->second;
+            return e;
+        };
+        plan.result = scalar();
+        std::size_t links = 0;
+        while (token().text == "+" || token().text == "-") {
+            if (++links >= 32) reject("slot result expression budget", token().offset);
+            const bool add = take("+"); if (!add) need("-");
+            plan.result = combine(add ? Expr::Kind::Add : Expr::Kind::Subtract,
+                                  std::move(plan.result), scalar());
+        }
+        need(";"); need("}");
+        if (token().text != "<eof>") reject("trailing slot source", token().offset);
+        return plan;
     }
 
     Plan parse_local() {
