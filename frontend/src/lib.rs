@@ -12,6 +12,8 @@ pub mod actor_send_effect_graph;
 /// Resolved call graph parking analysis, shared with Rust backend; no guest lowering.
 pub mod runtime_parking_effects;
 pub mod check;
+/// Staged typed V2 call planning; not yet connected to executable lowering.
+pub mod call_presence_v2;
 pub mod diag;
 pub mod directed_pipe;
 pub mod generator_cfg;
