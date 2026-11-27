@@ -248,6 +248,7 @@ private:
                           "self",".","x","=","x",";","self",".","y","=","y",";","}","}",
                           "pub","fnc","main","(",")",":","int","{",
                           "let","Storage","<","Point",">","s","="}) need(word);
+        if (token().text != "alloc") reject("expected alloc!",token().offset);
         local_operation("alloc"); need("Point"); need(";");
         for (auto word : {"let","mut","RawPointer","<","Point",">","p","=","RawPointer",".","empty","<","Point",">","(",")",";"}) need(word);
         bool live = false, bound = false, freed = false;
