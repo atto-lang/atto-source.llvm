@@ -11,6 +11,14 @@ const fixedNested=mutableNested.replace('pub let mut Scores','pub val Scores');
 const deepTree='define class Scores as pub let int n = 20; end\ndefine class Profile as pub let mut Scores scores = new Scores(); end\ndefine class Person as pub let mut Profile profile = new Profile(); pub let int age = 1; end\n';
 const main=s=>'pub fnc main(): int { '+s+' }';
 const cases=[
+ ['exclusive-call-detach',mutableNested+'fnc adjust(mut Scores s): void { s.n = 22; }\n'+main('let mut Person a = new Person(); let mut Person b = copy! a; b.scores = new Scores(); adjust(mut b.scores); return a.scores.n+b.scores.n;'),42],
+ ['exclusive-call-release',mutableNested+'fnc adjust(mut Scores s): void { s.n = 22; }\n'+main('let mut Person a = new Person(); let int n = 0; block { let mut Person b = copy! a; n = b.scores.n; } adjust(mut a.scores); return n+a.scores.n;'),42],
+ ['exclusive-call-shared-source',mutableNested+'fnc adjust(mut Scores s): void { s.n = 22; }\n'+main('let mut Person a = new Person(); let mut Person b = copy! a; adjust(mut a.scores); return b.scores.n;'),'E_COPY_READONLY'],
+ ['exclusive-call-shared-copy',mutableNested+'fnc adjust(mut Scores s): void { s.n = 22; }\n'+main('let mut Person a = new Person(); let mut Person b = copy! a; adjust(mut b.scores); return a.scores.n;'),'E_COPY_READONLY'],
+ ['exclusive-call-missing-mut',mutableNested+'fnc adjust(mut Scores s): void { s.n = 22; }\n'+main('let mut Person a = new Person(); adjust(a.scores); return a.scores.n;'),'E_BORROW'],
+ ['exclusive-call-return-escape',mutableNested+'fnc escape(mut Scores s): Scores { return s; }\n'+main('return 42;'),'E_COPY_UNPROVEN'],
+ ['exclusive-call-nested-effect',mutableNested+'fnc adjust(mut Scores s): void { s.n = 22; stdio.println(s.n); }\n'+main('return 42;'),'E_COPY_UNPROVEN'],
+ ['exclusive-call-unproved-callee',mutableNested+'fnc read(Scores s): int { return s.n; }\n'+main('let mut Person a = new Person(); return read(mut a.scores);'),'E_BORROW'],
  ['tree-detach',deepTree+main('let mut Person a = new Person(); let mut Person b = copy! a; let mut Person c = copy! b; b.profile = new Profile(); b.profile.scores.n = 22; return c.profile.scores.n + b.profile.scores.n;'),42],
  ['tree-deep',deepTree+main('let mut Person a = new Person(); a.profile.scores.n = 10; let mut Person b = copy! a; let mut Person c = copy!! b; c.profile.scores.n = 22; return a.profile.scores.n+b.profile.scores.n+c.profile.scores.n;'),42],
  ['tree-release',deepTree+main('let mut Person a = new Person(); let int before = 0; block { let mut Person b = copy! a; before = b.profile.scores.n; } a.profile.scores.n = 22; return before+a.profile.scores.n;'),42],
