@@ -1213,6 +1213,24 @@ mod parameter_rebind_tests {
     use super::*;
 
     #[test]
+    fn copied_scalar_let_shadow_creates_distinct_slots() {
+        let source = "pub fnc main(): int { let x = 40; let x = x + 1; set x = x + 1; return x; }";
+        let ir = compile_ir(source).unwrap();
+        assert!(ir.contains("%local0 = alloca i64"), "{ir}");
+        assert!(ir.contains("%local1 = alloca i64"), "{ir}");
+        let type_change = "pub fnc main(): int { let x = 40; let x = true; if x then return 42; else return 0; fi }";
+        assert!(compile_ir(type_change).is_ok());
+        for source in [
+            "pub fnc main(): int { const x = 1; const x = 2; return x; }",
+            "pub fnc main(): int { const x = 1; let x = 2; return x; }",
+            "pub fnc main(): int { let x = 1; const x = 2; return x; }",
+            "pub fnc main(): int { let x = 1; let x = true; set x = 2; return 42; }",
+        ] {
+            assert!(compile_ir(source).is_err(), "{source}");
+        }
+    }
+
+    #[test]
     fn explicit_local_set_spellings_use_checked_assignment() {
         let old = "pub fnc main(): int { let int x = 40; x = x + 2; return x; }";
         let ir = compile_ir(old).unwrap();
