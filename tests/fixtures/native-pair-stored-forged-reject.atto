@@ -1,0 +1,1 @@
+pub fnc main(): int { const x := 42; return __atto_pair_local_0; }
