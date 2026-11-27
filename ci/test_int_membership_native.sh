@@ -53,6 +53,24 @@ reject 'pub fnc main(): int { return match 7 over is in [int,int] -> 42 end; }' 
 reject 'pub fnc main(): int { return match 7 over is in [string,String] -> 42 end; }' E_MATCH
 reject 'pub fnc main(): int { return match 7 over is in [int,42] -> 42 end; }' E_UNSUPPORTED
 reject 'pub fnc main(): int { return match 7 over is in [int,bool] -> 42, on _ -> 0 end; }' E_MATCH
-test "$positive" = 10
-test "$negative" = 10
+pass 'const Pattern p = on 5; pub fnc main(): int { return match 5 over on p -> 42, on _ -> 0 end; }'
+pass 'const Pattern p = in [5,6,7]; pub fnc main(): int { return match 6 over on p -> 42, on _ -> 0 end; }'
+pass 'const Pattern[] z = [on 1,in [2,3],on true]; pub fnc main(): int { return match 3 over in z -> 42, on _ -> 0 end; }'
+pass 'const Pattern[] z = [on 1,on true]; pub fnc main(): int { return match true over in z -> 42, on _ -> 0 end; }'
+pass 'const Pattern[] z = [is int,is bool]; pub fnc main(): int { return match 7 over is in z -> 42 end; }'
+pass 'pub fnc main(): int { return match 3 over in [on 1,in [2,3]] -> 42, on _ -> 0 end; }'
+pass 'const Pattern p = is Int; pub fnc main(): int { return match 7 over on p -> 42 end; }'
+pass 'const Pattern[] z = [on true,on false]; pub fnc main(): int { return match false over in z -> 42 end; }'
+pass 'const Pattern[] z = [on 1,on 2]; pub fnc main(): int { return match 2 over in z when false -> 0, in z -> 42, on _ -> 0 end; }'
+reject 'const Pattern p = on 5; pub fnc main(): int { return p; }' E_PATTERN_ESCAPE
+reject 'const Pattern p = on q; const Pattern q = on p; pub fnc main(): int { return 42; }' E_PATTERN_NAME
+reject 'const Pattern[] z = [on 1,2]; pub fnc main(): int { return 42; }' E_SYNTAX
+reject 'const Pattern[] z = [is int,on 1]; pub fnc main(): int { return match 2 over is in z -> 42 end; }' E_PATTERN_TYPE
+reject 'const Pattern[] z = [on 1,on 1]; pub fnc main(): int { return 42; }' E_MATCH
+reject 'const Pattern[] z = [is int,is Int]; pub fnc main(): int { return 42; }' E_MATCH
+reject 'const Pattern p = on 1; pub fnc main(): int { return match 1 over in p -> 42, on _ -> 0 end; }' E_PATTERN_TYPE
+reject 'const Pattern[] z = [on 1]; pub fnc main(): int { return match 1 over on z -> 42, on _ -> 0 end; }' E_PATTERN_TYPE
+reject 'const Pattern[] z = [on 1,on 2]; pub fnc main(): int { return match 2 over in z -> 42, on 2 -> 0, on _ -> 0 end; }' E_MATCH
+test "$positive" = 19
+test "$negative" = 19
 echo "INT_MEMBERSHIP_NATIVE_GUEST_PASS positive=$positive negative=$negative"

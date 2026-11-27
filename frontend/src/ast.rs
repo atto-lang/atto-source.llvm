@@ -289,6 +289,8 @@ pub enum Pattern {
     InInts(Vec<i64>),
     /// Statically checked scalar type alternatives.
     StaticTypes(Vec<Type>),
+    /// Compile-time-only scalar disjunction, erased during checking.
+    ConstSet { ints: Vec<i64>, bools: Vec<bool>, types: Vec<Type> },
     Bool(bool),
     /// lower-case name: binds the subject
     Bind(String),
