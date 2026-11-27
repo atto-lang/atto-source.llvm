@@ -6298,6 +6298,7 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_pair_stored_unbound_reject native-pair-stored-unbound-reject.atto --diagnostic "E_UNBOUND")
     oreslang_contract_test(native_pair_stored_duplicate_reject native-pair-stored-duplicate-reject.atto --diagnostic "E_DUPLICATE")
     oreslang_contract_test(native_pair_stored_write_reject native-pair-stored-write-reject.atto --diagnostic "E_PAIR_STORAGE_UNSUPPORTED")
+    oreslang_contract_test(native_pair_stored_forged_reject native-pair-stored-forged-reject.atto --diagnostic "E_RESERVED")
     oreslang_contract_test(native_pair_literal_value_ir
         native-pair-literal-value.atto --ir "define i64 @__oreslang_guest_main")
     oreslang_contract_test(native_pair_literal_dynamic_ir
