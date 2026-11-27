@@ -177,13 +177,6 @@ inline void resolve_native_sums(Program& program) {
         validate_native_sum_expression_shape(e);
         using E = Expression::Kind;
         if (e.kind == E::SumConstruct) {
-            if (e.trap_origin && (e.name != "Ok" || e.arguments.size() != 1 ||
-                    !native_trap_pure_integer(*e.arguments.front())))
-                throw std::runtime_error("invalid native trap AST: operand must be a pure i64 expression");
-            // trap yields Result<T, Error> (spec ch. 7, S-04). Only the pure i64
-            // slice is lowered; it cannot fail, so the Error slot is never set.
-            if (e.trap_origin && !expected.empty() && expected != "Result<int,Error>")
-                throw std::runtime_error("native trap yields exactly Result<int, Error>, no Option or erased result conversion");
             // Do not admit a partially rewritten/malformed constructor AST.
             // The native lowering consumes only name + positional payloads;
             // stray children must not hide effectful or ownership-sensitive IR.
@@ -198,6 +191,37 @@ inline void resolve_native_sums(Program& program) {
             for (const auto& payload : e.arguments)
                 if (!payload)
                     throw std::runtime_error("malformed native sum constructor AST");
+            if (e.trap_origin) {
+                if (e.name != "Ok" || e.arguments.size() != 1)
+                    throw std::runtime_error("invalid native trap AST");
+                const auto& operand = *e.arguments.front();
+                if (operand.kind == E::Variable ||
+                        (operand.kind == E::SumConstruct && operand.trap_origin)) {
+                    // Resolve once, preserve the complete nominal Result type,
+                    // and reuse its existing ownership/lowering path. No new
+                    // tagged record is allocated for an idempotent trap.
+                    if (operand.kind == E::Variable && !env.count(operand.name))
+                        throw std::runtime_error("native trap operand is not a known Result binding");
+                    const Hint inner = expression(*e.arguments.front(), env, expected);
+                    if (inner.sum.empty() || !inner.cls.empty() || inner.array)
+                        throw std::runtime_error("native trap operand unsupported: only pure integer literals and checked arithmetic are lowered, or existing Result values");
+                    const auto& type = native_sum(program, inner.sum);
+                    if (type.kind != NativeSumType::Kind::Result)
+                        throw std::runtime_error("native trap Option payload requires checked nested ownership ABI");
+                    if (type.value_type == ScalarType::String ||
+                            (!type.trap_error && type.error_type == ScalarType::String))
+                        throw std::runtime_error("native trap owned Result payload requires checked cleanup lowering");
+                    if (!expected.empty() && inner.sum != expected)
+                        throw std::runtime_error("native trap existing Result type does not match expected Result");
+                    auto preserved = std::move(e.arguments.front());
+                    e = std::move(*preserved);
+                    return inner;
+                }
+                if (!native_trap_pure_integer(operand))
+                    throw std::runtime_error("invalid native trap AST: operand must be a pure i64 expression");
+                if (!expected.empty() && expected != "Result<int,Error>")
+                    throw std::runtime_error("native trap yields exactly Result<int, Error>, no Option or erased result conversion");
+            }
             std::string selected = expected;
             if (selected.empty() && e.trap_origin)
                 selected = add_type(NativeSumType::Kind::Result, ScalarType::I64, ScalarType::String, true);

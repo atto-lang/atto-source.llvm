@@ -264,6 +264,13 @@ public:
         }
         const std::size_t start = at_;
         const char ch = source_[at_];
+        // Exact non-letter UTF-8 aliases share the existing suspension
+        // effect and native admission gates. Never rewrite source trivia.
+        if (source_.substr(at_, 3) == "\xE2\xA7\x96" ||
+                source_.substr(at_, 3) == "\xE2\x88\x82") {
+            at_ += 3;
+            return {Kind::Identifier, "suspends", start};
+        }
         if (identifier_start(ch)) {
             ++at_;
             while (at_ < source_.size() && identifier_part(source_[at_])) ++at_;
@@ -274,6 +281,8 @@ public:
             // Existing nb-select recognition is intentionally unchanged
             // until native select lowering supports that grammar.
             const auto first = source_.substr(start, at_ - start);
+            if (first == "susp")
+                return {Kind::Identifier, "suspends", start};
             // Channel<int> has a distinct result/EOF/cancellation/ownership
             // representation. Reject the exact nominal type before any
             // scalar i64 LLVM lowering can reinterpret it as integers or
@@ -492,7 +501,10 @@ public:
         // rejects them before IR exactly like any other unexpected symbol.
         // '^' is the caret return marker. '&' stays an unsupported token:
         // there is no address-of, and the lexer rejects it before parsing.
-        if (std::string_view("(){}[],:;+-*/%=.<>@?!^").find(ch) != std::string_view::npos) {
+        // Single pipe is a token for explicit unsupported actor union diagnostics.
+        // This does not admit union lowering or scalar bitwise OR; longest-match
+        // pipeline and Boolean operators have already been handled above.
+        if (std::string_view("(){}[],:;+-*/%=.<>@?!^|").find(ch) != std::string_view::npos) {
             ++at_;
             return {Kind::Symbol, source_.substr(start, 1), start};
         }
@@ -6043,11 +6055,14 @@ private:
             const auto offset = token_.offset;
             advance();
             auto payload = unary(); // prefix precedence, evaluated once
-            // Only closed, synchronous i64 expressions are admitted. No
-            // source-level ordinary throw is possible in this grammar;
-            // future effects require real exception/cleanup lowering.
-            if (!native_trap_pure_integer(*payload))
-                fail("native trap operand unsupported: only pure integer literals and checked arithmetic are lowered");
+            // Admit existing Result references and nested traps for nominal
+            // resolution, without admitting calls, allocations or effects.
+            // The resolver erases the redundant trap only for checked Result
+            // values; scalar variables and owned compound payloads stay closed.
+            if (!native_trap_pure_integer(*payload) &&
+                    payload->kind != Expression::Kind::Variable &&
+                    !(payload->kind == Expression::Kind::SumConstruct && payload->trap_origin))
+                fail("native trap operand unsupported: only pure integer literals and checked arithmetic are lowered, or existing Result values");
             auto result = make_expression(Expression::Kind::SumConstruct, offset);
             result->name = "Ok"; // trap yields Result<int, Error> (spec ch. 7)
             result->trap_origin = true;
@@ -9951,10 +9966,9 @@ void resolve_and_validate_program(Program& program) {
     }
     // Export directives bind after full-file parsing; package-scoped names
     // remain non-public until the package-aware native linker enforces them.
-    std::unordered_set<std::string> export_names;
+    std::unordered_map<std::string, std::size_t> export_indices;
+    std::vector<FileExport> resolved_exports;
     for (const auto& entry : program.exports) {
-        if (!export_names.insert(entry.name).second)
-            throw std::runtime_error("EXPORT_DUPLICATE: " + entry.name);
         bool class_target = false, function_target = false;
         for (const auto& cls : program.classes)
             if (cls.name == entry.name) class_target = true;
@@ -9967,6 +9981,15 @@ void resolve_and_validate_program(Program& program) {
         if ((entry.kind == FileExport::Kind::Class && !class_target) ||
             (entry.kind == FileExport::Kind::Fnc && !function_target))
             throw std::runtime_error("EXPORT_KIND_MISMATCH: " + entry.name);
+        const auto [it, inserted] = export_indices.emplace(entry.name, resolved_exports.size());
+        if (!inserted) {
+            if (resolved_exports[it->second].visibility != entry.visibility)
+                throw std::runtime_error("EXPORT_VISIBILITY_CONFLICT: " + entry.name);
+            continue; // Both directives independently resolve to the same local binding.
+        }
+        auto resolved = entry;
+        resolved.kind = class_target ? FileExport::Kind::Class : FileExport::Kind::Fnc;
+        resolved_exports.push_back(std::move(resolved));
         if (class_target) {
             for (auto& cls : program.classes) if (cls.name == entry.name) {
                 if (entry.visibility == FileExport::Visibility::Package && cls.exported)
@@ -9981,6 +10004,7 @@ void resolve_and_validate_program(Program& program) {
             }
         }
     }
+    program.exports = std::move(resolved_exports);
     // Narrow standalone two-i64 inverted source only. The independent
     // verified-MIR pass rejects all other source metadata and effects before
     // any lowering. The normal function pipeline remains unchanged.
