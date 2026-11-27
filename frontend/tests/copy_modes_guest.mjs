@@ -15,7 +15,12 @@ const cases=[
  ['flat-third',flat+main('let Box a = new Box(); let Box b = copy! a; let Box c = copy! b; a.n = 10; b.n = 12; return a.n+b.n+c.n;'),42],
  ['moved-source',flat+main('let Box a = new Box(); let Box b = a; let Box c = copy! a; return b.n+c.n;'),'E_MOVED'],
  ['temporary-class-call',flat+'\nfnc read(Box x): int { return x.n; }\n'+main('let Box a = new Box(); return read(copy! a);'),'E_COPY_UNPROVEN'],
- ['actor-ref-denial','define actor A as\nend\n'+main('let a = spawn A(); let b = copy! a; return 42;'),'E_COPY_UNPROVEN'],
+ ['actor-ref-denial','define actor A receives int as\n receive(ActorMail<int> mail): void { return; }\nend\n'+main('let a = spawn A(); let b = copy! a; return 42;'),'E_COPY_UNPROVEN'],
+ ['fixed-slot',flat.replace('pub let','pub val')+main('let Box a = new Box(); let Box b = copy! a; b.n = 5; return 42;'),'E_IMMUTABLE'],
+ ['immutable-root',flat+main('let Box a = new Box(); val Box b = copy! a; b.n = 5; return 42;'),'E_IMMUTABLE'],
+ ['private-slot',flat.replace('pub let','let')+main('let Box a = new Box(); let Box b = copy! a; b.n = 5; return 42;'),'E_PRIVATE'],
+ ['rebound-root',flat+main('let Box a = new Box(); let Box b = copy! a; b = new Box(); b.n = 5; return 42;'),'E_OWNERSHIP'],
+ ['rhs-moves-root',flat+'\nfnc take_value(Box x): int { return x.n; }\n'+main('let Box a = new Box(); let Box b = copy! a; b.n = take_value(b); return 42;'),'E_OWNERSHIP'],
  ['bad-bang',main('return copy!!! 42;'),'E_TYPE'],
 ];
 const dir=mkdtempSync(join(tmpdir(),'atto-copy-modes-'));
@@ -29,7 +34,7 @@ try{
    assert.equal(r.status,0,id+': '+r.stderr);
    const bytes=readFileSync(output);assert.ok(WebAssembly.validate(bytes),id);
    const mod=new WebAssembly.Module(bytes);
-   const instance=new WebAssembly.Instance(mod,{atto:Object.fromEntries(WebAssembly.Module.imports(mod).map(i=>[i.name,()=>{throw Error('unexpected host effect')}]))});
+   const imports=WebAssembly.Module.imports(mod); const allowed=new Set(['print_i64','print_bool','print_f64','print_str','print_newline','actor_spawn','actor_send']); for(const i of imports){assert.equal(i.module,'atto');assert.equal(i.kind,'function');assert.ok(allowed.has(i.name));} const instance=new WebAssembly.Instance(mod,{atto:Object.fromEntries(imports.map(i=>[i.name,()=>{throw Error('unexpected host effect')}]))});
    assert.equal(instance.exports.main(),BigInt(expected),id);assert.equal(instance.exports.panic_code.value,0,id);
   } else {
    assert.equal(r.status,1,id+': '+r.stderr);assert.ok(r.stderr.includes(expected),id+': '+r.stderr);
