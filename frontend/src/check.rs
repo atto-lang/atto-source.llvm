@@ -1508,8 +1508,21 @@ impl<'a> FnCx<'a> {
     }
 
     fn declare(&mut self, name: &str, ty: Type, mutable: bool, pos: Pos) -> R<u32> {
-        if self.scopes.last().unwrap().iter().any(|l| l.name == name) {
-            return Err(Diagnostic::new(pos, "E_DUPLICATE", format!("duplicate binding '{name}'")));
+        self.declare_local(name, ty, mutable, false, pos)
+    }
+
+    // Stage the lexical-shadowing change in the copied scalar subset only.
+    // Parameters, fixed locals and non-scalar lifetimes remain fail-closed.
+    fn declare_local(&mut self, name: &str, ty: Type, mutable: bool,
+                     scalar_let_shadow: bool, pos: Pos) -> R<u32> {
+        if let Some(previous) = self.scopes.last().unwrap().iter().rev().find(|l| l.name == name) {
+            let eligible = scalar_let_shadow && mutable && previous.mutable
+                && previous.mail.is_none() && previous.slot >= self.nparams
+                && matches!(previous.ty, Type::Int | Type::Bool)
+                && matches!(ty, Type::Int | Type::Bool);
+            if !eligible {
+                return Err(Diagnostic::new(pos, "E_DUPLICATE", format!("duplicate binding '{name}'")));
+            }
         }
         if name == "self" {
             return Err(Diagnostic::new(pos, "E_RESERVED", "'self' cannot be rebound"));
@@ -1598,7 +1611,8 @@ impl<'a> FnCx<'a> {
                     return Err(Diagnostic::new(*pos, "E_GENERATOR_OWNERSHIP",
                         "generator handles must be consumed by for-in until owned bindings support close"));
                 }
-                let slot = self.declare(name, v.ty, *kind == BindKind::Let, *pos)?;
+                let is_let = *kind == BindKind::Let;
+                let slot = self.declare_local(name, v.ty, is_let, is_let, *pos)?;
                 TStmt::Set(slot, v)
             }
             Stmt::Assign { name, value, pos } => {
