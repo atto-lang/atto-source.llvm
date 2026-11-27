@@ -40,6 +40,7 @@ typedef struct SourceActor {
     struct SourceActor* replacement;
     int restart_decided;
     int restart_settled;
+    int terminal_policy_settled;
     int tombstone;
     /* Accepted guest DATA snapshot and waiters are guarded by group.mutex.
      * Physical callbacks signal this preinitialized condition after their
@@ -98,6 +99,10 @@ typedef struct {
     DoneAwaitFrame* pending_done;
     SourceActor* actors[SOURCE_GROUP_SLOTS];
     SourceActor* retired[SOURCE_GROUP_SLOTS];
+    /* A stopped leaf can outlive its source record in the VM while the
+     * supervisor CONTROL turn finishes. The exact VM ref reserves the slot
+     * until the VM acknowledges and accepts reclamation. */
+    OresNativeActorRef pending_leaf_reclaim[SOURCE_GROUP_SLOTS];
     pthread_cond_t supervisor_progress;
     OresSourceRecoveryLeaseV1 recovery_lease;
     size_t next_slot;
@@ -248,6 +253,30 @@ static int same_allocation(
         && a.domain == b.domain
         && a.owner == b.owner
         && a.generation == b.generation;
+}
+
+/* group.mutex held. Only the native VM may authorize scheduler reuse.
+ * No blocking or polling on a supervisor carrier. */
+static void source_reclaim_settled_leaves_locked(void) {
+    OresNativeExecutionContext current = {0};
+    if (ores_native_vm_current_execution_context(
+            group.vm, ORES_NATIVE_VM_MAIN, &current)) return;
+    for (size_t i = 0; i < group.next_slot; ++i) {
+        OresNativeActorRef old = group.pending_leaf_reclaim[i];
+        if (!old.scheduler_domain) continue;
+        ensure(!group.actors[i] && !group.retired[i] && old.actor_slot == i);
+        if (ores_native_vm_reclaim_supervised_leaf_v1(
+                group.vm, ORES_NATIVE_VM_MAIN, old))
+            group.pending_leaf_reclaim[i] = (OresNativeActorRef){0};
+    }
+}
+
+static size_t source_free_slot_locked(void) {
+    for (size_t i = 0; i < SOURCE_GROUP_ROOT_SLOT; ++i)
+        if (!group.actors[i] && !group.retired[i]
+                && !group.pending_leaf_reclaim[i].scheduler_domain)
+            return i;
+    return SOURCE_GROUP_ROOT_SLOT;
 }
 
 static SourceActor* lookup(size_t index) {
@@ -746,17 +775,18 @@ static void source_supervisor_notice(
     group_lock();
     const size_t slot = (size_t)failure.child.actor_slot;
     original = group.actors[slot] ? group.actors[slot] : group.retired[slot];
-    if (original && original->magic == SOURCE_ACTOR_MAGIC
+    ensure(original && original->magic == SOURCE_ACTOR_MAGIC
         && original->ref.scheduler_domain == failure.child.scheduler_domain
         && original->ref.actor_slot == failure.child.actor_slot
         && original->ref.generation == failure.child.generation
         && original->id == failure.correlation
-        && failure.kind == ORES_NATIVE_CONTROL_PANIC
+        && !original->terminal_policy_settled);
+    if (failure.kind == ORES_NATIVE_CONTROL_PANIC
         && failure.failure_code == ORES_SOURCE_ACTOR_FAILURE_FRAME
         && original->restart_remaining != 0
         && !original->restart_decided) {
         original->restart_decided = 1;
-        if (group.next_slot < SOURCE_GROUP_ROOT_SLOT) {
+        if (source_free_slot_locked() < SOURCE_GROUP_ROOT_SLOT) {
             approved = 1;
             constructor = original->constructor;
             receiver = original->on_message;
@@ -809,6 +839,7 @@ static void source_supervisor_notice(
             &group.terminal_stopped_notices, 1, memory_order_release);
     }
     group_lock();
+    original->terminal_policy_settled = 1;
     atomic_fetch_add_explicit(&group.terminal_notices, 1, memory_order_release);
     ensure(pthread_cond_broadcast(&group.supervisor_progress) == 0);
     group_unlock();
@@ -897,8 +928,10 @@ void* oreslang_source_actor_spawn_supervised_budgeted(
     group_lock();
     if (!group.vm) open_group_locked();
 
-    ensure(group.next_slot < SOURCE_GROUP_ROOT_SLOT);
-    const size_t slot = group.next_slot++;
+    source_reclaim_settled_leaves_locked();
+    const size_t slot = source_free_slot_locked();
+    ensure(slot < SOURCE_GROUP_ROOT_SLOT);
+    if (group.next_slot <= slot) group.next_slot = slot + 1;
     SourceActor* instance = (SourceActor*)calloc(1, sizeof(*instance));
     ensure(instance != NULL);
     instance->magic = SOURCE_ACTOR_MAGIC;
@@ -916,6 +949,7 @@ void* oreslang_source_actor_spawn_supervised_budgeted(
     instance->replacement = NULL;
     instance->restart_decided = 0;
     instance->restart_settled = 0;
+    instance->terminal_policy_settled = 0;
     instance->tombstone = 0;
     instance->admitted_sends = 0;
     instance->flush_waiters = 0;
@@ -1322,6 +1356,7 @@ static void close_idle_group_locked(void) {
         /* Decision metadata remains bounded by the current group. Public
          * identities never recycle, even after these records are freed. */
         for (size_t i = 0; i < group.next_slot; ++i) {
+            group.pending_leaf_reclaim[i] = (OresNativeActorRef){0};
             SourceActor* retired = group.retired[i];
             if (!retired) continue;
             ensure(retired->tombstone && retired->heap == NULL
@@ -1452,6 +1487,11 @@ void oreslang_source_actor_join_done(void* opaque) {
         (unsigned long long)failed,
         (unsigned long long)failure_code);
 #endif
+    /* The exact root policy callback must settle before the record can be
+     * detached. The VM's independent acknowledgement gate still decides
+     * when the scheduler slot becomes reusable. */
+    while (!instance->terminal_policy_settled)
+        ensure(pthread_cond_wait(&group.supervisor_progress, &group.mutex) == 0);
     /* Quiesce trusted external flush waiters before dropping their condition
      * and the actor pointer. This wait releases group.mutex until the final
      * reader exits, preventing a use-after-free during STOP/join. */
@@ -1466,8 +1506,11 @@ void oreslang_source_actor_join_done(void* opaque) {
         instance->tombstone = 1;
         group.retired[slot] = instance;
     } else {
+        ensure(!group.pending_leaf_reclaim[slot].scheduler_domain);
+        group.pending_leaf_reclaim[slot] = instance->ref;
         instance->magic = 0;
         free(instance);
+        source_reclaim_settled_leaves_locked();
     }
     ensure(group.live > 0);
     group.live--;
