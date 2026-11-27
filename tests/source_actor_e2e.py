@@ -185,6 +185,15 @@ def main():
         "source-actor-send-return-after-take-reject.ores": "use of explicitly moved int",
         "source-actor-send-expression-after-take-reject.ores": "use of explicitly moved int",
         "source-actor-send-class-value-reject.ores": "ownership violation: class is non-Copy",
+        # Native actor DATA is scalar i64 only. No owned array handle or
+        # borrowed reference may be silently reinterpreted as a scalar
+        # message until the typed buffer ABI and Sendable proof are lowered.
+        "source-actor-send-owned-array-reject.ores":
+            "native actor Array<T> DATA send requires typed owned-buffer mailbox lowering",
+        "source-actor-send-borrowed-array-reject.ores":
+            "native actor Array<T> DATA send requires typed owned-buffer mailbox lowering",
+        "source-actor-send-unmoved-array-reject.ores":
+            "native actor Array<T> DATA send requires typed owned-buffer mailbox lowering",
         "source-actor-send-moved-class-field-reject.ores": "ownership violation: use-after-move class field",
         "source-actor-send-field-take-reject.ores": "ownership violation: use-after-move class field",
         # Explicitly refuse source contracts that need typed actor field
@@ -199,6 +208,14 @@ def main():
         ) else []
         result = run([args.compiler, *flags, str(fixtures / name)])
         assert result.returncode != 0 and diagnostic in result.stderr, (name, diagnostic, result.stderr)
+        if name in {
+            "source-actor-send-owned-array-reject.ores",
+            "source-actor-send-borrowed-array-reject.ores",
+            "source-actor-send-unmoved-array-reject.ores",
+        }:
+            # A crash with a matching diagnostic is not a semantic rejection.
+            assert result.returncode == 1, ("buffer payload reject must exit 1", name, result.returncode)
+            assert "AddressSanitizer" not in result.stderr and "Segmentation fault" not in result.stderr, name
         assert not result.stdout.strip(), ("unsafe LLVM IR emitted for rejected source", name)
     print(f"PASS {len(negatives)} no-IR actor ownership and await boundary cases", flush=True)
     with tempfile.TemporaryDirectory(prefix="oreslang-native-source-actor-") as temp:
