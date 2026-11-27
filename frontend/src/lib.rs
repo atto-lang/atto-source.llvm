@@ -72,7 +72,7 @@ pub fn compile(source: &str) -> Result<Vec<u8>, Diagnostic> {
                             Some(lexer::Tok::Ident(w)) if w == "with") {
                             if start != 0 {
                                 return Err(Diagnostic::new(toks[start].pos, "E_UNSUPPORTED",
-                                    "attached struct execution requires one standalone file-local declaration"));
+                                    "attached struct execution requires leading file-local declarations"));
                             }
                             let program = struct_value_guest::lower(toks.clone())?;
                             let typed = check::check(&program)?;
