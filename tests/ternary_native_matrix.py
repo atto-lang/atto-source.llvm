@@ -114,7 +114,7 @@ fnc choose(int? value): int {
 pub fnc main(): int {
   return choose(42);
 }
-""", "native optional type '?' requires versioned Option/default ABI lowering"),
+""", "E_OPTION_TYPE_ABI_UNSUPPORTED"),
     "reject-optional-presence-still-gated": ("""
 fnc choose(int value?): int {
   return value;
@@ -122,7 +122,7 @@ fnc choose(int value?): int {
 pub fnc main(): int {
   return choose(42);
 }
-""", "native optional parameter presence '?' requires versioned default/presence ABI lowering"),
+""", "E_OPTIONAL_FORMAL_ABI_UNSUPPORTED"),
     "reject-divergent-move-state": (PAIR + """
 pub fnc main(): int {
   let mut Pair p = new Pair();
