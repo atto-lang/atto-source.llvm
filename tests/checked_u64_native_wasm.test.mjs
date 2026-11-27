@@ -62,7 +62,7 @@ try {
   });
   await test('refuse invalid source before emitting IR',()=>{
     const guest=body=>'pub fnc main(): u64 {return '+body+';}';
-    for(const source of [guest('18446744073709551616'),guest('-1'),guest('1/2'),guest('x'),guest('main()'),guest('f(1)')+'fnc f():u64{return 1;}',guest('1')+'fnc f(int n):u64{return 1;}',guest('1')+'fnc f(u64 n,u64 n):u64{return n;}',guest('1')+guest('2'),guest('1')+'fnc f():u64{return g();} fnc g():u64{return f();}',guest('1'+'+1'.repeat(100)),guest('('.repeat(40)+'1'+')'.repeat(40)),guest('01'),guest('1')+'\u202e',guest('1')+' // comment',guest('1')+' '.repeat(17000)]) {
+    for(const source of [guest('18446744073709551616'),guest('-1'),guest('1%2'),guest('x'),guest('main()'),guest('f(1)')+'fnc f():u64{return 1;}',guest('1')+'fnc f(int n):u64{return 1;}',guest('1')+'fnc f(u64 n,u64 n):u64{return n;}',guest('1')+guest('2'),guest('1')+'fnc f():u64{return g();} fnc g():u64{return f();}',guest('1'+'+1'.repeat(100)),guest('('.repeat(40)+'1'+')'.repeat(40)),guest('01'),guest('1')+'\u202e',guest('1')+' // comment',guest('1')+' '.repeat(17000)]) {
       const r=run(compiler,[],source); assert.ifError(r.error); assert.equal(r.status,2); assert.equal(r.stdout,''); assert.match(r.stderr,/E_U64_PROFILE/);
     }
     let s=guest('f15()')+'fnc f0():u64{return 1;}';
