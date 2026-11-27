@@ -4525,7 +4525,15 @@ private:
                     if (spawned.declared_type.argument != spawned.actor_type)
                         fail("ActorRef<T> type mismatch with spawned actor");
                     require("(");
-                    require(")");
+                    if (token_.text != ")") fail("expected ')'");
+                    // Only this authenticated spawn boundary classifies the
+                    // next contextual 'with' as actor policy, not record update.
+                    advance(true);
+                    // Grouped actor spawn is not the legacy zero-argument
+                    // source actor binding. Do not emit a partial binding that
+                    // would erase quotas, scheduling policy or startup data.
+                    if (token_.text == "with")
+                        fail("E_SPAWN_OPTIONS_UNSUPPORTED: grouped actor spawn requires typed initialization, resource admission and runtime lowering");
                     // A source 'pipe' is a typed graph construction with
                     // atomic connections, bounded DATA, distinct supervisor
                     // CONTROL, and physical shutdown barriers. Never lower
@@ -9638,10 +9646,10 @@ private:
                 + std::to_string(token_.offset));
         }
     }
-    void advance() {
+    void advance(bool at_spawn_close = false) {
         last_token_end_ = token_.offset + token_.text.size();
         token_ = lexer_.next();
-        reject_unlowered_with_update();
+        if (!at_spawn_close) reject_unlowered_with_update();
     }
     [[noreturn]] void fail(const std::string& reason) const {
         if (token_.text == "gpu" || token_.text == "cpu" || token_.text == "quantum") {
