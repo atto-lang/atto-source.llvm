@@ -1450,6 +1450,18 @@ impl Parser {
         self.in_generator = is_generator;
         let body = if prefix_type.is_some() {
             self.parse_return_first_body()?
+        } else if self.eat(&Tok::ColonColon) {
+            // Compatibility slice: explicit parenthesized scalar expression
+            // followed by end. Do not infer return from a statement block.
+            if is_generator || ret != Type::Int {
+                return Err(unsupported(self.pos(), "non-int or generator :: expression body"));
+            }
+            let expression_pos = self.pos();
+            self.expect(Tok::LParen, "'(' after '::'")?;
+            let value = self.parse_expr()?;
+            self.expect(Tok::RParen, "')' after expression body")?;
+            self.expect_word("end")?;
+            vec![Stmt::Return(Some(value), expression_pos)]
         } else {
             self.parse_block()?
         };
