@@ -6774,6 +6774,38 @@ private:
     std::unique_ptr<Expression> primary() {
         const auto offset = token_.offset;
 
+        // A closed, single-valued-break loop has no observable backedge.
+        // Keep the normal typed expression and native codegen paths in
+        // authority; reject bare names/calls and general loop CFGs.
+        if (token_.text == "loop" && peek_next().text == "{") {
+            advance();
+            require("{");
+            require("break");
+            if (token_.text == ";" || token_.text == "}")
+                fail("E_BREAK_VALUE: value loop requires a break operand");
+            auto value = expression();
+            using K = Expression::Kind;
+            switch (value->kind) {
+                case K::Integer: case K::Boolean: case K::String:
+                case K::Negate: case K::Abs: case K::LogicalNot:
+                case K::Add: case K::Subtract: case K::Multiply:
+                case K::Remainder: case K::Modulo: case K::BitXor:
+                case K::Equal: case K::NotEqual: case K::Less:
+                case K::LessEqual: case K::Greater: case K::GreaterEqual:
+                case K::LogicalAnd: case K::LogicalOr: case K::LogicalXor:
+                case K::Conditional: case K::Cast:
+                case K::ShiftLeft: case K::ShiftRight: case K::ShiftUnsignedRight:
+                    break;
+                default:
+                    fail("value-loop operand requires typed CFG lowering");
+            }
+            require(";");
+            require("}");
+            if (token_.text == "(")
+                fail("calling a computed value loop");
+            return value;
+        }
+
         // Source-to-MIR analysis runs inside the real compiler parser, but
         // never publishes an executable AST or LLVM scalar fallback.
         if (token_.text == "launch" &&
