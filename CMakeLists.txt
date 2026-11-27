@@ -648,6 +648,9 @@ if(ATTO_ACTOR_LOGICAL_FRAMES_HOST_ONLY)
     add_test(NAME native_source_actor_last_capacity_denial_host
         COMMAND atto-native-source-actor-restart-host-test --capacity)
     set_tests_properties(native_source_actor_last_capacity_denial_host PROPERTIES TIMEOUT 60)
+    add_test(NAME native_source_actor_leaf_reuse_host
+        COMMAND atto-native-source-actor-restart-host-test --reuse)
+    set_tests_properties(native_source_actor_leaf_reuse_host PROPERTIES TIMEOUT 60)
     add_executable(atto-native-source-recovery-lease-test
         tests/source_recovery_lease_v1_test.c)
     target_include_directories(atto-native-source-recovery-lease-test PRIVATE
@@ -879,6 +882,9 @@ if(BUILD_TESTING)
     add_test(NAME native_source_actor_restart_budget_exhausted_e2e
         COMMAND oreslang-native-source-actor-restart-test --exhaust)
     set_tests_properties(native_source_actor_restart_budget_exhausted_e2e PROPERTIES TIMEOUT 30)
+    add_test(NAME native_source_actor_leaf_reuse_e2e
+        COMMAND oreslang-native-source-actor-restart-test --reuse)
+    set_tests_properties(native_source_actor_leaf_reuse_e2e PROPERTIES TIMEOUT 60)
     # Static byte/bit/packet match plan host proof, NOT compiled .atto guest AOT.
     add_executable(oreslang-atto-byte-bit-pattern-plan-test
         tests/atto_byte_bit_pattern_plan_test.cpp)
