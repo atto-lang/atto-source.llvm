@@ -3,7 +3,9 @@ set -euo pipefail
 compiler="$1"
 clang="$2"
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-runtime="$root/src/main/cpp/oreslang/runtime/NativeStringRegion.c"
+export ORESLANG_LLVMC="$compiler" CLANG="$clang"
+export ORES_NO_GC_IR_AUDIT="${ORES_NO_GC_IR_AUDIT:-$(dirname "$compiler")/oreslang-no-gc-ir-audit}"
+test -x "$ORES_NO_GC_IR_AUDIT"
 work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT
 printf AB > "$work/expected"
@@ -14,7 +16,7 @@ for entry in 'stdio-direct.atto fcb8c1b56322b1b068007513cd60791504de5918' 'proce
   "$compiler" "$source" > "$work/guest.ll"
   test -s "$work/guest.ll"
   for opt in 0 2; do
-    "$clang" "-O$opt" -x ir "$work/guest.ll" -x c "$runtime" -std=c11 -pthread -I "$root/src/main/cpp" -o "$work/guest"
+    ORESLANG_LLVM_AOT_OPT_LEVEL="$opt" bash "$root/scripts/compile-aot.sh" "$source" "$work/guest"
     set +e
     timeout 20s "$work/guest" | cat > "$work/stdout"
     status=("${PIPESTATUS[@]}")
