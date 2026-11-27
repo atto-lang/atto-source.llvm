@@ -9429,6 +9429,18 @@ if(BUILD_TESTING)
     add_test(NAME native_select_continuation_generation_fence
         COMMAND oreslang-native-select-continuation-fence-test)
     set_tests_properties(native_select_continuation_generation_fence PROPERTIES TIMEOUT 30)
+
+    add_executable(atto-native-select-continuation-multi-owner-test
+        tests/native_select_continuation_multi_owner_test.cpp)
+    target_include_directories(atto-native-select-continuation-multi-owner-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(atto-native-select-continuation-multi-owner-test PRIVATE cxx_std_17)
+    target_compile_options(atto-native-select-continuation-multi-owner-test PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wpedantic -Werror -UNDEBUG>)
+    target_link_libraries(atto-native-select-continuation-multi-owner-test PRIVATE Threads::Threads)
+    add_test(NAME native_select_continuation_multi_owner_settlement
+        COMMAND atto-native-select-continuation-multi-owner-test)
+    set_tests_properties(native_select_continuation_multi_owner_settlement PROPERTIES TIMEOUT 60)
 endif()
 
 # C ABI bridge over the fixed two-arm NativeSelectArbiter (host-only).
