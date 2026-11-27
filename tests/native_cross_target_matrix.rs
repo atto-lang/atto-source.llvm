@@ -303,6 +303,40 @@ fn run(program: &str, args: &[&str]) -> Option<(i32, Vec<u8>, String)> {
 // Only this reviewed, exact repository path is an intentional abort guest.
 // All other processes retain the ordinary fail-closed signal/timeout policy.
 const EXPECTED_PANIC_FIXTURE: &str = "tests/fixtures/atto_parity_syntax/expect_err.atto";
+const EXPECTED_ARITHMETIC_TRAPS: &[&str] = &[
+    "tests/fixtures/logical-punctuation-v1/and-reached-rhs-trap.atto",
+    "tests/fixtures/logical-punctuation-v1/or-reached-rhs-trap.atto",
+    "tests/fixtures/logical-punctuation-v1/xor-eager-trap.atto",
+];
+fn run_arithmetic_trap(program: &str, args: &[&str], signal: i32) -> Option<(i32, Vec<u8>, String)> {
+    use std::os::unix::process::ExitStatusExt;
+    let out = Command::new("timeout")
+        .args(["--kill-after=5s", "--", "120s"])
+        .arg(program).args(args).output()
+        .unwrap_or_else(|e| fail(&format!("cannot start arithmetic trap guest {program}: {e}")));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let qemu_line = match signal {
+        4 => "qemu: uncaught target signal 4 (Illegal instruction) - core dumped",
+        5 => "qemu: uncaught target signal 5 (Trace/breakpoint trap) - core dumped",
+        _ => fail("unsupported arithmetic trap signal"),
+    };
+    let mut qemu = false;
+    let mut timeout = false;
+    let mut clean = true;
+    for line in stderr.lines() {
+        if line == qemu_line && !qemu { qemu = true; }
+        else if line == "timeout: the monitored command dumped core" && !timeout { timeout = true; }
+        else { clean = false; }
+    }
+    let trapped = out.status.signal() == Some(signal) ||
+        (out.status.code() == Some(128+signal) && qemu);
+    if !trapped || !clean || !out.stdout.is_empty() {
+        fail(&format!("{program} {args:?}: expected arithmetic trap signal {signal}, observed {:?}, stdout={:?}, stderr={stderr}", out.status, out.stdout));
+    }
+    // Normalize only the reviewed llvm.trap instruction's architecture-specific signal.
+    Some((134, out.stdout, String::new()))
+}
+
 fn run_guest(program: &str, args: &[&str], expected_panic: bool) -> Option<(i32, Vec<u8>, String)> {
     if !expected_panic { return run(program, args); }
     use std::os::unix::process::ExitStatusExt;
@@ -381,6 +415,7 @@ fn main() {
     println!("PASS unqualified cross-target profile rejection");
     let mut required_passed = BTreeSet::new();
     let mut expected_panic_passed = BTreeSet::new();
+    let mut arithmetic_traps_passed = BTreeSet::new();
     let mut required_runtime_passed = BTreeSet::new();
     let p = |name: &str| work.join(name).to_string_lossy().into_owned();
     let mut compared: BTreeMap<String, (usize, usize)> = o.triples.iter().map(|t| (t.clone(), (0, 0))).collect();
@@ -462,8 +497,16 @@ fn main() {
             runtime_linked += 1;
         }
         let expected_panic = name == EXPECTED_PANIC_FIXTURE;
+        let arithmetic_trap = EXPECTED_ARITHMETIC_TRAPS.contains(&name.as_str());
+        if arithmetic_trap && !String::from_utf8_lossy(&host_ir).contains("call void @llvm.trap(") {
+            fail(&format!("{name}: missing host arithmetic trap lowering"));
+        }
         println!("EXEC host oracle {i}: {name}");
-        let Some((host_code, host_out, _)) = run_guest(&hbin, &[], expected_panic) else { fail(&format!("{name}: host binary did not start")) };
+        let host_result = if arithmetic_trap {
+            let signal = if cfg!(target_arch="aarch64") { 5 } else { 4 };
+            run_arithmetic_trap(&hbin, &[], signal)
+        } else { run_guest(&hbin, &[], expected_panic) };
+        let Some((host_code, host_out, _)) = host_result else { fail(&format!("{name}: host binary did not start")) };
 
         if host_code < 0 { fail(&format!("{name}: host oracle terminated by signal")); }
         if required && (host_code != 42 || !host_out.is_empty()) {
@@ -499,6 +542,9 @@ fn main() {
                 failures.push(format!("{triple} {name}: IR is not stamped with the target triple"));
                 continue;
             }
+            if arithmetic_trap && !String::from_utf8_lossy(&ir).contains("call void @llvm.trap(") {
+                fail(&format!("{triple} {name}: missing arithmetic trap lowering"));
+            }
             fs::write(&ll, &ir).unwrap_or_else(|e| fail(&e.to_string()));
             // 3. Compile, link, run, compare.
             let clang_target = format!("--target={triple}");
@@ -526,9 +572,13 @@ fn main() {
                 Some(prefix) => {
                     let mut args: Vec<&str> = prefix[1..].iter().map(String::as_str).collect();
                     args.push(&bin);
-                    run_guest(&prefix[0], &args, expected_panic)
+                    if arithmetic_trap {
+                        run_arithmetic_trap(&prefix[0], &args, if triple.starts_with("aarch64-") { 5 } else { 4 })
+                    } else { run_guest(&prefix[0], &args, expected_panic) }
                 }
-                None => run_guest(&bin, &[], expected_panic),
+                None => if arithmetic_trap {
+                    run_arithmetic_trap(&bin, &[], if triple.starts_with("aarch64-") { 5 } else { 4 })
+                } else { run_guest(&bin, &[], expected_panic) },
             };
             let entry = compared.get_mut(triple).expect("triple");
             match result {
@@ -536,6 +586,9 @@ fn main() {
                     if expected_panic {
                         expected_panic_passed.insert(triple.clone());
                         println!("PASS intentional panic guest {triple} {name}: drained stdout + diagnosed abort");
+                    } else if arithmetic_trap {
+                        arithmetic_traps_passed.insert((triple.clone(), name.clone()));
+                        println!("PASS intentional arithmetic trap {triple} {name}");
                     } else {
                         entry.0 += 1;
                     }
@@ -565,6 +618,11 @@ fn main() {
     for (triple, (same, diff)) in &compared {
         if !required_passed.contains(triple) {
             failures.push(format!("{triple}: mandatory wide-i64 guest did not execute successfully"));
+        }
+        for fixture in EXPECTED_ARITHMETIC_TRAPS {
+            if !arithmetic_traps_passed.contains(&(triple.clone(), (*fixture).to_owned())) {
+                failures.push(format!("{triple}: mandatory arithmetic trap {fixture} did not execute successfully"));
+            }
         }
         if o.runtime_dir.is_some() {
             if !expected_panic_passed.contains(triple) {
