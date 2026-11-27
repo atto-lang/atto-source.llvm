@@ -84,6 +84,24 @@ try{
     const {r,c}=await compile(bad);assert.equal(r.status,1,bad);assert.equal(r.stdout,'');await assert.rejects(stat(c),{code:'ENOENT'});
   }
   console.log('LLVM_NOMINAL_CONSTRUCTOR_ALIAS_NEGATIVE_PASS count=5');
+  const valueSource="define struct Packet { i8 tag; int count; i16 tail; } with { constructor(i8 tag, int count, i16 tail) { self.tag = tag; self.count = count; self.tail = tail; } } pub fnc main(): int { val Packet packet = Packet(-3,40,5); val a = packet.tag; val b = packet.count; val c = packet.tail; return a + b + c; }";
+  let valueCode;
+  for(const alias of ['', 'make','new']){
+    const src=alias?valueSource.replace('Packet(-3,40,5)','Packet.'+alias+'(-3,40,5)'):valueSource;
+    const {r,c}=await compile(src);assert.equal(r.status,0,r.stderr);
+    const code=await readFile(c,'utf8');assert.match(code,/== 24, "size"/);
+    if(valueCode!==undefined)assert.equal(code,valueCode);else valueCode=code;
+    for(const opt of ['-O0','-O2']){
+      const bin=c+'.value.'+opt.slice(1);
+      const link=run('clang',['-std=c11','-Wall','-Wextra','-Werror','-fsanitize=undefined','-fno-sanitize-recover=all',opt,c,nominalHost,'-o',bin]);assert.equal(link.status,0,link.stderr);assert.equal(run(bin,[]).status,0);
+      console.log('LLVM_STANDALONE_STRUCT_CONSTRUCTOR_NATIVE_PASS',alias||'direct',opt);
+    }
+  }
+  for(const [from,to] of [["Packet(-3,40,5)","Packet.fake(-3,40,5)"],["Packet(-3,40,5)","Other.make(-3,40,5)"],["Packet(-3,40,5)","Packet.new(-3,40)"],["Packet(-3,40,5)","Packet.make(128,40,5)"],["Packet(-3,40,5)","new Packet(-3,40,5)"],["val Packet packet","val Other packet"],["packet.tag","other.tag"],["packet.tail","packet.missing"],["val a = packet.tag;","set packet.tag = 2; val a = packet.tag;"],["val a = packet.tag;","val packet = packet.tag; val a = packet.tag;"],["val a = packet.tag;","val a = packet.tag; destroy! packet;"]]){
+    const bad=valueSource.replace(from,to);assert.notEqual(bad,valueSource);
+    const {r,c}=await compile(bad);assert.equal(r.status,1,bad);assert.equal(r.stdout,'');await assert.rejects(stat(c),{code:'ENOENT'});
+  }
+  console.log('LLVM_STANDALONE_STRUCT_CONSTRUCTOR_NEGATIVE_PASS count=11');
   const nested=fixtures[1],flat=fixtures[0];
   for(const [source,from,to] of [
     [flat,'-3, 40, 5','128, 40, 5'],[flat,'ref! p','ref!p'],[flat,'ref! p','ref ! p'],
