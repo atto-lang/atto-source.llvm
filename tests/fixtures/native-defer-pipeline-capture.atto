@@ -7,9 +7,14 @@ fnc cleanup(int n): void {
     stdio.println(n);
     return;
 }
+fnc cleanup_bool(bool n): void {
+    stdio.println(n);
+    return;
+}
 pub fnc main(): int {
     defer seed() |> twice |> (|int x| -> || -> { cleanup(x); });
     defer 7 |> (|int x| -> || -> { cleanup(x); });
+    defer true |> (|bool b| -> || -> { cleanup_bool(b); });
     stdio.println(2);
     return 42;
 }
