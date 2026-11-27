@@ -315,7 +315,7 @@ public:
                     at_ < source_.size() && source_[at_] == '!' &&
                     source_.substr(at_, 2) != "!=" &&
                     !(source_.substr(at_, 3) == "!eq" &&
-                      (at_ + 3 == source_.size() || !identifier_part(source_[at_ + 3])))) {
+                      (at_ + 3 == source_.size() || !identifier_part_at(source_, at_ + 3)))) {
                 const auto after = at_ + 1;
                 if (after == source_.size() ||
                         std::string_view(" \t\r\n\v\f").find(source_[after]) == std::string_view::npos)
@@ -4807,7 +4807,7 @@ private:
                             const auto section = token_.text;
                             if (section != "schedule" && section != "resources" && section != "init")
                                 fail("E_SPAWN_OPTION_SECTION: unknown grouped spawn section");
-                            if (!sections.insert(section).second)
+                            if (!sections.emplace(section).second)
                                 fail("E_SPAWN_OPTION_DUPLICATE: duplicate grouped spawn section");
                             advance();
                             require("{");
