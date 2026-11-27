@@ -18,6 +18,7 @@ pub mod generator_cfg;
 pub mod generator_frame;
 pub mod lexer;
 pub mod parser;
+mod contextual_specialization;
 mod struct_value_guest;
 mod native_scalar_c;
 mod physical_layout;
@@ -62,6 +63,10 @@ fn compile_target(source: &str, native_c: bool, isolated: bool) -> Result<Vec<u8
         ));
     }
     let toks = lexer::lex(source)?;
+    if contextual_specialization::present(&toks) && (native_c || isolated) {
+        return Err(Diagnostic::new(toks[0].pos, "E_CONTEXT_PROFILE", "contextual specialization is only implemented in the browser Wasm frontend profile"));
+    }
+    let toks = contextual_specialization::lower(toks)?;
     if let Some(pos) = directed_pipe::unlowered_pos(&toks) {
         return Err(Diagnostic::new(pos, "E_UNSUPPORTED_CONTINUOUS_PIPE",
             "typed pipe/rpipe DATA graph is planned but no guest transport or PipeHandle exists"));
