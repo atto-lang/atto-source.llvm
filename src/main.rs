@@ -449,6 +449,13 @@ impl<'a> FunctionEmitter<'a> {
                 let target = if matches!(statement, TStmt::Break) { done } else { next }.clone();
                 self.branch(&target);
             }
+            TStmt::Unreachable => {
+                // Typed match exhaustiveness emits this synthetic terminal.
+                // Trap rather than introduce LLVM UB on a violated invariant.
+                self.instr("call void @llvm.trap()");
+                self.instr("unreachable");
+                self.terminated = true;
+            }
             _ => return Err(format!("E_UNSUPPORTED_NATIVE_STMT: {statement:?}")),
         }
         Ok(())
