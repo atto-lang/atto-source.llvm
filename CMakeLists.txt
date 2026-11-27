@@ -4260,6 +4260,12 @@ if(BUILD_TESTING)
             --run 43 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_named_call_mixed_guest named-call-mixed-main.ores
             --run 43 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_named_call_equals_guest named-call-equals-main.atto
+            --run 43 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_named_call_mixed_separators_guest named-call-mixed-separators-main.atto
+            --run 43 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_named_call_positional_equals_guest named-call-positional-equals-main.atto
+            --run 43 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_named_call_mut_borrow_binding named-call-mut-borrow-native.ores
             --run 7 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_named_call_overload_arity_guest named-call-arity-overload-main.ores
@@ -6428,6 +6434,16 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_wrong_arity wrong-arity.ores --diagnostic "wrong call arity")
     oreslang_contract_test(native_named_call_unknown_label named-call-unknown-reject.ores
         --diagnostic "unknown named argument")
+    oreslang_contract_test(native_named_call_duplicate_separators_reject named-call-duplicate-separators-reject.atto
+        --diagnostic "duplicate named argument")
+    oreslang_contract_test(native_named_call_unknown_equals_reject named-call-unknown-equals-reject.atto
+        --diagnostic "unknown named argument")
+    oreslang_contract_test(native_named_call_positional_after_equals_reject named-call-positional-after-equals-reject.atto
+        --diagnostic "positional argument cannot follow named argument")
+    oreslang_contract_test(native_named_call_member_duplicate_separators_reject named-member-mixed-separators-reject.atto
+        --diagnostic "duplicate named member argument")
+    oreslang_contract_test(native_named_call_pair_label_reject named-call-pair-label-reject.atto
+        --diagnostic "oreslang-llvmc:")
     oreslang_contract_test(native_named_call_duplicate_slot named-call-duplicate-reject.ores
         --diagnostic "duplicate binding of parameter")
     oreslang_contract_test(native_named_call_positional_after_named named-call-positional-after-named-reject.ores
