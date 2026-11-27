@@ -150,12 +150,9 @@ def compile_and_run(root, name, source, expected, compiler, clang, sanitize):
     # Tree shaking is part of the semantic gate: callees referenced only
     # from ternary arms must remain reachable even though runtime executes one arm.
     produced = execute([compiler, "--tree-shake", str(src)])
-    if "define class" in source:
-        # Preserve main's conservative constructor-root admission boundary,
-        # while retaining native execution coverage of class-valued effects.
-        assert produced.returncode != 0 and not produced.stdout, name
-        assert "rejects class declarations until class initializer roots are modeled" in produced.stderr, (name, produced.stderr)
-        produced = execute([compiler, str(src)])
+    # Current main models constructor roots. Exercise tree shaking for
+    # the class-valued effect case too: any denial is now a regression.
+    # Do not silently retry without tree shaking.
     assert produced.returncode == 0 and produced.stdout, (name, produced.stderr)
     assert "ternary.true" in produced.stdout, name
     assert "ternary.false" in produced.stdout, name
