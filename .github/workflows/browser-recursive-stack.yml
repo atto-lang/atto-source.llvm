@@ -1,0 +1,44 @@
+name: Browser recursive stack quota actual guest
+on:
+  pull_request:
+    paths:
+      - 'frontend/src/wasm.rs'
+      - 'frontend/src/wasm/**'
+      - 'frontend/src/check.rs'
+      - 'frontend/src/parser.rs'
+      - 'frontend/tests/recursive_stack_guest.mjs'
+      - '.github/workflows/browser-recursive-stack.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  recursive-guest:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify immutable source
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          git rev-parse HEAD^{tree}
+      - name: Build real browser frontend host CLI and run regression suite
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          cargo test --locked --lib --tests
+          cargo build --locked --release --bin attoc --target-dir "$RUNNER_TEMP/recursive-browser-compiler"
+          sha256sum "$RUNNER_TEMP/recursive-browser-compiler/release/attoc"
+      - name: Execute emitted guests
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          node --version
+          ATTOC="$RUNNER_TEMP/recursive-browser-compiler/release/attoc" node tests/recursive_stack_guest.mjs
