@@ -5720,6 +5720,82 @@ private:
                 deferred.kind = Statement::Kind::Defer;
                 deferred.offset = token_.offset;
                 auto target = primary();
+                if (token_.kind == Kind::Symbol && token_.text == "|>") {
+                    // Bounded native factory profile: one explicit immutable
+                    // int/bool capture, a chain of ordinary named scalar stages,
+                    // and one direct cleanup(capture) body. Publish the
+                    // generated local BEFORE its deferred call. The existing
+                    // root-scope lifetime and cleanup CFG keep the slot alive
+                    // through all supported returns. No closure object or
+                    // dynamic invocation is emitted.
+                    if (terminal_try_finally || value.caught_throw_value)
+                        fail("native defer factory in protected scope requires checked unwind lowering");
+                    std::size_t stages = 0;
+                    bool final_factory = false;
+                    while (accept("|>")) {
+                        if (++stages > kMaxNativePipelineStages)
+                            fail("native defer pipeline exceeds 128 stages");
+                        if (token_.kind == Kind::Symbol && token_.text == "(" &&
+                                peek_next().text == "|") {
+                            require("("); require("|");
+                            ScalarType capture_type;
+                            if (accept("int")) capture_type = ScalarType::I64;
+                            else if (accept("bool")) capture_type = ScalarType::Bool;
+                            else fail("native defer factory requires an int or bool capture");
+                            const std::string parameter = identifier();
+                            require("|"); require("->");
+                            if (!accept("_")) require("||");
+                            require("->"); require("{");
+                            const auto cleanup_offset = token_.offset;
+                            const std::string callee = identifier();
+                            if (callee == parameter)
+                                fail("native defer factory cleanup must be a direct named function");
+                            require("(");
+                            if (identifier() != parameter)
+                                fail("native defer factory may use only its explicit capture");
+                            require(")"); require(";"); require("}"); require(")"); require(";");
+
+                            Statement captured;
+                            captured.kind = Statement::Kind::ScopedLocal;
+                            captured.offset = deferred.offset;
+                            captured.branch_local = std::make_unique<LocalBinding>();
+                            auto& local = *captured.branch_local;
+                            // A dollar sign is not a native source identifier character.
+                            // Offset is unique for each registration in a function.
+                            local.name = "$defer_capture_" + std::to_string(deferred.offset);
+                            local.offset = deferred.offset;
+                            local.scalar_type = capture_type;
+                            local.initializer = std::move(target);
+                            local.assignable = false;
+                            local.owner_mutable = false;
+
+                            auto call = make_expression(Expression::Kind::Call, cleanup_offset);
+                            call->name = callee;
+                            auto argument = make_expression(Expression::Kind::Variable, cleanup_offset);
+                            argument->name = local.name;
+                            call->arguments.push_back(std::move(argument));
+                            call->argument_names.emplace_back("");
+                            deferred.expression = std::move(call);
+                            deferred.static_defer_factory = true;
+                            value.statements.push_back(std::move(captured));
+                            value.statements.push_back(std::move(deferred));
+                            final_factory = true;
+                            break;
+                        }
+                        auto stage = primary();
+                        if (stage->kind != Expression::Kind::Variable &&
+                                stage->kind != Expression::Kind::Call)
+                            fail("native defer pipeline requires named scalar stages and an inline factory");
+                        stage->kind = Expression::Kind::Call;
+                        stage->pipeline_stage = true;
+                        stage->arguments.insert(stage->arguments.begin(), std::move(target));
+                        stage->argument_names.insert(stage->argument_names.begin(), "");
+                        target = std::move(stage);
+                    }
+                    if (!final_factory)
+                        fail("native defer pipeline requires a checked inline factory");
+                    continue;
+                }
                 if (target->kind == Expression::Kind::Field && accept("=")) {
                     if (!target->left || target->left->kind != Expression::Kind::Variable)
                         fail("native deferred field assignment requires named class receiver");
@@ -9710,6 +9786,21 @@ private:
                     require_scalar(*stmt.expression, env.at(stmt.receiver),
                         "native scalar assignment", env);
                     return;
+                }
+                if (stmt.static_defer_factory) {
+                    if (stmt.kind != Statement::Kind::Defer || !stmt.expression ||
+                            stmt.expression->kind != Expression::Kind::Call)
+                        throw std::runtime_error("invalid static defer factory AST");
+                    const auto& call = *stmt.expression;
+                    const auto family = functions.find(call.name);
+                    if (family == functions.end() || !family->second.count(call.arguments.size()))
+                        throw std::runtime_error("native defer factory cleanup requires a resolved named void function");
+                    const auto& signature = family->second.at(call.arguments.size());
+                    if (!signature.returns_void || signature.async_source_i64 ||
+                            !signature.generics.empty() ||
+                            signature.parameter_is_scalar.size() != 1 ||
+                            !signature.parameter_is_scalar.front())
+                        throw std::runtime_error("native defer factory cleanup requires a synchronous scalar void function");
                 }
                 if (stmt.expression)
                     (void)validate_scalar_expression(*stmt.expression, env, functions);

@@ -4279,6 +4279,28 @@ if(BUILD_TESTING)
         --diagnostic "native defer requires a direct function call")
     oreslang_contract_test(reject_native_defer_moved_return native-defer-moved-after-return.ores
         --diagnostic "borrow of explicitly moved int")
+    # Bounded static capture pipeline: real generated IR and exact native trace.
+    if(ORE_CLANG)
+        add_test(NAME native_defer_pipeline_capture_trace
+            COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/native-defer-pipeline-trace.sh"
+                "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/native-defer-pipeline-capture.atto")
+    endif()
+    oreslang_contract_test(reject_native_defer_pipeline_outer_capture
+        native-defer-pipeline-outer-capture-reject.atto
+        --diagnostic "native defer factory may use only its explicit capture")
+    oreslang_contract_test(reject_native_defer_pipeline_named_factory
+        native-defer-pipeline-named-factory-reject.atto
+        --diagnostic "native defer pipeline requires a checked inline factory")
+    oreslang_contract_test(reject_native_defer_pipeline_nonvoid
+        native-defer-pipeline-nonvoid-reject.atto
+        --diagnostic "native defer factory cleanup requires a synchronous scalar void function")
+    oreslang_contract_test(reject_native_defer_pipeline_wrong_type
+        native-defer-pipeline-wrong-type-reject.atto
+        --diagnostic "native branch-local initializer requires")
+    oreslang_contract_test(reject_native_defer_pipeline_target_type
+        native-defer-pipeline-target-type-reject.atto
+        --diagnostic "argument 'n' requires")
     # Native return snapshot is immutable under subsequent deferred field cleanup.
     if(ORE_CLANG)
         oreslang_contract_test(native_defer_field_return_snapshot native-defer-field-return.ores

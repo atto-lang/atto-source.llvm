@@ -9,10 +9,10 @@ fnc add_one(borrow mut Counter c): void {
   c.value = c.value + 1;
   return;
 }
-fnc tick(borrow mut Counter c, int guard): int {
+fnc tick(borrow mut Counter c, int selector): int {
   defer add_one(rt mut borrow c);
   defer multiply_ten(rt mut borrow c);
-  if (guard eq 0) { return 0; } fi
+  if (selector eq 0) { return 0; } fi
   return 1;
 }
 pub fnc main(): int {
