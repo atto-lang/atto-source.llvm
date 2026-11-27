@@ -63,6 +63,7 @@ public:
         auto& e=require(p);
         if(e.phase!=Phase::initializing || e.init_started ||
            e.registry->phase()!=ActorResourceRegistry::Phase::live) deny("E_SPAWN_INIT_AUTHORITY");
+        e.init_pin=e.registry->acquire_turn();
         e.init_started=e.init_live=true;
         return InitLease(p);
     }
@@ -70,6 +71,9 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         auto& e=require(lease.p_);
         if(!e.init_live) deny("E_SPAWN_INIT_AUTHORITY");
+        if(!success || e.phase==Phase::retiring) e.registry->retire();
+        e.registry->release_turn(e.init_pin.value());
+        e.init_pin.reset();
         e.init_live=false;
         if(!success || e.phase==Phase::retiring ||
            e.registry->phase()!=ActorResourceRegistry::Phase::live) {
@@ -81,20 +85,26 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         auto& e=require(p);
         if(e.phase!=Phase::ready || e.registry->phase()!=ActorResourceRegistry::Phase::live) return {};
-        for(auto& id:e.receives) if(!id) {
+        for(std::size_t i=0;i<R;++i) if(!e.receives[i]) {
             if(e.next_receive==std::numeric_limits<std::uint64_t>::max()) deny("E_SPAWN_LEASE_LIMIT");
-            id=++e.next_receive; return ReceiveLease(p,id);
+            e.receive_pins[i]=e.registry->acquire_turn();
+            auto id=++e.next_receive;
+            e.receives[i]=id; return ReceiveLease(p,id);
         }
         deny("E_SPAWN_FULL");
     }
     void finish_receive(const ReceiveLease& lease) {
         std::lock_guard<std::mutex> lock(mutex_);
         auto& e=require(lease.p_);
-        for(auto& id:e.receives) if(id && id==lease.nonce_) {id=0; return;}
+        for(std::size_t i=0;i<R;++i) if(e.receives[i] && e.receives[i]==lease.nonce_) {
+            e.registry->release_turn(e.receive_pins[i].value());
+            e.receive_pins[i].reset(); e.receives[i]=0; return;
+        }
         deny("E_SPAWN_STALE_PERMIT");
     }
     void retire(const Permit& p) {
-        std::lock_guard<std::mutex> lock(mutex_); require(p).phase=Phase::retiring;
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto& e=require(p); e.phase=Phase::retiring; e.registry->retire();
     }
     void release_after_reclaim(const Permit& p) {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -115,6 +125,8 @@ private:
         std::uint64_t generation=0;
         Phase phase=Phase::initializing;
         bool init_started=false,init_live=false;
+        std::optional<ActorResourceRegistry::Ticket> init_pin{};
+        std::array<std::optional<ActorResourceRegistry::Ticket>,R> receive_pins{};
         std::array<std::uint64_t,R> receives{};
         std::uint64_t next_receive=0;
     };
