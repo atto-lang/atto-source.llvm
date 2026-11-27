@@ -5,6 +5,7 @@ use std::io::{Read as IoRead, Write as IoWrite};
 use std::process::{Command, Stdio};
 
 mod target_native;
+mod effect_check;
 
 use atto_compiler::ast::{BinOp, Type};
 use atto_compiler::check::{self, Import, TExpr, TFunc, TProgram, TStmt, TE};
@@ -645,6 +646,13 @@ pub fn compile_ir(source: &str) -> Result<String, String> {
 }
 
 fn compile_ir_with_profile(source: &str, profile: LibraryProfile) -> Result<String, String> {
+    compile_ir_with_effect_profile(source, profile, None)
+}
+
+fn compile_ir_with_effect_profile(
+    source: &str, profile: LibraryProfile,
+    effect_profile: Option<effect_check::Profile>,
+) -> Result<String, String> {
     if source.len() > atto_compiler::SOURCE_CAP {
         return Err("E_SOURCE_LIMIT: native Atto input exceeds 64 KiB".into());
     }
@@ -687,6 +695,11 @@ fn compile_ir_with_profile(source: &str, profile: LibraryProfile) -> Result<Stri
         program.funcs.extend(library.funcs);
     }
     let typed = check::check(&program).map_err(|e|e.to_string())?;
+    if let Some(strict) = effect_profile {
+        // Full typed tree, before backend IR or any output-file creation.
+        // This is a source-effect gate only, never WCET/AOT certification.
+        effect_check::admit(&typed, strict)?;
+    }
     if profile == LibraryProfile::FreestandingCore {
         if !typed.imports.is_empty() {
             return Err("E_FREESTANDING_FORBIDDEN_IMPORT: typed host imports".into());
@@ -917,22 +930,37 @@ fn validate_native_artifact(path: &std::path::Path) -> Result<(), String> {
 
 fn cli() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let (src, out, emit_only, profile) = match args.as_slice() {
-        [src, flag, out] if flag == "-o" => (src, out, false, LibraryProfile::Hosted),
-        [src, flag, out, mode] if flag == "-o" && mode == "--emit-llvm" =>
-            (src, out, true, LibraryProfile::Hosted),
-        [src, flag, out, mode, profile]
-            if flag == "-o" && mode == "--emit-llvm" && profile == "--freestanding-core" =>
-            (src, out, true, LibraryProfile::FreestandingCore),
+    let (src, out, options) = match args.as_slice() {
+        [src, flag, out, options @ ..] if flag == "-o" =>
+            (src, out, options),
         _ => return Err(
-            "usage: atto-llvm input.atto -o output [--emit-llvm [--freestanding-core]]".into()
+            "usage: atto-llvm input.atto -o output [--emit-llvm] [--freestanding-core] [--effect-check=pure|deterministic|no-alloc]".into()
         ),
     };
+    let mut emit_only = false;
+    let mut profile = LibraryProfile::Hosted;
+    let mut effect_profile = None;
+    for option in options {
+        match option.as_str() {
+            "--emit-llvm" if !emit_only => emit_only = true,
+            "--freestanding-core" if profile == LibraryProfile::Hosted =>
+                profile = LibraryProfile::FreestandingCore,
+            x if x.starts_with("--effect-check=") && effect_profile.is_none() => {
+                effect_profile = Some(effect_check::Profile::from_flag(
+                    &x["--effect-check=".len()..]
+                ).ok_or("E_EFFECT_PROFILE: unknown strict profile")?);
+            }
+            _ => return Err(format!("E_ARGS: unknown or repeated option {option}")),
+        }
+    }
+    if profile == LibraryProfile::FreestandingCore && !emit_only {
+        return Err("E_ARGS: --freestanding-core requires --emit-llvm".into());
+    }
     if !src.ends_with(".atto") {
         return Err("E_SOURCE: input must have the .atto extension".into());
     }
     let content = std::fs::read_to_string(src).map_err(|e|format!("E_INPUT: {e}"))?;
-    let ir = compile_ir_with_profile(&content, profile)?;
+    let ir = compile_ir_with_effect_profile(&content, profile, effect_profile)?;
     let (staged, mut stage_file) = OutputStage::create(
         std::path::Path::new(src), std::path::Path::new(out)
     )?;
