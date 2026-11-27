@@ -4698,6 +4698,24 @@ if(BUILD_TESTING)
                 --clang "${ORE_CLANG}"
                 --root "${CMAKE_CURRENT_SOURCE_DIR}" --sanitize)
         set_tests_properties(source_actor_compiled_native_asan_ubsan PROPERTIES TIMEOUT 180)
+        # Actual LLVM compiler-emitted Counter handler, linked with the
+        # native actor heap and executed for four stateful turns (total=10).
+        # A separate negative prevents declared state source from being
+        # promoted via the older legacy-field codegen path.
+        add_test(NAME native_llvm_counter_four_aot
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_actor_counter_four_aot.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --root "${CMAKE_CURRENT_SOURCE_DIR}")
+        add_test(NAME native_llvm_counter_four_asan_ubsan
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_actor_counter_four_aot.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_CLANG}"
+                --root "${CMAKE_CURRENT_SOURCE_DIR}" --sanitize)
+        set_tests_properties(native_llvm_counter_four_aot
+            native_llvm_counter_four_asan_ubsan PROPERTIES TIMEOUT 180)
     endif()
 
     # Run both direct await and typed Future<void> source through real
