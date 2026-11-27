@@ -1449,7 +1449,7 @@ public:
                  "actor entrypoint needs manifest-verified receiver, state "
                  "loan and mailbox MIR");
         while (token_.text == "export" || token_.text == "define" || token_.text == "declare" ||
-               at_bare_type_alias() ||
+               at_bare_type_alias() || at_denotation() ||
                 (token_.text == "pub" &&
                  (peek_next().text == "define" || peek_next().text == "declare"))) {
             if (token_.text == "export") {
@@ -1458,6 +1458,10 @@ public:
             }
             if (at_type_only_introducer()) {
                 type_only_declaration(program);
+                continue;
+            }
+            if (at_denotation()) {
+                type_denotation(program);
                 continue;
             }
             if (at_bare_type_alias()) {
@@ -1605,6 +1609,10 @@ public:
             }
             if (token_.text == "import")
                 fail("native contract imports require a validated cross-unit linker");
+            if (at_denotation()) {
+                type_denotation(program);
+                continue;
+            }
             if (at_bare_type_alias()) {
                 bare_type_alias(program);
                 continue;
@@ -2016,6 +2024,25 @@ private:
                (token_.text == "pub" && peek_next().text == "type");
     }
 
+    bool at_denotation() const {
+        return token_.text == "denote" &&
+            (peek_next().text == "type" || peek_next().text == "pub" ||
+             peek_next().text == "private");
+    }
+
+    void type_denotation(Program& program) {
+        require("denote");
+        // The existing scalar catalog supports transparent scalar identities,
+        // not package-linked visibility or scoped nominal/generic denotations.
+        if (!program.namespace_name.empty() || !program.module.empty() ||
+                !program.imports.empty() || !program.namespace_imports.empty())
+            fail("TYPE_DENOTE_SCOPE_UNSUPPORTED: standalone file scope required");
+        if (token_.text == "pub" || token_.text == "private")
+            fail("TYPE_DENOTE_VISIBILITY_UNSUPPORTED: explicit visibility requires linked type metadata");
+        if (token_.text != "type") fail("TYPE_DENOTE_KIND: expected type");
+        type_only_declaration(program, true, false, true);
+    }
+
     void bare_type_alias(Program& program) {
         const bool exported = accept("pub");
         if (token_.text != "type") fail("expected 'type'");
@@ -2185,7 +2212,7 @@ private:
     }
 
     void type_only_declaration(Program& program, bool already_defined = false,
-                               bool before_public = false) {
+                               bool before_public = false, bool denotation = false) {
         bool exported = before_public;
         if (already_defined) {
             if (accept("pub")) {
@@ -2240,7 +2267,7 @@ private:
         bool alias_as_spelling = false;
         if (accept("type")) {
             decl.kind = TypeOnlyDecl::Kind::Alias;
-            if (already_defined && token_.text == "alias" &&
+            if (!denotation && already_defined && token_.text == "alias" &&
                     peek_next().kind == Kind::Identifier) {
                 advance();
                 alias_as_spelling = true;
@@ -2275,6 +2302,8 @@ private:
                 require("=");
             }
             decl.alias_target = type_alias_target();
+            if (denotation && token_.text != ";")
+                fail("TYPE_DENOTE_RHS_UNSUPPORTED: only complete scalar type expressions admitted");
             type_alias_constraints(decl);
             require(";");
             scalar_alias_targets_.emplace(decl.name, decl.alias_target);
