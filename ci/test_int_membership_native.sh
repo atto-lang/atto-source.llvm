@@ -71,6 +71,13 @@ reject 'const Pattern[] z = [is int,is Int]; pub fnc main(): int { return 42; }'
 reject 'const Pattern p = on 1; pub fnc main(): int { return match 1 over in p -> 42, on _ -> 0 end; }' E_PATTERN_TYPE
 reject 'const Pattern[] z = [on 1]; pub fnc main(): int { return match 1 over on z -> 42, on _ -> 0 end; }' E_PATTERN_TYPE
 reject 'const Pattern[] z = [on 1,on 2]; pub fnc main(): int { return match 2 over in z -> 42, on 2 -> 0, on _ -> 0 end; }' E_MATCH
-test "$positive" = 19
-test "$negative" = 19
+pass 'type X = int | bool; const Pattern p = is X; pub fnc main(): int { return match 7 over on p -> 42 end; }'
+pass 'type X = int; type Y = X | bool; const Pattern[] z = [is Y]; pub fnc main(): int { return match true over is in z -> 42 end; }'
+pass 'type X = int | bool; pub fnc main(): int { return match 7 over is in [X,string] -> 42 end; }'
+reject 'type X = Y; type Y = X; pub fnc main(): int { return 42; }' E_UNSUPPORTED
+reject 'type X = int; type Y = X | Int; pub fnc main(): int { return 42; }' E_MATCH
+reject 'type X = int; const Pattern X = on 5; pub fnc main(): int { return 42; }' E_PATTERN_NAME
+reject 'type X = int; pub fnc main(): int { return X; }' E_PATTERN_TYPE
+test "$positive" = 22
+test "$negative" = 23
 echo "INT_MEMBERSHIP_NATIVE_GUEST_PASS positive=$positive negative=$negative"
