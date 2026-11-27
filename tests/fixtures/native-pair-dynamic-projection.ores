@@ -1,0 +1,2 @@
+fnc twice(int n): int { return n * 2; }
+pub fnc main(): int { const n = 21; return Pair.of<int>("key", twice(n)).second; }

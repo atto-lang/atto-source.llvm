@@ -7,12 +7,13 @@ use std::process::{Command, Output};
 
 const COMMANDS: [i64; 8] = [107, 201, 301, 201, 109, 201, 301, 401];
 const RESPONSES: [i64; 8] = [107, 207, 301, 200, 109, 209, 301, 401];
-const RUNTIME: [&str; 9] = [
+const RUNTIME: [&str; 10] = [
     "ActorOwnedI64Heap.c",
     "NativeActorScheduler.c",
     "NativeOresVM.c",
     "NativeActorFuture.c",
     "SourceActorBootstrap.c",
+    "NativeActorLogicalFramesV1.c",
     "NativeExecutionContextStore.c",
     "NativeContinuationStore.c",
     "NativeAwaitTraceBridge.c",

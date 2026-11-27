@@ -1,0 +1,1 @@
+pub fnc main(): int { const Pair: int = 7; return Pair.of("count", 42).second; }

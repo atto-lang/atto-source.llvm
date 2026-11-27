@@ -1,0 +1,1 @@
+pub fnc main(): int { return Pair.of<int>("count", 21).second + Pair.of<string,int>("next", 21).second; }

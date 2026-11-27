@@ -968,7 +968,8 @@ if(BUILD_TESTING)
     # Deliberate std::bad_alloc injection during the retirement snapshot:
     # either all correlations remain, or every retired identity is returned.
     add_executable(oreslang-native-ipc-loss-failpoint-test
-        tests/native_ipc_receipt_loss_failpoint_test.cpp)
+        tests/native_ipc_receipt_loss_failpoint_test.cpp
+        tests/native_ipc_receipt_loss_failpoint_allocator.cpp)
     target_include_directories(oreslang-native-ipc-loss-failpoint-test PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
     target_link_libraries(oreslang-native-ipc-loss-failpoint-test PRIVATE Threads::Threads)
@@ -2806,7 +2807,8 @@ if(BUILD_TESTING)
     # NativeIpcAuthenticatedStreamSession.hpp is Linux-only (#error elsewhere).
     if(OpenSSL_FOUND AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         add_executable(oreslang-native-ipc-authenticated-session-failpoint-test
-            tests/native_ipc_authenticated_session_failpoint_test.cpp)
+            tests/native_ipc_authenticated_session_failpoint_test.cpp
+            tests/native_ipc_receipt_loss_failpoint_allocator.cpp)
         target_include_directories(oreslang-native-ipc-authenticated-session-failpoint-test PRIVATE
             "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
         target_link_libraries(oreslang-native-ipc-authenticated-session-failpoint-test PRIVATE
@@ -6313,6 +6315,48 @@ if(BUILD_TESTING)
         native-entry-reject.ores --diagnostic "native Entry<K,V> unsupported")
     oreslang_contract_test(native_entry_generic_product_failclosed
         native-entry-generic-reject.ores --diagnostic "native Entry<K,V> unsupported")
+    oreslang_contract_test(native_pair_string_projection_ir
+        native-pair-string-projection.ores --ir "define i64 @__oreslang_guest_main")
+    oreslang_contract_test(native_pair_typed_projection_ir
+        native-pair-string-typed-projection.ores --ir "define i64 @__oreslang_guest_main")
+    oreslang_contract_test(native_pair_dynamic_projection_ir
+        native-pair-dynamic-projection.ores --ir "call i64 @twice")
+    oreslang_contract_test(native_pair_dynamic_bool_failclosed
+        native-pair-dynamic-bool-reject.ores --diagnostic "impossible native cast")
+    oreslang_contract_test(native_pair_dynamic_unknown_failclosed
+        native-pair-dynamic-unknown-reject.ores --diagnostic "unknown")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_pair_dynamic_projection_executes
+            native-pair-dynamic-projection.ores --run 42 --clang "${ORE_CLANG}")
+    endif()
+    # Nested scalar projection must retain the inner expression, while a
+    # dynamic string key remains fail-closed until owned Pair lowering exists.
+    oreslang_contract_test(native_pair_dynamic_key_failclosed
+        native-pair-dynamic-key-reject.atto --diagnostic "E_PAIR_KEY_TYPE")
+    oreslang_contract_test(native_pair_nested_projection_ir
+        native-pair-nested-projection.atto --ir "define i64 @__oreslang_guest_main")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_pair_nested_projection_executes
+            native-pair-nested-projection.atto --run 42 --clang "${ORE_CLANG}")
+        set_tests_properties(native_pair_nested_projection_executes PROPERTIES TIMEOUT 60)
+    endif()
+    oreslang_contract_test(native_pair_integer_key_failclosed
+        native-pair-integer-key-reject.ores --diagnostic "E_PAIR_KEY_TYPE")
+    oreslang_contract_test(native_pair_generic_key_failclosed
+        native-pair-generic-key-reject.ores --diagnostic "E_PAIR_KEY_TYPE")
+    oreslang_contract_test(native_pair_escape_failclosed
+        native-pair-escape-reject.ores --diagnostic "E_PAIR_ESCAPE_UNSUPPORTED")
+    oreslang_contract_test(native_pair_first_projection_failclosed
+        native-pair-first-projection-reject.ores --diagnostic "E_PAIR_PROJECTION_UNSUPPORTED")
+    oreslang_contract_test(native_pair_shadow_failclosed
+        native-pair-shadow-reject.ores --diagnostic "E_PAIR_SCOPE_UNSUPPORTED")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_pair_string_projection_executes
+            native-pair-string-projection.ores --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_pair_typed_projection_executes
+            native-pair-string-typed-projection.ores --run 42 --clang "${ORE_CLANG}")
+        set_tests_properties(native_pair_string_projection_executes native_pair_typed_projection_executes PROPERTIES TIMEOUT 60)
+    endif()
     oreslang_contract_test(native_user_tuple_call_is_ordinary
         native-user-tuple-call.ores --ir "call i64 @tuple")
     oreslang_contract_test(native_local_entry_identifier_is_ordinary
@@ -9025,6 +9069,7 @@ if(BUILD_TESTING)
             src/main/cpp/oreslang/runtime/NativeOresVM.c
             src/main/cpp/oreslang/runtime/NativeActorFuture.c
             src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+            src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c
             src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
             src/main/cpp/oreslang/runtime/NativeContinuationStore.c
             src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c

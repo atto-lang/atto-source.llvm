@@ -1,0 +1,1 @@
+pub fnc main(): int { return Pair.of("count", 42).second; }

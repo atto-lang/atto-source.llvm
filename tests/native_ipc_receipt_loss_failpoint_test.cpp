@@ -6,15 +6,7 @@
 #include <string>
 #include <cstdio>
 
-static std::atomic<int> fails_after{-1};
-void* operator new(std::size_t n) {
-    const int prev = fails_after.load();
-    if (prev >= 0 && fails_after.fetch_sub(1) == 0) throw std::bad_alloc();
-    if (void* p = std::malloc(n ? n : 1)) return p;
-    throw std::bad_alloc();
-}
-void operator delete(void* p) noexcept {std::free(p);}
-void operator delete(void* p, std::size_t) noexcept {std::free(p);}
+void set_ipc_test_allocation_failure(int count) noexcept;
 #include "oreslang/runtime/NativeIpcReceiptTable.hpp"
 using namespace oreslang::runtime;
 static IpcReceiptEnvelope msg(std::uint64_t i) {
@@ -33,10 +25,10 @@ int main() {
     table.commit_dispatch(second);
     table.accept_verified(second,IpcReceiptStage::remote_accepted);
     bool threw=false;
-    fails_after.store(fail_at);
+    set_ipc_test_allocation_failure(fail_at);
     try {(void)table.retire_transport_lost(msg(1));}
     catch (const std::bad_alloc&) {threw=true;}
-    fails_after.store(-1);
+    set_ipc_test_allocation_failure(-1);
     assert(table.invariant());
     if (threw) {
         assert(table.counters()==(std::pair<std::size_t,std::size_t>{2,1}));

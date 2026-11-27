@@ -1,0 +1,2 @@
+fnc twice(int n): int { return n * 2; }
+pub fnc main(): int { return Pair.of<int>("outer", Pair.of<int>("inner", twice(21)).second).second; }

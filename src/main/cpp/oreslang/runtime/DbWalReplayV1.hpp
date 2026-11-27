@@ -51,7 +51,7 @@ public:
             const std::uint64_t remaining = size - result.valid_bytes;
             if (remaining < 26) {
                 // A truncated tail must still match all known header bytes.
-                read_exact(fd, bytes.data(),
+                read_exact(fd, bytes, 0,
                         static_cast<std::size_t>(remaining),
                         result.valid_bytes);
                 validate_header_prefix(bytes.data(),
@@ -61,7 +61,7 @@ public:
                 result.incomplete_tail = true;
                 break;
             }
-            read_exact(fd, bytes.data(), 26, result.valid_bytes);
+            read_exact(fd, bytes, 0, 26, result.valid_bytes);
             validate_header_prefix(bytes.data(), 26, tenant,
                     generation, result.last_sequence,
                     result.last_operation);
@@ -79,7 +79,7 @@ public:
                 result.incomplete_tail = true;
                 break;
             }
-            read_exact(fd, bytes.data() + 26, frame_size - 26,
+            read_exact(fd, bytes, 26, frame_size - 26,
                     result.valid_bytes + 26);
             const std::uint32_t op = u32(bytes.data(), 18);
             DbWalFrameV1::require_matching(
@@ -156,17 +156,28 @@ private:
     static std::uint32_t u32(const std::uint8_t* p, std::size_t at) noexcept {
         return u16(p, at) | (u16(p, at + 2) << 16);
     }
-    static void read_exact(int fd, std::uint8_t* into, std::size_t bytes,
-            std::uint64_t offset) {
+    static void read_exact(int fd, std::array<std::uint8_t, 1118>& into,
+            std::size_t start, std::size_t bytes, std::uint64_t offset) {
+        const auto max_offset =
+                static_cast<std::uint64_t>(std::numeric_limits<off_t>::max());
+        if (start > into.size() || bytes > into.size() - start
+                || offset > max_offset || bytes > max_offset - offset)
+            throw std::overflow_error("WAL replay read range overflow");
         std::size_t done = 0;
         while (done < bytes) {
+            const std::size_t count = bytes - done;
+            const std::size_t index = start + done;
+            if (index >= into.size() || count > into.size() - index)
+                throw std::overflow_error("WAL replay buffer range overflow");
             const auto pos = static_cast<off_t>(offset + done);
-            const ssize_t n = ::pread(fd, into + done, bytes - done, pos);
+            const ssize_t n = ::pread(fd, into.data() + index, count, pos);
             if (n < 0 && errno == EINTR) continue;
             if (n < 0) throw std::system_error(
                     errno, std::generic_category(), "WAL replay pread");
             if (n == 0) throw std::runtime_error(
                     "WAL changed during recovery; abort without publishing");
+            if (static_cast<std::size_t>(n) > count)
+                throw std::runtime_error("WAL replay invalid read count");
             done += static_cast<std::size_t>(n);
         }
     }

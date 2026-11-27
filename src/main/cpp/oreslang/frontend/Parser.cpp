@@ -6771,8 +6771,77 @@ private:
                 std::move(extent), std::move(group)}, std::move(shared)});
     }
 
+    // Bounded native Pair projection: scan original lexical tokens once,
+    // reject competing names/imports/macros instead of guessing symbol
+    // identity. A genuine resolved-symbol implementation must replace this.
+    void check_inline_pair_scope() {
+        if (inline_pair_scope_checked_) return;
+        Lexer scan(source_, unsafe_base_offset_, experimental_pointer_int_aot_);
+        Token prior{Kind::End, {}, 0};
+        for (Token item = scan.next(); item.kind != Kind::End; item = scan.next()) {
+            if (item.kind == Kind::Identifier &&
+                    (item.text == "import" || item.text == "use" || item.text == "macro"))
+                fail("E_PAIR_SCOPE_UNSUPPORTED: inline Pair requires a source-local unambiguous builtin");
+            if (item.kind == Kind::Identifier && item.text == "Pair") {
+                Lexer probe = scan;
+                const Token dot = probe.next();
+                const Token method = probe.next();
+                if (prior.text == "." || prior.text == "::" ||
+                        dot.text != "." || method.text != "of")
+                    fail("E_PAIR_SCOPE_UNSUPPORTED: competing Pair declaration or reference");
+            }
+            prior = item;
+        }
+        inline_pair_scope_checked_ = true;
+    }
+
+    std::unique_ptr<Expression> inline_pair_scalar_projection(std::size_t offset) {
+        check_inline_pair_scope();
+        require("Pair");
+        require(".");
+        require("of");
+        if (accept("<")) {
+            if (accept("string") || accept("String")) {
+                require(",");
+                require("int");
+            } else {
+                require("int");
+                if (token_.text == ",")
+                    fail("E_PAIR_KEY_TYPE: Pair first generic argument must be string");
+            }
+            require(">");
+        }
+        require("(");
+        if (token_.kind != Kind::String)
+            fail("E_PAIR_KEY_TYPE: Pair first argument must be string");
+        // The discarded static string is validated and has no guest
+        // effects. The second operand must survive as a checked expression,
+        // evaluated once by normal native lowering, not by the parser.
+        (void)string_literal(token_.text);
+        advance();
+        require(",");
+        auto second = expression();
+        require(")");
+        if (!accept("."))
+            fail("E_PAIR_ESCAPE_UNSUPPORTED: native owned Pair ABI is not implemented");
+        if (token_.text != "second")
+            fail("E_PAIR_PROJECTION_UNSUPPORTED: only i64 second projection is admitted");
+        require("second");
+        // Existing identity-only scalar cast validates the actual type and
+        // denies nominal/aggregate handles; no numeric coercion is added.
+        auto expr = make_expression(Expression::Kind::Cast, offset);
+        expr->cast_target = ScalarType::I64;
+        expr->left = std::move(second);
+        return expr;
+    }
+
     std::unique_ptr<Expression> primary() {
         const auto offset = token_.offset;
+        if (token_.kind == Kind::Identifier && token_.text == "Pair") {
+            Lexer probe = lexer_;
+            if (probe.next().text == "." && probe.next().text == "of")
+                return inline_pair_scalar_projection(offset);
+        }
 
         // A closed, single-valued-break loop has no observable backedge.
         // Keep the normal typed expression and native codegen paths in
@@ -9717,6 +9786,7 @@ private:
         throw std::runtime_error(reason + " at byte " + std::to_string(token_.offset));
     }
 
+    bool inline_pair_scope_checked_ = false;
     std::unordered_map<std::string, ForwardType> forwards_;
     std::unordered_map<std::string, std::string> actor_forwards_;
     std::unordered_map<std::string, ScalarAlias> defined_type_aliases_;
