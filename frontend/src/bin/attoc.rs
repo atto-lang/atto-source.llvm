@@ -4,12 +4,14 @@ use std::io::Write;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let isolated = args.first().map(String::as_str) == Some("--isolated-core");
+    if isolated { args.remove(0); }
     let (input, output) = match args.as_slice() {
         [input] => (input.as_str(), None),
         [input, flag, output] if flag == "-o" => (input.as_str(), Some(output.as_str())),
         _ => {
-            eprintln!("usage: attoc <input.atto> [-o out.wasm]");
+            eprintln!("usage: attoc [--isolated-core] <input.atto> [-o out.wasm]");
             return ExitCode::from(2);
         }
     };
@@ -24,7 +26,8 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let wasm = match atto_compiler::compile(&source) {
+    let compiled = if isolated { atto_compiler::compile_isolated_core(&source) } else { atto_compiler::compile(&source) };
+    let wasm = match compiled {
         Ok(bytes) => bytes,
         Err(error) => {
             eprintln!("{input}:{error}");

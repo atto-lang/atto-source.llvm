@@ -29,6 +29,15 @@ pub const COMPILER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Compile one `.atto` source file to a guest WebAssembly module.
 pub fn compile(source: &str) -> Result<Vec<u8>, Diagnostic> {
+    compile_profile(source, false)
+}
+
+/// Explicit isolated core-wasm.i64-v1 profile; the browser ABI is unchanged.
+pub fn compile_isolated_core(source: &str) -> Result<Vec<u8>, Diagnostic> {
+    compile_profile(source, true)
+}
+
+fn compile_profile(source: &str, isolated: bool) -> Result<Vec<u8>, Diagnostic> {
     if source.len() > SOURCE_CAP {
         return Err(Diagnostic::new(
             Pos { line: 1, col: 1 },
@@ -81,7 +90,7 @@ pub fn compile(source: &str) -> Result<Vec<u8>, Diagnostic> {
                                 return Err(Diagnostic::new(toks[start].pos, "E_UNSUPPORTED",
                                     "scalar struct lowering must not allocate or use actor/generator/global state"));
                             }
-                            let bytes = wasm::emit(&typed);
+                            let bytes = if isolated { wasm::emit_isolated_core(&typed)? } else { wasm::emit(&typed) };
                             if bytes.len() > wasm::MAX_OUTPUT {
                                 return Err(Diagnostic::new(toks[start].pos, "E_OUTPUT_LIMIT",
                                     "generated module exceeds 1 MiB"));
@@ -142,7 +151,7 @@ pub fn compile(source: &str) -> Result<Vec<u8>, Diagnostic> {
     }
     let program = parser::Parser::new(toks).parse_program()?;
     let typed = check::check(&program)?;
-    let bytes = wasm::emit(&typed);
+    let bytes = if isolated { wasm::emit_isolated_core(&typed)? } else { wasm::emit(&typed) };
     if bytes.len() > wasm::MAX_OUTPUT {
         return Err(Diagnostic::new(
             Pos { line: 1, col: 1 },
