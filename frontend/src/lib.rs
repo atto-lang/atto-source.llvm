@@ -9,6 +9,8 @@
 pub mod ast;
 /// Pure bounded typed-IR DATA send-effect closure, shared with peer frontend.
 pub mod actor_send_effect_graph;
+/// Resolved call graph parking analysis, shared with Rust backend; no guest lowering.
+pub mod runtime_parking_effects;
 pub mod check;
 pub mod diag;
 pub mod directed_pipe;
