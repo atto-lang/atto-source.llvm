@@ -1828,7 +1828,8 @@ impl Parser {
             ));
         }
         self.advance();
-        let init = if self.struct_target && self.is_word("copy") && *self.peek_at(1) == Tok::Bang {
+        let init = if self.struct_target && self.is_word("copy") && *self.peek_at(1) == Tok::Bang
+            && matches!(self.peek_at(2), Tok::Ident(_)) && *self.peek_at(3) == Tok::Semi {
             let copy_pos = self.pos();
             self.advance();
             self.advance();
@@ -2539,6 +2540,20 @@ impl Parser {
 
     fn parse_unary_inner(&mut self) -> R<Expr> {
         let pos = self.pos();
+        // The internal name cannot be spelled by the source lexer. Keep
+        // the modes distinct and preserve ordinary logical negation.
+        if self.is_word("copy") && *self.peek_at(1) == Tok::Bang {
+            let bang = self.toks[self.i + 1].pos;
+            self.advance();
+            self.advance();
+            let deep = bang.line == pos.line && bang.col == pos.col + 4
+                && *self.peek() == Tok::Bang && self.pos().line == bang.line
+                && self.pos().col == bang.col + 1;
+            if deep { self.advance(); }
+            let inner = self.parse_unary()?;
+            let name = if deep { "$copy_deep" } else { "$copy_shallow" };
+            return Ok(Expr { kind: ExprKind::Call(name.to_owned(), vec![inner]), pos });
+        }
         let op = match self.peek() {
             Tok::Minus => UnOp::Neg,
             Tok::Plus => UnOp::Plus,

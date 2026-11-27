@@ -315,6 +315,8 @@ struct ClassInfo {
     fields: Vec<FieldInfo>,
     methods: Vec<MethodInfo>,
     new_idx: u32,
+    shallow_idx: Option<u32>,
+    deep_idx: Option<u32>,
     ctor_idx: Option<u32>,
     ctor_params: Vec<Type>,
 }
@@ -846,6 +848,11 @@ pub fn check(p: &Program) -> R<TProgram> {
         let fields = fields_of(&c.name, &c.fields, false, 0)?;
         let mut methods = methods_of(&c.name, &c.methods, &c.fields)?;
         let new_idx = take();
+        // fields_of has already proved this closed class layout contains
+        // only immutable scalar representations. Custom methods cannot
+        // grant either generated capability.
+        let shallow_idx = (!methods.iter().any(|m| m.name == "copy")).then(&mut take);
+        let deep_idx = (!methods.iter().any(|m| m.name == "copy_deep")).then(&mut take);
         let ctor_idx = c.ctor.as_ref().map(|_| take());
         for m in &mut methods {
             m.idx = take();
@@ -859,6 +866,8 @@ pub fn check(p: &Program) -> R<TProgram> {
             fields,
             methods,
             new_idx,
+            shallow_idx,
+            deep_idx,
             ctor_idx,
             ctor_params,
         });
@@ -1119,6 +1128,28 @@ pub fn check(p: &Program) -> R<TProgram> {
             locals: vec![me],
             body,
         });
+        // Private compiler-issued functions, not source-callable methods.
+        // Both flat witnesses allocate a fresh root and load/store each
+        // scalar field exactly once; neither invokes constructors.
+        for (mode, index) in [("shallow", info.shallow_idx), ("deep", info.deep_idx)] {
+            let Some(index) = index else { continue; };
+            let source = TE { e: TExpr::Local(0), ty: me };
+            let target = TE { e: TExpr::Local(1), ty: me };
+            let mut body = vec![TStmt::Set(1, TE {
+                e: TExpr::Alloc((info.fields.len() as u32 * FIELD_BYTES).max(FIELD_BYTES)), ty: me,
+            })];
+            for f in &info.fields {
+                body.push(TStmt::FieldSet {
+                    obj: target.clone(), offset: f.slot, ty: f.ty,
+                    value: TE { e: TExpr::FieldGet { obj: Box::new(source.clone()), offset: f.slot }, ty: f.ty },
+                });
+            }
+            body.push(TStmt::Return(Some(target)));
+            funcs[index as usize] = Some(TFunc {
+                name: format!("{}.$copy_{mode}", c.name), params: vec![me],
+                ret: me, locals: vec![me], body,
+            });
+        }
         for (m, mi) in c.methods.iter().zip(&info.methods) {
             let owner = Owner::Class {
                 c: ci as u32,
@@ -1581,9 +1612,13 @@ impl<'a> FnCx<'a> {
                     Some(t) => Some(self.resolve(*t, *pos)?),
                     None => None,
                 };
-                let v = match want {
-                    Some(t) => self.consume_expected(init, t)?,
-                    None => self.consume(init)?,
+                let v = match &init.kind {
+                    ExprKind::Call(op, args) if matches!(op.as_str(), "$copy_shallow" | "$copy_deep") =>
+                        self.copy_value(op, args, init.pos, true)?,
+                    _ => match want {
+                        Some(t) => self.consume_expected(init, t)?,
+                        None => self.consume(init)?,
+                    },
                 };
                 if let Some(t) = want {
                     if t != v.ty {
@@ -3125,7 +3160,32 @@ impl<'a> FnCx<'a> {
         })
     }
 
+    fn copy_value(&mut self, name: &str, args: &[Expr], pos: Pos, binding: bool) -> R<TE> {
+        if args.len() != 1 || matches!(self.owner, Owner::FieldInit { .. }) {
+            return Err(Diagnostic::new(pos, "E_COPY_UNPROVEN", "invalid copy operand context"));
+        }
+        let value = self.value(&args[0])?;
+        match value.ty {
+            Type::Int | Type::Bool | Type::Float | Type::Str | Type::Enum(_) => Ok(value),
+            Type::Class(ci) if binding && self.owner == Owner::TopLevel
+                && matches!(&args[0].kind, ExprKind::Var(_))
+                && matches!(&value.e, TExpr::Local(_)) => {
+                let info = &self.g.classes[ci as usize];
+                let idx = if name == "$copy_deep" { info.deep_idx } else { info.shallow_idx };
+                let idx = idx.ok_or_else(|| Diagnostic::new(pos, "E_COPY_OVERRIDE",
+                    "custom copy method is not a verified copy capability"))?;
+                let ty = value.ty;
+                Ok(TE { e: TExpr::Call(idx, vec![value]), ty })
+            }
+            _ => Err(Diagnostic::new(pos, "E_COPY_UNPROVEN",
+                "copy requires an intrinsic scalar or a named flat class in a local binding")),
+        }
+    }
+
     fn call(&mut self, name: &str, args: &[Expr], pos: Pos) -> R<TE> {
+        if matches!(name, "$copy_shallow" | "$copy_deep") {
+            return self.copy_value(name, args, pos, false);
+        }
         if matches!(self.owner, Owner::FieldInit { .. }) {
             return Err(Diagnostic::new(pos, "E_UNSUPPORTED", "calls in a field initializer"));
         }
