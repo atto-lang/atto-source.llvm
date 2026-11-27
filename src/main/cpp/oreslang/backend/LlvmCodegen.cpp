@@ -243,7 +243,10 @@ llvm::Value* lower(const Expression& expr,
         case Expression::Kind::RecordConstruct: {
             if (!moves || !moves->record_classes || !moves->record_schemas)
                 throw std::runtime_error("record construction lacks typed root region");
-            const auto& cls = *moves->record_classes->at(expr.name);
+            const auto record = moves->record_classes->find(expr.name);
+            if (record == moves->record_classes->end() || !record->second)
+                throw std::runtime_error("native record construction lacks class metadata for '" + expr.name + "'");
+            const auto& cls = *record->second;
             if (moves->layouts->at(expr.name).owns_arrays) throw std::runtime_error("owning constructor requires destination ownership");
             std::unordered_map<std::string, llvm::Value*> parameters;
             for (std::size_t i = 0; i < expr.arguments.size(); ++i) {
@@ -319,7 +322,11 @@ llvm::Value* lower(const Expression& expr,
             if (!expr.resolved_class.empty()) {
                 if (!moves || !moves->record_classes || !moves->record_schemas)
                     throw std::runtime_error("record value lacks root-region provenance");
-                const auto& cls = *moves->record_classes->at(expr.resolved_class);
+                const auto record = moves->record_classes->find(expr.resolved_class);
+                if (record == moves->record_classes->end() || !record->second)
+                    throw std::runtime_error("native record value '" + expr.name +
+                        "' lacks class metadata for '" + expr.resolved_class + "'");
+                const auto& cls = *record->second;
                 if (moves->layouts->at(expr.resolved_class).owns_arrays) throw std::runtime_error("owning aggregate value requires destination transfer");
                 auto* values = entry_alloca(builder, i64, llvm::ConstantInt::get(i64, cls.fields.size()), "return.record.fields");
                 for (std::size_t i = 0; i < cls.fields.size(); ++i) {
