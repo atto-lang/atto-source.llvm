@@ -37,6 +37,17 @@ hash_file() {
     fi
     printf '%s\n' "$digest"
 }
+# Identity checks complement, but do not replace, exact source HEAD/tree CI.
+if [[ ! -f "$compiler" || ! -x "$compiler" ]]; then
+    echo 'FAIL: missing source-built inverted compiler executable' >&2
+    exit 1
+fi
+if ! clang_path="$(command -v "$clang")" || [[ ! -f "$clang_path" || ! -x "$clang_path" ]]; then
+    echo 'FAIL: missing executable Clang toolchain' >&2
+    exit 1
+fi
+compiler_sha="$(hash_file "$compiler")" || exit 1
+clang_sha="$(hash_file "$clang_path")" || exit 1
 auditor_sha="$(hash_file "$auditor")" || exit 1
 printf '%s\n' 'STRICT_NO_GC_IR_SCREENED_ONLY (linked binary and FFI audit still required)' \
     > "$tmp/expected-audit-success"
@@ -103,6 +114,7 @@ PY
 }
 
 for fixture in positive-column-get.atto positive-column-bounded.atto positive-production-erase-swap.atto positive-immutable-column-swap.atto; do
+    case_fixture_sha="$(hash_file "$fixtures/$fixture")" || exit 1
     "$compiler" "$fixtures/$fixture" > "$tmp/guest.ll"
     audit_ir "$tmp/guest.ll"
     for required in '; typed MIR, experimental local i64 pair LLVM IR' \
@@ -116,6 +128,13 @@ for fixture in positive-column-get.atto positive-column-bounded.atto positive-pr
     for optimization in -O0 -O2; do
         "$clang" "$optimization" -x ir "$tmp/guest.ll" -o "$tmp/guest"
         expect_native_exit_42 "$tmp/guest" "$fixture" "$optimization"
+        if [[ "$(hash_file "$fixtures/$fixture")" != "$case_fixture_sha" ]]; then
+            echo "FAIL: source fixture changed during native execution: $fixture" >&2
+            exit 1
+        fi
+        printf 'DOP_NATIVE_CASE=%s OPT=%s SOURCE_SHA256=%s IR_SHA256=%s BINARY_SHA256=%s EXIT=42\n' \
+            "$fixture" "$optimization" "$case_fixture_sha" \
+            "$(hash_file "$tmp/guest.ll")" "$(hash_file "$tmp/guest")"
     done
 done
 
@@ -126,11 +145,16 @@ if [[ ! -f "$contracts/swap-reuse.atto" ||
     echo "FAIL: canonical DOP v1 fixture corpus absent" >&2
     exit 1
 fi
+swap_fixture_sha="$(hash_file "$contracts/swap-reuse.atto")" || exit 1
+trap_fixture_sha="$(hash_file "$contracts/removed-index-trap.atto")" || exit 1
 "$compiler" "$contracts/swap-reuse.atto" > "$tmp/reuse.ll"
 audit_ir "$tmp/reuse.ll"
 for optimization in -O0 -O2; do
     "$clang" "$optimization" -x ir "$tmp/reuse.ll" -o "$tmp/reuse"
     expect_native_exit_42 "$tmp/reuse" "swap-reuse.atto" "$optimization"
+    printf 'DOP_NATIVE_CASE=%s OPT=%s SOURCE_SHA256=%s IR_SHA256=%s BINARY_SHA256=%s EXIT=42\n' \
+        swap-reuse.atto "$optimization" "$swap_fixture_sha" \
+        "$(hash_file "$tmp/reuse.ll")" "$(hash_file "$tmp/reuse")"
 done
 
 # A guest read past logical length is dynamically guarded, rather than
@@ -247,4 +271,15 @@ for option in --profile=native-hard-rt --target=wasm32 \
         exit 1
     fi
 done
-printf 'PASS: production .atto -> typed MIR -> no-GC-screened IR, 10 native exit-42 (O0/O2), 4 bounds signals, 5 source rejects, 5 mode rejects, known-GC denied (linked/FFI audit still unproven)\n'
+# Deny in-job mutation of compiler, Clang, auditor and canonical contract files.
+if [[ "$(hash_file "$compiler")" != "$compiler_sha" ||
+      "$(hash_file "$clang_path")" != "$clang_sha" ||
+      "$(hash_file "$auditor")" != "$auditor_sha" ||
+      "$(hash_file "$contracts/swap-reuse.atto")" != "$swap_fixture_sha" ||
+      "$(hash_file "$contracts/removed-index-trap.atto")" != "$trap_fixture_sha" ]]; then
+    echo 'FAIL: inverted native toolchain or canonical fixture changed during gate' >&2
+    exit 1
+fi
+printf 'DOP_SOURCE_COMPILER_SHA256=%s\nDOP_CLANG_SHA256=%s\nDOP_IR_AUDITOR_SHA256=%s\nDOP_SWAP_FIXTURE_SHA256=%s\nDOP_TRAP_FIXTURE_SHA256=%s\n' \
+    "$compiler_sha" "$clang_sha" "$auditor_sha" "$swap_fixture_sha" "$trap_fixture_sha"
+printf 'PASS: production .atto -> typed MIR -> no-GC-screened IR, 10 bounded native exit-42 (O0/O2), 4 bounds signals, 5 source rejects, 5 mode rejects, known-GC denied (linked/FFI audit still unproven)\n'
