@@ -770,10 +770,8 @@ static void* source_spawn_locked(OresSourceActorInit constructor,
  * recovery bridge. A plain STOP/join must not create an unreachable child.
  * The registered root still decides policy after physical finalization. */
 static int source_recovery_owns_locked(const SourceActor* actor) {
-    const OresSourceRecoveryLeaseV1* lease = &group.recovery_lease;
-    return lease->held && lease->slot == actor->ref.actor_slot
-        && lease->generation == actor->ref.generation
-        && lease->correlation == actor->id;
+    return ores_source_recovery_matches(&group.recovery_lease,
+        (size_t)actor->ref.actor_slot, actor->ref.generation, actor->id);
 }
 
 static void source_supervisor_notice(
