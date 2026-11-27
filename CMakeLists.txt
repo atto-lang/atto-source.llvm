@@ -6269,6 +6269,21 @@ if(BUILD_TESTING)
         native-entry-reject.ores --diagnostic "native Entry<K,V> unsupported")
     oreslang_contract_test(native_entry_generic_product_failclosed
         native-entry-generic-reject.ores --diagnostic "native Entry<K,V> unsupported")
+    oreslang_contract_test(native_pair_value_projection_ir
+        native-pair-value-projection.atto --ir "define i64 @__oreslang_guest_main")
+    oreslang_contract_test(native_pair_value_dynamic_ir
+        native-pair-value-dynamic.atto --ir "call i64 @twice")
+    oreslang_contract_test(native_pair_value_bool_failclosed
+        native-pair-value-bool-reject.atto --diagnostic "impossible native cast")
+    oreslang_contract_test(native_pair_key_unsupported
+        native-pair-key-unsupported.atto --diagnostic "E_PAIR_PROJECTION_UNSUPPORTED")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_pair_value_projection_executes
+            native-pair-value-projection.atto --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_pair_value_dynamic_executes
+            native-pair-value-dynamic.atto --run 42 --clang "${ORE_CLANG}")
+        set_tests_properties(native_pair_value_projection_executes native_pair_value_dynamic_executes PROPERTIES TIMEOUT 60)
+    endif()
     oreslang_contract_test(native_pair_string_projection_ir
         native-pair-string-projection.ores --ir "define i64 @__oreslang_guest_main")
     oreslang_contract_test(native_pair_typed_projection_ir
