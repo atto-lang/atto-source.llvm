@@ -1,0 +1,2 @@
+fnc twice(int n): int { return n + n; }
+pub fnc main(): int { const n = 21; return Pair.of<int>("count", twice(n)).value; }
