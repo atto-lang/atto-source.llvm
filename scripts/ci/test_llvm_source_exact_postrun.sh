@@ -14,6 +14,22 @@ extract_step() {
     END { if (!found) exit 12 }
   ' "$workflow"
 }
+# No GitHub expressions are allowed in a Bash run block: workflow_dispatch
+# input substitution would happen *before* shell parsing, enabling injection
+# if a later edit weakens trusted preflight. Inputs belong in step env only.
+awk '
+  /^        run:/ { if ($0 != "        run: |") bad=1; in_run=1; next }
+  in_run && /^      - name: / { in_run=0 }
+  in_run && index($0, "${{") > 0 { bad=1 }
+  END { exit bad ? 1 : 0 }
+' "$workflow" || { echo "direct GitHub expression inside shell run block" >&2; exit 1; }
+v3_step="$(extract_step 'Run full V3 private-export security regressions (no export)')"
+grep -qxF "        if: inputs.suite == 'security-v3'" <<< "$v3_step"
+grep -qxF '          SOURCE_SHA: ${{ inputs.source_sha }}' <<< "$v3_step"
+grep -qxF '          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"' <<< "$v3_step"
+grep -qxF '          echo "V3_SECURITY_SUITE_EXECUTED_FOR_EXACT_SOURCE_SHA=$SOURCE_SHA"' <<< "$v3_step"
+printf 'SOURCEFREE_NO_INLINE_GITHUB_BASH_EXPRESSION=PASS\\n'
+
 grep -qxF '          - actor-ledger' "$workflow" || {
   echo 'missing actor-ledger dispatch choice' >&2; exit 1;
 }
@@ -21,13 +37,15 @@ native_step="$(extract_step 'Run real ledger, scheduler STOP and pinned physical
 grep -qxF "        if: inputs.suite == 'actor-ledger'" <<< "$native_step"
 grep -qxF '          test -x scripts/ci/run_actor_ledger_native_exact_head.sh' <<< "$native_step"
 grep -qxF '          bash scripts/ci/run_actor_ledger_native_exact_head.sh "$SOURCE_SHA"' <<< "$native_step"
+# Toolchain is intentionally shared with continuation and CGL suites.
+toolchain_step="$(extract_step 'Verify preinstalled LLVM / Clang / CMake toolchain')"
+grep -qxF "        if: inputs.suite == 'actor-llvm' || inputs.suite == 'actor-ledger' || inputs.suite == 'continuation-gate' || inputs.suite == 'cgl-compat'" <<< "$toolchain_step"
 for name in \
-  'Verify preinstalled LLVM / Clang / CMake toolchain' \
   'Build actual Oreslang source compiler against LLVM' \
   'Compile and execute real Oreslang source actor fixtures'; do
   step="$(extract_step "$name")"
   grep -qxF "        if: inputs.suite == 'actor-llvm' || inputs.suite == 'actor-ledger'" <<< "$step" || {
-    echo "actor-ledger missing actual compiler/guest dependency: $name" >&2; exit 1;
+    echo "actor-ledger missing actual compiler/guest dependency: $name" >&2; exit 1
   }
 done
 guest_step="$(extract_step 'Execute real compiled Oreslang ledger guest fixtures')"
@@ -59,12 +77,20 @@ assert_before() {
 trusted_step="$(extract_step 'Checkout trusted main for source-free workflow tests')"
 grep -qxF '          ref: ${{ github.sha }}' <<< "$trusted_step"
 grep -qxF '          persist-credentials: false' <<< "$trusted_step"
-admission_step="$(extract_step 'Verify open same-repo PR and exact immutable head before checkout')"
-grep -Fq 'repos/${GITHUB_REPOSITORY}/branches/main/protection' <<< "$admission_step"
-grep -Fq 'test "$strong_main_policy" = "true"' <<< "$admission_step"
-grep -Fq '.required_status_checks.strict == true' <<< "$admission_step"
+preflight="$(extract_step 'Verify open same-repo PR and exact immutable head before checkout')"
+grep -Fq 'repos/${GITHUB_REPOSITORY}/branches/main/protection' <<< "$preflight"
+grep -Fq 'test "$strong_main_policy" = "true"' <<< "$preflight"
+grep -Fq '.required_status_checks.strict == true' <<< "$preflight"
 mock_step="$(extract_step 'Execute trusted source-free post-run authorization regression mocks')"
 grep -qxF '          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"' <<< "$mock_step"
+# Pre-PR trusted-main tests cannot be silently removed while the independent
+# post-run attestor happens to retain a second invocation of the same test.
+grep -Fq 'git hash-object --no-filters scripts/ci/verify_llvm_independent_attestor.py' <<< "$mock_step"
+grep -qxF '          python3 -I -B scripts/ci/test_verify_llvm_independent_attestor.py' <<< "$mock_step"
+grep -Fq 'python3 -I -B scripts/ci/verify_llvm_required_check_pins.py scripts/ci/llvm_required_check_pins.json -' <<< "$mock_step"
+grep -Fq 'python3 -I -B scripts/ci/test_verify_llvm_required_check_pins.py' <<< "$mock_step"
+grep -Fq 'bash scripts/ci/test_prepare_source_ephemeral_jit.sh scripts/ci/prepare_source_ephemeral_jit.sh' <<< "$mock_step"
+grep -Fq 'gh api "repos/${GITHUB_REPOSITORY}/branches/main/protection"' <<< "$mock_step"
 grep -qxF '          bash scripts/ci/test_llvm_source_exact_postrun.sh .github/workflows/llvm-source-exact-ephemeral.yml' <<< "$mock_step"
 grep -qxF '          python3 scripts/ci/test_verify_llvm_exact_checkout.py' <<< "$mock_step"
 grep -qxF '          python3 scripts/ci/test_materialize_llvm_exact_checkout.py' <<< "$mock_step"
@@ -157,96 +183,51 @@ for san_needle in \
 done
 assert_before 'Require exact tree and preinstalled native toolchain' 'Execute exact-head CGL negative preflight, native compiler, CTest and guest ELF'
 assert_before 'Execute exact-head CGL negative preflight, native compiler, CTest and guest ELF' 'Execute linked CGL native tests with Clang ASan and UBSan'
-assert_before 'Execute linked CGL native tests with Clang ASan and UBSan' 'Post-run attestation of current PR head and independent reviewer'
+assert_before 'Execute linked CGL native tests with Clang ASan and UBSan' 'Exact-source result scope (never a carrier export approval)'
 printf 'SOURCEFREE_CGL_NATIVE_ELF_SANITIZER_WORKFLOW_CONTRACT=PASS\n'
 
-block="$(awk '
-  /^      - name: Post-run attestation of current PR head and independent reviewer$/ { in_step=1; next }
-  in_step && /^      - name: / { exit }
-  in_step && /^        if: success\(\)$/ { gated=1 }
-  in_step && /^        run: \|$/ { in_block=1; next }
-  in_step && in_block && /^          / { print substr($0,11); next }
-  in_step && in_block && /^$/ { print ""; next }
-  END { if (!gated || !in_block) exit 12 }
-' "$workflow")"
-[[ "$block" == *POST_EXECUTION_EXACT_PR_HEAD_REVIEW=PASS* ]] || {
-  echo 'missing post-run attestation marker' >&2; exit 2;
-}
-bash -n <<< "$block"
-grep -Fq 'repos/${GITHUB_REPOSITORY}/branches/main/protection' <<< "$block"
-grep -Fq 'test "$strong_main_policy" = "true"' <<< "$block"
-grep -Fq '.required_status_checks.strict == true' <<< "$block"
-command -v jq >/dev/null
-export GITHUB_REPOSITORY="ores-truffle-oreslang/oreslang-source.llvm"
-export PR_NUMBER=1220
-export SOURCE_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-export FAKE_HEAD="$SOURCE_SHA"
-export FAKE_PR_SHA="$SOURCE_SHA"
-export FAKE_PR_REPO="$GITHUB_REPOSITORY"
-export FAKE_PR_STATE=open
-export FAKE_PR_PRIVATE=true
-export FAKE_AUTHOR_ID=7777
-export FAKE_PROTECTED=true
-export FAKE_POLICY_JSON='{"required_pull_request_reviews":{"require_code_owner_reviews":true,"dismiss_stale_reviews":true,"required_approving_review_count":1,"bypass_pull_request_allowances":{"users":[],"teams":[],"apps":[]}},"enforce_admins":{"enabled":true},"allow_force_pushes":{"enabled":false},"allow_deletions":{"enabled":false},"required_status_checks":{"strict":true,"contexts":["llvm-security"],"checks":[]}}'
-export FAKE_REVIEW_STATE=APPROVED
-export FAKE_REVIEW_SHA="$SOURCE_SHA"
-export FAKE_REVIEWER_ID=11139560
-git() {
-  [[ "${1:-}" == rev-parse && "${2:-}" == HEAD && "$#" -eq 2 ]] || return 19
-  printf '%s\n' "$FAKE_HEAD"
-}
-gh() {
-  [[ "${1:-}" == api ]] || return 21
-  case "${2:-}" in
-    "repos/${GITHUB_REPOSITORY}/branches/main")
-      printf '%s\n' "$FAKE_PROTECTED" ;;
-    "repos/${GITHUB_REPOSITORY}/branches/main/protection")
-      [[ "${3:-}" == --jq ]] || return 23
-      jq -r "${4:-}" <<< "$FAKE_POLICY_JSON" ;;
-    "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")
-      printf '%s\t%s\t%s\t%s\t%s\n' "$FAKE_PR_SHA" "$FAKE_PR_REPO" "$FAKE_PR_STATE" "$FAKE_PR_PRIVATE" "$FAKE_AUTHOR_ID" ;;
-    "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100")
-      printf '%s\t%s\t%s\n' "$FAKE_REVIEW_STATE" "$FAKE_REVIEW_SHA" "$FAKE_REVIEWER_ID" ;;
-    *) return 22 ;;
-  esac
-}
-export -f git gh
-runs=0
-if bash -c "$block" >/dev/null 2>&1; then
-  ((runs+=1))
-else
-  echo 'valid exact-head independently approved result unexpectedly denied' >&2; exit 1
+# Continuation-gate TSan is mandatory and cannot be silently skipped.
+tsan_step="$(extract_step 'Execute exact-head pinned continuation under GCC TSan')"
+grep -qxF "        if: inputs.suite == 'continuation-gate'" <<< "$tsan_step"
+for required in \
+  'TSAN_OPTIONS: "halt_on_error=1"' \
+  'test "$(git rev-parse HEAD)" = "$SOURCE_SHA"' \
+  'test -f tests/pinned_continuation_gate_test.cpp' \
+  'command -v g++' \
+  '-fsanitize=thread -fno-omit-frame-pointer' \
+  'timeout 120s "$scratch/pinned-test-tsan"' \
+  'PINNED_CONTINUATION_TSAN_EXECUTED_FOR_SHA=$SOURCE_SHA'; do
+  grep -Fq -- "$required" <<< "$tsan_step"
+done
+printf 'SOURCEFREE_PINNED_CONTINUATION_TSAN_CONTRACT=PASS\n'
+
+# Refuse any authorization marker after PR-controlled code on the same runner.
+if grep -Fq 'Post-run attestation of current PR head and independent reviewer' "$workflow" ||
+   grep -Fq 'POST_EXECUTION_EXACT_PR_HEAD_REVIEW=PASS' "$workflow"; then
+  echo 'insecure same-job postrun authorization still present' >&2; exit 1
 fi
-expect_deny() {
-  local label="$1" key="$2" value="$3" previous
-  previous="${!key}"
-  printf -v "$key" '%s' "$value"
-  export "$key"
-  if bash -c "$block" >/dev/null 2>&1; then
-    echo "insecurely allowed case: $label" >&2
-    return 1
-  fi
-  printf -v "$key" '%s' "$previous"
-  export "$key"
-  ((runs+=1))
-}
-expect_deny 'unprotected main' FAKE_PROTECTED false
-expect_deny 'checkout SHA changed' FAKE_HEAD bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-expect_deny 'PR head moved' FAKE_PR_SHA bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-expect_deny 'foreign source repo' FAKE_PR_REPO foreign/repository
-expect_deny 'PR closed' FAKE_PR_STATE closed
-expect_deny 'PR made public' FAKE_PR_PRIVATE false
-expect_deny 'review dismissed' FAKE_REVIEW_STATE DISMISSED
-expect_deny 'review stale' FAKE_REVIEW_SHA bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-expect_deny 'unauthorized reviewer' FAKE_REVIEWER_ID 11139561
-expect_deny 'reviewer is author' FAKE_AUTHOR_ID 11139560
-expect_deny 'invalid author identity' FAKE_AUTHOR_ID invalid
-expect_deny 'weak CODEOWNER rule' FAKE_POLICY_JSON "$(jq -c '.required_pull_request_reviews.require_code_owner_reviews=false' <<< "$FAKE_POLICY_JSON")"
-expect_deny 'stale reviews accepted' FAKE_POLICY_JSON "$(jq -c '.required_pull_request_reviews.dismiss_stale_reviews=false' <<< "$FAKE_POLICY_JSON")"
-expect_deny 'administrator bypass' FAKE_POLICY_JSON "$(jq -c '.enforce_admins.enabled=false' <<< "$FAKE_POLICY_JSON")"
-expect_deny 'force-push allowed' FAKE_POLICY_JSON "$(jq -c '.allow_force_pushes.enabled=true' <<< "$FAKE_POLICY_JSON")"
-expect_deny 'status checks missing' FAKE_POLICY_JSON "$(jq -c 'del(.required_status_checks)' <<< "$FAKE_POLICY_JSON")"
-expect_deny 'status checks empty' FAKE_POLICY_JSON "$(jq -c '.required_status_checks.contexts=[]' <<< "$FAKE_POLICY_JSON")"
-expect_deny 'status checks non-strict' FAKE_POLICY_JSON "$(jq -c '.required_status_checks.strict=false' <<< "$FAKE_POLICY_JSON")"
-expect_deny 'review bypass app' FAKE_POLICY_JSON "$(jq -c '.required_pull_request_reviews.bypass_pull_request_allowances.apps=[{"slug":"bypass"}]' <<< "$FAKE_POLICY_JSON")"
-printf 'POSTRUN_MOCK_TESTS=%d PASS (1 allowed, 19 denied; no GitHub API calls)\n' "$runs"
+grep -qxF '  independent-postrun-attestation:' "$workflow"
+grep -qxF '    needs: [source-exact-validation]' "$workflow"
+grep -qxF '    runs-on: [self-hosted, linux, x64, oreslang-llvm-attestor-ephemeral-v1]' "$workflow"
+grep -qxF '      actions: read' "$workflow"
+grep -qxF '      pull-requests: read' "$workflow"
+attest_checkout="$(extract_step 'Checkout reviewed protected main only (no PR source)')"
+grep -qxF '          ref: ${{ github.sha }}' <<< "$attest_checkout"
+grep -qxF '          persist-credentials: false' <<< "$attest_checkout"
+attest_preflight="$(extract_step 'Verify attestor source identity and run offline negative regression')"
+grep -qxF '          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"' <<< "$attest_preflight"
+grep -qxF '          python3 -I -B scripts/ci/test_verify_llvm_independent_attestor.py' <<< "$attest_preflight"
+# The final trusted runner must hash-check both attestor code and its tests.
+grep -Fq 'git hash-object --no-filters scripts/ci/verify_llvm_independent_attestor.py' <<< "$attest_preflight"
+grep -Fq 'git hash-object --no-filters scripts/ci/test_verify_llvm_independent_attestor.py' <<< "$attest_preflight"
+grep -Fq 'scripts/ci/verify_llvm_required_check_pins.py' <<< "$attest_preflight"
+grep -Fq 'scripts/ci/llvm_required_check_pins.json' <<< "$attest_preflight"
+attest_final="$(extract_step 'Independently verify current exact head approval and actual source job steps')"
+grep -qxF '          GH_TOKEN: ${{ github.token }}' <<< "$attest_final"
+grep -qxF '          PYTHONOPTIMIZE=0 python3 -I -B scripts/ci/verify_llvm_independent_attestor.py' <<< "$attest_final"
+if grep -Fq 'ref: ${{ inputs.source_sha }}' <<< "$attest_checkout"; then
+  echo 'fresh attestor tries to checkout PR source' >&2; exit 1
+fi
+assert_before 'Exact-source result scope (never a carrier export approval)' 'Checkout reviewed protected main only (no PR source)'
+assert_before 'Checkout reviewed protected main only (no PR source)' 'Independently verify current exact head approval and actual source job steps'
+printf 'FRESH_POSTRUN_INDEPENDENT_ATTESTOR_CONTRACT=PASS\n'
