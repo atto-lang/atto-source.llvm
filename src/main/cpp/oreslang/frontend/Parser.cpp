@@ -7271,7 +7271,7 @@ private:
                 do {
                     if (named_argument_ahead()) {
                         std::string label = identifier();
-                        require(":");
+                        if (!accept(":")) require("=");
                         if (!labels.insert(label).second) {
                             fail("duplicate named argument '" + label + "'");
                         }
@@ -7327,7 +7327,7 @@ private:
                     do {
                         if (named_argument_ahead()) {
                             std::string label = identifier();
-                            require(":");
+                            if (!accept(":")) require("=");
                             if (!member_labels.insert(label).second)
                                 fail("duplicate named member argument '" + label + "'");
                             member_named_seen = true;
@@ -7386,7 +7386,11 @@ private:
     bool named_argument_ahead() const {
         if (token_.kind != Kind::Identifier || reserved(token_.text)) return false;
         Lexer lookahead = lexer_;
-        return lookahead.next().text == ":";
+        const Token separator = lookahead.next();
+        if (separator.text == "=") return true;
+        // Pair := has no native scalar argument ABI. Never reinterpret it
+        // as a named argument, even if the lexer emits separate tokens.
+        return separator.text == ":" && lookahead.next().text != "=";
     }
 
     void export_declaration(Program& program) {
