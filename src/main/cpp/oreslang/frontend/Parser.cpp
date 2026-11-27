@@ -3981,7 +3981,14 @@ private:
             // the let-mut and scalar-alias checks below.
             const bool type_right_const = token_.text == "const" &&
                     sum_first.kind == Kind::Identifier &&
-                    [&] { Lexer right = sum_look; return right.next().text == ":"; }();
+                    [&] {
+                        Lexer right = sum_look;
+                        if (right.next().text != ":") return false;
+                        // ActorRef is a capability, not a scalar constant.
+                        // Leave the exact typed spawn form to the lifecycle
+                        // admission path below (including actor identity checks).
+                        return right.next().text != "ActorRef";
+                    }();
             if (token_.text == "let" && sum_first.text == "mut") sum_first = sum_look.next();
             // Java: `val Count c = 42;` with `type Count = int;` is the same
             // scalar local as `val c: Count = 42;`. Only a declared scalar alias
