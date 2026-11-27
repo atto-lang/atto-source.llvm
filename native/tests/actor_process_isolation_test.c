@@ -1,4 +1,9 @@
 #define _POSIX_C_SOURCE 200809L
+#if defined(__APPLE__)
+#define _DARWIN_C_SOURCE 1
+#else
+#define _DEFAULT_SOURCE 1
+#endif
 #include "atto/actor_process_isolation.h"
 /* Release builds define NDEBUG, disabling assert() and accidentally skipping
  * test operations that were written inside assertions. Keep all executable
@@ -48,13 +53,19 @@ int main(int argc, char **argv) {
         if (!strcmp(argv[1], "code17")) return 17;
         if (!strcmp(argv[1], "segv")) { raise(SIGSEGV); return 90; }
         if (!strcmp(argv[1], "pagefault")) {
-            /* A real protected-memory access, not merely raise(SIGSEGV).
-             * Works with the POSIX /dev/zero mapping on Linux and macOS. */
-            int zero = open("/dev/zero", O_RDONLY);
-            if (zero < 0) return 92;
-            void *page = mmap(NULL, 4096, PROT_NONE, MAP_PRIVATE, zero, 0);
-            (void)close(zero);
+            /* Real inaccessible memory, independent of /dev/zero support.
+             * Use the host page size (including Darwin arm64) and prove the
+             * mapping is writable before revoking all access. */
+            const long page_size = sysconf(_SC_PAGESIZE);
+            if (page_size <= 0) return 92;
+            void *page = mmap(NULL, (size_t)page_size, PROT_READ | PROT_WRITE,
+                              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
             if (page == MAP_FAILED) return 93;
+            *(volatile unsigned char *)page = 42;
+            if (mprotect(page, (size_t)page_size, PROT_NONE) != 0) {
+                (void)munmap(page, (size_t)page_size);
+                return 95;
+            }
             volatile unsigned char observed = *(volatile unsigned char *)page;
             (void)observed;
             return 94;
