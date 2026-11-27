@@ -5,6 +5,7 @@ use std::io::{Read as IoRead, Write as IoWrite};
 use std::process::{Command, Stdio};
 
 mod target_native;
+mod owned_unwind;
 
 use atto_compiler::ast::{BinOp, Type};
 use atto_compiler::check::{self, Import, TExpr, TFunc, TProgram, TStmt, TE};
@@ -889,6 +890,18 @@ fn validate_native_artifact(path: &std::path::Path) -> Result<(), String> {
 
 fn cli() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // Isolated library ABI: explicit IR only, never an executable main.
+    if let [src, flag, out, mode] = args.as_slice() {
+        if flag == "-o" && mode == "--owned-unwind-v1" {
+            if !src.ends_with(".atto") { return Err("E_SOURCE: input must have the .atto extension".into()); }
+            let content = std::fs::read_to_string(src).map_err(|e|format!("E_INPUT: {e}"))?;
+            let ir = owned_unwind::compile(&content)?;
+            let (staged, mut file) = OutputStage::create(std::path::Path::new(src),std::path::Path::new(out))?;
+            file.write_all(ir.as_bytes()).map_err(|e|format!("E_OUTPUT: {e}"))?;
+            file.flush().map_err(|e|format!("E_OUTPUT: {e}"))?;
+            drop(file);return staged.publish();
+        }
+    }
     let (src, out, emit_only, profile) = match args.as_slice() {
         [src, flag, out] if flag == "-o" => (src, out, false, LibraryProfile::Hosted),
         [src, flag, out, mode] if flag == "-o" && mode == "--emit-llvm" =>
