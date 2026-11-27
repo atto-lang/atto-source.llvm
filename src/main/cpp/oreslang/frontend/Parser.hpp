@@ -344,6 +344,9 @@ struct Statement {
     std::unique_ptr<Expression> condition_rhs;
     std::vector<Statement> then_statements;
     std::vector<Statement> else_statements;
+    // Only statically lowered factory callbacks carry this marker.
+    // Ordinary delayed direct calls retain their legacy contract.
+    bool static_defer_factory = false;
 };
 
 // Side-effect-free equality guard with return-only taken branch.
