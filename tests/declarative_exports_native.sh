@@ -6,7 +6,7 @@ compiler="$1"; clang="$2"; fixtures="$3"
 tmp="$(mktemp -d)"
 trap 'rm -rf -- "$tmp"' EXIT
 fail() { echo "DECLARATIVE_EXPORT_NATIVE_FAIL: $*" >&2; exit 1; }
-for input in top bottom; do
+for input in top bottom duplicate; do
   "$compiler" --target=host "$fixtures/$input.atto" > "$tmp/$input.ll" 2> "$tmp/$input.err" ||
     fail "$input was rejected: $(cat "$tmp/$input.err")"
   [[ -s "$tmp/$input.ll" ]] || fail "$input emitted no IR"
@@ -20,7 +20,7 @@ for input in top bottom; do
     echo "EXPORT_GUEST_EXECUTED fixture=$input opt=$opt exit=42"
   done
 done
-for input in wrong-kind unknown duplicate invalid-pkg nested-module-reject; do
+for input in wrong-kind unknown visibility-duplicate invalid-pkg nested-module-reject; do
   if "$compiler" --target=host "$fixtures/$input.atto" > "$tmp/$input.ll" 2> "$tmp/$input.err"; then
     fail "invalid $input was accepted"
   fi

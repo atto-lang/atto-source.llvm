@@ -107,3 +107,28 @@ commit of a new page, not the O(1) path.
    reclaimed-after-STOP.
 4. **Java/.NET parity.** Same words, statuses and teardown rules: Offset32 as
    the field word, and Handle32 profile selection per this document.
+
+## Width policy: what is 32-bit, and what must not be
+
+32 bits is the right width for **references inside one actor's heap**, which is
+where reference memory goes. It is the wrong width for anything that counts
+monotonically, crosses actors or processes, or must be unguessable.
+
+| Thing | Width | Why |
+| --- | --- | --- |
+| Actor-local object reference (field, array element, frame slot) | **32-bit Offset32** | Up to 32 GiB per actor heap with the 8-byte quantum; halves edge storage |
+| Stale-protected reference (Handle32) | **32-bit**, with Handle64 as a profile | Slot bits are capacity-sized and slots quarantine on exhaustion. A hot, high-churn, long-lived actor that would quarantine its table should select a 64-bit handle (32-bit slot + 32-bit generation) |
+| Dense row / ECS index | **32-bit** | Same reasoning as Offset32 |
+| Allocation generations, heap and actor incarnation IDs, epochs | **64-bit** | A 32-bit counter wraps in minutes at 10M/s, and a wrapped generation re-admits ABA |
+| Mailbox, sequence and ticket counters | **64-bit** | Same wrap argument. `BoundedMpscQueue` was fixed to `uint64_t` for exactly this |
+| Byte budgets and stats summed across actors or the process | **64-bit** | Totals routinely exceed 4 GiB |
+| Actor heap larger than 32 GiB | **native64 mode** | Explicit opt-in (`force_native64`), never a silent widening |
+| FFI, OS, MMIO and code pointers | **native width** | Never compressed; explicit conversion only |
+| Cross-actor references (`ActorRef<T>`) | **64-bit or wider capability** | Needs actor identity plus incarnation, not a heap offset |
+| Durable or distributed identities (persisted actors, cross-node) | **128-bit** | Collision-free without coordination (UUID-class) |
+| Unforgeable tokens (tenant capabilities, wire secrets) | **≥128-bit random** | Must resist guessing; 32/64-bit tokens are brute-forceable |
+| Guest integer values (`int`, i64) | **as declared** | Values, not references: never narrowed by this policy |
+
+Rule of thumb: **compress what is *stored many times*, not what *counts or
+identifies*.** A 4-byte reference saves memory per edge. A 4-byte counter or
+identity only saves 4 bytes once, and turns wrap-around into a security bug.

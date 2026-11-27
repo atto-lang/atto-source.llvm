@@ -1,0 +1,10 @@
+// NEGATIVE: immutable const cannot satisfy Interval.cancel(mut self).
+// A cancellation mutation must never be accepted through an immutable binding.
+import module time from "std/time";
+pub routine main(): void {
+  val initial = time.instant(7, 0);
+  val period = time.nanoseconds(1).expect("period");
+  const repeat = time.interval(initial, period);
+  repeat.cancel();
+  return;
+}

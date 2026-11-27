@@ -1,11 +1,14 @@
 #include "oreslang/frontend/Parser.hpp"
 #include <cstdlib>
+#include <cstdio>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 
 using oreslang::parse_program;
-static void check(bool condition) { if (!condition) std::abort(); }
+#define check(condition) do { if (!(condition)) { \
+    std::fprintf(stderr, "actor admission failure line %d: %s\n", __LINE__, #condition); \
+    std::abort(); } } while (false)
 
 static constexpr std::string_view valid_actor = R"(
 define actor Worker as {
@@ -28,7 +31,9 @@ static void denied(std::string src, const char* diagnostic) {
     try { (void)parse_program(src); }
     catch (const std::exception& e) {
         rejected = std::string(e.what()).find(diagnostic) != std::string::npos;
+        if (!rejected) std::fprintf(stderr, "expected %s, observed %s\n", diagnostic, e.what());
     }
+    if (!rejected) std::fprintf(stderr, "unexpected admission/diagnostic: %s\n", src.c_str());
     check(rejected);
 }
 
@@ -58,6 +63,10 @@ int main() {
     denied(changed_header("Worker receives String as"),
            "NATIVE_ACTOR_RECEIVES_TYPE_UNSUPPORTED");
     denied(changed_header("Worker receives int | String as"),
+           "NATIVE_ACTOR_RECEIVES_UNION_UNSUPPORTED");
+    denied(changed_header("Worker receives int|int as"),
+           "NATIVE_ACTOR_RECEIVES_UNION_UNSUPPORTED");
+    denied(changed_header("Worker receives int /* separator */ | int as"),
            "NATIVE_ACTOR_RECEIVES_UNION_UNSUPPORTED");
     denied(changed_header("Worker receives int receives int as"),
            "NATIVE_ACTOR_RECEIVES_DUPLICATE");
@@ -123,5 +132,21 @@ int main() {
     denied("@ActorMaxThreads(MaxActorThreads.LOW)\n"
            "define class C as let int x = 1; end\n"
            + std::string(valid_actor), "expected 'actor'");
+    // Grouped or legacy spawn policies must not become plain ActorRef bindings.
+    for (const auto* suffix : {
+        "with {}",
+        "with { schedule { max_parallelism = 2; affinity = sticky; } }",
+        "with { resources { heap_size = 67108864; stack_size = 65536; mailbox_capacity = 1024; } }",
+        "with { init { name = \"worker-1\"; seed = 42; } }",
+        "/* comment */ with { init {} }",
+        "with schedule(max_parallelism=2)",
+        "with { unknown {} }"
+    }) {
+        denied(std::string(valid_actor) + "\n pub fnc main(): int { val w: ActorRef<Worker> = spawn Worker() " +
+               suffix + "; return 0; }", "E_SPAWN_OPTIONS_UNSUPPORTED");
+    }
+    auto legacy_spawn = parse_program(std::string(valid_actor) +
+        "\n pub fnc main(): int { val w: ActorRef<Worker> = spawn Worker(); w.stop(); return 0; }");
+    check(legacy_spawn.actors.size() == 1);
     return 0;
 }

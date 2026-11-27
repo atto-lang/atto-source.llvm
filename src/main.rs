@@ -444,6 +444,174 @@ fn admit_freestanding_tokens(
     Ok(())
 }
 
+/// Core/import borrow boundary for this deliberately scalar-only native
+/// compiler slice. No implicit borrow, class ownership, heap handle, stream
+/// or generator may cross an imported std.http function signature. Extending
+/// this surface to non-Copy types requires a real lifetime-aware borrow proof,
+/// not merely adding a type to the LLVM emitter.
+fn validate_http_core_copy_boundary(
+    library: &atto_compiler::ast::Program,
+) -> Result<(), String> {
+    use atto_compiler::ast::Type;
+    if library.funcs.is_empty() || !library.classes.is_empty()
+        || !library.actors.is_empty() || !library.enums.is_empty()
+        || library.actor_interface.is_some() || !library.type_names.is_empty()
+    {
+        return Err("E_NATIVE_IMPORT_BORROW: std.http may expose only closed scalar functions".into());
+    }
+    for function in &library.funcs {
+        if function.is_generator
+            || !matches!(function.ret, Type::Int | Type::Bool)
+            || function.params.iter().any(|p| !matches!(p.ty, Type::Int | Type::Bool))
+        {
+            return Err(format!(
+                "E_NATIVE_IMPORT_BORROW: non-Copy or effectful core function '{}'",
+                function.name
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Resolve the *compiler-owned* HTTP scalar library as a separate parsed
+/// source unit before type checking. The bootstrap frontend has no general
+/// module AST, so this initial native import slice admits only qualified,
+/// public free-function calls. Unsupported module imports fail closed; this
+/// is not a general filesystem/package importer or a network capability.
+fn link_registered_http_import(
+    tokens: Vec<atto_compiler::lexer::Token>,
+    profile: LibraryProfile,
+) -> Result<(Vec<atto_compiler::lexer::Token>, Option<atto_compiler::ast::Program>), String> {
+    use atto_compiler::lexer::{Tok, Token};
+    use std::collections::BTreeSet;
+
+    let word = |index: usize, expected: &str| {
+        matches!(tokens.get(index).map(|t| &t.tok),
+            Some(Tok::Ident(name)) if name == expected)
+    };
+    if !tokens.iter().any(|token| matches!(&token.tok,
+        Tok::Ident(name) if name == "import")) {
+        return Ok((tokens, None));
+    }
+    if profile == LibraryProfile::FreestandingCore {
+        return Err("E_FREESTANDING_FORBIDDEN_IMPORT: std.http is hosted-only".into());
+    }
+    // Exactly one, source-leading wildcard alias of the registered identity.
+    // The lexer eliminates comments/strings as keyword candidates, and the
+    // parser never sees a partial or unvalidated import declaration.
+    if !word(0, "import")
+        || !matches!(tokens.get(1).map(|t| &t.tok), Some(Tok::Star))
+        || !word(2, "as")
+        || !word(4, "from")
+        || !matches!(tokens.get(6).map(|t| &t.tok), Some(Tok::Semi))
+    {
+        return Err("E_NATIVE_IMPORT_UNSUPPORTED: expected source-leading import * as alias from \"std.http\";".into());
+    }
+    let alias = match tokens.get(3).map(|t| &t.tok) {
+        Some(Tok::Ident(alias)) if !alias.is_empty()
+            && !matches!(alias.as_str(), "import" | "from" | "pub"
+                | "define" | "fnc" | "module" | "as") => alias.clone(),
+        _ => return Err("E_NATIVE_IMPORT_ALIAS: expected non-keyword namespace alias".into()),
+    };
+    match tokens.get(5).map(|t| &t.tok) {
+        Some(Tok::Str(path)) if path == "std.http" => {}
+        Some(Tok::Str(_)) => {
+            return Err("E_NATIVE_IMPORT_UNREGISTERED: only registered std.http is admitted".into());
+        }
+        _ => return Err("E_NATIVE_IMPORT_UNSUPPORTED: import path must be a quoted identity".into()),
+    }
+
+    // Compile-time inclusion is NOT the same as concatenating source bytes:
+    // the library is independently lexed and parsed into an AST. Its bytes
+    // come only from this backend repository's immutable build input, never
+    // from working-directory shadow files, env search paths or symlinks.
+    const HTTP_SOURCE: &str = include_str!("../stdlib/http/message_policy.atto");
+    if HTTP_SOURCE.len() > atto_compiler::SOURCE_CAP {
+        return Err("E_NATIVE_IMPORT_LIMIT: packaged library exceeds source cap".into());
+    }
+    let library_tokens = atto_compiler::lexer::lex(HTTP_SOURCE)
+        .map_err(|e| format!("E_NATIVE_IMPORT_LIBRARY_LEX: {e}"))?;
+    let library = atto_compiler::parser::Parser::new(library_tokens.clone())
+        .parse_program()
+        .map_err(|e| format!("E_NATIVE_IMPORT_LIBRARY_PARSE: {e}"))?;
+    validate_http_core_copy_boundary(&library)?;
+    let library_names: BTreeSet<String> = library.funcs.iter()
+        .map(|func| func.name.clone()).collect();
+    if library_names.len() != library.funcs.len() || library_names.contains("main") {
+        return Err("E_NATIVE_IMPORT_LIBRARY_SHAPE: duplicate or reserved function".into());
+    }
+    // The current frontend's Func AST does not retain the public modifier.
+    // Extract the public surface from the same independently lexed source,
+    // at file scope only. A private helper may be linked for internal library
+    // calls but never exported to an import alias.
+    let mut public_functions = BTreeSet::new();
+    let mut depth = 0usize;
+    for (i, token) in library_tokens.iter().enumerate() {
+        if depth == 0
+            && matches!(&token.tok, Tok::Ident(value) if value == "pub")
+            && matches!(library_tokens.get(i + 1).map(|t| &t.tok),
+                Some(Tok::Ident(value)) if value == "fnc")
+        {
+            if let Some(Tok::Ident(name)) = library_tokens.get(i + 2).map(|t| &t.tok) {
+                if !name.starts_with("http_") || !library_names.contains(name)
+                    || !public_functions.insert(name.clone())
+                {
+                    return Err("E_NATIVE_IMPORT_LIBRARY_EXPORT: invalid public HTTP function".into());
+                }
+            } else {
+                return Err("E_NATIVE_IMPORT_LIBRARY_EXPORT: missing function name".into());
+            }
+        }
+        match &token.tok {
+            Tok::LBrace => depth += 1,
+            Tok::RBrace => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    if public_functions.is_empty() {
+        return Err("E_NATIVE_IMPORT_LIBRARY_EXPORT: no public HTTP functions".into());
+    }
+
+    let mut application_tokens = Vec::with_capacity(tokens.len());
+    let mut i = 7;
+    while i < tokens.len() {
+        if let Tok::Ident(name) = &tokens[i].tok {
+            if name == "import" {
+                return Err("E_NATIVE_IMPORT_UNSUPPORTED: multiple or nested imports".into());
+            }
+            // User-authored direct references to the compiler's internal
+            // function names cannot bypass the qualified namespace export.
+            if library_names.contains(name) {
+                return Err(format!("E_NATIVE_IMPORT_PRIVATE: unqualified built-in symbol {name}"));
+            }
+            if *name == alias {
+                if matches!(tokens.get(i + 1).map(|t| &t.tok), Some(Tok::Dot)) {
+                    let member = match tokens.get(i + 2).map(|t| &t.tok) {
+                        Some(Tok::Ident(member)) => member,
+                        _ => return Err("E_NATIVE_IMPORT_MEMBER: expected a public function name".into()),
+                    };
+                    let qualified = format!("http_{member}");
+                    if !public_functions.contains(&qualified) {
+                        return Err(format!("E_NATIVE_IMPORT_PRIVATE: no public std.http function {member}"));
+                    }
+                    if !matches!(tokens.get(i + 3).map(|t| &t.tok), Some(Tok::LParen)) {
+                        return Err("E_NATIVE_IMPORT_MEMBER: only qualified calls are supported".into());
+                    }
+                    application_tokens.push(Token {
+                        tok: Tok::Ident(qualified), pos: tokens[i].pos,
+                    });
+                    i += 3;
+                    continue;
+                }
+                return Err("E_NATIVE_IMPORT_ALIAS: namespace alias cannot be shadowed or used as a value".into());
+            }
+        }
+        application_tokens.push(tokens[i].clone());
+        i += 1;
+    }
+    Ok((application_tokens, Some(library)))
+}
+
 pub fn compile_ir(source: &str) -> Result<String, String> {
     compile_ir_with_profile(source, LibraryProfile::Hosted)
 }
@@ -453,15 +621,43 @@ fn compile_ir_with_profile(source: &str, profile: LibraryProfile) -> Result<Stri
         return Err("E_SOURCE_LIMIT: native Atto input exceeds 64 KiB".into());
     }
     let toks = atto_compiler::lexer::lex(source).map_err(|e|e.to_string())?;
+    if atto_compiler::directed_pipe::unlowered_pos(&toks).is_some() {
+        return Err("E_UNSUPPORTED_CONTINUOUS_PIPE: typed source/sink DATA graph needs native guest transport and PipeHandle".into());
+    }
+    // Native AOT may not reinterpret a protected actor state schema as
+    // ordinary fields, even when the scalar target linker would otherwise
+    // admit a nested actor declaration.
+    let has_attached_actor_state = toks.windows(5).any(|w|
+        matches!((&w[0].tok,&w[1].tok,&w[2].tok,&w[3].tok,&w[4].tok),
+            (atto_compiler::lexer::Tok::Ident(a),
+             atto_compiler::lexer::Tok::Ident(b),
+             atto_compiler::lexer::Tok::Ident(c),
+             atto_compiler::lexer::Tok::Ident(d),
+             atto_compiler::lexer::Tok::Ident(_))
+                if a=="define"&&b=="state"&&c=="on"&&d=="actor"));
+    if has_attached_actor_state {
+        let headers=atto_compiler::target_syntax::parse_target_declarations(&toks)
+            .map_err(|d|d.to_string())?;
+        if !headers.actor_state_attachments.is_empty() {
+            return Err("E_UNSUPPORTED_NATIVE_STATE: actor guarded state lowering, startup and fenced leases are not yet proven".into());
+        }
+    }
     if profile == LibraryProfile::FreestandingCore {
         admit_freestanding_tokens(&toks)?;
     }
-    let program = if target_native::requires_target_link(&toks) {
+    let (toks, linked_http) = link_registered_http_import(toks, profile)?;
+    let mut program = if target_native::requires_target_link(&toks) {
         target_native::lower(&toks)?
     } else {
         atto_compiler::parser::Parser::new(toks).parse_program()
             .map_err(|e|e.to_string())?
     };
+    if let Some(library) = linked_http {
+        // Merge independently checked source units at the AST boundary, not
+        // by text concatenation. The normal typed checker enforces all call
+        // signatures and duplicate declaration rules on the linked program.
+        program.funcs.extend(library.funcs);
+    }
     let typed = check::check(&program).map_err(|e|e.to_string())?;
     if profile == LibraryProfile::FreestandingCore {
         if !typed.imports.is_empty() {
@@ -764,6 +960,132 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compiled_http_namespace_imports_real_backend_owned_ast() {
+        let source = include_str!("../tests/http_stdlib/namespace_import_canary.atto");
+        let ir = compile_ir(source).expect("registered public HTTP namespace must compile");
+        assert!(ir.contains("define i32 @main()"), "{ir}");
+        // The regular typed backend lowers both imported and caller functions
+        // to native LLVM; no interpreter or synthetic hardcoded exit 42.
+        assert!(ir.contains("@atto_func_"), "{ir}");
+        assert!(ir.contains("llvm.trap"), "{ir}");
+    }
+
+    #[test]
+    fn imported_core_http_signature_rejects_non_copy_and_generator_abises() {
+        use atto_compiler::ast::Type;
+        let toks=atto_compiler::lexer::lex(include_str!("../stdlib/http/message_policy.atto"))
+            .expect("compiler-owned HTTP library lexes");
+        let original=atto_compiler::parser::Parser::new(toks).parse_program()
+            .expect("compiler-owned HTTP policy parses");
+        validate_http_core_copy_boundary(&original)
+            .expect("pure, scalar int/bool ABI is admitted");
+
+        let mut non_copy=original.clone();
+        non_copy.funcs[0].ret=Type::Class(0);
+        let err=validate_http_core_copy_boundary(&non_copy).unwrap_err();
+        assert!(err.contains("E_NATIVE_IMPORT_BORROW"), "{err}");
+
+        let mut borrowed=original.clone();
+        borrowed.funcs[0].params[0].ty=Type::Str;
+        let err=validate_http_core_copy_boundary(&borrowed).unwrap_err();
+        assert!(err.contains("E_NATIVE_IMPORT_BORROW"), "{err}");
+
+        let mut suspended=original.clone();
+        suspended.funcs[0].is_generator=true;
+        let err=validate_http_core_copy_boundary(&suspended).unwrap_err();
+        assert!(err.contains("E_NATIVE_IMPORT_BORROW"), "{err}");
+
+        let mut module_like=original.clone();
+        module_like.classes.push(atto_compiler::ast::ClassDecl {
+            name: "Forbidden".into(),
+            pos: Default::default(),
+            public: true,
+            fields: vec![],
+            ctor: None,
+            methods: vec![],
+        });
+        let err=validate_http_core_copy_boundary(&module_like).unwrap_err();
+        assert!(err.contains("E_NATIVE_IMPORT_BORROW"), "{err}");
+    }
+
+    #[test]
+    fn native_http_import_rejects_unregistered_and_private_symbols() {
+        let bad = [
+            (r#"import * as http from "std.unregistered"; pub fnc main(): int { return 42; }"#,
+             "E_NATIVE_IMPORT_UNREGISTERED"),
+            (r#"import * as collections from "ores.core.collections"; pub fnc main(): int { return 42; }"#,
+             "E_NATIVE_IMPORT_UNREGISTERED"),
+            (r#"import * as http from "std.http"; pub fnc main(): int { return http.private_helper(1); }"#,
+             "E_NATIVE_IMPORT_PRIVATE"),
+            (r#"import * as http from "std.http"; pub fnc main(): int { if http_status_valid(200) then return 42; fi return 1; }"#,
+             "E_NATIVE_IMPORT_PRIVATE"),
+            (r#"import * as http from "std.http"; import * as http from "std.http"; pub fnc main(): int { return 42; }"#,
+             "E_NATIVE_IMPORT_UNSUPPORTED"),
+            (r#"import module http from "std.http"; pub fnc main(): int { return 42; }"#,
+             "E_NATIVE_IMPORT_UNSUPPORTED"),
+            (r#"import * as http from "std.http"; pub fnc main(): int { val x = http; return 42; }"#,
+             "E_NATIVE_IMPORT_ALIAS"),
+        ];
+        for (source, code) in bad {
+            let err = compile_ir(source).expect_err("invalid import must emit NO LLVM IR");
+            assert!(err.contains(code), "expected {code}, got: {err}");
+        }
+    }
+
+    #[test]
+    fn native_http_import_is_not_freestanding_and_not_ambient() {
+        let source=r#"import * as http from "std.http"; pub fnc main(): int { return 42; }"#;
+        let err=compile_ir_with_profile(source, LibraryProfile::FreestandingCore)
+            .expect_err("freestanding scalar core cannot import hosted HTTP");
+        assert!(err.contains("E_FREESTANDING_FORBIDDEN_IMPORT"), "{err}");
+        let no_import="pub fnc main(): int { if http_status_valid(200) then return 42; fi return 1; }";
+        let err=compile_ir(no_import).expect_err("compiler does not provide ambient std symbols");
+        assert!(err.contains("E_UNBOUND"), "{err}");
+        let comment_only="// import * as http from \"std.http\";\npub fnc main(): int { return 42; }";
+        assert!(compile_ir(comment_only).is_ok(), "commented import is not a dependency");
+    }
+    #[test]
+    fn native_pipe_and_rpipe_fail_before_emitting_llvm_ir() {
+        for direction in ["pipe", "rpipe"] {
+            let source = format!("pub fnc main(): int {{ val x = a {direction} b; return 0; }}");
+            let e = compile_ir(&source).unwrap_err();
+            assert!(e.contains("E_UNSUPPORTED_CONTINUOUS_PIPE"), "{e}");
+            let e = compile_ir_with_profile(&source, LibraryProfile::FreestandingCore).unwrap_err();
+            assert!(e.contains("E_UNSUPPORTED_CONTINUOUS_PIPE"), "{e}");
+        }
+        let ir = compile_ir("// rpipe pipe\npub fnc main(): int { return 42; }").unwrap();
+        assert!(ir.contains("ret i64 42"));
+    }
+
+    #[test]
+    fn native_and_freestanding_compilers_fail_closed_on_canonical_source_bytes() {
+        for (name, source) in [
+            ("actor-forward", include_str!("../fixtures/pipe-rpipe-v1/actor-forward.atto")),
+            ("actor-reverse", include_str!("../fixtures/pipe-rpipe-v1/actor-reverse.atto")),
+            ("actor-missing-emits", include_str!("../fixtures/pipe-rpipe-v1/actor-missing-emits.atto")),
+            ("actor-wrong-direction", include_str!("../fixtures/pipe-rpipe-v1/actor-wrong-direction.atto")),
+            ("mixed-channel-stream-forward", include_str!("../fixtures/pipe-rpipe-v1/mixed-channel-stream-forward.atto")),
+            ("mixed-channel-stream-reverse", include_str!("../fixtures/pipe-rpipe-v1/mixed-channel-stream-reverse.atto")),
+            ("actor-duplicate-direction", include_str!("../fixtures/pipe-rpipe-v1/actor-duplicate-direction.atto")),
+            ("actor-mixed-directions", include_str!("../fixtures/pipe-rpipe-v1/actor-mixed-directions.atto")),
+            ("stopped-source", include_str!("../fixtures/pipe-rpipe-v1/stopped-source.atto")),
+            ("closed-channel", include_str!("../fixtures/pipe-rpipe-v1/closed-channel.atto")),
+            ("stopped-consumer", include_str!("../fixtures/pipe-rpipe-v1/stopped-consumer.atto")),
+            ("stopped-actor-sink", include_str!("../fixtures/pipe-rpipe-v1/stopped-actor-sink.atto")),
+        ] {
+            let standard=compile_ir(source)
+                .expect_err("native LLVM IR must not be emitted for unlowered actor pipeline");
+            assert!(standard.contains("E_UNSUPPORTED_CONTINUOUS_PIPE"),
+                "{name}: {standard}");
+            let freestanding=compile_ir_with_profile(source, LibraryProfile::FreestandingCore)
+                .expect_err("freestanding cannot instantiate guest actor graphs");
+            assert!(freestanding.contains("E_UNSUPPORTED_CONTINUOUS_PIPE"),
+                "{name}: {freestanding}");
+        }
+    }
+
     #[test]
     fn native_main_is_direct_i64_call() {
         let ir = compile_ir("pub fnc main(): int { return 42; }").unwrap();
@@ -814,6 +1136,35 @@ mod tests {
         for (source, code) in samples {
             let err = compile_ir_with_profile(source, LibraryProfile::FreestandingCore).unwrap_err();
             assert!(err.contains(code), "{code} got {err}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod attached_actor_state_native_no_ir {
+    use super::compile_ir;
+
+    #[test]
+    fn parsed_attachment_does_not_lower_to_unprotected_native_state() {
+        let source=r#"
+            define actor Counter as end
+            define state on actor Counter as { let int count: 0; }
+        "#;
+        let error=compile_ir(source).expect_err("no native IR may be emitted for unverified actor state");
+        assert!(error.starts_with("E_UNSUPPORTED_NATIVE_STATE:"),"{error}");
+    }
+
+    #[test]
+    fn exact_shared_counter_examples_are_not_silently_accepted() {
+        let inputs=[
+            include_str!("../tests/fixtures/actor-attached-state-v1/inline_counter.atto"),
+            include_str!("../tests/fixtures/actor-attached-state-v1/attached_counter.atto"),
+            include_str!("../tests/fixtures/actor-attached-state-v1/attached_initialized.atto"),
+        ];
+        for input in inputs {
+            let error=compile_ir(input).expect_err(
+                "full guarded Counter actor startup/message lowering is not proven");
+            assert!(!error.is_empty());
         }
     }
 }

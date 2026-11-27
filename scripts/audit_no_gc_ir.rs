@@ -111,7 +111,55 @@ fn audit_line(line: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+/// LLVM permits whitespace (including newlines and comments) between the
+/// `gc` keyword and its quoted strategy. The line-local symbol scanner cannot
+/// recognize that grammar on its own. This pass skips comments and string data
+/// while screening the entire module, so splitting a GC attribute cannot
+/// bypass the strict no-tracing-GC screen.
+fn audit_gc_strategy_across_lines(text: &str) -> Result<(), String> {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b';' => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'"' => i = quoted_end(bytes, i)?,
+            b'g' if bytes[i..].starts_with(b"gc")
+                && (i == 0 || !is_word(bytes[i - 1]))
+                && (i + 2 == bytes.len() || !is_word(bytes[i + 2])) =>
+            {
+                let mut next = i + 2;
+                let mut separated = false;
+                loop {
+                    while next < bytes.len() && bytes[next].is_ascii_whitespace() {
+                        separated = true;
+                        next += 1;
+                    }
+                    if next < bytes.len() && bytes[next] == b';' {
+                        separated = true;
+                        while next < bytes.len() && bytes[next] != b'\n' {
+                            next += 1;
+                        }
+                        continue;
+                    }
+                    break;
+                }
+                if separated && bytes.get(next) == Some(&b'"') {
+                    return Err("tracing GC strategy forbidden (including multiline IR)".into());
+                }
+                i += 2;
+            }
+            _ => i += 1,
+        }
+    }
+    Ok(())
+}
+
 fn audit_ir(text: &str) -> Result<(), String> {
+    audit_gc_strategy_across_lines(text)?;
     for (index, line) in text.lines().enumerate() {
         audit_line(line.as_bytes()).map_err(|why| format!("line {}: {why}", index + 1))?;
     }
@@ -164,6 +212,32 @@ mod tests {
             r#"@x = constant [2 x i8] c"unterminated"#,
         ] {
             assert!(audit_ir(ir).is_err(), "admitted: {ir}");
+        }
+    }
+
+    #[test]
+    fn rejects_multiline_gc_strategy_evasion() {
+        // All three declarations are accepted as LLVM IR by Clang.
+        for ir in [
+            "define void @f() gc\n  \"shadow-stack\" { ret void }",
+            "define void @f()\n gc\n \"statepoint-example\" { ret void }",
+            "define void @f() gc ; permitted LLVM comment\n \"shadow-stack\" { ret void }",
+            "define void @f() gc\n\t; comment\n\t\"shadow-stack\" { ret void }",
+        ] {
+            assert!(audit_ir(ir).is_err(), "multiline GC attribute admitted: {ir}");
+        }
+    }
+
+    #[test]
+    fn multiline_screen_ignores_comments_and_data() {
+        for ir in [
+            "; gc\n; \"shadow-stack\"\ndefine void @main() { ret void }",
+            "@message = constant [15 x i8] c\"gc\\00shadow-stack\"",
+            "source_filename = \"gc\\0Ashadow-stack.atto\"",
+            "define void @gc_user() { ret void }",
+            "declare void @my_gc_collect()",
+        ] {
+            assert!(audit_ir(ir).is_ok(), "safe data rejected: {ir}");
         }
     }
 

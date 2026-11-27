@@ -19,8 +19,8 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
-#ifdef ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE
 #include <errno.h>
+#ifdef ORESLANG_NATIVE_TEST_PTHREAD_CREATE_FAILURE
 /* Only compiled in the isolated fault-injection CTest; absent in production. */
 static _Atomic int fail_next_carrier_create;
 void ores_native_actor_scheduler_test_fail_next_create(void) {
@@ -116,6 +116,11 @@ struct OresNativeActorScheduler {
     uint32_t affinity_window;
     unsigned char head_skips[TURN_CLASSES];
     uint64_t affine_picks;
+    /* Measured on accepted physical turns under the scheduler lock. These
+     * count actor-carrier switches, NOT hardware cache misses or ownership
+     * transfers. No allocation, syscall, or extra hot-path atomic. */
+    uint64_t carrier_migrations;
+    uint64_t continuation_migrations; /* WAKE / TASK only */
     /* Carriers parked in pthread_cond_wait(ready) / busy-polling work_epoch.
      * Both change only under `lock`, which is what makes skipping a signal
      * safe: a producer that sees a spinner knows it will re-check under the
@@ -369,7 +374,11 @@ enum { AFFINITY_WINDOW_DEFAULT = 8, AFFINITY_WINDOW_MAX = 64, AFFINITY_MAX_HEAD_
  * Never leaves a runnable turn waiting for a particular carrier. */
 static size_t pick_affine_locked(OresNativeActorScheduler* s, int k, size_t self) {
     const uint32_t head = s->rq_head[k];
-    if (s->affinity_window == 0 || s->head_skips[k] >= AFFINITY_MAX_HEAD_SKIPS
+    /* With only one started carrier, scanning actor queue nodes cannot
+     * improve locality and only pollutes L1/L2. Keep FIFO until a second
+     * physical worker has actually started. */
+    if (s->started_workers <= 1 || s->affinity_window <= 1
+            || s->head_skips[k] >= AFFINITY_MAX_HEAD_SKIPS
             || s->actors[head].last_carrier1 == (uint32_t)self + 1) {
         s->head_skips[k] = 0;
         return head;
@@ -558,7 +567,17 @@ static void* carrier(void* raw) {
                 ? (consecutive < 2 ? consecutive + 1 : 2) : 1;
         recent_actor = i;
         ActorLane* lane = &s->actors[i];
-        lane->last_carrier1 = (uint32_t)slot->index + 1;
+        const uint32_t previous_carrier1 = lane->last_carrier1;
+        const uint32_t current_carrier1 = (uint32_t)slot->index + 1;
+        /* Reuse the existing per-actor hint, while the dispatch lock is
+         * held; never consult OS thread ids or add global cache-line writes. */
+        if (previous_carrier1 && previous_carrier1 != current_carrier1) {
+            if (s->carrier_migrations != UINT64_MAX) ++s->carrier_migrations;
+            if ((kind == TURN_WAKE || kind == TURN_TASK)
+                    && s->continuation_migrations != UINT64_MAX)
+                ++s->continuation_migrations;
+        }
+        lane->last_carrier1 = current_carrier1;
         uint64_t payload = 0;
         uint64_t original_mail_sequence = 0;
         OresNativeActorTerminalFailure failure = {0};
@@ -1129,17 +1148,16 @@ void ores_native_actor_scheduler_signal_turn_gate(OresNativeActorScheduler* s) {
     unlock(s);
 }
 
-OresNativeActorRef ores_native_actor_scheduler_spawn(
-    OresNativeActorScheduler* s, size_t i) {
+/* Requires scheduler lock. No actor identity is consumed until the caller
+ * has completed any requested physical-carrier admission barrier. */
+static OresNativeActorRef spawn_locked(OresNativeActorScheduler* s, size_t i) {
     OresNativeActorRef missing = {0, 0, 0};
-    if (!s) return missing;
-    lock(s);
-    if (s->retired || i >= s->actor_count || s->actors[i].spawned) {
-        unlock(s);
+    if (s->retired || i >= s->actor_count || s->actors[i].spawned)
         return missing;
-    }
     ActorLane* a = &s->actors[i];
     a->spawned = 1;
+    /* A fresh incarnation must not inherit an older actor's cache hint. */
+    a->last_carrier1 = 0;
     a->generation = a->authority.generation;
     a->allocation_domain = (OresNativeAllocationDomainRef){
         ORES_ALLOCATION_DOMAIN_ACTOR,
@@ -1147,7 +1165,54 @@ OresNativeActorRef ores_native_actor_scheduler_spawn(
         (uint64_t)i,
         a->generation
     };
-    OresNativeActorRef ref = {s->domain, (uint64_t)i, a->generation};
+    return (OresNativeActorRef){s->domain, (uint64_t)i, a->generation};
+}
+
+OresNativeActorRef ores_native_actor_scheduler_spawn(
+    OresNativeActorScheduler* s, size_t i) {
+    OresNativeActorRef missing = {0, 0, 0};
+    if (!s) return missing;
+    lock(s);
+    OresNativeActorRef ref = spawn_locked(s, i);
+    unlock(s);
+    return ref;
+}
+
+/* Java/Graal parity opt-in. First actor of a domain acquires one native
+ * pthread and waits for that carrier's run-loop check-in BEFORE publishing
+ * an ActorRef. Further idle actors reuse the same worker. Real runnable
+ * pressure may grow the scheduler up to the configured worker_count.
+ * On pthread_create failure no actor slot/generation is consumed. */
+OresNativeActorRef ores_native_actor_scheduler_spawn_ready(
+    OresNativeActorScheduler* s, size_t i) {
+    OresNativeActorRef missing = {0, 0, 0};
+    if (!s) return missing;
+    lock(s);
+    OresNativeActorRef ref = missing;
+    if (!s->retired && i < s->actor_count && !s->actors[i].spawned
+            && ensure_workers_locked(s, 1)) {
+        /* pthread_create success alone is insufficient: wait until one
+         * carrier has entered its actual scheduler loop. Other workers may
+         * still be attaching; idle ActorRefs must not wait for all of them.
+         * This is a bounded admission wait, not a host busy-spin. */
+        if (s->carriers_checked_in == 0) {
+            struct timespec deadline;
+            if (clock_gettime(CLOCK_REALTIME, &deadline) == 0) {
+                deadline.tv_sec += 30;
+                while (!s->retired && s->carriers_checked_in == 0) {
+                    int rc = pthread_cond_timedwait(
+                        &s->drained, &s->lock, &deadline);
+                    if (rc == ETIMEDOUT) break;
+                    if (rc != 0) abort();
+                }
+            }
+        }
+        /* A stalled/failed OS start cannot publish an unusable ActorRef.
+         * An unready worker remains scheduler-owned for eventual check-in
+         * or VM retirement; never detach or reclaim it behind its back. */
+        if (!s->retired && s->carriers_checked_in != 0)
+            ref = spawn_locked(s, i);
+    }
     unlock(s);
     return ref;
 }
@@ -1964,4 +2029,21 @@ uint64_t ores_native_actor_scheduler_affine_picks(OresNativeActorScheduler* s) {
     const uint64_t picks = s->affine_picks;
     unlock(s);
     return picks;
+}
+
+/* Observability only: a carrier switch does not transfer execution authority.
+ * Both counters are read under the scheduler lock and saturate on overflow. */
+uint64_t ores_native_actor_scheduler_carrier_migrations(OresNativeActorScheduler* s) {
+    if (!s) return 0;
+    lock(s);
+    const uint64_t count = s->carrier_migrations;
+    unlock(s);
+    return count;
+}
+uint64_t ores_native_actor_scheduler_continuation_migrations(OresNativeActorScheduler* s) {
+    if (!s) return 0;
+    lock(s);
+    const uint64_t count = s->continuation_migrations;
+    unlock(s);
+    return count;
 }

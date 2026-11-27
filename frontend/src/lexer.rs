@@ -28,6 +28,8 @@ pub enum Tok {
     Colon,
     ColonColon,
     Arrow,
+    /// Exact U+2022 BULLET for return-first callable declarations.
+    Bullet,
     Dot,
     Assign,
     EqEq,
@@ -46,10 +48,13 @@ pub enum Tok {
     YieldStar,
     Slash,
     Bang,
+    UnicodeNot,
     Question,
     Pipe,
     PipeGt,
     Amp,
+    /// Contextual return alias at the beginning of a statement.
+    Caret,
     At,
     Eof,
 }
@@ -64,6 +69,15 @@ pub const MAX_TOKENS: usize = 32_768;
 pub const MAX_STRING_BYTES: usize = 4_096;
 
 pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
+    // Scan raw source before comments or quoted literals can hide controls.
+    let (mut raw_line, mut raw_col) = (1u32, 1u32);
+    for c in source.chars() {
+        if matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}') {
+            return Err(Diagnostic::new(Pos { line: raw_line, col: raw_col },
+                "E_SOURCE_BIDI", "bidirectional Unicode control in source"));
+        }
+        if c == '\n' { raw_line += 1; raw_col = 1; } else { raw_col += 1; }
+    }
     let chars: Vec<char> = source.chars().collect();
     let mut out = Vec::new();
     let (mut i, mut line, mut col) = (0usize, 1u32, 1u32);
@@ -120,9 +134,14 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
         if out.len() >= MAX_TOKENS {
             return Err(Diagnostic::new(pos, "E_SOURCE_LIMIT", "too many tokens"));
         }
-        if c.is_alphabetic() || c == '_' {
+        if matches!(c, '⧖' | '∂') {
+            bump!();
+            out.push(Token { tok: Tok::Ident("suspends".to_owned()), pos });
+            continue;
+        }
+        if c.is_alphabetic() || c == '_' || c == '〇' {
             let mut s = String::new();
-            while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
+            while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_' || chars[i] == '〇') {
                 s.push(chars[i]);
                 bump!();
             }
@@ -132,7 +151,7 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
                 bump!();
                 Tok::YieldStar
             } else {
-                Tok::Ident(s)
+                Tok::Ident(if s == "susp" { "suspends".to_owned() } else { s })
             };
             out.push(Token { tok, pos });
             continue;
@@ -184,14 +203,14 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
                     bump!();
                 }
             }
-            if i < chars.len() && chars[i] == 'i' && !chars.get(i + 1).is_some_and(|d| d.is_alphanumeric() || *d == '_') {
+            if i < chars.len() && chars[i] == 'i' && !chars.get(i + 1).is_some_and(|d| d.is_alphanumeric() || *d == '_' || *d == '〇') {
                 return Err(Diagnostic::new(
                     pos,
                     "E_UNSUPPORTED_TYPE",
                     "imaginary literals are not supported by the browser compiler yet",
                 ));
             }
-            if i < chars.len() && (chars[i].is_alphabetic() || chars[i] == '_') {
+            if i < chars.len() && (chars[i].is_alphabetic() || chars[i] == '_' || chars[i] == '〇') {
                 return Err(Diagnostic::new(pos, "E_INTEGER_LITERAL", "malformed integer literal"));
             }
             if floating {
@@ -289,6 +308,7 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
             (',', _) => (Tok::Comma, 1),
             (':', Some(':')) => (Tok::ColonColon, 2),
             (':', _) => (Tok::Colon, 1),
+            ('•', _) => (Tok::Bullet, 1),
             ('-', Some('>')) => (Tok::Arrow, 2),
             ('-', Some('-')) => (Tok::MinusMinus, 2),
             ('-', _) => (Tok::Minus, 1),
@@ -300,13 +320,14 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
             ('=', _) => (Tok::Assign, 1),
             ('!', Some('=')) => (Tok::NotEq, 2),
             ('!', _) => (Tok::Bang, 1),
+            ('¬', _) => (Tok::UnicodeNot, 1),
             ('<', Some('=')) => (Tok::Le, 2),
             ('<', _) => (Tok::Lt, 1),
             ('>', Some('=')) => (Tok::Ge, 2),
             ('>', _) => (Tok::Gt, 1),
             ('*', _) => (Tok::Star, 1),
             ('/', _) => (Tok::Slash, 1),
-            ('%', _) | ('^', _) => {
+            ('%', _) => {
                 return Err(Diagnostic::new(
                     pos,
                     "E_UNSUPPORTED",
@@ -317,6 +338,7 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diagnostic> {
             ('|', Some('>')) => (Tok::PipeGt, 2),
             ('|', _) => (Tok::Pipe, 1),
             ('&', _) => (Tok::Amp, 1),
+            ('^', _) => (Tok::Caret, 1),
             ('@', _) => (Tok::At, 1),
             ('`', _) => {
                 return Err(Diagnostic::new(

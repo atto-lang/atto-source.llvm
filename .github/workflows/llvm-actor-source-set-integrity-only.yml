@@ -5,6 +5,7 @@ on:
     paths:
       - 'src/main/cpp/oreslang/main.cpp'
       - 'src/main/cpp/oreslang/frontend/ActorSourceSetAdmission.hpp'
+      - 'src/main/cpp/oreslang/frontend/ActorDeclaredHeaderAdmission.hpp'
       - 'src/main/cpp/oreslang/frontend/SourceInput.hpp'
       - 'contracts/actor-counter-identical-source-v1/**'
       - 'tests/cmake/native_actor_source_set_integrity_only.cmake'
@@ -47,7 +48,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends cmake ninja-build clang-18 llvm-18-dev libclang-18-dev nodejs
+          sudo apt-get install -y --no-install-recommends cmake ninja-build clang-18 llvm-18-dev libclang-18-dev nodejs git
           node --version
       - name: Build real LLVM compiler from complete checked-out source
         shell: bash
@@ -70,4 +71,5 @@ jobs:
           ctest --test-dir build-source-set --output-on-failure --no-tests=error \
             -R '^(native_actor_counter_source_set_integrity_only|native_actor_source_set_git_blob_and_paths_host_only)$'
           echo 'RECEIPT LLVM_ACTOR_SOURCE_SET_INTEGRITY_ONLY=EXECUTED'
+          echo 'RECEIPT ACTOR_DECLARATION_HEADERS_ONLY=EXECUTED'
           echo 'RECEIPT GUEST_ACTOR_EXECUTED=NO'

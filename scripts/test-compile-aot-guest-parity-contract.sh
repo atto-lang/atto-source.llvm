@@ -6,7 +6,7 @@ command -v clang >/dev/null || { echo 'Clang required for host-only negative con
 tmp="$(mktemp -d)"
 trap 'rm -rf -- "$tmp"' EXIT
 mkdir -p "$tmp/repo/scripts" "$tmp/repo/contracts/atto-parity-v1" "$tmp/repo/tests/fixtures" "$tmp/bin"
-cp -- "$root/scripts/compile-aot.sh" "$root/scripts/test-compile-aot-guest-parity.sh" "$tmp/repo/scripts/"
+cp -- "$root/scripts/compile-aot.sh" "$root/scripts/audit-aot-linked-image.sh" "$root/scripts/test-compile-aot-guest-parity.sh" "$tmp/repo/scripts/"
 printf '%s\n' 'pub fnc main(): int { return 40 + 2; }' > "$tmp/repo/contracts/atto-parity-v1/add.atto"
 printf '%s\n' 'pub fnc main(): int { return 42; }' > "$tmp/repo/tests/fixtures/numerics-atto-main.atto"
 cat > "$tmp/bin/oreslang-llvmc" <<'COMPILER'

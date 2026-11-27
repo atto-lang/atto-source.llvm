@@ -19,7 +19,7 @@ if(NOT "${good_status}" STREQUAL "0" OR NOT good_ir MATCHES "define [^\n]*@")
 endif()
 
 # Exact Java/Graal guest fixture. LLVM may reject it until real native
-# tagged payload, ownership-safe throw and caller-side Option lowering exist.
+# tagged payload, ownership-safe throw and caller-side Result lowering exist.
 if(NOT EXISTS "${ORES_TRAP_SHARED_SOURCE}")
     message(FATAL_ERROR "shared AttoLang trap fixture is missing")
 endif()
@@ -43,7 +43,10 @@ set(case_3 [=[trap fnc checked():int { return 7; } pub fnc main():int { return 7
 set(case_4 [=[pub fnc main():int { val Option<int> outcome = trap true; return 7; }]=])
 set(case_5 [=[pub fnc main():int { throw Error("ordinary"); return 7; }]=])
 set(case_6 [=[pub fnc main():int { val Option<int> outcome = trap Some(7); return 7; }]=])
-foreach(n RANGE 1 6)
+set(case_7 [=[pub fnc main():int { return trap! 7; }]=])
+set(case_8 [=[fnc checked():int { return 7; } pub fnc main():int { return trap! checked(); }]=])
+set(case_9 [=[pub fnc main():int { val Option<int> outcome = trap! Some(7); return 7; }]=])
+foreach(n RANGE 1 9)
     set(source "${case_${n}}")
     set(path "${CMAKE_CURRENT_BINARY_DIR}/ores_trap_gate_reject_${n}.atto")
     file(WRITE "${path}" "${source}\n")
@@ -62,4 +65,4 @@ foreach(n RANGE 1 6)
         message(FATAL_ERROR "rejected trap source produced LLVM IR in case ${n}")
     endif()
 endforeach()
-message(STATUS "LLVM_TRAP_OPTION_RESULT_NATIVE_SOURCE_GATE=6_REJECTED_1_POSITIVE (not semantic parity)")
+message(STATUS "LLVM_TRAP_OPTION_RESULT_NATIVE_SOURCE_GATE=9_REJECTED_1_POSITIVE (not semantic parity)")

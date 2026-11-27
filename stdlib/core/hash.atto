@@ -1,0 +1,27 @@
+// LLVM backend-local noncryptographic byte-fold, guest source only.
+// State range [0,1000000007), octets [0,255]; -1 is invalid input.
+// Same public v1 byte-step semantics as Java, independently maintained.
+// No 64-bit overflow, host hashing, modulo, shifts or unchecked wrapping.
+define module hash as
+  pub fnc initial_state(): int { return 17; }
+  pub fnc step_byte(int state, int octet): int {
+    if state < 0 || state >= 1000000007; do return -1; fi
+    if octet < 0 || octet > 255; do return -1; fi
+    let candidate: int = state * 31 + octet;
+    for (let i = 0; i < 31; i = i + 1) {
+      if candidate >= 1000000007; do
+        candidate = candidate - 1000000007;
+      fi
+    }
+    return candidate;
+  }
+  pub fnc two_bytes(int first, int second): int {
+    let head: int = step_byte(initial_state(), first);
+    if head < 0; do return -1; fi
+    return step_byte(head, second);
+  }
+  pub fnc from_bool(bool value): int {
+    if value; do return step_byte(initial_state(), 1); fi
+    return step_byte(initial_state(), 0);
+  }
+end

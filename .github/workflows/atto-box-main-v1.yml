@@ -1,0 +1,73 @@
+name: Atto Box int main native AOT integration
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'src/main/cpp/oreslang/frontend/Parser.hpp'
+      - 'src/main/cpp/oreslang/types/OwnershipChecker.cpp'
+      - 'src/main/cpp/oreslang/types/NativeScalarTypes.cpp'
+      - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
+      - 'src/main/cpp/oreslang/types/SendSyncContract.hpp'
+      - 'tests/native_send_sync_contract_test.cpp'
+      - 'tests/atto_box_main_v1.sh'
+      - 'tests/alloc-parity-llvm-v1.sh'
+      - 'tests/alloc-parity-llvm-v1.tsv'
+      - 'tests/atto_box_main_v1_oracle_test.sh'
+      - 'tests/atto-box-main-v1/**'
+      - '.github/workflows/atto-box-main-v1.yml'
+  push:
+    paths:
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'src/main/cpp/oreslang/frontend/Parser.hpp'
+      - 'src/main/cpp/oreslang/types/OwnershipChecker.cpp'
+      - 'src/main/cpp/oreslang/types/NativeScalarTypes.cpp'
+      - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
+      - 'src/main/cpp/oreslang/types/SendSyncContract.hpp'
+      - 'tests/native_send_sync_contract_test.cpp'
+      - 'tests/atto_box_main_v1.sh'
+      - 'tests/alloc-parity-llvm-v1.sh'
+      - 'tests/alloc-parity-llvm-v1.tsv'
+      - 'tests/atto_box_main_v1_oracle_test.sh'
+      - 'tests/atto-box-main-v1/**'
+      - '.github/workflows/atto-box-main-v1.yml'
+permissions:
+  contents: read
+jobs:
+  host-aot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout immutable triggering HEAD
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          submodules: false
+      - name: Check Git HEAD and unmodified working tree
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet
+          git diff --cached --quiet
+          echo "ATTO_LLVM_ALLOC_SOURCE_HEAD=$EXPECTED_HEAD"
+          echo "ATTO_LLVM_ALLOC_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Self-test strict Box guest and safety-negative test oracles
+        shell: bash
+        run: bash tests/atto_box_main_v1_oracle_test.sh
+      - name: Install supported LLVM 18 target toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq llvm-18-dev clang-18 cmake
+      - name: Build real main C++17 compiler and run Box AOT, sanitizer, and Send Sync checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="/usr/lib/llvm-18/bin:$PATH"
+          cmake -S . -B /tmp/atto-box-main-build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DLLVM_DIR=/usr/lib/llvm-18/cmake
+          cmake --build /tmp/atto-box-main-build --target oreslang-llvmc -j2
+          bash tests/alloc-parity-llvm-v1.sh /tmp/atto-box-main-build/oreslang-llvmc
+          ATTO_BOX_SANITIZE=1 bash tests/atto_box_main_v1.sh /tmp/atto-box-main-build/oreslang-llvmc
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -Isrc/main/cpp tests/native_send_sync_contract_test.cpp -o /tmp/atto-send-sync
+          /tmp/atto-send-sync

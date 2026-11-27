@@ -1,0 +1,7 @@
+// The native frame bridge is compiler/runtime-private.
+pub fnc oreslang_source_actor_frame_push(): int {
+  return 1;
+}
+pub fnc main(): int {
+  return oreslang_source_actor_frame_push();
+}

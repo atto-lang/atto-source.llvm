@@ -7,12 +7,16 @@
 //! rejected with a diagnostic and never produces an artifact. See README.md.
 
 pub mod ast;
+/// Pure bounded typed-IR DATA send-effect closure, shared with peer frontend.
+pub mod actor_send_effect_graph;
 pub mod check;
 pub mod diag;
+pub mod directed_pipe;
 pub mod generator_cfg;
 pub mod generator_frame;
 pub mod lexer;
 pub mod parser;
+mod struct_value_guest;
 pub mod target_syntax;
 pub mod target_typed;
 pub mod wasm;
@@ -33,6 +37,63 @@ pub fn compile(source: &str) -> Result<Vec<u8>, Diagnostic> {
         ));
     }
     let toks = lexer::lex(source)?;
+    if let Some(pos) = directed_pipe::unlowered_pos(&toks) {
+        return Err(Diagnostic::new(pos, "E_UNSUPPORTED_CONTINUOUS_PIPE",
+            "typed pipe/rpipe DATA graph is planned but no guest transport or PipeHandle exists"));
+    }
+    // Attached nominal struct syntax has its own target AST. Never route it
+    // through identity-bearing class or structural shape lowering. Locate
+    // top-level declaration headers using lexer tokens, not source text.
+    let mut depth = 0usize;
+    let mut pending_struct = None;
+    for (i, token) in toks.iter().enumerate() {
+        if depth == 0 && (matches!(toks.get(i..i.saturating_add(5)),
+            Some([lexer::Token { tok: lexer::Tok::Ident(a), .. },
+                  lexer::Token { tok: lexer::Tok::Ident(_), .. },
+                  lexer::Token { tok: lexer::Tok::Assign, .. },
+                  lexer::Token { tok: lexer::Tok::Ident(b), .. },
+                  lexer::Token { tok: lexer::Tok::LBrace, .. }])
+                if a == "type" && b == "struct")
+            || matches!(toks.get(i..i.saturating_add(4)),
+                Some([lexer::Token { tok: lexer::Tok::Ident(a), .. },
+                      lexer::Token { tok: lexer::Tok::Ident(b), .. },
+                      lexer::Token { tok: lexer::Tok::Ident(_), .. },
+                      lexer::Token { tok: lexer::Tok::LBrace, .. }])
+                    if a == "define" && b == "struct")) {
+            pending_struct = Some(i);
+        }
+        match &token.tok {
+            lexer::Tok::LBrace => depth += 1,
+            lexer::Tok::RBrace => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    if let Some(start) = pending_struct.take() {
+                        if matches!(toks.get(i+1).map(|t| &t.tok),
+                            Some(lexer::Tok::Ident(w)) if w == "with") {
+                            if start != 0 {
+                                return Err(Diagnostic::new(toks[start].pos, "E_UNSUPPORTED",
+                                    "attached struct execution requires leading file-local declarations"));
+                            }
+                            let program = struct_value_guest::lower(toks.clone())?;
+                            let typed = check::check(&program)?;
+                            if typed.heap || typed.strings || !typed.actors.is_empty()
+                                || !typed.generators.is_empty() || !typed.globals.is_empty() {
+                                return Err(Diagnostic::new(toks[start].pos, "E_UNSUPPORTED",
+                                    "scalar struct lowering must not allocate or use actor/generator/global state"));
+                            }
+                            let bytes = wasm::emit(&typed);
+                            if bytes.len() > wasm::MAX_OUTPUT {
+                                return Err(Diagnostic::new(toks[start].pos, "E_OUTPUT_LIMIT",
+                                    "generated module exceeds 1 MiB"));
+                            }
+                            return Ok(bytes);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
     // Detect target declarations at any file-scope position, not only at
     // source byte zero. Ignore comments/strings (the lexer already tokenizes
     // them) and ignore nested brace bodies so a string or local expression
@@ -53,6 +114,20 @@ pub fn compile(source: &str) -> Result<Vec<u8>, Diagnostic> {
                 }
             }
             _ => {}
+        }
+    }
+    // A protected actor attachment must never become an ordinary field
+    // during the scalar/actor guest compiler's fallback parsing.
+    let attached_actor_state = toks.windows(5).any(|w|
+        matches!((&w[0].tok,&w[1].tok,&w[2].tok,&w[3].tok,&w[4].tok),
+            (lexer::Tok::Ident(a),lexer::Tok::Ident(b),
+             lexer::Tok::Ident(c),lexer::Tok::Ident(d),lexer::Tok::Ident(_))
+                if a=="define"&&b=="state"&&c=="on"&&d=="actor"));
+    if attached_actor_state {
+        let headers = target_syntax::parse_target_declarations(&toks)?;
+        if !headers.actor_state_attachments.is_empty() {
+            return Err(Diagnostic::new(toks[0].pos, "E_UNSUPPORTED",
+                "attached actor state is parsed but its guarded native/guest runtime is unavailable"));
         }
     }
     if target {
@@ -162,8 +237,13 @@ mod abi {
                     ),
                 );
             }
-            // SAFETY: single-threaded wasm; the host wrote `length` bytes before calling.
-            let input: &[u8] = unsafe { &(*std::ptr::addr_of!(INPUT))[..length as usize] };
+            // SAFETY: the checked length is within the initialized static INPUT buffer.
+            // The single-threaded Wasm ABI does not allow host writes while compile runs.
+            // Form only the requested byte slice, not an implicit reference to the
+            // entire raw array. This keeps dangerous_implicit_autorefs enabled.
+            let input: &[u8] = unsafe {
+                std::slice::from_raw_parts(std::ptr::addr_of!(INPUT).cast::<u8>(), length as usize)
+            };
             let source = match std::str::from_utf8(input) {
                 Ok(s) => s,
                 Err(_) => {
@@ -181,5 +261,51 @@ mod abi {
                 Err(d) => fail(&mut st, d),
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod directional_pipe_guest_gate_tests {
+    use super::*;
+    #[test]
+    fn rejects_continuous_pipe_and_rpipe_without_guest_runtime() {
+        let samples = [
+            "pub fnc main(): int { val c = producer pipe consumer; return 0; }",
+            "pub fnc main(): int { val c = consumer rpipe producer; return 0; }",
+            "define actor Producer as end pub fnc main(): int { val c = spawn Producer() pipe spawn Producer(); return 0; }",
+        ];
+        for source in samples {
+            let d = compile(source).expect_err("continuous graph cannot reach wasm codegen");
+            assert_eq!(d.code, "E_UNSUPPORTED_CONTINUOUS_PIPE", "{source}");
+        }
+    }
+    #[test]
+    fn all_twelve_exact_canonical_pipeline_guests_fail_before_wasm_codegen() {
+        // These are byte-identical atto-platform-conformance #102 fixtures.
+        // This backend has no actual typed continuous guest runtime yet.
+        for (name, source) in [
+            ("actor-forward", include_str!("../../fixtures/pipe-rpipe-v1/actor-forward.atto")),
+            ("actor-reverse", include_str!("../../fixtures/pipe-rpipe-v1/actor-reverse.atto")),
+            ("actor-missing-emits", include_str!("../../fixtures/pipe-rpipe-v1/actor-missing-emits.atto")),
+            ("actor-wrong-direction", include_str!("../../fixtures/pipe-rpipe-v1/actor-wrong-direction.atto")),
+            ("mixed-channel-stream-forward", include_str!("../../fixtures/pipe-rpipe-v1/mixed-channel-stream-forward.atto")),
+            ("mixed-channel-stream-reverse", include_str!("../../fixtures/pipe-rpipe-v1/mixed-channel-stream-reverse.atto")),
+            ("actor-duplicate-direction", include_str!("../../fixtures/pipe-rpipe-v1/actor-duplicate-direction.atto")),
+            ("actor-mixed-directions", include_str!("../../fixtures/pipe-rpipe-v1/actor-mixed-directions.atto")),
+            ("stopped-source", include_str!("../../fixtures/pipe-rpipe-v1/stopped-source.atto")),
+            ("closed-channel", include_str!("../../fixtures/pipe-rpipe-v1/closed-channel.atto")),
+            ("stopped-consumer", include_str!("../../fixtures/pipe-rpipe-v1/stopped-consumer.atto")),
+            ("stopped-actor-sink", include_str!("../../fixtures/pipe-rpipe-v1/stopped-actor-sink.atto")),
+        ] {
+            let d=compile(source).expect_err("unsupported pipeline cannot emit Wasm");
+            assert_eq!(d.code,"E_UNSUPPORTED_CONTINUOUS_PIPE",
+                "{name}: must reject without accepting untyped DATA graphs");
+        }
+    }
+
+    #[test]
+    fn commented_words_are_not_continuous_pipeline_tokens() {
+        let source = "// pipe rpipe\npub fnc main(): int { return 42; }";
+        assert!(compile(source).is_ok());
     }
 }

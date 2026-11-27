@@ -1,0 +1,55 @@
+// expect-exit: 0
+// Mirrors tests/fixtures/stdlib_path_telemetry_sync_v1.atto (atto-source.llvm#883).
+// Native guest candidate; fail closed if std/* imports are not linked.
+// This is NOT an executed proof of LLVM stdlib support.
+import module path from "std/path";
+import module telemetry from "std/telemetry";
+import module sync from "std/sync";
+
+pub fnc main(): int {
+  if !path.is_separator(47, false) then return 1; fi
+  if path.is_separator(92, false) then return 2; fi
+  if !path.is_separator(92, true) then return 3; fi
+  if path.component_kind(2, 46, 46) != 2 then return 4; fi
+  if path.advance_relative_depth(0, 2) != -1 then return 5; fi
+  if path.advance_relative_depth(2, 2) != 1 then return 6; fi
+  if path.advance_relative_depth(256, 0) != -1 then return 7; fi
+  if !path.is_windows_drive_prefix(67, 58) then return 8; fi
+  if telemetry.traceparent_v00_fields_valid(0, 0, 0, 1, 1) then return 9; fi
+  if !telemetry.traceparent_v00_fields_valid(0, 1, 0, 1, 255) then return 10; fi
+  if !telemetry.sampled_flag(3) then return 11; fi
+  if telemetry.sampling_decision(3, false) != 0 then return 12; fi
+  if !telemetry.dormant_probe_admissible(3, 2, true) then return 13; fi
+  if telemetry.dormant_probe_admissible(0, 1, true) then return 14; fi
+  if telemetry.queue_admissible(8, 8, 0, 0) then return 15; fi
+  if !sync.mutex_take_admissible(false, false, 0) then return 16; fi
+  if sync.mutex_take_admissible(false, false, 1) then return 17; fi
+  if !sync.read_take_admissible(0, false, 0, 10) then return 18; fi
+  if sync.read_take_admissible(0, false, 1, 10) then return 19; fi
+  if !sync.sem_return_admissible(3, 2, 5, false) then return 20; fi
+  if sync.sem_return_admissible(4, 2, 5, false) then return 21; fi
+  if !sync.barrier_last_arrival(3, 4, false) then return 22; fi
+  if sync.next_epoch_admissible(2147483647, 0) then return 23; fi
+  if !sync.sem_return_admissible(3, 2, 5, true) then return 24; fi
+  if !path.relative_join_budget_admissible(4, 4, 1, 1) then return 25; fi
+  if path.relative_join_budget_admissible(4093, 4, 1, 1) then return 26; fi
+  if path.relative_join_budget_admissible(3, 3, 256, 1) then return 27; fi
+  if path.extension_offset_admissible(4, 0) then return 28; fi
+  if !path.extension_offset_admissible(4, 1) then return 29; fi
+  if path.extension_offset_admissible(4, 3) then return 30; fi
+  if !path.windows_device_3(99, 111, 110) then return 31; fi
+  if !path.windows_device_4(99, 111, 109, 50) then return 32; fi
+  if path.windows_device_4(99, 111, 109, 48) then return 33; fi
+  if path.windows_device_3(97, 98, 99) then return 34; fi
+  if !sync.mutex_release_receipt_admissible(true, 8, 8, 3, 3, false) then return 35; fi
+  if sync.mutex_release_receipt_admissible(true, 8, 9, 3, 3, false) then return 36; fi
+  if sync.mutex_release_receipt_admissible(true, 8, 8, 3, 2, false) then return 37; fi
+  if sync.mutex_release_receipt_admissible(true, 8, 8, 3, 3, true) then return 38; fi
+  if !sync.rw_upgrade_admissible(1, false, 0, true) then return 39; fi
+  if sync.rw_upgrade_admissible(2, false, 0, true) then return 40; fi
+  if !path.is_safe_scalar(233, false) then return 41; fi
+  if path.is_safe_scalar(233, true) then return 42; fi
+  if path.is_safe_scalar(55296, false) then return 43; fi
+  if path.is_safe_scalar(1114112, false) then return 44; fi
+  return 0;
+}

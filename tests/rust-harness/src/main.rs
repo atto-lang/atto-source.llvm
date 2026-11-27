@@ -1,4 +1,5 @@
 mod checked_i64;
+mod native_cast_parity;
 #[cfg(test)]
 mod actor_io_half_close;
 
@@ -1304,6 +1305,12 @@ fn real_main() -> Result<(), String> {
             let compiler = path_arg(&args, 2, "usage: native-async-io-boundary <compiler>")?;
             native_async_io_boundary(&compiler)
         }
+        Some("native-cast-parity") => {
+            let compiler = path_arg(&args, 2, "usage: native-cast-parity <compiler> <clang> <fixtures>")?;
+            let clang = path_arg(&args, 3, "usage: native-cast-parity <compiler> <clang> <fixtures>")?;
+            let fixtures = path_arg(&args, 4, "usage: native-cast-parity <compiler> <clang> <fixtures>")?;
+            native_cast_parity::run_cases(&compiler, &clang, &fixtures)
+        }
         Some("native-remainder-parity") => {
             let compiler = path_arg(&args, 2, "usage: native-remainder-parity <compiler> <clang>")?;
             let clang = path_arg(&args, 3, "usage: native-remainder-parity <compiler> <clang>")?;
@@ -1333,7 +1340,7 @@ fn real_main() -> Result<(), String> {
             aot_driver(&driver, &compiler, &clang)
         }
         _ => Err(
-            "usage: oreslang-llvm-test-harness <realtime-profile|callable-nominal|nominal-type-binders|aot-driver|native-remainder-parity|named-call-order|actor-persistent-fields|tagged-message-wire|native-async-io-boundary|native-inline-self-arity> ..."
+            "usage: oreslang-llvm-test-harness <realtime-profile|callable-nominal|nominal-type-binders|aot-driver|native-remainder-parity|native-cast-parity|named-call-order|actor-persistent-fields|tagged-message-wire|native-async-io-boundary|native-inline-self-arity> ..."
                 .to_string(),
         ),
     }

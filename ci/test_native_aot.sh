@@ -3,12 +3,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export CARGO_NET_OFFLINE=true
-test "$(git hash-object frontend/src/check.rs)" = "fc8806e97d94f408fd145f48b73ab33324dae2fa"
-test "$(git hash-object frontend/src/parser.rs)" = "6231be661be9b7bb40bd9ed69d4cd60ccc5b9609"
-test "$(git hash-object frontend/src/lexer.rs)" = "23f8fe950b47627110cf3265b771398bb46213e3"
+test "$(git hash-object frontend/src/check.rs)" = "96978d25b1f32b6be3c0810662ad60228f59ed7a"
+test "$(git hash-object frontend/src/parser.rs)" = "2e5f64eee05a3adede33b11c13c57638be731314"
+test "$(git hash-object frontend/src/lexer.rs)" = "f12cc53cf4d59f9ee4c0918ef708673e3d2031d8"
 
-cargo test --offline
-cargo build --offline --release --bin atto-llvm
+cargo test --locked --offline
+cargo build --locked --offline --release --bin atto-llvm
 clang --version | head -n 1
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -214,5 +214,7 @@ if find "$work" -type f -name '*.atto-stage-*.tmp' | grep -q .; then
   echo "FAIL: temporary compiler artifacts leaked" >&2; exit 1
 fi
 echo "PASS atomic output, failure preservation, and cleanup"
+
+bash ci/test_guard_dual_form_native.sh
 
 echo "PASS LLVM_NATIVE_AOT_SCALAR_GUEST cases=$total toolchain=clang no_guest_vm=1 zero_gc_scalar=1"

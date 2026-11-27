@@ -1,0 +1,19 @@
+// expect-exit: 42
+import module map from "atto.alloc/map";
+pub fnc main(): int {
+  let mut table = map.new_map(3);
+  table.try_insert(-1, 10);
+  table.try_insert(2, 20);
+  table.try_insert(5, 30);
+  if table.len() != 3 || table.get_or(5, 0) != 30; do return 1; fi
+  table.try_insert(2, 21);
+  if table.len() != 3 || table.get_or(2, 0) != 21; do return 2; fi
+  table.try_insert(8, 99);
+  if table.len() != 3 || table.contains_key(8); do return 3; fi
+  table.remove(-1);
+  table.try_insert(8, 40);
+  if table.len() != 3 || table.get_or(8, 0) != 40; do return 4; fi
+  table.clear();
+  if table.len() != 0 || table.contains_key(2); do return 5; fi
+  return 42;
+}

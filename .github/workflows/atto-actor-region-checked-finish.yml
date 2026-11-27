@@ -1,0 +1,32 @@
+name: LLVM actor-region checked finish (native substrate)
+on:
+  push:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/ActorArena.c'
+      - 'src/main/cpp/oreslang/runtime/ActorArena.h'
+      - 'src/main/cpp/oreslang/runtime/ActorRegionV1.c'
+      - 'src/main/cpp/oreslang/runtime/ActorRegionV1.h'
+      - 'src/main/cpp/oreslang/backend/ActorRegionV2Guest.hpp'
+      - 'tests/actor_region_compiler_finish_v1_test.c'
+      - 'tests/run_actor_region_compiler_finish_v1.sh'
+      - '.github/workflows/atto-actor-region-checked-finish.yml'
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/ActorArena.c'
+      - 'src/main/cpp/oreslang/runtime/ActorArena.h'
+      - 'src/main/cpp/oreslang/runtime/ActorRegionV1.c'
+      - 'src/main/cpp/oreslang/runtime/ActorRegionV1.h'
+      - 'src/main/cpp/oreslang/backend/ActorRegionV2Guest.hpp'
+      - 'tests/actor_region_compiler_finish_v1_test.c'
+      - 'tests/run_actor_region_compiler_finish_v1.sh'
+      - '.github/workflows/atto-actor-region-checked-finish.yml'
+permissions:
+  contents: read
+jobs:
+  checked-native-cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: GCC and Clang ASan/UBSan checked owner cleanup (host substrate only)
+        run: bash tests/run_actor_region_compiler_finish_v1.sh

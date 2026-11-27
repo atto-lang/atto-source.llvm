@@ -1,0 +1,406 @@
+{
+  "schema": "atto.backend-local.arena-policy.v1",
+  "backend": "atto-source.llvm",
+  "source": "stdlib/policy/alloc/arena_plan.atto",
+  "source_git_blob_sha": "e42af976b5ec0846c86e0ed8dfee3d9d6e34056d",
+  "status": "SOURCE_ONLY_NOT_EXECUTED_BY_NATIVE_ATTO_COMPILER",
+  "i64_arguments": "Decimal strings represent exact signed 64-bit integers; JSON numbers restricted to safe integer range.",
+  "semantics": "Policy admission only. No ownership/loan/heap/handle authority, allocation, destructor or source-level guest runtime is certified.",
+  "cases": [
+    {
+      "id": "arena-01",
+      "fn": "arena_reservation_end",
+      "args": [
+        0,
+        0,
+        0
+      ],
+      "expected": 0
+    },
+    {
+      "id": "arena-02",
+      "fn": "arena_reservation_end",
+      "args": [
+        0,
+        8,
+        8
+      ],
+      "expected": 8
+    },
+    {
+      "id": "arena-03",
+      "fn": "arena_reservation_end",
+      "args": [
+        7,
+        1,
+        8
+      ],
+      "expected": 8
+    },
+    {
+      "id": "arena-04",
+      "fn": "arena_reservation_end",
+      "args": [
+        8,
+        1,
+        8
+      ],
+      "expected": -1
+    },
+    {
+      "id": "arena-05",
+      "fn": "arena_reservation_end",
+      "args": [
+        -1,
+        1,
+        8
+      ],
+      "expected": -1
+    },
+    {
+      "id": "arena-06",
+      "fn": "arena_reservation_end",
+      "args": [
+        7,
+        -1,
+        8
+      ],
+      "expected": -1
+    },
+    {
+      "id": "arena-07",
+      "fn": "arena_reservation_end",
+      "args": [
+        7,
+        1,
+        -1
+      ],
+      "expected": -1
+    },
+    {
+      "id": "arena-08",
+      "fn": "arena_reservation_end",
+      "args": [
+        9,
+        0,
+        8
+      ],
+      "expected": -1
+    },
+    {
+      "id": "arena-09",
+      "fn": "arena_reservation_end",
+      "args": [
+        "9223372036854775806",
+        1,
+        "9223372036854775807"
+      ],
+      "expected": "9223372036854775807"
+    },
+    {
+      "id": "arena-10",
+      "fn": "arena_reservation_end",
+      "args": [
+        "9223372036854775806",
+        2,
+        "9223372036854775807"
+      ],
+      "expected": -1
+    },
+    {
+      "id": "arena-11",
+      "fn": "arena_rewind_target",
+      "args": [
+        0,
+        8,
+        8,
+        0
+      ],
+      "expected": 0
+    },
+    {
+      "id": "arena-12",
+      "fn": "arena_rewind_target",
+      "args": [
+        8,
+        8,
+        8,
+        0
+      ],
+      "expected": 8
+    },
+    {
+      "id": "arena-13",
+      "fn": "arena_rewind_target",
+      "args": [
+        9,
+        8,
+        8,
+        0
+      ],
+      "expected": -1
+    },
+    {
+      "id": "arena-14",
+      "fn": "arena_rewind_target",
+      "args": [
+        4,
+        8,
+        8,
+        1
+      ],
+      "expected": -1
+    },
+    {
+      "id": "arena-15",
+      "fn": "arena_rewind_target",
+      "args": [
+        4,
+        8,
+        8,
+        -1
+      ],
+      "expected": -1
+    },
+    {
+      "id": "arena-16",
+      "fn": "arena_rewind_target",
+      "args": [
+        4,
+        9,
+        8,
+        0
+      ],
+      "expected": -1
+    },
+    {
+      "id": "arena-17",
+      "fn": "arena_rewind_target",
+      "args": [
+        -1,
+        8,
+        8,
+        0
+      ],
+      "expected": -1
+    },
+    {
+      "id": "arena-18",
+      "fn": "arena_tail_release_valid",
+      "args": [
+        4,
+        4,
+        8,
+        8,
+        0
+      ],
+      "expected": true
+    },
+    {
+      "id": "arena-19",
+      "fn": "arena_tail_release_valid",
+      "args": [
+        4,
+        3,
+        8,
+        8,
+        0
+      ],
+      "expected": false
+    },
+    {
+      "id": "arena-20",
+      "fn": "arena_tail_release_valid",
+      "args": [
+        0,
+        0,
+        0,
+        8,
+        0
+      ],
+      "expected": false
+    },
+    {
+      "id": "arena-21",
+      "fn": "arena_tail_release_valid",
+      "args": [
+        4,
+        4,
+        8,
+        8,
+        1
+      ],
+      "expected": false
+    },
+    {
+      "id": "arena-22",
+      "fn": "arena_tail_release_valid",
+      "args": [
+        4,
+        4,
+        8,
+        8,
+        -1
+      ],
+      "expected": false
+    },
+    {
+      "id": "arena-23",
+      "fn": "arena_tail_release_valid",
+      "args": [
+        9,
+        1,
+        8,
+        8,
+        0
+      ],
+      "expected": false
+    },
+    {
+      "id": "arena-24",
+      "fn": "arena_tail_release_valid",
+      "args": [
+        4,
+        5,
+        8,
+        8,
+        0
+      ],
+      "expected": false
+    },
+    {
+      "id": "arena-25",
+      "fn": "arena_tail_release_valid",
+      "args": [
+        0,
+        8,
+        8,
+        7,
+        0
+      ],
+      "expected": false
+    },
+    {
+      "id": "arena-26",
+      "fn": "arena_can_close",
+      "args": [
+        0,
+        0,
+        0
+      ],
+      "expected": true
+    },
+    {
+      "id": "arena-27",
+      "fn": "arena_can_close",
+      "args": [
+        1,
+        0,
+        0
+      ],
+      "expected": false
+    },
+    {
+      "id": "arena-28",
+      "fn": "arena_can_close",
+      "args": [
+        0,
+        1,
+        0
+      ],
+      "expected": false
+    },
+    {
+      "id": "arena-29",
+      "fn": "arena_can_close",
+      "args": [
+        0,
+        0,
+        1
+      ],
+      "expected": false
+    },
+    {
+      "id": "arena-30",
+      "fn": "arena_can_close",
+      "args": [
+        -1,
+        0,
+        0
+      ],
+      "expected": false
+    },
+    {
+      "id": "arena-31",
+      "fn": "arena_plan_next_generation",
+      "args": [
+        1,
+        4
+      ],
+      "expected": 2
+    },
+    {
+      "id": "arena-32",
+      "fn": "arena_plan_next_generation",
+      "args": [
+        3,
+        4
+      ],
+      "expected": 4
+    },
+    {
+      "id": "arena-33",
+      "fn": "arena_plan_next_generation",
+      "args": [
+        4,
+        4
+      ],
+      "expected": -1
+    },
+    {
+      "id": "arena-34",
+      "fn": "arena_plan_next_generation",
+      "args": [
+        0,
+        4
+      ],
+      "expected": -1
+    },
+    {
+      "id": "arena-35",
+      "fn": "arena_plan_next_generation",
+      "args": [
+        1,
+        0
+      ],
+      "expected": -1
+    },
+    {
+      "id": "arena-36",
+      "fn": "arena_plan_next_generation",
+      "args": [
+        -1,
+        4
+      ],
+      "expected": -1
+    },
+    {
+      "id": "arena-37",
+      "fn": "arena_plan_next_generation",
+      "args": [
+        "9223372036854775806",
+        "9223372036854775807"
+      ],
+      "expected": "9223372036854775807"
+    },
+    {
+      "id": "arena-38",
+      "fn": "arena_plan_next_generation",
+      "args": [
+        "9223372036854775807",
+        "9223372036854775807"
+      ],
+      "expected": -1
+    }
+  ]
+}
