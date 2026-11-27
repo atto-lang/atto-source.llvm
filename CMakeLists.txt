@@ -6373,9 +6373,15 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_oversized_integer overflow-integer.ores --diagnostic "overflows signed 64-bit")
     oreslang_contract_test(reject_unclosed_comment unclosed-comment.ores --diagnostic "unterminated block comment")
 
-    # Primitive field projections use synchronous whole-object loan
-    # admission until per-field provenance can be proven by both checker and
-    # LLVM lowering. Rejections must emit zero IR.
+    # Direct flat scalar fields of a local owner have distinct call-loan
+    # identities; nonlocal/nested/whole-owner loans remain conservative.
+    # Rejections must emit zero IR.
+    oreslang_contract_test(native_projection_same_exclusive
+        class-projection-same-exclusive-reject.atto --diagnostic "conflicting active native borrow")
+    oreslang_contract_test(native_projection_outer_loan
+        class-projection-outer-loan-reject.atto --diagnostic "conflicting active native borrow")
+    oreslang_contract_test(native_projection_nested_release_outer_live
+        class-projection-nested-release-outer-live-reject.atto --diagnostic "conflicting active native borrow")
     oreslang_contract_test(native_projection_alias_conflict
         class-projection-overlap-reject.ores --diagnostic "conflicting active native borrow")
     oreslang_contract_test(native_projection_immutable_exclusive
@@ -6532,6 +6538,14 @@ if(BUILD_TESTING)
             class-projection-shared-reborrow-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
         oreslang_contract_test(native_projection_two_shared_clang
             class-projection-two-shared-native.ores --run 42 --clang "${ORE_CLANG}" --no-native-abi)
+        oreslang_contract_test(native_projection_disjoint_shared_mut_clang
+            class-projection-disjoint-shared-mut-native.atto --run 42 --clang "${ORE_CLANG}" --no-native-abi)
+        oreslang_contract_test(native_projection_disjoint_mut_mut_clang
+            class-projection-disjoint-mut-mut-native.atto --run 42 --clang "${ORE_CLANG}" --no-native-abi)
+        oreslang_contract_test(native_projection_disjoint_release_clang
+            class-projection-disjoint-release-native.atto --run 42 --clang "${ORE_CLANG}" --no-native-abi)
+        oreslang_contract_test(native_projection_nested_release_clang
+            class-projection-nested-release-native.atto --run 42 --clang "${ORE_CLANG}" --no-native-abi)
 
         add_test(NAME native_projection_borrow_compiler_to_clang_matrix
             COMMAND "${Python3_EXECUTABLE}"

@@ -32,6 +32,10 @@ struct LocalOwnership {
     bool assignable = false; // lexical slot replacement, not referent mutation
     std::size_t shared_loans = 0;
     bool exclusive_loan = false;
+    // A subset of the aggregate loan counts identifies direct scalar slots
+    // in a uniquely owned flat class. All other loans remain root-wide.
+    std::unordered_map<std::string, std::size_t> direct_shared_loans;
+    std::unordered_set<std::string> direct_exclusive_loans;
     std::string class_name;
     std::unordered_set<std::string> mutable_paths;
     std::unordered_map<std::string, std::string> subobjects;
@@ -52,7 +56,9 @@ bool same_affine_state(const Locals& left, const Locals& right) {
         if (item.second.moved != found->second.moved ||
                 item.second.moved_fields != found->second.moved_fields ||
                 item.second.shared_loans != found->second.shared_loans ||
-                item.second.exclusive_loan != found->second.exclusive_loan)
+                item.second.exclusive_loan != found->second.exclusive_loan ||
+                item.second.direct_shared_loans != found->second.direct_shared_loans ||
+                item.second.direct_exclusive_loans != found->second.direct_exclusive_loans)
             return false;
     }
     return true;
@@ -127,11 +133,10 @@ LocalOwnership& array_owner(const Expression& receiver, Locals& locals, bool wri
 struct Loan {
     std::string name;
     bool exclusive = false;
-    // Projection borrows alias their complete class owner until this
-    // synchronous call returns. This intentionally forbids disjoint loans
-    // until source/CFG lowering models exact per-field loan provenance.
     bool projected_scalar_field = false;
     std::string projected_class;
+    // Empty means a conservative root-wide loan.
+    std::string direct_field;
 };
 
 // Only named scalar storage and admitted scalar-class layouts are addressable.
@@ -184,19 +189,59 @@ Loan acquire(const Expression& expr, Mode expected, Locals& locals) {
     if (!source.class_name.empty() && !source.moved_fields.empty())
         reject(expr, "ownership violation: cannot borrow a partially moved class '" +
             root->name + "'");
-    if (source.exclusive_loan || (exclusive && source.shared_loans != 0))
+    // Only direct, primitive fields of a local value with a flat layout
+    // qualify. Borrowed receivers and any nested/array layout retain the
+    // root-wide policy; no dynamic disjointness assumption is introduced.
+    const bool direct = !projection.empty() && expr.left->kind == Expression::Kind::Field &&
+        expr.left->left && expr.left->left->kind == Expression::Kind::Variable &&
+        source.mode == Mode::Value && !source.record_view &&
+        source.subobjects.empty() && source.class_array_fields.empty();
+    bool conflict = source.exclusive_loan || (exclusive && source.shared_loans != 0);
+    if (direct) {
+        std::size_t direct_shared_count = 0;
+        for (const auto& entry : source.direct_shared_loans)
+            direct_shared_count += entry.second;
+        const bool root_exclusive = source.exclusive_loan && source.direct_exclusive_loans.empty();
+        const bool root_shared = source.shared_loans != direct_shared_count;
+        conflict = root_exclusive || source.direct_exclusive_loans.count(projection) ||
+            (exclusive && (root_shared || source.direct_shared_loans.count(projection)));
+    }
+    if (conflict)
         reject(expr, "conflicting active native borrow of '" + root->name + "'");
-    if (exclusive) source.exclusive_loan = true;
-    else ++source.shared_loans;
+    if (exclusive) {
+        source.exclusive_loan = true;
+        if (direct) source.direct_exclusive_loans.insert(projection);
+    } else {
+        ++source.shared_loans;
+        if (direct) ++source.direct_shared_loans[projection];
+    }
     const auto child = source.subobjects.find(projection);
     return {root->name, exclusive, !projection.empty() && child == source.subobjects.end(),
-        child == source.subobjects.end() ? std::string{} : child->second};
+        child == source.subobjects.end() ? std::string{} : child->second,
+        direct ? projection : std::string{}};
 }
 
 void release(const Loan& loan, Locals& locals) {
     auto& source = locals.at(loan.name);
-    if (loan.exclusive) source.exclusive_loan = false;
-    else --source.shared_loans;
+    if (loan.exclusive) {
+        if (!loan.direct_field.empty()) {
+            if (source.direct_exclusive_loans.erase(loan.direct_field) != 1)
+                throw std::runtime_error("internal native direct exclusive loan accounting");
+            source.exclusive_loan = !source.direct_exclusive_loans.empty();
+        } else {
+            source.exclusive_loan = false;
+        }
+    } else {
+        if (source.shared_loans == 0)
+            throw std::runtime_error("internal native shared loan accounting");
+        --source.shared_loans;
+        if (!loan.direct_field.empty()) {
+            auto slot = source.direct_shared_loans.find(loan.direct_field);
+            if (slot == source.direct_shared_loans.end() || slot->second == 0)
+                throw std::runtime_error("internal native direct shared loan accounting");
+            if (--slot->second == 0) source.direct_shared_loans.erase(slot);
+        }
+    }
 }
 
 void check_call(const Expression& expr, Locals& locals, const Functions& functions) {
@@ -253,8 +298,8 @@ void check_call(const Expression& expr, Locals& locals, const Functions& functio
             Loan loan = acquire(argument, parameter.mode, locals);
             const auto& source = locals.at(loan.name);
             // A class-field projection supplies a borrowed i64 pointer,
-            // not a borrowed class pointer. All such field loans currently
-            // freeze the whole owner, preventing sibling-alias escape.
+            // not a borrowed class pointer. Only proven direct scalar slots
+            // can coexist; aggregate reads/moves retain root-wide fencing.
             const std::string actual_class =
                 loan.projected_scalar_field ? std::string{} : !loan.projected_class.empty() ? loan.projected_class : source.class_name;
             if (actual_class != parameter.class_name)
