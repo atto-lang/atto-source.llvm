@@ -21,7 +21,8 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target = fa
                                   bool actor_region_v1 = false,
                                   const std::vector<CheckedSourceRoutineV1>& checked_routines = {},
                                   const std::vector<CheckedLogSiteV1>& checked_sites = {},
-                                  bool tenant_vm_guest = false);
+                                  bool tenant_vm_guest = false,
+                                  const char* hosted_linux_triple = nullptr);
 
 // Host-owned, restricted interface-only consumer. The host independently
 // admits the release and chooses the namespace module and logical slot.

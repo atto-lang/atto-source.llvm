@@ -930,18 +930,23 @@ static std::string emit_verified_llvm_ir_impl(const Program& source, bool wasm32
                                   const std::vector<CheckedSourceRoutineV1>& checked_routines,
                                   const std::vector<CheckedLogSiteV1>& checked_sites,
                                   bool tenant_vm_guest,
-                                  const std::unordered_set<std::string>& interface_declarations) {
+                                  const std::unordered_set<std::string>& interface_declarations,
+                                  const char* hosted_linux_triple = nullptr) {
+    if (hosted_linux_triple && (wasm32_target || cortex_m_target || bounded_allocator_provider ||
+            tenant_vm_guest || !isolate_entry.empty() || actor_region_v1 ||
+            !checked_routines.empty() || !checked_sites.empty() || !interface_declarations.empty()))
+        throw std::runtime_error("hosted Linux cross target conflicts with unqualified lowering profile");
     for (const auto& fn : source.functions)
         for (const auto& binding : fn.locals)
             if (binding.native_box_i64 &&
                     (wasm32_target || cortex_m_target ||
-                     !isolate_entry.empty() || tenant_vm_guest || sizeof(void*) != 8 ||
+                     !isolate_entry.empty() || tenant_vm_guest || hosted_linux_triple || sizeof(void*) != 8 ||
                      fn.name != "main" || !fn.parameters.empty()))
                 throw std::runtime_error(
                     "ATTO_BOX_MAIN_V1_REJECT: Box<int> requires hosted native 64-bit main ABI");
     if (source.pointer_int_plan) {
         if (wasm32_target || cortex_m_target || bounded_allocator_provider ||
-                tenant_vm_guest || !source.functions.empty() ||
+                tenant_vm_guest || hosted_linux_triple || !source.functions.empty() ||
                 !source.actors.empty() || !source.classes.empty() ||
                 !source.imports.empty())
             throw std::runtime_error(
@@ -1197,7 +1202,7 @@ static std::string emit_verified_llvm_ir_impl(const Program& source, bool wasm32
     }
     if (wasm32_target && cortex_m_target) throw std::runtime_error("conflicting LLVM target selectors");
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
-        if (wasm32_target || !source.classes.empty() || !source.actors.empty())
+        if (wasm32_target || hosted_linux_triple || !source.classes.empty() || !source.actors.empty())
             throw std::runtime_error("experimental scalar loop unsupported target/owners");
         return emit_scalar_while_frame_llvm_ir(*source.functions.front().scalar_while);
     }
@@ -1447,6 +1452,25 @@ static std::string emit_verified_llvm_ir_impl(const Program& source, bool wasm32
         if (actual.getPointerSizeInBits(0) != profile.pointer_bits()
                 || actual.isLittleEndian() != (profile.endian() == "little"))
             throw std::runtime_error("wasm32 target ABI/data layout mismatch");
+    }
+    if (hosted_linux_triple) {
+        // Same IR as the host target, stamped for another hosted Linux machine.
+        // The guest heap word stays 32-bit on every one of these (Offset32).
+        if (wasm32_target || cortex_m_target || tenant_vm_guest || bounded_allocator_provider)
+            throw std::runtime_error("hosted Linux cross target conflicts with another target selector");
+        const auto profile = TargetAbi::parse(hosted_linux_triple);
+        if (!profile.experimental_hosted_linux_ir())
+            throw std::runtime_error("target has no hosted Linux IR lowering");
+#if LLVM_VERSION_MAJOR >= 21
+        module.setTargetTriple(llvm::Triple(std::string(profile.triple())));
+#else
+        module.setTargetTriple(std::string(profile.triple()));
+#endif
+        module.setDataLayout(std::string(profile.data_layout()));
+        const auto& actual = module.getDataLayout();
+        if (actual.getPointerSizeInBits(0) != profile.pointer_bits()
+                || actual.isLittleEndian() != (profile.endian() == "little"))
+            throw std::runtime_error("hosted Linux target ABI/data layout mismatch");
     }
     auto* i64 = llvm::Type::getInt64Ty(context);
     llvm::Type* i32 = llvm::Type::getInt32Ty(context);
@@ -4237,10 +4261,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                                   const std::string& isolate_entry, bool actor_region_v1,
                                   const std::vector<CheckedSourceRoutineV1>& checked_routines,
                                   const std::vector<CheckedLogSiteV1>& checked_sites,
-                                  bool tenant_vm_guest) {
+                                  bool tenant_vm_guest, const char* hosted_linux_triple) {
     return emit_verified_llvm_ir_impl(source, wasm32_target, cortex_m_target,
         bounded_allocator_provider, isolate_entry, actor_region_v1,
-        checked_routines, checked_sites, tenant_vm_guest, {});
+        checked_routines, checked_sites, tenant_vm_guest, {}, hosted_linux_triple);
 }
 
 std::string emit_verified_scalar_namespace_consumer(

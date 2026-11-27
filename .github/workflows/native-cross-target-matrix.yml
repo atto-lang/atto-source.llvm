@@ -1,0 +1,49 @@
+name: Cross-compile .atto fixtures for hosted Linux triples
+# Same .atto fixtures, compiled on x86_64 for x86_64, aarch64, i686 and armv7,
+# executed under qemu-user (binfmt), must match the native host build exactly.
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/native-cross-target-matrix.yml'
+      - 'src/main/cpp/oreslang/**'
+      - 'contracts/architecture/**'
+      - 'tests/native_cross_target_matrix.rs'
+      - 'tests/fixtures/**'
+      - 'CMakeLists.txt'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cross-matrix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      ZIG_VERSION: 0.14.1
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Toolchains (LLVM 19, qemu-user binfmt)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang-19 llvm-19-dev lld-19 qemu-user-static binfmt-support >/dev/null
+      - name: Zig (static musl linker for every triple)
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" -o zig.tar.xz
+          # Official Zig 0.14.1 x86_64-linux SHA256 (ziglang.org/download/index.json).
+          echo "24aeeec8af16c381934a6cd7d95c807a8cb2cf7df9fa40d359aa884195c4716c  zig.tar.xz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/zig" && tar -xJf zig.tar.xz -C "$RUNNER_TEMP/zig" --strip-components=1
+          echo "$RUNNER_TEMP/zig" >> "$GITHUB_PATH"
+      - name: Build oreslang-llvmc
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR=/usr/lib/llvm-19/lib/cmake/llvm \
+            -DCMAKE_C_COMPILER=clang-19 -DCMAKE_CXX_COMPILER=clang++-19
+          cmake --build build --target oreslang-llvmc -j"$(nproc)"
+      - name: Cross-target matrix (host oracle vs 4 triples)
+        run: |
+          rustc --edition=2021 -D warnings tests/native_cross_target_matrix.rs -o xmatrix
+          ./xmatrix --compiler build/oreslang-llvmc --clang clang-19 --zig zig --root . \
+            --runtime-dir src/main/cpp/oreslang/runtime

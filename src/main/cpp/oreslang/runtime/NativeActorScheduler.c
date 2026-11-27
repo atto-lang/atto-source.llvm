@@ -10,6 +10,7 @@
 #include "oreslang/runtime/NativeExecutionContext.h"
 #include "oreslang/runtime/NativePhysicalTurnGate.h"
 #include <pthread.h>
+#include <errno.h> /* ENOTSUP for the musl affinity fallback */
 #include <sched.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -927,7 +928,7 @@ static int create_carrier(pthread_t* tid, void* context) {
             rc = pthread_attr_setschedparam(&attr, &param);
         }
     }
-#if defined(__linux__)
+#if defined(__linux__) && defined(__GLIBC__)
     /* Pin in the attributes, not after start: the carrier never executes an
      * instruction (or takes a turn) on a CPU outside its reservation. */
     if (rc == 0 && s->cpu_affinity_configured) {
@@ -936,6 +937,11 @@ static int create_carrier(pthread_t* tid, void* context) {
         CPU_SET(s->cpus[slot->index % s->cpu_count], &set);
         rc = pthread_attr_setaffinity_np(&attr, sizeof(set), &set);
     }
+#elif defined(__linux__)
+    /* musl has no pthread_attr_setaffinity_np. Pinning after start would let
+     * the carrier run outside its reservation, so pinned schedulers fail
+     * closed here; unpinned schedulers are unaffected. */
+    if (rc == 0 && s->cpu_affinity_configured) rc = ENOTSUP;
 #endif
     if (rc == 0) rc = pthread_create(tid, &attr, carrier, context);
     if (pthread_attr_destroy(&attr) != 0) abort();
