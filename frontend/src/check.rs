@@ -337,6 +337,7 @@ struct ActorInfo {
 struct Globals<'a> {
     sigs: BTreeMap<(String, usize), (u32, Vec<Type>, Type)>,
     names: BTreeMap<String, Vec<usize>>,
+    exclusive_mutators: BTreeSet<(String, usize)>,
     classes: Vec<ClassInfo>,
     enums: &'a [EnumDecl],
     actors: Vec<ActorInfo>,
@@ -994,9 +995,39 @@ pub fn check(p: &Program) -> R<TProgram> {
     }
     let total = next as usize;
 
+    // The bounded call-loan slice deliberately requires a single class
+    // formal, void result, no calls/transfer and literal scalar writes.
+    // Preserve the legacy suffix-mut consuming ABI; prefix mut never falls
+    // back to it. Broader effects/profile migration remain unadmitted.
+    let mut exclusive_mutators = BTreeSet::new();
+    for f in &p.funcs {
+        if !f.params.iter().any(|q| q.exclusive) { continue; }
+        let valid = f.params.len() == 1 && f.params[0].exclusive && !f.is_generator && res(f.ret)? == Type::Void
+            && matches!(res(f.params[0].ty)?, Type::Class(ci) if classes[ci as usize].closed_copy_tree
+                && classes[ci as usize].fields.iter().all(|field| matches!(field.ty, Type::Int | Type::Bool | Type::Float | Type::Str | Type::Enum(_))))
+            && !f.body.is_empty() && f.body.iter().all(|stmt| matches!(stmt,
+                Stmt::FieldAssign { target, value, .. } if matches!(&target.kind, ExprKind::Var(n) if n == &f.params[0].name)
+                    && matches!(&value.kind, ExprKind::Int(_) | ExprKind::Bool(_) | ExprKind::Float(_) | ExprKind::Str(_))));
+        if !valid {
+            return Err(Diagnostic::new(f.pos, "E_COPY_UNPROVEN", "exclusive formal requires a closed single-leaf synchronous scalar mutator"));
+        }
+        exclusive_mutators.insert((f.name.clone(), f.params.len()));
+    }
+    for c in &p.classes {
+        if c.ctor.as_ref().is_some_and(|k| k.params.iter().any(|q| q.exclusive)) ||
+            c.methods.iter().any(|m| m.params.iter().any(|q| q.exclusive)) {
+            return Err(Diagnostic::new(c.pos, "E_COPY_UNPROVEN", "exclusive formal on methods/constructors is not admitted"));
+        }
+    }
+    for a in &p.actors {
+        if a.methods.iter().any(|m| m.params.iter().any(|q| q.exclusive)) {
+            return Err(Diagnostic::new(a.pos, "E_COPY_UNPROVEN", "exclusive actor formal is not admitted"));
+        }
+    }
     let g = Globals {
         sigs,
         names,
+        exclusive_mutators,
         classes,
         enums: &p.enums,
         actors,
@@ -1298,6 +1329,7 @@ pub fn check(p: &Program) -> R<TProgram> {
                     name: String::new(),
                     ty: mi.ret,
                     mutable: false,
+                    exclusive: false,
                     pos: m.pos,
                 },
                 mi.ret,
@@ -1495,6 +1527,9 @@ fn body_check(
                 mail: None,
             });
         }
+    }
+    if owner == Owner::TopLevel && g.exclusive_mutators.contains(&(label.to_string(), named.len())) {
+        cx.fresh_copy_roots.insert(0);
     }
     cx.scopes.push(Vec::new());
     let tbody = cx.stmts(body)?;
@@ -3087,6 +3122,54 @@ impl<'a> FnCx<'a> {
     }
 
     /// Check arguments against parameter types; object arguments move.
+    /// Exclusive call loan on a verified immediate or transitive subtree.
+    /// Single argument, no user call during projection, no escape in the
+    /// callee. Do not give general value()/consume() a class field handle.
+    fn exclusive_nested_arg(&mut self, arg: &Expr, want: Type) -> R<TE> {
+        let ExprKind::Call(marker, inner) = &arg.kind else {
+            return Err(Diagnostic::new(arg.pos, "E_BORROW", "exclusive formal requires explicit mut argument"));
+        };
+        if marker != "$mut_arg" || inner.len() != 1 {
+            return Err(Diagnostic::new(arg.pos, "E_BORROW", "exclusive formal requires explicit mut argument"));
+        }
+        let mut path = Vec::new();
+        let mut base = &inner[0];
+        while let ExprKind::Member(parent, member) = &base.kind {
+            path.push(member.as_str());
+            base = parent;
+        }
+        let ExprKind::Var(name) = &base.kind else {
+            return Err(Diagnostic::new(arg.pos, "E_COPY_UNPROVEN", "exclusive argument requires a named lexical root"));
+        };
+        let Some((root, Type::Class(ci), mutable)) = self.lookup(name).map(|l| (l.slot,l.ty,l.mutable)) else {
+            return Err(Diagnostic::new(arg.pos, "E_COPY_UNPROVEN", "exclusive argument requires a class root"));
+        };
+        if !self.nested_linear || self.owner != Owner::TopLevel || !mutable ||
+            !self.fresh_copy_roots.contains(&root) || self.moved.contains(&root) {
+            return Err(Diagnostic::new(arg.pos, "E_COPY_READONLY", "exclusive argument has no independent write authority"));
+        }
+        let mut obj = TE { e: TExpr::Local(root), ty: Type::Class(ci) };
+        let mut current = ci;
+        let mut first = true;
+        for member in path.into_iter().rev() {
+            let edge = self.g.classes[current as usize].fields.iter().find(|f| f.name == member)
+                .ok_or_else(|| Diagnostic::new(arg.pos, "E_UNBOUND", "unknown exclusive projection"))?;
+            let Type::Class(child) = edge.ty else { return Err(type_err(arg.pos, "exclusive projection requires class field")); };
+            if !edge.public {
+                return Err(Diagnostic::new(arg.pos, "E_PRIVATE", "private exclusive projection"));
+            }
+            if !edge.referent_mutable || !self.g.classes[child as usize].closed_copy_tree ||
+                (first && !self.nested_unique(root, edge.slot)) {
+                return Err(Diagnostic::new(arg.pos, "E_COPY_READONLY", "exclusive argument is a shared or read-only descendant"));
+            }
+            first = false;
+            obj = TE { e: TExpr::FieldGet { obj: Box::new(obj), offset: edge.slot }, ty: Type::Class(child) };
+            current = child;
+        }
+        if obj.ty != want { return Err(type_err(arg.pos, "exclusive argument type mismatch")); }
+        Ok(obj)
+    }
+
     fn args(&mut self, callee: &str, args: &[Expr], params: &[Type]) -> R<Vec<TE>> {
         let mut out = Vec::new();
         for (i, (a, want)) in args.iter().zip(params).enumerate() {
@@ -3463,6 +3546,7 @@ impl<'a> FnCx<'a> {
     }
 
     fn call(&mut self, name: &str, args: &[Expr], pos: Pos) -> R<TE> {
+        if name == "$mut_arg" { return Err(Diagnostic::new(pos, "E_BORROW", "mut argument requires a verified exclusive formal")); }
         if matches!(name, "$copy_shallow" | "$copy_deep") {
             return self.copy_value(name, args, pos, false);
         }
@@ -3591,7 +3675,9 @@ impl<'a> FnCx<'a> {
                 })
             }
         };
-        let targs = self.args(name, args, &params)?;
+        let targs = if self.g.exclusive_mutators.contains(&(name.to_string(), args.len())) {
+            vec![self.exclusive_nested_arg(&args[0], params[0])?]
+        } else { self.args(name, args, &params)? };
         Ok(TE {
             e: TExpr::Call(idx, targs),
             ty: ret,
