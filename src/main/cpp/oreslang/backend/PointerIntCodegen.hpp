@@ -33,6 +33,44 @@ inline std::string emit_verified_ir(const Plan& plan) {
     llvm::IRBuilder<> builder(context);
     auto* i64 = llvm::Type::getInt64Ty(context);
     auto* i32 = llvm::Type::getInt32Ty(context);
+
+    if (plan.form == Plan::Form::PlacementPoint) {
+        auto* point=llvm::StructType::create(context,{i64,i64},"atto.Point");
+        auto* fn=llvm::Function::Create(llvm::FunctionType::get(i32,false),
+            llvm::GlobalValue::ExternalLinkage,"main",module);
+        builder.SetInsertPoint(llvm::BasicBlock::Create(context,"entry",fn));
+        auto* storage=builder.CreateAlloca(point,nullptr,"point.storage");
+        storage->setAlignment(llvm::Align(8));
+        std::unordered_map<std::string,llvm::Value*> copies;
+        for(const auto& step:plan.placement_steps) {
+            switch(step.kind) {
+            case PlacementStep::Kind::Construct:
+                builder.CreateLifetimeStart(storage,builder.getInt64(16));
+                builder.CreateStore(builder.getInt64(step.x),builder.CreateStructGEP(point,storage,0,"point.x"));
+                builder.CreateStore(builder.getInt64(step.y),builder.CreateStructGEP(point,storage,1,"point.y"));
+                break;
+            case PlacementStep::Kind::CopyField:
+                copies.emplace(step.name,builder.CreateLoad(i64,builder.CreateStructGEP(point,storage,
+                    static_cast<unsigned>(step.field),"point.field"),"point.copy"));
+                break;
+            case PlacementStep::Kind::Destroy:
+                // Only two trivially destructible i64 fields are admitted.
+                builder.CreateLifetimeEnd(storage,builder.getInt64(16)); break;
+            case PlacementStep::Kind::Bind:
+            case PlacementStep::Kind::Detach:
+            case PlacementStep::Kind::Free:
+                // Proven nonescaping slot and stack allocation reclamation.
+                break;
+            }
+        }
+        llvm::Value* result=nullptr;
+        if(plan.result->kind==Expr::Kind::Variable) result=copies.at(plan.result->name);
+        else result=builder.CreateAdd(copies.at(plan.result->lhs->name),copies.at(plan.result->rhs->name));
+        builder.CreateRet(builder.CreateTrunc(result,i32,"native.exit"));
+        std::string errors;llvm::raw_string_ostream diagnostics(errors);
+        if(llvm::verifyModule(module,&diagnostics))throw std::runtime_error("Point LLVM verification failure: "+diagnostics.str());
+        std::string output;llvm::raw_string_ostream stream(output);module.print(stream,nullptr);stream.flush();return output;
+    }
     auto* array = llvm::ArrayType::get(i64, plan.count);
     // Closed readonly helper takes a real stack-region address, not a wrapper.
     llvm::Function* readonly_helper = nullptr;

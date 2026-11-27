@@ -9622,7 +9622,10 @@ private:
     void advance() {
         last_token_end_ = token_.offset + token_.text.size();
         token_ = lexer_.next();
-        reject_unlowered_with_update();
+        // The opt-in pointer grammar authenticates its entire token stream,
+        // including the exact Point constructor attachment; ordinary source
+        // keeps the independent unlowered-with reconstruction denial.
+        if (!experimental_pointer_int_aot_) reject_unlowered_with_update();
     }
     [[noreturn]] void fail(const std::string& reason) const {
         if (token_.text == "gpu" || token_.text == "cpu" || token_.text == "quantum") {

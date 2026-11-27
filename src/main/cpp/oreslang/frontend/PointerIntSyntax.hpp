@@ -3,6 +3,7 @@
 // tokens. No private source scanner may reinterpret comments, symbols or
 // identifiers. These M2a HIR nodes are published only after ownership checks.
 #include "oreslang/types/PointerIntHIR.hpp"
+#include "oreslang/types/PointerIntOwnership.hpp"
 #include <array>
 #include <algorithm>
 #include <optional>
@@ -39,6 +40,7 @@ public:
     }
 
     Plan parse() {
+        if (token().text == "define") return parse_placement_point();
         Plan plan;
         while (take("fnc")) {
             const auto helper = identifier();
@@ -234,6 +236,73 @@ private:
         need("!");
     }
 
+
+
+    Plan parse_placement_point() {
+        Plan plan;
+        plan.form = Plan::Form::PlacementPoint; plan.owner = "s"; plan.local_handle = "p"; plan.count = 2;
+        // Exact nominal declaration and trivial constructor. No arbitrary field
+        // layout, constructor effects, implicit allocations or user destructor.
+        for (auto word : {"define","struct","Point","{","int","x",";","int","y",";","}","with","{",
+                          "constructor","(","int","x",",","int","y",")","{",
+                          "self",".","x","=","x",";","self",".","y","=","y",";","}","}",
+                          "pub","fnc","main","(",")",":","int","{",
+                          "let","Storage","<","Point",">","s","="}) need(word);
+        if (token().text != "alloc") reject("expected alloc!",token().offset);
+        local_operation("alloc"); need("Point"); need(";");
+        for (auto word : {"let","mut","RawPointer","<","Point",">","p","=","RawPointer",".","empty","<","Point",">","(",")",";"}) need(word);
+        bool live = false, bound = false, freed = false;
+        std::array<std::int64_t,2> values{};
+        while (token().text != "return") {
+            if (plan.placement_steps.size() >= 32 || freed) reject("Point step budget or use after free",token().offset);
+            PlacementStep s{PlacementStep::Kind::Free,0,0,0,{}};
+            if (take("new")) {
+                if (live || bound) reject("Point storage already live",token().offset);
+                need("Point"); need("(");
+                auto x = unsigned_literal(); need(","); auto y = unsigned_literal();
+                if (x > static_cast<std::uint64_t>(INT64_MAX) || y > static_cast<std::uint64_t>(INT64_MAX))
+                    reject("Point literal overflow",token().offset);
+                need(")"); need("at"); need("s");
+                s.kind=PlacementStep::Kind::Construct; s.x=static_cast<std::int64_t>(x); s.y=static_cast<std::int64_t>(y);
+                values={s.x,s.y}; live=true;
+            } else if (token().text=="ref") {
+                if (!live || bound) reject("Point bind authority",token().offset);
+                local_operation("ref"); need("p"); need("to"); need("s");
+                s.kind=PlacementStep::Kind::Bind; bound=true;
+            } else if (take("val")) {
+                if (!live || !bound) reject("Point read authority",token().offset);
+                s.kind=PlacementStep::Kind::CopyField; s.name=identifier();
+                if (!placement_copy_name(s.name) || known_locals_.count(s.name))
+                    reject("invalid Point scalar name",token().offset);
+                need("="); need("(");
+                if (token().text!="deref") reject("expected deref!",token().offset);
+                local_operation("deref"); need("p"); need(")"); need(".");
+                if (take("x")) s.field=0; else {need("y"); s.field=1;}
+                known_locals_.emplace(s.name,values[s.field]);
+            } else if (token().text=="unref") {
+                if (!bound) reject("Point empty detach",token().offset);
+                local_operation("unref"); need("p"); s.kind=PlacementStep::Kind::Detach; bound=false;
+            } else if (token().text=="destroy") {
+                if (!live || bound) reject("Point destroy authority",token().offset);
+                local_operation("destroy"); need("s"); s.kind=PlacementStep::Kind::Destroy; live=false;
+            } else if (token().text=="free") {
+                if (live || bound) reject("Point free authority",token().offset);
+                local_operation("free"); need("s"); s.kind=PlacementStep::Kind::Free; freed=true;
+            } else reject("unsupported Point storage effect",token().offset);
+            need(";"); plan.placement_steps.push_back(std::move(s));
+        }
+        if (!freed) reject("Point storage leak",token().offset);
+        need("return");
+        auto scalar=[&]() {
+            auto n=identifier(); if (!known_locals_.count(n)) reject("Point result escape",token().offset);
+            auto e=std::make_unique<Expr>();e->kind=Expr::Kind::Variable;e->name=n;e->known=known_locals_.at(n);return e;
+        };
+        plan.result=scalar();
+        if (take("+")) plan.result=combine(Expr::Kind::Add,std::move(plan.result),scalar());
+        need(";");need("}");
+        if (token().text!="<eof>") reject("trailing Point program",token().offset);
+        return plan;
+    }
 
     Plan parse_slot() {
         Plan plan;
