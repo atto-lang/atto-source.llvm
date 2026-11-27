@@ -9,6 +9,7 @@ on:
       - 'docs/security/CI_PRIVATE_SOURCE_MIRRORING.md'
       - 'scripts/audit-private-ci-governance.py'
       - 'scripts/test-audit-private-ci-governance.py'
+      - 'tests/test_private_ci_approval_reset.py'
       - 'scripts/publish-private-ci-source-v3.py'
       - 'scripts/test-publish-private-ci-source-v3.py'
       - 'scripts/run-in-private-ci-destination.sh'
@@ -22,6 +23,7 @@ on:
       - 'docs/security/CI_PRIVATE_SOURCE_MIRRORING.md'
       - 'scripts/audit-private-ci-governance.py'
       - 'scripts/test-audit-private-ci-governance.py'
+      - 'tests/test_private_ci_approval_reset.py'
       - 'scripts/publish-private-ci-source-v3.py'
       - 'scripts/test-publish-private-ci-source-v3.py'
       - 'scripts/run-in-private-ci-destination.sh'
@@ -37,6 +39,8 @@ jobs:
           persist-credentials: false
       - name: Offline governance regression suite
         run: python3 scripts/test-audit-private-ci-governance.py
+      - name: Bootstrap private-source approval denial regression suite
+        run: python3 -m unittest discover -s tests -p test_private_ci_approval_reset.py -v
       - name: LLVM v3 private publisher regression suite
         run: |
           set -euo pipefail
