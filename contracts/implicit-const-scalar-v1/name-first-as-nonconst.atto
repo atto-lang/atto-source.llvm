@@ -1,0 +1,1 @@
+pub fnc helper(int p): int { const x as int = p; return x; } pub fnc main(): int { return helper(42); }
