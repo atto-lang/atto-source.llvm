@@ -1956,7 +1956,7 @@ impl Parser {
     }
 
     /// `condition = condition_and { "|" condition_and } ;
-    ///  condition_and = logical_or { "," logical_or } ;`
+    ///  condition_and = equality { "," equality } ;`
     fn parse_cond(&mut self) -> R<Expr> {
         self.cond += 1;
         let r = (|| {
@@ -2008,6 +2008,59 @@ impl Parser {
         r
     }
 
+    /// Short-circuit logical operators are distinct from comma/pipe condition
+    /// operators, which are eagerly evaluated. The lexer deliberately keeps
+    /// paired pipes as two tokens: initial || still starts a zero-arg lambda.
+    /// In infix position only, a pair is logical OR.
+    fn parse_logical_or(&mut self) -> R<Expr> {
+        let mut left = self.parse_logical_and()?;
+        let mut links = 0;
+        while *self.peek() == Tok::Pipe && *self.peek_at(1) == Tok::Pipe {
+            let pos = self.pos();
+            self.advance();
+            self.advance();
+            self.grow(1)?;
+            links += 1;
+            let right = self.parse_logical_and()?;
+            left = Expr {
+                kind: ExprKind::Ternary(
+                    Box::new(left),
+                    Box::new(Expr { kind: ExprKind::Bool(true), pos }),
+                    Box::new(right),
+                ),
+                pos,
+            };
+        }
+        self.height -= links;
+        Ok(left)
+    }
+
+    /// a && b lowers to a ? b : false. The normal typed ternary emitter
+    /// evaluates a exactly once and b only when a is true. No eager builtin
+    /// and no changed meaning for unary & (reserved ownership/borrow form).
+    fn parse_logical_and(&mut self) -> R<Expr> {
+        let mut left = self.parse_equality()?;
+        let mut links = 0;
+        while *self.peek() == Tok::Amp && *self.peek_at(1) == Tok::Amp {
+            let pos = self.pos();
+            self.advance();
+            self.advance();
+            self.grow(1)?;
+            links += 1;
+            let right = self.parse_equality()?;
+            left = Expr {
+                kind: ExprKind::Ternary(
+                    Box::new(left),
+                    Box::new(right),
+                    Box::new(Expr { kind: ExprKind::Bool(false), pos }),
+                ),
+                pos,
+            };
+        }
+        self.height -= links;
+        Ok(left)
+    }
+
     fn parse_ternary(&mut self) -> R<Expr> {
         let mut c = self.parse_logical_or()?;
         // Functional pipeline: value |> f |> g(extra) lowers to g(f(value), extra).
@@ -2057,47 +2110,6 @@ impl Parser {
             _ => {}
         }
         Ok(c)
-    }
-
-    // Explicit Boolean operators work in ordinary expressions as well as guards.
-    // Lower directly to a typed lazy conditional, not eager scalar bitwise IR.
-    // The Boolean literal arm forces both operands to be Bool in the checker.
-    fn parse_logical_or(&mut self) -> R<Expr> {
-        let mut links = 0;
-        let mut left = self.parse_logical_and()?;
-        while *self.peek() == Tok::PipePipe {
-            let pos = self.pos();
-            self.advance();
-            self.grow(1)?;
-            links += 1;
-            let right = self.parse_logical_and()?;
-            left = Expr {
-                kind: ExprKind::Ternary(Box::new(left),
-                    Box::new(Expr { kind: ExprKind::Bool(true), pos }), Box::new(right)),
-                pos,
-            };
-        }
-        self.height -= links;
-        Ok(left)
-    }
-
-    fn parse_logical_and(&mut self) -> R<Expr> {
-        let mut links = 0;
-        let mut left = self.parse_equality()?;
-        while *self.peek() == Tok::AmpAmp {
-            let pos = self.pos();
-            self.advance();
-            self.grow(1)?;
-            links += 1;
-            let right = self.parse_equality()?;
-            left = Expr {
-                kind: ExprKind::Ternary(Box::new(left), Box::new(right),
-                    Box::new(Expr { kind: ExprKind::Bool(false), pos })),
-                pos,
-            };
-        }
-        self.height -= links;
-        Ok(left)
     }
 
     fn parse_equality(&mut self) -> R<Expr> {
@@ -2214,7 +2226,7 @@ impl Parser {
         let op = match self.peek() {
             Tok::Minus => UnOp::Neg,
             Tok::Plus => UnOp::Plus,
-            Tok::Bang => UnOp::Not,
+            Tok::Bang | Tok::UnicodeNot => UnOp::Not,
             Tok::Amp => return Err(unsupported(pos, "borrow expressions")),
             Tok::PlusPlus | Tok::MinusMinus => {
                 return Err(Diagnostic::new(
@@ -2531,12 +2543,11 @@ fn describe(t: &Tok) -> String {
                 Tok::YieldStar => "yield*",
                 Tok::Slash => "/",
                 Tok::Bang => "!",
+                Tok::UnicodeNot => "¬",
                 Tok::Question => "?",
                 Tok::Pipe => "|",
                 Tok::PipeGt => "|>",
-                Tok::PipePipe => "||",
                 Tok::Amp => "&",
-                Tok::AmpAmp => "&&",
                 Tok::Caret => "^",
                 Tok::At => "@",
                 _ => "?",
