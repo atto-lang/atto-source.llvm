@@ -102,6 +102,29 @@ static void test_stale_handles(void) {
     ores_timer_wheel_destroy(&w);
 }
 
+static void test_generation_exhaustion_and_reserved_deadline(void) {
+    OresTimerWheel w;
+    CHECK(ores_timer_wheel_init(&w, 2, MS, 0));
+    CHECK(ores_timer_wheel_arm(&w, ORES_TIMER_NO_DEADLINE, 1) == 0);
+    CHECK(w.size == 0 && ores_timer_wheel_next_deadline_ns(&w) == ORES_TIMER_NO_DEADLINE);
+    uint64_t first = ores_timer_wheel_arm(&w, MS, 1);
+    CHECK(ores_timer_wheel_cancel(&w, first));
+    /* Seed the final generation instead of looping 2^32 times. */
+    w.generation[0] = UINT32_MAX;
+    uint64_t last = ores_timer_wheel_arm(&w, MS, 2);
+    CHECK(last != first && ores_timer_wheel_cancel(&w, last));
+    uint64_t sibling = ores_timer_wheel_arm(&w, MS, 3);
+    CHECK(sibling != 0 && sibling != first && !ores_timer_wheel_cancel(&w, first));
+    CHECK(ores_timer_wheel_is_live(&w, sibling));
+    CHECK(ores_timer_wheel_cancel(&w, sibling));
+    w.generation[1] = UINT32_MAX;
+    uint64_t final = ores_timer_wheel_arm(&w, MS, 4);
+    CHECK(final != 0 && poll1(&w, MS, 1) == 1 && out[0].handle == final);
+    CHECK(!ores_timer_wheel_is_live(&w, final) && w.size == 0);
+    CHECK(ores_timer_wheel_arm(&w, MS, 5) == 0);
+    ores_timer_wheel_destroy(&w);
+}
+
 static void test_bounded_fifo(void) {
     OresTimerWheel w;
     CHECK(ores_timer_wheel_init(&w, 1024, MS, 0));
@@ -279,6 +302,7 @@ int main(void) {
     test_cascade_and_overflow();
     test_late_poll_cascade_order();
     test_stale_handles();
+    test_generation_exhaustion_and_reserved_deadline();
     test_bounded_fifo();
     test_clock_regression();
     test_one_million();
