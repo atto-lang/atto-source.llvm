@@ -4256,6 +4256,12 @@ if(BUILD_TESTING)
           "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/named-call-source-order.ores")
     set_tests_properties(native_named_call_lexical_ir_order PROPERTIES TIMEOUT 30)
     if(ORE_CLANG)
+        oreslang_contract_test(native_shared_named_equals named-call-equals-main.ores
+            --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_shared_named_mixed named-call-mixed-separator-main.ores
+            --run 42 --clang "${ORE_CLANG}")
+        oreslang_contract_test(native_shared_named_positional named-call-equals-positional-main.ores
+            --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_named_call_reordered_guest named-call-reordered-main.ores
             --run 43 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_named_call_mixed_guest named-call-mixed-main.ores
@@ -6614,6 +6620,14 @@ if(BUILD_TESTING)
     endif()
 
     oreslang_contract_test(reject_wrong_arity wrong-arity.ores --diagnostic "wrong call arity")
+    oreslang_contract_test(native_shared_named_order_reject named-call-equals-positional-after-reject.ores
+        --diagnostic "positional argument cannot follow named argument")
+    oreslang_contract_test(native_shared_named_unknown_reject named-call-equals-unknown-reject.ores
+        --diagnostic "unknown named argument")
+    oreslang_contract_test(native_shared_named_duplicate_reject named-call-mixed-duplicate-reject.ores
+        --diagnostic "duplicate named argument")
+    oreslang_contract_test(native_shared_named_pair_reject named-call-pair-not-label-reject.ores
+        --diagnostic "oreslang-llvmc:")
     oreslang_contract_test(native_named_call_unknown_label named-call-unknown-reject.ores
         --diagnostic "unknown named argument")
     oreslang_contract_test(native_named_call_duplicate_separators_reject named-call-duplicate-separators-reject.atto
