@@ -1,0 +1,14 @@
+define class Pair as
+  pub final mut Array<int> first;
+  pub final mut Array<int> second;
+  constructor() {
+    self.second = new Array<int>();
+    self.first = new Array<int>();
+  }
+end
+pub fnc main(): int {
+  let mut Pair p = new Pair();
+  p.first.add(7);
+  p.second.add(35);
+  return p.first.get(0) + p.second.get(0);
+}

@@ -4539,7 +4539,9 @@ if(BUILD_TESTING)
     endif()
     oreslang_contract_test(reject_owned_int_without_opt_in owned-native-region-main.ores --diagnostic "experimental owned int requires --experimental-owned-int")
     oreslang_contract_test(owned_native_heap_lowering owned-native-region-main.ores --experimental-owned-int --ir "call void @oreslang_owned_i64_region_drop")
-    oreslang_contract_test(reject_owned_runtime_const_initializer owned-native-runtime-const-reject.ores --experimental-owned-int --diagnostic "E_NON_CONST_INITIALIZER")
+    # spec #307: local const may capture runtime scalars. Keep the historical source blob.
+    oreslang_contract_test(owned_runtime_const_initializer owned-native-runtime-const-reject.ores --experimental-owned-int --ir "call void @oreslang_owned_i64_region_drop")
+    oreslang_contract_test(reject_owned_runtime_const_rebind owned-native-runtime-const-rebind.ores --experimental-owned-int --diagnostic "E_IMMUTABLE_REBIND")
     oreslang_contract_test(owned_native_region_nested owned-native-region-call.ores --experimental-owned-int --ir "call void @oreslang_owned_i64_region_close")
     oreslang_contract_test(reject_unsupported_native_heap_type owned-native-region-unsupported.ores --experimental-owned-int --diagnostic "native scalar local requires int, bool or checked scalar alias")
     oreslang_contract_test(reject_local_uninitialized owned-uninitialized.ores --diagnostic "unknown parameter")
@@ -6761,6 +6763,12 @@ if(BUILD_TESTING)
             class-scalar-constructor-duplicate-reject.ores --diagnostic "duplicate native constructor parameter")
         oreslang_contract_test(reject_scalar_constructor_owned_array
             class-scalar-constructor-owned-reject.ores --diagnostic "native owned Array<int> constructor requires checked failure cleanup")
+        oreslang_contract_test(reject_explicit_array_constructor_order
+            class-explicit-array-constructor-order-reject.atto --diagnostic "E_CONSTRUCTOR_ARRAY_INIT")
+        oreslang_contract_test(reject_explicit_array_constructor_duplicate
+            class-explicit-array-constructor-duplicate-reject.atto --diagnostic "E_CONSTRUCTOR_ARRAY_INIT")
+        oreslang_contract_test(reject_explicit_array_constructor_missing
+            class-explicit-array-constructor-missing-reject.atto --diagnostic "declaration-only fields with explicit constructor")
         oreslang_contract_test(reject_scalar_constructor_effect_arg
             class-scalar-constructor-args-effect-reject.ores --diagnostic "native scalar constructor argument requires pure integer expression")
         oreslang_contract_test(reject_scalar_constructor_owned_int_arg
@@ -6815,6 +6823,7 @@ if(BUILD_TESTING)
         oreslang_contract_test(native_exec_lexical_local owned-lexical-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_owned_identifier owned-identifier-main.ores --no-native-abi --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_owned_region owned-native-region-main.ores --experimental-owned-int --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c")
+        oreslang_contract_test(native_exec_owned_runtime_const owned-native-runtime-const-reject.ores --experimental-owned-int --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c")
         oreslang_contract_test(native_exec_owned_region_nested owned-native-region-call.ores --experimental-owned-int --run 42 --clang "${ORE_CLANG}" --native-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeOwnedI64Region.c")
         oreslang_contract_test(native_exec_lexical_shared_loan owned-local-shared-borrow.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(native_exec_lexical_mutable_loan owned-local-mutable-borrow.ores --run 42 --clang "${ORE_CLANG}")
