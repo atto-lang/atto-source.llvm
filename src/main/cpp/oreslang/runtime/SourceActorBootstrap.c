@@ -923,7 +923,7 @@ void* oreslang_source_actor_spawn(
         ensure(ores_native_vm_started_carriers(
             group.vm, ORES_NATIVE_VM_UNTRUSTED) == 0);
         fprintf(stderr,
-            "SOURCE_ACTOR_FIRST_CARRIER_READY main=1 shared=0 private=0 untrusted=0\\n");
+            "SOURCE_ACTOR_FIRST_CARRIER_READY main=1 shared=0 private=0 untrusted=0\n");
     }
 #endif
     group.live++;
