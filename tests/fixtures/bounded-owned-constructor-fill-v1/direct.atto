@@ -1,0 +1,20 @@
+define class Buckets as
+  pub let int bound;
+  pub let mut Array<int> heads = new Array<int>();
+  pub constructor(int capacity) {
+    if capacity < 1 || capacity > 16; do
+      rt fail("capacity outside 1..16");
+    fi
+    self.bound = capacity;
+    for (let int i = 0; i < capacity; i = i + 1) {
+      self.heads.add(-1);
+    }
+  }
+end
+pub fnc main(): int {
+  let mut Buckets b = new Buckets(3);
+  if b.bound neq 3 || b.heads.size neq 3 || b.heads.get(0) neq -1 ||
+     b.heads.get(2) neq -1; do return 1; fi
+  b.heads.set(1, 42);
+  return b.heads.get(1);
+}
