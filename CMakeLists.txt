@@ -6766,6 +6766,16 @@ if(BUILD_TESTING)
             class-scalar-constructor-owned-arg-reject.ores --experimental-owned-int --diagnostic "native scalar constructor arguments require plain stack scalar values")
         oreslang_contract_test(reject_scalar_constructor_effect_body
             class-scalar-constructor-effectful-body-reject.ores --diagnostic "native scalar constructor body must be empty or contain only")
+        oreslang_contract_test(native_scalar_constructor_field_init
+            class-scalar-constructor-field-init.atto --run 42 --clang "${ORE_CLANG}" --no-native-abi)
+        oreslang_contract_test(reject_scalar_constructor_field_init_duplicate
+            class-scalar-constructor-field-init-duplicate.atto --diagnostic "E_CONSTRUCTOR_FIELD_INIT")
+        oreslang_contract_test(reject_scalar_constructor_field_init_unknown
+            class-scalar-constructor-field-init-unknown.atto --diagnostic "E_CONSTRUCTOR_FIELD_INIT")
+        oreslang_contract_test(reject_scalar_constructor_field_init_missing
+            class-scalar-constructor-field-init-missing.atto --diagnostic "declaration-only fields with explicit constructor")
+        oreslang_contract_test(reject_scalar_constructor_field_init_effect
+            class-scalar-constructor-field-init-effect.atto --diagnostic "native scalar constructor body must be empty or contain only")
         oreslang_contract_test(native_exec_constant constant-main.ores --run 42 --clang "${ORE_CLANG}")
         oreslang_contract_test(numerics_atto_integer_guest numerics-atto-main.atto --run 42 --clang "${ORE_CLANG}")
         # LLVM compiler-produced AttoXP scalar guests; FFI linking is separate.

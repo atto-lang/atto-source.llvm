@@ -3282,9 +3282,39 @@ private:
                     require(")");
                 }
                 require("{");
+                // A deliberately narrow initialization-only body: direct
+                // parameter-to-uninitialized-int-field assignments are pure
+                // and total, so they can use existing constructor initializer
+                // slots without a new effect/ownership or evaluation-order ABI.
+                // Never permit reinitialization, field reads, arithmetic,
+                // calls, branches, or array/nested-owner writes here.
+                while (accept("self")) {
+                    require(".");
+                    const auto target = identifier();
+                    require("=");
+                    const auto source_offset = token_.offset;
+                    const auto source = identifier();
+                    require(";");
+                    auto field = std::find_if(result.fields.begin(), result.fields.end(),
+                        [&](const ClassField& item) { return item.name == target; });
+                    if (field == result.fields.end() || !field->constructor_argument ||
+                            field->initializer_expression || field->int_array ||
+                            !field->class_name.empty() || !field->sum_type.empty() ||
+                            field->scalar_type != ScalarType::I64)
+                        fail("E_CONSTRUCTOR_FIELD_INIT: requires an uninitialized scalar int field");
+                    if (!params.count(source))
+                        fail("E_CONSTRUCTOR_FIELD_INIT: source must be a declared int parameter");
+                    field->initializer_expression = std::make_unique<Expression>();
+                    field->initializer_expression->kind = Expression::Kind::Variable;
+                    field->initializer_expression->name = source;
+                    field->initializer_expression->offset = source_offset;
+                    // Explicit constructor parameters, not the implicit
+                    // positional field list, now determine the ABI.
+                    field->constructor_argument = false;
+                }
                 if (accept_return_marker()) require(";");
                 if (token_.text != "}")
-                    fail("native scalar constructor body must be empty or contain only 'return;'");
+                    fail("native scalar constructor body must be empty or contain only checked field initialization and 'return;'");
                 require("}");
                 continue;
             }
