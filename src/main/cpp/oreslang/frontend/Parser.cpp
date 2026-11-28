@@ -3517,10 +3517,17 @@ private:
     bool named_aggregate_ahead() {
         if (token_.text != "const") return false;
         Lexer look = lexer_;
-        if (!named_aggregate_wrapper(look.next().text)) return false;
-        const auto next = look.next();
-        return next.text == "<" ||
-            (next.kind == Kind::Identifier && look.next().text == "=");
+        const auto first = look.next();
+        const bool explicit_wrapper = named_aggregate_wrapper(first.text);
+        if (explicit_wrapper) {
+            const auto next = look.next();
+            return next.text == "<" ||
+                (next.kind == Kind::Identifier && look.next().text == "=");
+        }
+        // Only a complete untyped empty literal, never grouped scalar syntax.
+        return first.kind == Kind::Identifier && !reserved(first.text) &&
+            look.next().text == "=" && look.next().text == "(" &&
+            look.next().text == ")" && look.next().text == ";";
     }
     std::string named_aggregate_identifier() {
         if (token_.kind != Kind::Identifier || token_.text.size() > 128 ||
@@ -3540,10 +3547,9 @@ private:
     }
     void parse_named_aggregate(NamedAggregateMap& aliases) {
         require("const");
-        NamedAggregate row{std::string(token_.text), {}};
-        if (!named_aggregate_wrapper(row.wrapper))
-            fail("E_NAMED_AGGREGATE_PROFILE: expected aggregate wrapper");
-        advance();
+        const bool explicit_wrapper = named_aggregate_wrapper(token_.text);
+        NamedAggregate row{explicit_wrapper ? std::string(token_.text) : "Tuple", {}};
+        if (explicit_wrapper) advance();
         bool introduce = false;
         std::string alias;
         const NamedAggregate* expected = nullptr;
@@ -3569,14 +3575,22 @@ private:
         if (named_aggregate_locals_.count(local) || named_aggregate_locals_.size() >= 64)
             fail("duplicate aggregate local or aggregate budget exceeded");
         require("=");
-        require(row.wrapper == "struct" ? "{" : "(");
-        do {
+        const bool brace = row.wrapper == "struct" ||
+            (row.wrapper == "Record" && token_.text == "{");
+        const std::string_view close = brace ? "}" : ")";
+        require(brace ? "{" : "(");
+        if (row.wrapper == "struct" && token_.text == close)
+            fail("E_EMPTY_AGGREGATE: empty Struct not admitted");
+        bool comma = false;
+        while (token_.text != close) {
             if (row.fields.size() >= 64) fail("aggregate field budget exceeded");
             const auto key = row.wrapper == "Tuple" ? std::to_string(row.fields.size())
                                                     : named_aggregate_identifier();
             if (named_aggregate_field(row, key))
                 fail("E_DUPLICATE_FIELD: duplicate aggregate field");
-            if (row.wrapper != "Tuple") require(row.wrapper == "struct" ? ":" : "=");
+            if (row.wrapper == "Record") {
+                if (!accept(":")) require("=");
+            } else if (row.wrapper == "struct") require(":");
             const bool is_bool = token_.text == "true" || token_.text == "false";
             std::int64_t n;
             if (is_bool) { n = token_.text == "true" ? 1 : 0; advance(); }
@@ -3586,8 +3600,12 @@ private:
                 n = signed_integer_literal();
             }
             row.fields.push_back({key, is_bool, n});
-        } while (accept(","));
-        require(row.wrapper == "struct" ? "}" : ")");
+            comma = accept(",");
+            if (!comma) break;
+        }
+        if (row.wrapper == "Tuple" && row.fields.size() == 1 && !comma)
+            fail("E_TUPLE_ARITY: singleton Tuple requires trailing comma");
+        require(close);
         require(";");
         if (expected) {
             if (expected->fields.size() != row.fields.size())
