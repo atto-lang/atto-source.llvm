@@ -65,6 +65,6 @@ for source in "$fixtures"/reject-*.atto; do
   fi
   rejected=$((rejected + 1))
 done
-test "$ran" -eq 9
-test "$rejected" -eq 5
+test "$ran" -eq 11
+test "$rejected" -eq 12
 echo "type alias spellings: $ran native O0/O2 guests + $rejected compile negatives passed"
