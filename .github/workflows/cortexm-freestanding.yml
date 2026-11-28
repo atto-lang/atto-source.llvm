@@ -1,0 +1,36 @@
+name: Freestanding Cortex-M3 real Atto guest
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  cortexm-freestanding:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Record and verify exact source commit and root tree
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          git rev-parse HEAD
+          git rev-parse HEAD^{tree}
+          git status --porcelain
+      - name: Install pinned Rust and ARM toolchain/QEMU
+        run: |
+          rustup toolchain install 1.85.1 --profile minimal
+          rustup default 1.85.1
+          rustc --version
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends clang-18 lld-18 binutils qemu-system-arm llvm-18
+          clang-18 --version | head -n1
+          qemu-system-arm --version | head -n1
+      - name: Run real Atto frontend, Cortex-M ELF proof and QEMU guest
+        env:
+          CLANG: clang-18
+        run: bash ci/test_freestanding_cortexm.sh

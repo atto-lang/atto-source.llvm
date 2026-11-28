@@ -26,7 +26,7 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 "$DB_CXX_BIN" -std=c++17 -Wall -Wextra -Werror -pthread -I src/main/cpp \
   tests/native/wal_storage_fd_owner_test.cpp -o "$tmp/test"
 timeout 30s "$tmp/test" >"$tmp/out" 2>"$tmp/err" || { cat "$tmp/err" >&2; exit 1; }
-printf '%s\n' 'WAL_NATIVE_HOST_FD_PASS checks=20; NO GUEST OR POWER-LOSS CLAIM' >"$tmp/expected"
+printf '%s\n' 'WAL_NATIVE_HOST_FD_PASS checks=26; NO GUEST OR POWER-LOSS CLAIM' >"$tmp/expected"
 cmp -s "$tmp/out" "$tmp/expected" || { cat "$tmp/out" >&2; exit 1; }
-printf 'SOURCE_COMMIT=%s SOURCE_TREE=%s NATIVE_HOST_CHECKS=20 NO_GUEST_PROOF\n' \
+printf 'SOURCE_COMMIT=%s SOURCE_TREE=%s NATIVE_HOST_CHECKS=26 NO_GUEST_PROOF\n' \
   "$DB_EXPECTED_COMMIT" "$DB_EXPECTED_TREE"

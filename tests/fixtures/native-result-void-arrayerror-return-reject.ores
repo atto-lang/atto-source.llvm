@@ -1,0 +1,3 @@
+// A host-only closed array result must not fake guest tagged construction.
+fnc make(): Result<void, ArrayError> { return Ok(); }
+pub fnc main(): int { return 42; }

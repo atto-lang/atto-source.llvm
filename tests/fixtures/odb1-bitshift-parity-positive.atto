@@ -1,0 +1,36 @@
+// Actual native .ores fixture: signed i64 shifts used by ODB1 little-endian packing.
+// Must compile to LLVM IR, be linked by Clang, and EXIT ZERO on all assertions.
+// This is scalar shift parity, NOT full ODB1 List/Result/stdio guest support.
+// Shifts are <<< (left), >>> (logical right) and ashr (arithmetic right, infix);
+// << and >> are typed channel/stream I/O. The checks are split across two
+// functions because the native backend admits at most 8 conditionals each.
+fnc byte_packing(): int {
+  let int number = 65535;
+  let int hi = number ashr 8;
+  let int lo = number - hi * 256;
+  if (hi != 255) { return 1; } fi
+  if (lo != 255) { return 2; } fi
+  if ((1 + 2 <<< 3) != 24) { return 3; } fi
+  if (256 ashr 4 + 4 != 1) { return 4; } fi
+  if ((1024 ashr 2) ashr 2 != 64) { return 5; } fi
+  if (-1 ashr 1 != -1) { return 6; } fi
+  if ((-1 >>> 1) != 9223372036854775807) { return 7; } fi
+  return 0;
+}
+
+fnc shift_edges(): int {
+  let int dynamic_count = 8;
+  if ((-9223372036854775808 >>> 63) != 1) { return 8; } fi
+  if ((1 <<< 63) != -9223372036854775808) { return 9; } fi
+  if ((-1 >>> 0) != -1) { return 10; } fi
+  if ((1 <<< 0) != 1) { return 11; } fi
+  if (-9223372036854775808 ashr 63 != -1) { return 12; } fi
+  if (65535 ashr dynamic_count != 255) { return 13; } fi
+  return 0;
+}
+
+pub fnc main(): int {
+  let int first = byte_packing();
+  if (first != 0) { return first; } fi
+  return shift_edges();
+}

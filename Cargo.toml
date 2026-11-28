@@ -1,0 +1,19 @@
+[package]
+name = "atto-llvm-aot"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Checked AttoLang scalar frontend and direct LLVM IR native AOT bootstrap"
+
+[dependencies]
+atto-compiler-browser = { path = "frontend" }
+
+[[bin]]
+name = "atto-llvm"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 2
+lto = true
+codegen-units = 1
+panic = "abort"
