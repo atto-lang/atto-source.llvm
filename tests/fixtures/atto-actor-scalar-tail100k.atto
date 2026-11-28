@@ -1,0 +1,20 @@
+// 100,000 direct recursive tail transfers must reuse one actor-owned
+// typed frame. This source is compiled to M3 bytecode, not native recursion.
+fnc tail(int n): int {
+  if n <= 0 then
+    return 0;
+  fi
+  return tail(n - 1);
+}
+define actor Worker as {
+  let seen: int = 0;
+  pub fnc on_message(int n): int {
+    return tail(n);
+  }
+}
+pub fnc main(): int {
+  const a: ActorRef<Worker> = spawn Worker();
+  a.send(100000);
+  stop a;
+  return 43;
+}

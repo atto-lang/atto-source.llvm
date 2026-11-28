@@ -1,0 +1,20 @@
+// An actor callback with a nested call is not currently eligible for
+// the narrow direct-return M3 entry. It must not fall back to carrier
+// native recursive lowering when actor-owned frame parity is required.
+fnc depth(int n): int {
+  if n <= 0 then
+    return 0;
+  fi
+  return 1 + depth(n - 1);
+}
+define actor Worker as {
+  let seen: int = 0;
+  pub fnc on_message(int n): int {
+    return depth(n) + 1;
+  }
+}
+pub fnc main(): int {
+  const a: ActorRef<Worker> = spawn Worker();
+  stop a;
+  return 43;
+}
