@@ -1,0 +1,7 @@
+# Canonical corpora vendored byte-exact from atto-lang/atto-borrow-checker.rs.
+# tests/borrow_conformance_l1.sh verifies these blob SHAs; refresh all three
+# lines together when re-vendoring (never edit the corpus files here).
+source=atto-lang/atto-borrow-checker.rs
+commit=f8ecc9669d7442204ba43a04df2a35c9fbe126a0
+graph-cases-v1.json=c451e7b94a393d114cbba830c951134a75f58661
+graph-cases-hybrid-v1.json=97ec3b8b5a8933961f34d1a828f5c19a3ebac742

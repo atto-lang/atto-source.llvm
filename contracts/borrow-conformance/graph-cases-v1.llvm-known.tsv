@@ -1,0 +1,5 @@
+# Known L1 differences: OwnershipCfg.hpp vs the canonical corpora.
+# case<TAB>engine verdict<TAB>engine code (- for none)<TAB>reason. Exact match required; stale rows fail.
+C16	accept	-	OwnershipCfg requires one initialization per path, not canonical global owner-definition uniqueness (an adapter-class MIR rule)
+C18	accept	-	V0 model limit (divergent join): the powerset join decides it; the hybrid agrees (H01)
+C19	accept	-	V0 model limit (cycle): the fixed point accepts; the hybrid agrees (H10)

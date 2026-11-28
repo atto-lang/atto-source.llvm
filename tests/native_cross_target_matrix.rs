@@ -65,6 +65,8 @@ const RUNTIME_FILES: &[&str] = &[
     "NativeStringRegion.c", "SourceTaskRuntime.c",
     // SourceActorBootstrap on current main requires logical-frame storage.
     "NativeActorLogicalFramesV1.c",
+    // Owned Array<int> class fields and native telemetry spans.
+    "NativeIntArrayRegion.c", "NativeTelemetrySpan.c",
 ];
 
 struct Options {
@@ -307,6 +309,8 @@ const EXPECTED_ARITHMETIC_TRAPS: &[&str] = &[
     "tests/fixtures/logical-punctuation-v1/and-reached-rhs-trap.atto",
     "tests/fixtures/logical-punctuation-v1/or-reached-rhs-trap.atto",
     "tests/fixtures/logical-punctuation-v1/xor-eager-trap.atto",
+    // A terminal checked overflow is never an Err: it must trap (main ae526f7ab).
+    "tests/fixtures/trap-int-overflow-terminal.atto",
 ];
 fn run_arithmetic_trap(program: &str, args: &[&str], signal: i32) -> Option<(i32, Vec<u8>, String)> {
     use std::os::unix::process::ExitStatusExt;
@@ -423,6 +427,7 @@ fn main() {
     let (mut admitted, mut host_runtime, mut runtime_linked) = (0usize, 0usize, 0usize);
     let mut host_rejected = 0usize;
     let mut host_empty = 0usize;
+    let mut no_entry = 0usize;
 
     // Runtime sources and per-triple runtime objects (cross-compiled once).
     let include = format!("-I{}", o.root.join("src/main/cpp").display());
@@ -476,6 +481,16 @@ fn main() {
         admitted += 1;
         let (hll, hbin) = (p(&format!("{i}.host.ll")), p(&format!("{i}.host.bin")));
         fs::write(&hll, &host_ir).unwrap_or_else(|e| fail(&e.to_string()));
+        // Library modules and freestanding units have no program entry point:
+        // there is nothing to execute, so they are not compared (not a failure).
+        let has_main = String::from_utf8_lossy(&host_ir)
+            .lines()
+            .any(|l| l.starts_with("define") && l.contains(" @main("));
+        if !has_main && !required {
+            no_entry += 1;
+            println!("NOT_COMPARED no main entry point: {name}");
+            continue;
+        }
         let mut needs_runtime = false;
         if !matches!(run(&o.clang, &["-O2", "-x", "ir", &hll, "-o", &hbin]), Some((0, _, _))) {
             // Not libc-only: link the C actor runtime, as the host test scripts do.
@@ -613,7 +628,7 @@ fn main() {
         failures.push("runtime requested but no runtime-backed fixture linked; vacuous actor lane refused".into());
     }
     let _ = fs::remove_dir_all(&work);
-    println!("fixtures admitted for host: {admitted}; linked with the C actor runtime: {runtime_linked}; not linkable: {host_runtime}; host rejected: {host_rejected}; host empty: {host_empty}");
+    println!("fixtures admitted for host: {admitted}; linked with the C actor runtime: {runtime_linked}; not linkable: {host_runtime}; no main entry: {no_entry}; host rejected: {host_rejected}; host empty: {host_empty}");
     println!("Scope: host-admitted, successfully linked fixtures only; not a complete positive/negative corpus qualification.");
     for (triple, (same, diff)) in &compared {
         if !required_passed.contains(triple) {
