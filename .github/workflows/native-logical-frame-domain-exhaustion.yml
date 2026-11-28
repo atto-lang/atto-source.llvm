@@ -1,0 +1,67 @@
+name: Native actor logical frame domain exhaustion
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c'
+      - 'src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.h'
+      - 'tests/native_actor_logical_frames_v1_test.c'
+      - 'tests/native_actor_logical_frames_domain_exhaustion_test.c'
+      - '.github/workflows/native-logical-frame-domain-exhaustion.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-domain-exhaustion:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify tested immutable source tree
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain)"
+          for path in \
+            src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c \
+            src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.h \
+            tests/native_actor_logical_frames_v1_test.c \
+            tests/native_actor_logical_frames_domain_exhaustion_test.c; do
+            test "$(git hash-object "$path")" = "$(git rev-parse "HEAD:$path")"
+          done
+          echo "SOURCE_COMMIT=$SOURCE_SHA TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Exercise real frame implementation and exhaustion boundary at O0/O2
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/atto-domain"
+          for compiler in clang gcc; do
+            for opt in 0 2; do
+              "$compiler" -std=c11 "-O$opt" -pthread -Wall -Wextra -Wpedantic -Werror \
+                -Isrc/main/cpp tests/native_actor_logical_frames_domain_exhaustion_test.c \
+                -o "$RUNNER_TEMP/atto-domain/domain-$compiler-O$opt"
+              "$RUNNER_TEMP/atto-domain/domain-$compiler-O$opt"
+              "$compiler" -std=c11 "-O$opt" -pthread -Wall -Wextra -Wpedantic -Werror \
+                -Isrc/main/cpp \
+                src/main/cpp/oreslang/runtime/NativeActorLogicalFramesV1.c \
+                tests/native_actor_logical_frames_v1_test.c \
+                -o "$RUNNER_TEMP/atto-domain/original-$compiler-O$opt"
+              "$RUNNER_TEMP/atto-domain/original-$compiler-O$opt"
+            done
+          done
+      - name: Exercise native C implementation under ASan and UBSan
+        shell: bash
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O1 -g -pthread -Wall -Wextra -Wpedantic -Werror \
+            -fsanitize=address,undefined -fno-sanitize-recover=all \
+            -fno-omit-frame-pointer -Isrc/main/cpp \
+            tests/native_actor_logical_frames_domain_exhaustion_test.c \
+            -o "$RUNNER_TEMP/domain-sanitize"
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            "$RUNNER_TEMP/domain-sanitize"

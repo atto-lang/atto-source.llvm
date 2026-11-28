@@ -6,14 +6,57 @@ extern "C" {
 
 /* Native actor heap experimental ABI. Actor IDs and enter tokens MUST remain
  * private to the scheduler, not exposed as forgeable guest-language values.
- * One actor turn runs at a time and its memory authority is carrier-bound.
- * Migration requires leave + fresh enter; stable carrier threads are not
- * required. This heap does not use a tracing garbage collector. */
+ * One actor turn runs at a time. Each admitted OresActorTurn is bound to its
+ * physical carrier for the duration of that turn, even when the domain/epoch
+ * fields of the token are known to another thread. An actor may migrate to a
+ * different carrier only after leave and a fresh enter. Cross-turn loans
+ * may be released without re-entering a turn, preserving async quiescence.
+ * This native scalar heap does not use a tracing garbage collector; neither
+ * the guest compiler nor transitive process closure is certified by that fact. */
 typedef struct OresActorI64Heap OresActorI64Heap;
 typedef struct { uint64_t domain, epoch; } OresActorTurn;
 typedef struct { uint64_t domain, index, generation; } OresActorSlot;
 typedef struct { uint64_t domain, nonce, index, generation; } OresActorLoan;
-typedef struct { uint64_t domain, index, generation; } OresActorExternalLease;
+
+/* HOST ONLY, experimental, scalar-i64 actor heap access evidence v1.
+ * This records only operations through this heap ABI. It does NOT certify
+ * complete Oreslang memory/synchronization coverage or race freedom.
+ * Guest code must not receive this API, its output buffer, or credentials.
+ */
+typedef enum {
+    ORES_ACTOR_HEAP_ACCESS_ALLOC = 1,
+    ORES_ACTOR_HEAP_ACCESS_READ = 2,
+    ORES_ACTOR_HEAP_ACCESS_WRITE = 3,
+    ORES_ACTOR_HEAP_ACCESS_DROP = 4,
+    ORES_ACTOR_HEAP_ACCESS_FIELD_INIT = 5,
+    ORES_ACTOR_HEAP_ACCESS_FIELD_READ = 6,
+    ORES_ACTOR_HEAP_ACCESS_FIELD_WRITE = 7
+} OresActorHeapAccessKind;
+
+typedef struct {
+    uint64_t domain, actor_id, incarnation, turn_epoch;
+    uint64_t slot_index, slot_generation;
+    uint32_t kind;
+} OresActorHeapAccessEvent;
+
+typedef struct {
+    uint64_t dropped;
+    uint32_t stored, capacity;
+    uint32_t enabled;
+} OresActorHeapAccessSummary;
+
+/* Enable before first turn; bounded 1..65536 events. Never allocates while
+ * a turn executes. Returns 0 if unavailable/rejected; 1 only on admission.
+ * Snapshot must be taken while no turn executes; refuses partial buffers.
+ * Overflow is sticky (dropped>0); snapshots then return 0 (inconclusive)
+ * while filling summary and any adequately sized diagnostic output buffer.
+ * A return value of 1 confirms only buffer completeness, NOT program coverage.
+ * Neither function exposes a native/guest address or recorded data value.
+ */
+int ores_actor_i64_heap_trace_enable(OresActorI64Heap* heap, uint32_t capacity);
+int ores_actor_i64_heap_trace_snapshot(
+    OresActorI64Heap* heap, OresActorHeapAccessEvent* output,
+    uint32_t output_capacity, OresActorHeapAccessSummary* summary);
 
 /* Allocated once per actor incarnation, survives any number of turns. */
 OresActorI64Heap* ores_actor_i64_heap_open(uint64_t actor_id,
@@ -36,6 +79,13 @@ void ores_actor_i64_heap_write(OresActorI64Heap* heap,
                                  OresActorSlot slot, int64_t value);
 void ores_actor_i64_heap_drop(OresActorI64Heap* heap,
                                 OresActorTurn turn, OresActorSlot slot);
+/* Compiler-owned actor-handler temporary ABI: the compiler allocates a
+ * three-word token on the native stack and drops it before handler exit.
+ * Tokens may not escape across await, FFI, or an actor turn boundary. */
+void ores_actor_i64_heap_scoped_new(OresActorI64Heap* heap,
+    uint64_t domain, uint64_t epoch, int64_t value, uint64_t token[3]);
+void ores_actor_i64_heap_scoped_drop(OresActorI64Heap* heap,
+    uint64_t domain, uint64_t epoch, uint64_t token[3]);
 /* Shared read loans survive turns/await. They forbid slot writes and drops,
  * plus physical heap release, until the last loan is released. A loan cannot
  * itself dereference memory outside an admitted turn. Exclusive mutable
@@ -43,17 +93,6 @@ void ores_actor_i64_heap_drop(OresActorI64Heap* heap,
 OresActorLoan ores_actor_i64_heap_borrow(OresActorI64Heap* heap,
                                           OresActorTurn turn, OresActorSlot slot);
 void ores_actor_i64_heap_release(OresActorI64Heap* heap, OresActorLoan loan);
-/* Lifetime-only authority for an admitted continuation/FFI/I/O callback.
- * It carries no slot index or memory dereference capability. Release may run
- * on any native carrier. The scheduler owns one mutable token per callback:
- * successful/stale release consumes it by zeroing the token, so retrying that
- * same token is safe even after CONTROL has destroyed the heap. Do not clone a
- * token into independently live owners; copied stale tokens are only supported
- * for replay/ABA rejection while the heap is still alive. */
-OresActorExternalLease ores_actor_i64_heap_external_acquire(
-    OresActorI64Heap* heap, OresActorTurn turn);
-void ores_actor_i64_heap_external_release(
-    OresActorI64Heap* heap, OresActorExternalLease* lease);
 /* Compiler-emitted, serial actor field ABI. Only admitted turns may access
  * fixed-layout owned fields. Field initialization is single-use. */
 void ores_actor_i64_heap_field_init(OresActorI64Heap* heap,
@@ -71,10 +110,9 @@ void ores_actor_i64_heap_field_write(OresActorI64Heap* heap,
                                      uint64_t domain, uint64_t epoch,
                                      uint64_t index, int64_t value);
 void ores_actor_i64_heap_retire(OresActorI64Heap* heap);
-/* Returns zero while a turn, read loan, or external lifetime lease is
- * outstanding; returns one and frees native memory after quiescence. Never
- * call with an invalidated heap pointer. The supervisor is responsible for
- * dropping its heap pointer after successful destroy and fencing stale users. */
+/* Returns zero while a turn or loan is outstanding; returns one and frees
+ * native memory after quiescence. Never call with an invalidated heap pointer.
+ * The supervisor is responsible for fencing stale wakeups/callback holders. */
 int ores_actor_i64_heap_try_destroy(OresActorI64Heap* heap);
 #ifdef __cplusplus
 }

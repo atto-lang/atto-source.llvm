@@ -5,6 +5,7 @@ All checks use explicit control flow. Python removes bare 'assert' statements
 under -O / PYTHONOPTIMIZE; a release harness must never silently skip gates.
 """
 import argparse
+import hashlib
 import pathlib
 import re
 import subprocess
@@ -115,10 +116,19 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--compiler", required=True)
     parser.add_argument("--fixture", required=True)
+    parser.add_argument("--fixture-git-blob")
     parser.add_argument("--ir")
     parser.add_argument("--diagnostic")
+    parser.add_argument("--parser-diagnostic", action="store_true")
     parser.add_argument("--run", type=int)
     parser.add_argument("--clang")
+    # Native optimizer and sanitizer matrices require actual Clang execution.
+    # Without --run they must fail, not yield a false-green compile-only gate.
+    parser.add_argument("--opt-level", choices=("0", "1", "2", "3"))
+    # Clang's -fsanitize at a pre-generated IR boundary can link sanitizer
+    # runtimes without adding memory-access instrumentation. This is only an
+    # executable toolchain/link smoke, never ASan/UBSan coverage evidence.
+    parser.add_argument("--sanitizer-runtime-smoke", action="store_true")
     parser.add_argument("--target")
     parser.add_argument("--native-runtime")
     parser.add_argument("--experimental-owned-int", action="store_true")
@@ -133,6 +143,8 @@ def main():
                 not args.no_native_abi and not args.no_main_link and
                 not args.verify_object and args.native_runtime is None,
                 "--diagnostic cannot be combined with positive test modes")
+    require(not args.parser_diagnostic or bool(args.diagnostic),
+            "--parser-diagnostic requires --diagnostic")
     if args.ir is not None:
         require(bool(args.ir), "--ir requires nonempty text")
     if args.run is not None:
@@ -140,10 +152,23 @@ def main():
                 "--run requires an OS exit code in [0, 255]")
     require(not (args.no_main_link and args.run is not None),
             "--no-main-link cannot request successful execution")
+    require(args.opt_level is None or (args.run is not None and bool(args.clang)),
+            "--opt-level requires an executable --run and --clang")
+    require(not args.sanitizer_runtime_smoke or (args.run is not None and bool(args.clang)),
+            "--sanitizer-runtime-smoke requires an executable --run and --clang")
     require(args.native_runtime is None or args.run is not None,
             "--native-runtime requires --run")
     require(not args.verify_object or bool(args.clang),
             "--verify-object requires --clang")
+    if args.fixture_git_blob is not None:
+        require(re.fullmatch(r"[0-9a-f]{40}", args.fixture_git_blob) is not None,
+                "--fixture-git-blob requires lowercase 40-hex Git SHA-1")
+        fixture_bytes = pathlib.Path(args.fixture).read_bytes()
+        git_blob = hashlib.sha1(
+            f"blob {len(fixture_bytes)}\0".encode("ascii") + fixture_bytes
+        ).hexdigest()
+        require(git_blob == args.fixture_git_blob,
+                "fixture Git blob SHA mismatch")
     cmd = [args.compiler]
     if args.target:
         cmd.append("--target=" + args.target)
@@ -158,6 +183,29 @@ def main():
                 f"invalid source must produce a compiler diagnostic (exit 1), got {compile_result.returncode}")
         require(args.diagnostic in compile_result.stderr,
                 "expected compiler diagnostic was absent")
+        # A wrapper crash, missing toolchain, or sanitizer failure can exit 1
+        # and echo the sought-for diagnostic; that is not guest admission.
+        diagnostic_lower = compile_result.stderr.casefold()
+        infrastructure_markers = (
+            "traceback (most recent call last)", "filenotfounderror",
+            "command not found", "no such file or directory",
+            "addresssanitizer", "undefinedbehaviorsanitizer",
+            "segmentation fault", "runtime error: ",
+        )
+        require(not any(marker in diagnostic_lower for marker in infrastructure_markers),
+                "infrastructure failure cannot certify compiler rejection")
+        if args.parser_diagnostic:
+            # The native frontend emits one bounded exception line. A matched
+            # substring in a wrapper traceback or echoed source is not proof.
+            # Main appends bounded, sanitized [file:]/[module:]/[namespace:]
+            # context after the byte offset (llvmc safe-diagnostic contract).
+            expected_line = (r"oreslang-llvmc: " + re.escape(args.diagnostic)
+                             + r" at byte [0-9]+"
+                             + r"(?: \[file: [^\]\n]{1,128}\])?"
+                             + r"(?: \[module: [^\]\n]{1,128}\])?"
+                             + r"(?: \[namespace: [^\]\n]{1,128}\])?\n")
+            require(re.fullmatch(expected_line, compile_result.stderr) is not None,
+                    "parser diagnostic did not match exact compiler error line")
         require(not compile_result.stdout, "compiler emitted stdout after rejection")
         return
     require(compile_result.returncode == 0,
@@ -273,7 +321,13 @@ def main():
             "native executable lacks an i32 main entrypoint wrapper")
     with tempfile.TemporaryDirectory(prefix="oreslang-llvm-test-") as directory:
         executable = str(pathlib.Path(directory) / "guest")
-        clang_cmd = [args.clang, "-x", "ir", "-"]
+        clang_cmd = [args.clang]
+        if args.opt_level is not None:
+            clang_cmd.append("-O" + args.opt_level)
+        if args.sanitizer_runtime_smoke:
+            clang_cmd.extend(["-fsanitize=address,undefined",
+                              "-fno-omit-frame-pointer"])
+        clang_cmd.extend(["-x", "ir", "-"])
         if args.native_runtime:
             native_source = pathlib.Path(args.native_runtime)
             clang_cmd.extend(["-x", "c", str(native_source), "-std=c11",
@@ -298,6 +352,11 @@ if __name__ == "__main__":
     except subprocess.TimeoutExpired:
         print("contract test failed: subprocess timed out", file=sys.stderr)
         sys.exit(1)
-    except (ContractFailure, OSError) as error:
+    except ContractFailure as error:
         print(f"contract test failed: {error}", file=sys.stderr)
+        sys.exit(1)
+    except OSError:
+        # Filesystem and process-launch errors may contain absolute private
+        # paths. Keep CI diagnostics bounded and non-sensitive.
+        print("contract test failed: operating-system failure", file=sys.stderr)
         sys.exit(1)

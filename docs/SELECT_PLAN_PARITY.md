@@ -5,9 +5,12 @@ required behavior contract, not an assertion of native feature support.
 
 The Java reference backend defines:
 
-- **Static select**: reevaluate channel/value case expressions on every
-  execution. Any future plan-hoisting optimization must prove expression
-  purity, binding stability, actor ownership, and hot-reload invalidation.
+- **Static select**: evaluate channel/value expressions on every execution
+  except when the compiler proves that a specific source site is safe to
+  hoist. Java PR #526 now proposes lexical-loop-only cached descriptors for
+  read-only select arms bound to non-shadowed immutable val/const channels.
+  Dynamic operands, WRITE arms, mutable bindings, and shadowed bindings
+  continue to be evaluated each iteration; LLVM remains fail-closed.
 - **Immutable SelectPlan**: reuse an immutable case descriptor list and its
   fairness cursor. Each operation must have fresh winner/cancellation state.
 - **DynamicSelectPlan**: keyed insertion-ordered cases with atomic put/remove
@@ -93,3 +96,115 @@ The negative `unsupported-static-select` and
 no LLVM IR emitted**, preventing premature claims of parity. Do not loosen
 these tests until the relevant native feature and its conformance suite are
 implemented.
+
+
+## October 20 — loop-local hoisting and static FAIR tickets (proposed Java #526)
+
+The revised Java draft proposes a restricted interpreter optimization:
+cache `SelectSet` descriptors on each executing loop's `Env` for
+READ/DEFAULT-only static select sites where all channel operands are direct
+immutable non-shadowed lexical bindings. The cache is *not* attached to
+shared source AST nodes and cannot survive the loop invocation, actor
+generation or hot reload. No user-visible static/async select effect should
+change.
+
+Native codegen **must not** copy a plan between actors or across a dynamic
+state/ownership boundary. It must either reconstruct the cases on each
+iteration or statically prove the same read-only/stable-binding predicate.
+
+The source static selection cursor has a crucial compatibility contract:
+each invocation consumes the owning actor's original static FAIR ticket,
+including immediate misses/default selections, **independently** of which
+case wins. Java exposes a compiler-only `SelectSet.selectStaticAsync(policy,
+ticket)` / `tryStaticSelect(policy, ticket)` path that snapshots this ticket
+on an individual registration under arbitration. Cached descriptors must
+not replace that with their internal win-advancing FAIR cursor; doing so
+would change source-level selection ordering, especially with cancellation
+and concurrent pending selections. Old pending registrations cannot retarget
+a subsequent source ticket or new dynamic-plan generation.
+
+### Required native differential fixtures before feature activation
+
+- Two always-ready channels, repeated static FAIR selection with first,
+  default, cancellation, and try-miss in the same loop.
+- Nested loops and separate actor instances compiled from the same AST.
+- Shadowing immutable channel names inside a per-iteration body versus
+  immutable bindings outside the loop.
+- Mutable channel binding reassignments, side-effectful channel factories,
+  persistent WRITE payloads and scope-finalization exits: **must not hoist**.
+- Dynamic plan add/remove/rebind with old pending winner; stable result keys
+  and generation-isolated FAIR state.
+- Actor stop, module hot reload, timeout cancellation and Future completion
+  races, with no guest callbacks under channel/coordinator locks.
+- Allocation and throughput benchmark parity under JDK25/GraalVM and native
+  ASAN/TSAN builds; never claim zero allocation merely for descriptor reuse.
+
+### Mixed readiness
+
+Future, deadline, cancellation-token and default readiness from Java PR #433
+are not yet integrated with the Java optimized plan in PR #526 and are not
+native features. The native implementation must allocate fresh per-invocation
+subscriptions/timers, reset relative deadlines, arbitrate a single winner,
+revoke loser subscriptions and reject stale callback generations before
+emitting any LLVM IR for these source forms. Preserve typed Option/unit
+payloads and checked move-only ownership; fail closed otherwise.
+
+**Evidence status:** this is a forward contract, not a native
+implementation or new native test result. No current-head JDK25/GraalVM or
+native differential evidence accompanies this documentation update.
+
+## Native static-select arbitration substrate
+
+The native runtime now has a host-side `NativeSelectArbiter<N>` substrate for the
+linearization point needed by future static-select lowering. It proves a narrow
+runtime contract only:
+
+- exactly one registered case can win;
+- armed losing registrations are revoked exactly once;
+- cancellation revokes every armed registration exactly once;
+- a completion/cancellation that wins before an external registration returns
+  its revoker is remembered, and `arm()` immediately revokes that late loser;
+- loser revocation callbacks run outside the arbiter mutex and all revokers are
+  drained even if one callback throws;
+- `TaskCancellation` can own the arbiter through a lifetime-safe cancellation
+  handle.
+
+This is **not** source-level select support. `Channel<T>`/Future registration,
+typed arm bindings, ownership/borrow checking, blocking suspension,
+continuation scheduling, channel-close semantics, policy lowering
+(`first`/`fair`/`random`), and actor generation fencing are still required.
+Until those layers are wired and tested, source `select`, including both
+`{ ... }` and `over ... end`, must continue to fail closed at the native
+frontend boundary.
+
+
+## Main-stack runtime integration
+
+The native runtime prerequisites are now carried on a clean branch rooted at the
+live main tree rather than relying on feature branches whose parent PRs had
+already merged.
+
+The integrated runtime contract includes:
+
+- bounded selectable signed-i64 channel readiness;
+- channel close/EOF with buffered drain-before-EOF and terminal closed writes;
+- immutable/non-consuming signed-i64 Future readiness with value/failure/cancel;
+- exactly-one select arbitration with loser revocation;
+- actor-generation continuation tickets with ABA-safe identities;
+- a claimed continuation retains a physical execution lease through callback
+  completion;
+- actor generation advance fails while any claimed continuation is still
+  executing;
+- terminal close cancels pending delivery but physical retirement is not
+  reported complete until every claimed continuation has released its lease.
+
+This closes the gap where a scheduler could consume a logical continuation
+ticket and then advance the actor generation before the continuation physically
+returned.
+
+Source-level static select remains fail-closed. The next compiler slice must
+bind typed read/write/Future arms to these runtime transactions, store the
+winner result in compiler-owned continuation storage, revoke borrows before
+suspension, and reacquire/revalidate actor-local state on resume. Parser
+admission must not be enabled before those ownership and suspension checks are
+executable.

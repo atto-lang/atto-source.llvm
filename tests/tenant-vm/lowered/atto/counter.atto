@@ -1,0 +1,11 @@
+// Real AttoLang, compiled by oreslang-llvmc and lowered into a tenant VM.
+define actor Counter as {
+  let total: int = 0;
+  pub fnc on_message(int increment): int {
+    total = total + increment;
+    return total;
+  }
+}
+pub fnc main(): int {
+  return 0;
+}

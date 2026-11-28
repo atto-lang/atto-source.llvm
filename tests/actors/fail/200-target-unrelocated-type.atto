@@ -1,0 +1,10 @@
+// expect-reject: E_UNSUPPORTED_NATIVE_TYPE
+// Standalone fnc Type::NamedRef indices must not escape its temporary parser.
+use namespace workers;
+declare actor Worker;
+define actor Worker as
+    receive(ActorMail<int> mail): void { return; }
+end
+mtd (Worker self) process_value(int value): int { return value + 1; }
+fnc escape_type(ActorRef<Worker> worker): int { return 0; }
+pub fnc main(): int { return 0; }

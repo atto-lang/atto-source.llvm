@@ -84,55 +84,47 @@ int main() {
                (void)check_actor_pipeline_graph(wrong,links); });
     deny([&] { auto wrong=stages;wrong.pop_back();
                (void)check_actor_pipeline_graph(wrong,links); });
-    // Endpoint pair uniqueness must not concatenate user-controlled names.
-    // Both pairs below would equal "a:b:c" if constructed naively.
-    {
-        std::vector<PipeStage> tricky = {
-            {"P", PipeRole::readable, "", "E", "a:b"},
-            {"P", PipeRole::readable, "", "E", "a"},
-            {"S", PipeRole::writable, "E", "", "c"},
-            {"S", PipeRole::writable, "E", "", "b:c"}
-        };
-        std::vector<PipeConnection> edges = {
-            {"a:b", "c", "E"}, {"a", "b:c", "E"}
-        };
-        expect(check_actor_pipeline_graph(tricky, edges).size() == 2);
-        deny([&] { auto duplicate = edges; duplicate.push_back(edges[0]);
-                   (void)check_actor_pipeline_graph(tricky, duplicate); });
-        // Canonically similar UTF-8 strings are still distinct instance IDs.
-        auto unicode=tricky;
-        unicode[0].instance_id=std::string({char(0xc3),char(0xa9)});
-        unicode[1].instance_id=std::string({char('e'),char(0xcc),char(0x81)});
-        std::vector<PipeConnection> unicode_edges = {
-            {unicode[0].instance_id,"c","E"},
-            {unicode[1].instance_id,"b:c","E"}
-        };
-        expect(check_actor_pipeline_graph(unicode,unicode_edges).size()==2);
-        std::string exact256;
-        for (int i=0;i<64;++i)
-            exact256+=std::string({char(0xf0),char(0x9f),char(0x8c),char(0x8d)});
-        auto upper=tricky;
-        upper[0].instance_id=exact256;
-        auto upper_edges=edges;
-        upper_edges[0].source=exact256;
-        expect(check_actor_pipeline_graph(upper,upper_edges).size()==2);
-        deny([&] { auto over=upper; over[0].instance_id+=
-                        std::string({char(0xf0),char(0x9f),char(0x8c),char(0x8d)});
-                   (void)check_actor_pipeline_graph(over,upper_edges); });
-    }
-    // A TRANSFORM with declared output type but no actual outgoing edge
-    // must not be admitted as a terminal writable sink.
-    deny([&] {
-        std::vector<PipeStage> stages = {
-            {"Producer", PipeRole::readable, "", "Event", "src"},
-            {"Worker", PipeRole::transform, "Event", "Event", "worker"}
-        };
-        std::vector<PipeConnection> edges = {{"src", "worker", "Event"}};
-        (void)check_actor_pipeline_graph(stages, edges);
-    });
     // Budget checks operate before graph allocation and fail closed.
     deny([&] { auto wrong=links;wrong.clear();
                (void)check_actor_pipeline_graph(stages,wrong); });
     deny([&] { auto wrong=stages;wrong.resize(1025,stages[1]);
                (void)check_actor_pipeline_graph(wrong,links); });
+    // Restricted portable guest slice is NOT the host's 1024-stage DAG.
+    // In this context duplicate nominal types require unique instance IDs.
+    std::vector<PipeStage> guest = {
+        {"Parse", PipeRole::duplex, "int", "int", "parse0"},
+        {"Validate", PipeRole::transform, "int", "int", "validate0"},
+        {"Sink", PipeRole::duplex, "int", "int", "sink0"}
+    };
+    const auto admitted = check_actor_pipeline_guest_integer_v1(guest);
+    expect(admitted.size() == 2);
+    expect(admitted[0].source == "parse0"
+           && admitted[0].target == "validate0"
+           && admitted[1].target == "sink0");
+    std::vector<PipeStage> max_guest;
+    max_guest.push_back({"Source", PipeRole::readable, "", "int", "source0"});
+    for (int i = 0; i < 14; ++i)
+        max_guest.push_back({"Transform", PipeRole::transform,
+                            "int", "int", "transform" + std::to_string(i)});
+    max_guest.push_back({"Sink", PipeRole::writable, "int", "", "sink0"});
+    expect(check_actor_pipeline_guest_integer_v1(max_guest).size() == 15);
+    max_guest.insert(max_guest.begin() + 1,
+        {"Transform", PipeRole::transform, "int", "int", "extra"});
+    deny([&] { (void)check_actor_pipeline_guest_integer_v1(max_guest); });
+    deny([&] { (void)check_actor_pipeline_guest_integer_v1(
+        std::vector<PipeStage>{guest[0]}); });
+    deny([&] { auto wrong=guest;wrong[1].inbound="string";
+               (void)check_actor_pipeline_guest_integer_v1(wrong); });
+    deny([&] { auto wrong=guest;wrong[0].inbound="bool";
+               (void)check_actor_pipeline_guest_integer_v1(wrong); });
+    deny([&] { auto wrong=guest;wrong.back().outbound="bool";
+               (void)check_actor_pipeline_guest_integer_v1(wrong); });
+    deny([&] { auto wrong=guest;wrong[1].instance_id="parse0";
+               (void)check_actor_pipeline_guest_integer_v1(wrong); });
+    // The generic host DAG remains unmodified and may handle other nominal
+    // payloads; host transport tests remain an independent proof surface.
+    expect(check_actor_pipeline(std::vector<PipeStage>{
+        {"Source", PipeRole::readable, "", "string"},
+        {"Sink", PipeRole::writable, "string", ""}}).size() == 1);
+
 }

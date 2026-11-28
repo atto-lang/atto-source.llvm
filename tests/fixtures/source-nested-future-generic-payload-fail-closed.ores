@@ -1,0 +1,4 @@
+pub fnc main(): int {
+  val nested: Future<Future<Option<int>>> = 42;
+  return 42;
+}

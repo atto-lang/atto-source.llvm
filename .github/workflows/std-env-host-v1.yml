@@ -1,0 +1,39 @@
+name: std-env host snapshot v1 (HOST ONLY)
+on:
+  pull_request:
+    paths:
+      - 'native/include/atto/host_env_snapshot_v1.h'
+      - 'native/src/host_env_snapshot_v1.c'
+      - 'native/tests/host_env_snapshot_v1_test.c'
+      - 'scripts/test-native-host-env-v1.sh'
+      - '.github/workflows/std-env-host-v1.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'native/include/atto/host_env_snapshot_v1.h'
+      - 'native/src/host_env_snapshot_v1.c'
+      - 'native/tests/host_env_snapshot_v1_test.c'
+      - 'scripts/test-native-host-env-v1.sh'
+      - '.github/workflows/std-env-host-v1.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  native-host-model:
+    name: C11 host-only ${{ matrix.compiler }} ${{ matrix.opt }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        opt: [-O1, -O2]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and execute actual native host-only tests
+        env:
+          CC: ${{ matrix.compiler }}
+          CFLAGS: ${{ matrix.opt }} -g -fsanitize=address,undefined -fno-omit-frame-pointer
+          ASAN_OPTIONS: detect_leaks=1
+          UBSAN_OPTIONS: halt_on_error=1
+        run: sh scripts/test-native-host-env-v1.sh

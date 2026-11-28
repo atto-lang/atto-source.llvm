@@ -1,0 +1,84 @@
+// LLVM/native Atto telemetry data-policy candidate.
+// Keep real-time actor turns allocation-free: native runtime owns fixed rings,
+// span tokens, clocking, W3C wire parsing and all exporter access.
+// Values below are snapshots only, never ambient authority.
+define module Telemetry as
+  // Two signed 64-bit limbs encode a 128-bit opaque W3C trace ID.
+  // This guest-constructible snapshot is NOT a trusted SpanContext.
+  pub define class SpanSnapshot as
+    pub val int trace_id_high;
+    pub val int trace_id_low;
+    pub val int span_id;
+    pub val int parent_span_id;
+    pub val int operation_id;
+    pub val int code_generation;
+    pub val int trace_flags;
+    pub val int span_kind;
+    pub val int start_ns;
+    pub val int end_ns;
+    pub val int status_code;
+  end
+
+  // This validates decoded v00 fields, NOT the wire header's hex/width syntax.
+  pub fnc traceparent_v00_fields_valid(int version, int high, int low, int span_id, int flags): bool {
+    if version != 0 then return false; fi
+    if high == 0 && low == 0 then return false; fi
+    if span_id == 0 then return false; fi
+    return flags >= 0 && flags <= 255;
+  }
+
+  pub fnc sampled_flag(int flags): bool {
+    if flags < 0 || flags > 255 then return false; fi
+    return flags % 2 == 1;
+  }
+
+  // DROP=0, RECORD_ONLY=1, RECORD_AND_SAMPLE=2.
+  // Parent-based policy=3 preserves only the sampled policy bit; the
+  // native runtime carries nonrecording context separately.
+  pub fnc sampling_decision(int policy, bool parent_sampled): int {
+    if policy == 1 then return 1; fi
+    if policy == 2 then return 2; fi
+    if policy == 3 && parent_sampled then return 2; fi
+    return 0;
+  }
+
+  pub fnc decision_is_recording(int decision): bool {
+    return decision == 1 || decision == 2;
+  }
+
+  pub fnc decision_is_sampled(int decision): bool {
+    return decision == 2;
+  }
+
+  // Native LLVM AOT can enable already-emitted dormant probe sites; this
+  // does NOT authorize ORC JIT / function replacement or add absent probes.
+  pub fnc dormant_probe_admissible(int compiled_ceiling, int requested, bool authorized): bool {
+    if !authorized then return false; fi
+    if compiled_ceiling < 1 || compiled_ceiling > 3 then return false; fi
+    if requested < 1 || requested > 3 then return false; fi
+    return requested <= compiled_ceiling;
+  }
+
+  pub fnc span_window_valid(int started_ns, int ended_ns): bool {
+    if started_ns < 0 || ended_ns < 0 then return false; fi
+    return ended_ns >= started_ns;
+  }
+
+  // Fixed-capacity, single-owner collector admission. All comparisons are
+  // subtraction-free so 64-bit signed overflow cannot enable an overfill.
+  pub fnc ring_admissible(int count, int capacity, int required_bytes, int free_bytes): bool {
+    if capacity < 1 || count < 0 || count >= capacity then return false; fi
+    if required_bytes < 0 || free_bytes < 0 then return false; fi
+    return required_bytes <= free_bytes;
+  }
+
+  pub fnc snapshot(int high, int low, int span_id, int parent_id,
+                   int operation_id, int generation, int flags, int kind,
+                   int start_ns, int end_ns, int status_code): SpanSnapshot {
+    // No implicit sanitization. The runtime must validate all provenance,
+    // boundary and range constraints before exporting a snapshot.
+    return new SpanSnapshot(high, low, span_id, parent_id, operation_id,
+                            generation, flags, kind, start_ns, end_ns,
+                            status_code);
+  }
+end

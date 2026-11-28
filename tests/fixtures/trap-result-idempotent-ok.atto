@@ -1,0 +1,7 @@
+fnc unchanged(Result<int,int> value): Result<int,int> {
+    return trap value;
+}
+pub fnc main(): int {
+    val Result<int,int> original = Ok(42);
+    return unchanged(original).unwrap_or(0);
+}

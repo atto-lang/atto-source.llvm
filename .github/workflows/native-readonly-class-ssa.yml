@@ -1,0 +1,62 @@
+name: Native readonly class SSA exact head
+on:
+  pull_request:
+    paths: [src/native_readonly.rs, src/main.rs, frontend/src/check.rs, .github/workflows/native-readonly-class-ssa.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify source and compile
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$(git write-tree)" = "$(git rev-parse HEAD^{tree})"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          git rev-parse HEAD HEAD^{tree}
+          rustup toolchain install 1.85.1 --profile minimal
+          cargo +1.85.1 test --offline --bin atto-llvm
+          cargo +1.85.1 build --offline --release --bin atto-llvm
+      - name: Compile actual Atto guests and inspect native pointer storage
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          cat > "$work/positive.atto" <<'EOF'
+          // atto-ownership: borrow-default-v1
+          define class Parcel as pub let int padding = 99; pub let int value = 21; end
+          fnc get(Parcel p): int { return p.value; }
+          fnc forward(Parcel p): int { return get(p); }
+          pub fnc main(): int { let p = new Parcel(); return forward(p) + get(p); }
+          EOF
+          target/release/atto-llvm "$work/positive.atto" -o "$work/positive.ll" --emit-llvm
+          grep -F 'define internal i64 @atto_ro_f0(ptr %arg0)' "$work/positive.ll"
+          grep -F 'getelementptr i8, ptr %arg0, i64 8' "$work/positive.ll"
+          test "$(grep -c 'alloca ' "$work/positive.ll")" = 1
+          if grep -E 'alloca ptr|store ptr|load ptr|noalias' "$work/positive.ll"; then exit 1; fi
+          for opt in 0 2; do
+            clang -x ir -O"$opt" "$work/positive.ll" -o "$work/guest"
+            status=0
+            timeout 10s "$work/guest" || status=$?
+            test "$status" = 42
+            echo "native O$opt exit=$status"
+          done
+          sed 's/int value = 21/int value = 9223372036854775807/' "$work/positive.atto" > "$work/overflow.atto"
+          target/release/atto-llvm "$work/overflow.atto" -o "$work/overflow.ll" --emit-llvm
+          clang -x ir -O2 "$work/overflow.ll" -o "$work/overflow"
+          status=0
+          (ulimit -c 0; "$work/overflow") || status=$?
+          test "$status" = 132
+          sed 's/return get(p);/return forward(p);/' "$work/positive.atto" > "$work/cycle.atto"
+          if target/release/atto-llvm "$work/cycle.atto" -o "$work/cycle.ll" --emit-llvm; then exit 1; fi
+          test ! -e "$work/cycle.ll"
+          sha256sum "$work/"*.ll

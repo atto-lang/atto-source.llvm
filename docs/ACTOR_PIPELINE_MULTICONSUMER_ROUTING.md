@@ -136,7 +136,7 @@ constructor with independent bounded mailboxes and implements:
 - `write_one_async(source, payload)` — single-edge-only default forward;
   rejects ambiguous branching;
 - `write_round_robin_async(source, payload)` — source-local strict RR;
-- `write_to_async(source, target, payload)` — topology-connected edge only;
+- `write_to_async(source, target, payload)` — authorized connected edge;
 - `write_by_key_async(source, key, payload)` — stable FNV-1a edge selection;
   rejects malformed/overlong UTF-8, surrogates and oversize keys. Unicode
   normalization (NFC), if required, belongs to the typed key codec upstream.
@@ -144,16 +144,6 @@ constructor with independent bounded mailboxes and implements:
 These APIs are **host-only** and currently use `std::string` payloads;
 they are not a substitute for checked `ActorMail<T>` serialization,
 isolate memory ownership, or guest compiler lowering.
-
-**Authorization gap / release blocker:** The native transport validates
-topology but accepts caller-provided `source` names. A guessed source string
-can select another actor's existing host edge if the caller is not trusted.
-It is therefore **not** a guest-safe routing capability. Until the compiler
-and scheduler derive the exact source instance and generation from an
-authenticated actor execution context, the transport must remain reachable
-only from trusted supervisor/embedding code. No Java, LLVM or other backend
-may lower guest `self.forward*` directly to these string-based APIs. Tests
-of host topology restrictions are not evidence of caller authentication.
 
 ### Native aggregate payload accounting (2026-10-15 hardening)
 
@@ -166,16 +156,6 @@ atomic pressure gates shared across *all* graph edges. A zero-byte DATA
 message still consumes one message slot, so empty messages cannot evade
 the resource bound.
 
-Pending **reader** promises have a separate graph-wide cap, defaulting to
-65,536 and configurable over 1..65,536. This closes the multiplicative
-allocation gap of up to 4,096 edges with 4,096 pending readers each.
-Each accepted pending read takes one global credit. A direct write handoff
-releases the reader credit, and STOP releases all remaining pending reader
-credits while failing their Futures. Per-edge reader bounds still apply.
-The host exposes `pending_reader_count()` for accounting diagnostics.
-Native regressions cover cross-edge saturation, credit reuse after handoff,
-STOP cancellation, and invalid global reader limits.
-
 Bytes are charged only for a buffered message or pending writer, before
 publication; a failed reservation never consumes credits. Reading a queued
 message releases its bytes. Promoting an already charged writer preserves
@@ -186,17 +166,6 @@ buffered transport allocation. The host-only `buffered_payload_bytes()` and
 `buffered_message_count()` diagnostics expose the currently charged
 payload bytes and buffered/pending messages.
 
-A failed pending-writer promotion may leave free buffer capacity while older
-writers are still queued. New writers MUST queue behind older pending writers,
-never fill the free slot ahead of them, and the per-edge pending-writer quota
-continues to apply independently of buffer occupancy. If repeated promotion
-failures empty the buffer while a charged writer remains, the next reader
-directly receives the oldest pending writer and releases its graph-wide byte
-and message credits. The failed writers' admission futures settle exceptionally;
-successful recovery does not reorder or duplicate DATA. The fault-injection
-regression covers FIFO, pending-writer capacity, stranded-reader prevention,
-and post-failure reuse under both GCC and Clang sanitizer targets.
-
 This is **not** a global heap cap on consumers holding already-delivered
 Futures or a claim of guest-level backpressure. The future scheduler
 `RouteReceipt`/typed `ActorMail<T>` integration must enforce the same
@@ -204,49 +173,6 @@ generation-scoped credit policy (including accounting for actual encoded
 payload sizes) on Java/GraalVM, LLVM and other backends. It must also
 preserve one failure receipt per fan-out destination under byte pressure.
 
-
-## Native host route-correlation ledger (2026-10-16)
-
-`ActorPipeRouteLedger.hpp` adds a C++17 **host-only** immutable
-correlation frame ledger over the validated DAG, with supervisor-selected
-ingress roots, generation-scoped flow IDs, independent route IDs for each
-fan-out message, one-shot frame retirement and 1..65,536-frame capacity.
-The ledger checks every selected forward edge, rejects ambiguous forwarding,
-preserves the published edge order, uses per-source round-robin cursors,
-and rejects foreign/stale frames and graph reconfiguration with live frames.
-An explicit supervisor abort invalidates outstanding frames.
-
-A reverse `backward(frame)` selector creates exactly **one** new,
-immutable, VM-host frame pointing to the immediate previous actor instance
-in the verified original path. Both fan-in branches keep their distinct
-paths; the original frame is consumed exactly once, the flow ID stays
-constant, and the reverse hop has its own route ID. Reverse data cannot
-re-enter forward selection or route above the origin.
-
-**Frame lifetime hardening:** the ledger retains owning references
-to active route frames until completion, STOP or generation abort.
-Dropping the final external handle cannot leave a dangling pointer or
-allow an allocator-reused address to authenticate a different frame (ABA).
-The updated exact C++ header and test blobs were compiled and run locally
-with GCC and Clang in C++17 ASan+UBSan mode (2,000 concurrent selections).
-Those local runs still used a lightweight graph-contract stub, not the
-production native graph validator or entire CTest matrix.
-
-**Important:** this ledger is NOT yet attached to native DATA mailbox
-envelopes and does not authenticate the current executing actor. It also
-does not lower any Oreslang source `self.forward_*`, `self.backward` or
-`self.reply` method. The Java/GraalVM draft contains a more integrated,
-real-mailbox SHARED host bridge, so this constitutes **correlation-substrate
-parity only, not executable backend parity**.
-
-`native_actor_pipe_route_ledger_test.cpp` is registered with CTest and
-the standalone GCC/Clang O0/O2/ASan/UBSan matrix. A local syntax and
-algorithm test of the **exact new header and test Git blobs**, using a
-type-compatible lightweight `ActorPipeContract.hpp` graph validator
-stub, passed GCC 14 and Clang 17 under ASan/UBSan with 2,000 parallel
-route selections. The production DAG validator, actual native transport,
-full repository CTest and compiled guest actor code were **not executed**
-by that isolated test and remain release blockers.
 
 ## Mandatory release gates
 

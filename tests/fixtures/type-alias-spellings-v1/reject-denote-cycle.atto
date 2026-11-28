@@ -1,0 +1,4 @@
+// expect: TYPE_ALIAS_CYCLE
+denote type A = B;
+denote type B = A;
+pub fnc main(): int { return 42; }

@@ -1,0 +1,5 @@
+// Must reject: transform callable capture has no proven receiver ownership.
+fnc invalid(Result<Option<int>,String> value): void {
+  val transform = value.transpose;
+  return;
+}

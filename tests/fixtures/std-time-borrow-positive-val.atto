@@ -1,0 +1,15 @@
+// POSITIVE Atto binding semantics: val == const mut (fixed binding,
+// writable referent), so mut self is legal without let mut.
+// Expected stdout: 1, true, true; compiler must link real std/time .atto.
+import module time from "std/time";
+pub routine main(): void {
+  val clock = time.manual_clock(7, 0);
+  val step = time.nanoseconds(1).expect("one");
+  stdio.println(clock.advance(step).expect("advance").ticks_ns);
+  val due = time.deadline_after(clock.now(), step).expect("due");
+  val timer = time.one_shot(due);
+  stdio.println(timer.poll(time.instant(7, 2)).expect("fire"));
+  val repeating = time.interval(time.instant(7, 2), step);
+  stdio.println(repeating.cancel());
+  return;
+}

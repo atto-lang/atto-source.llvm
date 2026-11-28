@@ -1,0 +1,24 @@
+// expect-exit: 42
+import module linked_list from "atto.alloc/linked_list";
+pub fnc main(): int {
+  let mut list = linked_list.new_linked_list();
+  list.push_back(12);
+  list.push_front(10);
+  list.push_back(12);
+  list.push_back(14);
+  if list.len() != 4; do return 1; fi
+  if list.remove_first(12) == false; do return 2; fi
+  if list.len() != 3; do return 3; fi
+  let Array<int> snapshot = list.to_array();
+  if snapshot.size != 3 || snapshot.get(0) != 10 ||
+      snapshot.get(1) != 12 || snapshot.get(2) != 14; do
+    return 4;
+  fi
+  list.pop_front();
+  list.pop_back();
+  list.push_back(17);
+  if list.len() != 2 || list.allocated_slots() != 4; do return 5; fi
+  list.clear();
+  if !list.is_empty(); do return 6; fi
+  return 42;
+}

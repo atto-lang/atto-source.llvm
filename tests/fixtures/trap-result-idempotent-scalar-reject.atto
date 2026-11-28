@@ -1,0 +1,5 @@
+pub fnc main(): int {
+    val int original = 7;
+    val Result<int,Error> result = trap original;
+    return result.unwrap_or(0);
+}

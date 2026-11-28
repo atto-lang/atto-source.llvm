@@ -1,5 +1,7 @@
 #pragma once
 // Trusted host substrate; guest never receives native pointers or these C++ tokens.
+// Grants bind both actor identity and incarnation: numeric actor ID reuse never
+// transfers shared-region authority to a replacement actor.
 // SHARED actors keep their own ActorArena; this is an explicitly shared region.
 #include <array>
 #include <atomic>
@@ -11,7 +13,6 @@
 #include <mutex>
 #include <shared_mutex>
 #include <stdexcept>
-#include <thread>
 
 namespace oreslang::runtime {
 class SharedDomainArena final {
@@ -19,48 +20,20 @@ public:
     static constexpr std::size_t Slots = 16;
     static constexpr std::size_t SlotBytes = 64;
     static constexpr std::size_t Members = 16;
-    class Lease;
-    // Grants and handles are capabilities, not serializable coordinates.
-    // Raw aggregate fields previously let trusted-but-unprivileged host code
-    // fabricate another member's predictable (domain,generation,index) token.
-    class Grant final {
-        friend class SharedDomainArena;
-        friend class Lease;
-        std::uint64_t domain_ = 0, generation_ = 0;
-        std::size_t member_ = 0;
-        Grant(std::uint64_t domain, std::uint64_t generation, std::size_t member)
-            : domain_(domain), generation_(generation), member_(member) {}
-    public:
-        Grant(const Grant&) = default;
-        Grant& operator=(const Grant&) = default;
-        std::uint64_t domain_id() const noexcept { return domain_; }
-    };
-    class Handle final {
-        friend class SharedDomainArena;
-        friend class Lease;
-        std::uint64_t domain_ = 0, generation_ = 0;
-        std::size_t slot_ = 0;
-        Handle(std::uint64_t domain, std::uint64_t generation, std::size_t slot)
-            : domain_(domain), generation_(generation), slot_(slot) {}
-    public:
-        // An invalid zero handle is useful for delayed assignment, but callers
-        // cannot manufacture a live handle because the authority fields remain private.
-        Handle() = default;
-        Handle(const Handle&) = default;
-        Handle& operator=(const Handle&) = default;
-    };
+    struct Grant { std::uint64_t domain, generation; std::size_t member; };
+    struct Handle { std::uint64_t domain, generation; std::size_t slot; };
 
     class Lease final {
         friend class SharedDomainArena;
         SharedDomainArena* arena_;
-        // A std::shared_mutex must be unlocked by the same thread that locked it.
-        std::thread::id owner_thread_;
         std::shared_lock<std::shared_mutex> read_;
         std::unique_lock<std::shared_mutex> write_;
         bool exclusive_;
-        Lease(SharedDomainArena& arena, std::uint64_t actor, std::uint64_t incarnation, Grant grant, bool exclusive)
-            : arena_(&arena), owner_thread_(std::this_thread::get_id()), exclusive_(exclusive) {
-            if (!actor || !incarnation) throw std::logic_error("shared region actor incarnation required");
+        Lease(SharedDomainArena& arena, std::uint64_t actor, std::uint64_t incarnation,
+              Grant grant, bool exclusive)
+            : arena_(&arena), exclusive_(exclusive) {
+            if (!actor || !incarnation)
+                throw std::logic_error("shared region actor identity and incarnation required");
             // Actor carrier threads must not park behind another actor's
             // critical lease. Admission is fail-fast; the scheduler may
             // resubmit a turn after the owner releases its lease.
@@ -74,17 +47,16 @@ public:
             arena.validate_grant(grant, actor, incarnation, exclusive_);
         }
         void require_live(bool write = false) const {
-            if (!arena_ || owner_thread_ != std::this_thread::get_id() ||
-                arena_->closing_.load(std::memory_order_acquire) ||
+            if (!arena_ || arena_->closing_.load(std::memory_order_acquire) ||
                 (write && !exclusive_))
                 throw std::logic_error("shared region lease revoked or insufficient rights");
         }
         auto& slot(Handle h) const {
             require_live();
-            if (h.domain_ != arena_->identity_ || h.slot_ >= Slots)
+            if (h.domain != arena_->identity_ || h.slot >= Slots)
                 throw std::logic_error("foreign shared region handle");
-            auto& s = arena_->slots_[h.slot_];
-            if (!s.live || s.generation != h.generation_)
+            auto& s = arena_->slots_[h.slot];
+            if (!s.live || s.generation != h.generation)
                 throw std::logic_error("stale shared region handle");
             return s;
         }
@@ -93,11 +65,6 @@ public:
         Lease& operator=(const Lease&) = delete;
         Lease(Lease&&) = delete; // moved-from lease must never outlive its lock
         Lease& operator=(Lease&&) = delete;
-        ~Lease() noexcept {
-            // Destructing on a foreign carrier would unlock a shared_mutex
-            // from the wrong thread (undefined behavior), so fail closed.
-            if (owner_thread_ != std::this_thread::get_id()) std::terminate();
-        }
         Handle allocate(std::size_t bytes) {
             require_live(true);
             if (bytes == 0 || bytes > SlotBytes) throw std::out_of_range("shared region slot bytes");
@@ -107,7 +74,7 @@ public:
                     s.live = true;
                     s.length = bytes;
                     s.data.fill(std::byte{0});
-                    return Handle(arena_->identity_, s.generation, i);
+                    return {arena_->identity_, s.generation, i};
                 }
             }
             throw std::out_of_range("shared region slot quota");
@@ -126,9 +93,7 @@ public:
         void drop(Handle h) {
             require_live(true);
             auto& s = slot(h);
-            // Security-sensitive drop must not be optimized away as a dead store.
-            // The final destructor uses the same volatile scrub primitive.
-            SharedDomainArena::scrub(s.data);
+            s.data.fill(std::byte{0});
             s.length = 0;
             s.live = false;
             s.generation = s.generation == std::numeric_limits<std::uint64_t>::max()
@@ -136,7 +101,11 @@ public:
         }
     };
 
-    SharedDomainArena() : identity_(allocate_identity()) {}
+    SharedDomainArena()
+        : identity_(next_identity_.fetch_add(1, std::memory_order_relaxed)) {
+        if (!identity_ || identity_ == std::numeric_limits<std::uint64_t>::max())
+            throw std::overflow_error("shared region identity exhausted");
+    }
     SharedDomainArena(const SharedDomainArena&) = delete;
     SharedDomainArena& operator=(const SharedDomainArena&) = delete;
     ~SharedDomainArena() noexcept {
@@ -147,12 +116,14 @@ public:
         for (auto& s : slots_) scrub(s.data);
     }
 
-    Grant grant(std::uint64_t actor, std::uint64_t incarnation, bool allow_read, bool allow_write) {
+    Grant grant(std::uint64_t actor, std::uint64_t incarnation,
+                bool allow_read, bool allow_write) {
         // Like actor lease admission, membership grants may not park a CONTROL
         // carrier behind a guest-held critical lease.
         std::unique_lock lock(mutex_, std::try_to_lock);
         if (!lock.owns_lock()) throw std::logic_error("shared region busy");
-        if (closing_.load(std::memory_order_acquire) || !actor || !incarnation || (!allow_read && !allow_write))
+        if (closing_.load(std::memory_order_acquire) || !actor || !incarnation
+            || (!allow_read && !allow_write))
             throw std::logic_error("invalid shared region grant");
         for (std::size_t i = 0; i < Members; ++i) {
             auto& m = members_[i];
@@ -162,7 +133,7 @@ public:
                 m.incarnation = incarnation;
                 m.read = allow_read || allow_write;
                 m.write = allow_write;
-                return Grant(identity_, m.generation, i);
+                return {identity_, m.generation, i};
             }
         }
         throw std::out_of_range("shared region membership quota");
@@ -173,7 +144,7 @@ public:
         std::unique_lock lock(mutex_, std::try_to_lock);
         if (!lock.owns_lock()) return false;
         validate_grant(grant, 0, 0, false);
-        auto& m = members_[grant.member_];
+        auto& m = members_[grant.member];
         m.active = false;
         m.actor = 0;
         m.incarnation = 0;
@@ -216,21 +187,11 @@ public:
     }
 private:
     struct Slot { std::array<std::byte, SlotBytes> data{}; std::uint64_t generation = 1; std::size_t length = 0; bool live = false; };
-    struct Member { std::uint64_t actor = 0, incarnation = 0, generation = 1; bool active = false, read = false, write = false; };
+    struct Member {
+        std::uint64_t actor = 0, incarnation = 0, generation = 1;
+        bool active = false, read = false, write = false;
+    };
     inline static std::atomic<std::uint64_t> next_identity_{1};
-    // Saturate rather than wrapping the identity counter: a wrapped value
-    // could eventually reauthorize stale cross-domain grants or handles.
-    static std::uint64_t allocate_identity() {
-        auto current = next_identity_.load(std::memory_order_relaxed);
-        for (;;) {
-            if (current == 0 || current == std::numeric_limits<std::uint64_t>::max())
-                throw std::overflow_error("shared region identity exhausted");
-            if (next_identity_.compare_exchange_weak(
-                    current, current + 1, std::memory_order_relaxed,
-                    std::memory_order_relaxed))
-                return current;
-        }
-    }
     const std::uint64_t identity_;
     std::shared_mutex mutex_;
     std::atomic<bool> closing_{false};
@@ -241,13 +202,16 @@ private:
         volatile unsigned char* p = reinterpret_cast<volatile unsigned char*>(data.data());
         for (std::size_t i = 0; i < N; ++i) p[i] = 0;
     }
-    void validate_grant(Grant grant, std::uint64_t actor, std::uint64_t incarnation, bool writer) const {
+    void validate_grant(Grant grant, std::uint64_t actor,
+                        std::uint64_t incarnation, bool writer) const {
         if (closing_.load(std::memory_order_acquire) ||
-            grant.domain_ != identity_ || grant.member_ >= Members)
+            grant.domain != identity_ || grant.member >= Members)
             throw std::logic_error("foreign or retired shared region grant");
-        const auto& m = members_[grant.member_];
-        if (!m.active || m.generation != grant.generation_ || !m.actor ||
-            !m.read || (actor != 0 && (m.actor != actor || m.incarnation != incarnation)) || (writer && !m.write))
+        const auto& m = members_[grant.member];
+        if (!m.active || m.generation != grant.generation || !m.actor ||
+            !m.read || (actor != 0 &&
+            (m.actor != actor || m.incarnation != incarnation)) ||
+            (writer && !m.write))
             throw std::logic_error("stale or insufficient shared region grant");
     }
 };

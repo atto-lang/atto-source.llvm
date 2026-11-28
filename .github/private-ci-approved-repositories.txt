@@ -1,0 +1,6 @@
+# Private CI destinations explicitly approved for oreslang-source.llvm source transfers.
+# No repositories are approved by default.
+# Changes must be reviewed by maintainers and security owners on a protected branch.
+# Format: one exact owner/repo per uncommented line, no whitespace or wildcards.
+# Superseded destination proposal from PR #788 was deactivated.
+# See Git history and PR #788 for candidate details; no live grant.

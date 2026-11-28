@@ -1,5 +1,13 @@
 # Exact GitHub Actions run evidence contract v1 — five Oreslang source backends and three Rx variants
 
+## Strict runner ID typing
+
+The source-free regression suite now has 97 tests per round. Non-success
+classification accepts only null or an actual integer zero as an unallocated
+runner ID. Boolean and floating-point zero values are malformed and return
+ordinary rejection, never `NOT_EXECUTED`. Positive integer IDs indicate runner
+allocation. This classification does not certify backend execution or parity.
+
 This repository carries **the same** `scripts/verify_ci_run.py` and
 `scripts/test_verify_ci_run.py` as `oreslang-source.java`, `.llvm`, `.net`,
 `.wasm`, and `.forge`. The helper is read-only: it never publishes Git objects,
@@ -10,8 +18,9 @@ checks out private source, starts workflows, or changes repository policy.
 The verifier checks that a **real GitHub Actions run** corresponds to a
 specific immutable commit and its actual Git tree **and approved workflow file path**, in one of eight exact
 private repositories (five compiler backends plus three Rx prototypes) with pinned numeric repository IDs. It independently
-fetches the repository, commit, run and *all* Actions jobs through GitHub's
-read-only API. It rejects nonprivate/mismatched/archived identities, wrong
+fetches the repository, commit, run and *all* Actions jobs for the independently
+pinned run attempt through GitHub's read-only attempt-specific jobs API. It
+never substitutes the latest-attempt shortcut for a historical attempt. It rejects nonprivate/mismatched/archived identities, wrong
 commit/tree, foreign run/head repository, wrong run SHA, foreign/missing workflow path, uncompleted/failed
 runs, missing/failed/skipped jobs, zero-step jobs, missing or stale run-attempt IDs, missing expected jobs or
 expected executable steps, ambiguous duplicate job names, missing/zero/noninteger
@@ -23,6 +32,17 @@ teardown are **invalid proof requirements**, even when some unrelated command
 succeeded in the same job. A required step must belong to a named **required
 job**; an unrelated job cannot satisfy it. With multiple named jobs, explicit per-job step bindings are mandatory: a
 passing step in job A may not stand in for the required test step in job B.
+
+A successful verifier result is emitted as
+`oreslang-parity-execution-evidence-v1` with claim tier `RUNNER_EXECUTED`.
+The result includes the immutable run/attempt/workflow/source identity plus each
+verified job's numeric job/runner identity and the actually executed
+non-housekeeping step names and timestamps. Step categories default to
+`indeterminate`; downstream parity tooling must not promote them to host-test,
+compiler-build, or compiled-guest execution tiers without separate evidence.
+The source verifier does not enumerate run artifacts, so it emits
+`artifacts_verified: false` and an empty artifact list. An empty list must not
+be interpreted as verified absence of artifacts.
 
 This is a **run execution and Git provenance check**, not proof that all
 expected tests executed, or a guest-runtime feature-parity certification.
@@ -76,8 +96,12 @@ trusted local environment or a **reviewed** source-scoped CI workflow with a
 read-only token. The GitHub Actions token must have adequate `actions: read`
 and `contents: read` access; no cross-organization checkout is needed.
 Success produces a machine-readable statement
-`GITHUB_RUN_EXECUTION_VERIFIED_NOT_GUEST_PARITY_CERTIFIED`. Failure returns
-nonzero and a `CI_RUN_EVIDENCE_REJECTED` explanation without printing tokens.
+`GITHUB_RUN_EXECUTION_VERIFIED_NOT_GUEST_PARITY_CERTIFIED`. A completed run
+whose authenticated job metadata shows **no allocated runner and no executed
+step records** returns exit status 2 with
+`CI_RUN_EVIDENCE_NOT_EXECUTED`; this is an infrastructure/execution-state
+classification, never a passing test claim. Other failures return exit status 1
+with a `CI_RUN_EVIDENCE_REJECTED` explanation without printing tokens.
 
 ## Security and release boundaries
 
@@ -110,7 +134,7 @@ workflow YAML Git blob (as this verifier requires), source HEAD and tree.
 The verifier denies duplicate step names within a job, because two steps
 with the same display name cannot unambiguously satisfy a named proof step.
 All required jobs and steps must be explicit sequences; malformed caller
-inputs deny verification. These guards are checked by all 73 independently defined source-free
+inputs deny verification. These guards are checked by all 94 independently defined source-free
 regression cases, three times in the CI workflow. The
 regressions are not native Oreslang compiler or runtime conformance tests.
 
@@ -183,8 +207,8 @@ private test-carrier execution and exact guest snapshot evidence must
 be attested separately under the source-export policy; a successful
 carrier run cannot certify a different source repository's commit.
 
-The source-free regression suite defines 73 unittest methods, and the workflow
-requires at least 73 per round in three rounds when Actions runners are available. Passing
+The source-free regression suite defines 94 unittest methods, and the workflow
+requires at least 94 per round in three rounds when Actions runners are available. Passing
 these tests alone does not establish that any backend-native tests ran.
 
 ## Short-lived Actions evidence artifact
@@ -221,7 +245,7 @@ https://github.com/scintilla-run-test/gleam-runner-conformance/actions/runs/3898
 This does not authorize private compiler/actor source export and does not
 attest native guest-language compilation or execution.
 
-## Independently pinned run attempt (73-case regression gate)
+## Independently pinned run attempt (94-case regression gate)
 
 The verifier requires `--run-attempt N` from independently approved release
 evidence, and compares it with GitHub's run attempt and every job's attempt.

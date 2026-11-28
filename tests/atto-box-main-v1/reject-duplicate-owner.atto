@@ -1,0 +1,5 @@
+pub fnc main(): int {
+    val Box<int> first = Box<int>(42);
+    val Box<int> second = Box<int>(2);
+    return first.get();
+}

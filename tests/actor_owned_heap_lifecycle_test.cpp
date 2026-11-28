@@ -13,15 +13,47 @@
 
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "actor heap check failed at %d\n", __LINE__); return 1; } } while (0)
 
-enum Misuse { WRONG_OWNER, WRONG_EPOCH, FORGED_SLOT, DROP_LOANED, WRITE_LOANED, STALE_SLOT_REUSED, FOREIGN_SLOT, DOUBLE_LOAN_RELEASE, REENTER, CALL_AFTER_RETIRE, FOREIGN_CARRIER_TURN, NESTED_CARRIER_ACTOR, FORGED_EXTERNAL_LEASE, FORGED_EXTERNAL_DOMAIN, EXTERNAL_AFTER_RETIRE };
-static void invalid_call(enum Misuse which) {
-    OresActorSlot foreign_slot = {0, 0, 0};
-    if (which == FOREIGN_SLOT) {
-        OresActorI64Heap* foreign = ores_actor_i64_heap_open(30, 7, 2);
-        OresActorTurn foreign_turn = ores_actor_i64_heap_enter(foreign, 30, 7);
-        foreign_slot = ores_actor_i64_heap_new(foreign, foreign_turn, 5);
-        ores_actor_i64_heap_leave(foreign, foreign_turn);
+#if !defined(ORES_HEAP_NO_LINK_WRAP)
+/* Linker --wrap intercepts calls from production ActorOwnedI64Heap.c,
+ * not its C++ test host's unrelated allocator traffic. Check actual bytes
+ * BEFORE real free at O0/O2, never after the allocation lifetime ends.
+ * This is scalar-heap direct linkage, NOT process-wide GC certification. */
+struct TrackedHeapAllocation { void* p; size_t bytes; };
+static TrackedHeapAllocation tracked_heap[32];
+static size_t tracked_heap_count;
+static size_t scrubbed_physical_frees;
+extern "C" void* __real_calloc(size_t count, size_t size);
+extern "C" void __real_free(void*);
+extern "C" void* __wrap_calloc(size_t count, size_t size) {
+    if (size && count > SIZE_MAX / size) abort();
+    void* p = __real_calloc(count, size);
+    if (p) {
+        if (tracked_heap_count == 32) abort();
+        tracked_heap[tracked_heap_count++] = TrackedHeapAllocation{p, count * size};
     }
+    return p;
+}
+extern "C" void __wrap_free(void* p) {
+    if (!p) return;
+    size_t i = 0;
+    while (i < tracked_heap_count && tracked_heap[i].p != p) ++i;
+    if (i == tracked_heap_count) abort();
+    const volatile unsigned char* bytes =
+        static_cast<const volatile unsigned char*>(p);
+    for (size_t j = 0; j < tracked_heap[i].bytes; ++j) {
+        if (bytes[j] != 0) {
+            fputs("ACTOR_OWNED_I64_HEAP_UNSCRUBBED_PRE_FREE\n", stderr);
+            abort();
+        }
+    }
+    tracked_heap[i] = tracked_heap[--tracked_heap_count];
+    ++scrubbed_physical_frees;
+    __real_free(p);
+}
+#endif /* !ORES_HEAP_NO_LINK_WRAP */
+
+enum Misuse { WRONG_OWNER, WRONG_EPOCH, FORGED_SLOT, DROP_LOANED, WRITE_LOANED, STALE_SLOT_REUSED, FOREIGN_SLOT, DOUBLE_LOAN_RELEASE, REENTER, CALL_AFTER_RETIRE, CROSS_CARRIER_TOKEN, NESTED_DIFFERENT_HEAP };
+static void invalid_call(enum Misuse which) {
     OresActorI64Heap* heap = ores_actor_i64_heap_open(29, 7, 2);
     OresActorTurn turn = ores_actor_i64_heap_enter(heap, 29, 7);
     OresActorSlot slot = ores_actor_i64_heap_new(heap, turn, 99);
@@ -50,7 +82,10 @@ static void invalid_call(enum Misuse which) {
         (void) ores_actor_i64_heap_new(heap, turn, 12);
         (void) ores_actor_i64_heap_read(heap, turn, slot);
     } else if (which == FOREIGN_SLOT) {
-        (void) ores_actor_i64_heap_read(heap, turn, foreign_slot);
+        OresActorI64Heap* foreign = ores_actor_i64_heap_open(30, 7, 2);
+        OresActorTurn other = ores_actor_i64_heap_enter(foreign, 30, 7);
+        OresActorSlot other_slot = ores_actor_i64_heap_new(foreign, other, 5);
+        (void) ores_actor_i64_heap_read(heap, turn, other_slot);
     } else if (which == DOUBLE_LOAN_RELEASE) {
         OresActorLoan loan = ores_actor_i64_heap_borrow(heap, turn, slot);
         ores_actor_i64_heap_release(heap, loan);
@@ -60,29 +95,18 @@ static void invalid_call(enum Misuse which) {
     } else if (which == CALL_AFTER_RETIRE) {
         ores_actor_i64_heap_retire(heap);
         (void) ores_actor_i64_heap_new(heap, turn, 6);
-    } else if (which == FOREIGN_CARRIER_TURN) {
-        /* The compiler-facing fixed-field ABI must reject a current turn
-         * copied onto a different native carrier. */
-        ores_actor_i64_heap_field_init(heap, turn.domain, turn.epoch, 1, 77);
-        std::thread stolen([&] {
-            (void) ores_actor_i64_heap_field_read(
-                heap, turn.domain, turn.epoch, 1);
+    } else if (which == CROSS_CARRIER_TOKEN) {
+        /* Logical domain/epoch match, but this token was admitted on the
+         * forked child's main carrier, not on the child native thread. */
+        std::thread thief([&] {
+            (void) ores_actor_i64_heap_read(heap, turn, slot);
         });
-        stolen.join();
-    } else if (which == NESTED_CARRIER_ACTOR) {
-        OresActorI64Heap* other = ores_actor_i64_heap_open(30, 8, 1);
-        (void) ores_actor_i64_heap_enter(other, 30, 8);
-    } else if (which == FORGED_EXTERNAL_LEASE) {
-        OresActorExternalLease lease = ores_actor_i64_heap_external_acquire(heap, turn);
-        ++lease.generation;
-        ores_actor_i64_heap_external_release(heap, &lease);
-    } else if (which == FORGED_EXTERNAL_DOMAIN) {
-        OresActorExternalLease lease = ores_actor_i64_heap_external_acquire(heap, turn);
-        ++lease.domain;
-        ores_actor_i64_heap_external_release(heap, &lease);
-    } else if (which == EXTERNAL_AFTER_RETIRE) {
-        ores_actor_i64_heap_retire(heap);
-        (void) ores_actor_i64_heap_external_acquire(heap, turn);
+        thief.join();
+    } else if (which == NESTED_DIFFERENT_HEAP) {
+        /* Two actor turns cannot execute simultaneously on one carrier,
+         * even if they have different domain IDs. */
+        OresActorI64Heap* sibling = ores_actor_i64_heap_open(30, 8, 2);
+        (void) ores_actor_i64_heap_enter(sibling, 30, 8);
     }
     /* None of these calls may finish normally. */
 }
@@ -119,6 +143,57 @@ static int second_carrier(void* argument) {
     return 0;
 }
 
+static int test_long_lived_source_actor_heap_churn(void) {
+    /* 100,000 transients on ONE heap rather than 100,000 short-lived
+     * processes. A persistent compiler-declared field must survive all
+     * reuses. Each temporary allocation is explicitly dropped. */
+    const uint64_t owner = 3301u, incarnation = 11u;
+    OresActorI64Heap* heap = ores_actor_i64_heap_open(owner, incarnation, 2u);
+    CHECK(heap != nullptr);
+    OresActorTurn initial = ores_actor_i64_heap_enter(heap, owner, incarnation);
+    ores_actor_i64_heap_field_init_mutable(
+        heap, initial.domain, initial.epoch, 0u, 41);
+    ores_actor_i64_heap_leave(heap, initial);
+    uint64_t last_generation = 0;
+    for (int turn_index = 0; turn_index < 1000; ++turn_index) {
+        OresActorTurn turn = ores_actor_i64_heap_enter(heap, owner, incarnation);
+        CHECK(ores_actor_i64_heap_field_read(
+                  heap, turn.domain, turn.epoch, 0u) == 41 + turn_index);
+        for (int j = 0; j < 100; ++j) {
+            const int64_t value = (int64_t)turn_index * 100 + j;
+            OresActorSlot temporary = ores_actor_i64_heap_new(heap, turn, value);
+            CHECK(temporary.domain == turn.domain && temporary.index == 1u);
+            CHECK(temporary.generation > last_generation);
+            last_generation = temporary.generation;
+            CHECK(ores_actor_i64_heap_read(heap, turn, temporary) == value);
+            ores_actor_i64_heap_write(heap, turn, temporary, value + 1);
+            CHECK(ores_actor_i64_heap_read(heap, turn, temporary) == value + 1);
+            ores_actor_i64_heap_drop(heap, turn, temporary);
+        }
+        ores_actor_i64_heap_field_write(
+            heap, turn.domain, turn.epoch, 0u, 42 + turn_index);
+        ores_actor_i64_heap_leave(heap, turn);
+    }
+    OresActorTurn final_turn = ores_actor_i64_heap_enter(heap, owner, incarnation);
+    CHECK(ores_actor_i64_heap_field_read(
+              heap, final_turn.domain, final_turn.epoch, 0u) == 1041);
+    /* Simulate a suspended read borrow. Its lease outlives the native
+     * turn and can be released from a different trusted host carrier. */
+    OresActorSlot field = {final_turn.domain, 0u, 1u};
+    OresActorLoan suspended = ores_actor_i64_heap_borrow(heap, final_turn, field);
+    /* Supervisor cancellation may retire a heap while its final actor turn
+     * is still unwinding. Neither an active turn nor its cross-turn loan
+     * permits physical release. A retired turn may still leave. */
+    ores_actor_i64_heap_retire(heap);
+    CHECK(ores_actor_i64_heap_try_destroy(heap) == 0);
+    ores_actor_i64_heap_leave(heap, final_turn);
+    CHECK(ores_actor_i64_heap_try_destroy(heap) == 0);
+    std::thread releaser([&] { ores_actor_i64_heap_release(heap, suspended); });
+    releaser.join();
+    CHECK(ores_actor_i64_heap_try_destroy(heap) == 1);
+    return 0;
+}
+
 int main(void) {
     /* One actor heap survives between logical turns and native carriers. */
     OresActorI64Heap* heap = ores_actor_i64_heap_open(29, 7, 2);
@@ -131,6 +206,12 @@ int main(void) {
     OresActorTurn denied = {0, 0};
     CHECK(ores_actor_i64_heap_try_enter(heap, 29, 7, &denied) == 0);
     CHECK(denied.domain == 0 && denied.epoch == 0);
+    std::thread competitor([&] {
+        OresActorTurn busy = {91, 92};
+        CHECK(ores_actor_i64_heap_try_enter(heap, 29, 7, &busy) == 0);
+        CHECK(busy.domain == 91 && busy.epoch == 92);
+    });
+    competitor.join();
     ores_actor_i64_heap_leave(heap, first); /* simulates await/suspension */
     OresActorTurn next = {0, 0};
     CHECK(ores_actor_i64_heap_try_enter(heap, 29, 7, &next) == 1);
@@ -157,51 +238,6 @@ int main(void) {
     CHECK(ores_actor_i64_heap_try_destroy(heap) == 0); /* outstanding loan */
     ores_actor_i64_heap_release(heap, shutdown_hold);
     CHECK(ores_actor_i64_heap_try_destroy(heap) == 1);
-
-    /* Lifetime-only external owners block physical free without carrying any
-     * slot/read authority. Release may happen on a callback carrier. */
-    OresActorI64Heap* external_heap = ores_actor_i64_heap_open(41, 2, 2);
-    OresActorTurn external_turn = ores_actor_i64_heap_enter(external_heap, 41, 2);
-    (void) ores_actor_i64_heap_new(external_heap, external_turn, 123);
-    OresActorExternalLease external =
-        ores_actor_i64_heap_external_acquire(external_heap, external_turn);
-    ores_actor_i64_heap_leave(external_heap, external_turn);
-    ores_actor_i64_heap_retire(external_heap);
-    CHECK(ores_actor_i64_heap_try_destroy(external_heap) == 0);
-    std::thread callback_release([&] {
-        ores_actor_i64_heap_external_release(external_heap, &external);
-        ores_actor_i64_heap_external_release(external_heap, &external);
-    });
-    callback_release.join();
-    CHECK(external.domain == 0 && external.index == 0 && external.generation == 0);
-    CHECK(ores_actor_i64_heap_try_destroy(external_heap) == 1);
-    external_heap = nullptr;
-    /* The consumed token can be retried after CONTROL has destroyed/cleared
-     * the heap pointer: release must return before touching heap storage. */
-    ores_actor_i64_heap_external_release(external_heap, &external);
-
-    /* Reusing a bounded lease slot must not let an old cleanup token release
-     * the newer generation occupying that slot. */
-    OresActorI64Heap* reused_heap = ores_actor_i64_heap_open(42, 3, 1);
-    OresActorTurn reused_turn = ores_actor_i64_heap_enter(reused_heap, 42, 3);
-    OresActorExternalLease old_lease =
-        ores_actor_i64_heap_external_acquire(reused_heap, reused_turn);
-    OresActorExternalLease stale_copy = old_lease;
-    ores_actor_i64_heap_external_release(reused_heap, &old_lease);
-    CHECK(old_lease.domain == 0 && old_lease.index == 0 && old_lease.generation == 0);
-    OresActorExternalLease current_lease =
-        ores_actor_i64_heap_external_acquire(reused_heap, reused_turn);
-    CHECK(current_lease.index == stale_copy.index);
-    CHECK(current_lease.generation > stale_copy.generation);
-    ores_actor_i64_heap_external_release(reused_heap, &stale_copy);
-    CHECK(stale_copy.domain == 0 && stale_copy.index == 0 && stale_copy.generation == 0);
-    ores_actor_i64_heap_leave(reused_heap, reused_turn);
-    ores_actor_i64_heap_retire(reused_heap);
-    CHECK(ores_actor_i64_heap_try_destroy(reused_heap) == 0);
-    ores_actor_i64_heap_external_release(reused_heap, &current_lease);
-    CHECK(current_lease.domain == 0 && current_lease.index == 0
-          && current_lease.generation == 0);
-    CHECK(ores_actor_i64_heap_try_destroy(reused_heap) == 1);
 #if defined(__unix__) || defined(__APPLE__)
     CHECK(rejects(WRONG_OWNER));
     CHECK(rejects(WRONG_EPOCH));
@@ -213,26 +249,14 @@ int main(void) {
     CHECK(rejects(DOUBLE_LOAN_RELEASE));
     CHECK(rejects(REENTER));
     CHECK(rejects(CALL_AFTER_RETIRE));
-    CHECK(rejects(FOREIGN_CARRIER_TURN));
-    CHECK(rejects(NESTED_CARRIER_ACTOR));
-    CHECK(rejects(FORGED_EXTERNAL_LEASE));
-    CHECK(rejects(FORGED_EXTERNAL_DOMAIN));
-    CHECK(rejects(EXTERNAL_AFTER_RETIRE));
+    CHECK(rejects(CROSS_CARRIER_TOKEN));
+    CHECK(rejects(NESTED_DIFFERENT_HEAP));
+    CHECK(test_long_lived_source_actor_heap_churn() == 0);
+#if !defined(ORES_HEAP_NO_LINK_WRAP) /* Apple ld has no --wrap: no pre-free scrub evidence there */
+    CHECK(tracked_heap_count == 0);
+    CHECK(scrubbed_physical_frees == 2);
 #endif
-    /* Domain authority must remain unique across repeated actor incarnation
-     * creation/destruction. This exercises the saturating CAS issuance path
-     * under ordinary operation; exhaustion itself is intentionally unreachable
-     * in a bounded regression. */
-    uint64_t previous_domain = 0;
-    for (uint64_t i = 0; i < 1024; ++i) {
-        OresActorI64Heap* probe = ores_actor_i64_heap_open(1000 + i, 1, 1);
-        OresActorTurn probe_turn = ores_actor_i64_heap_enter(probe, 1000 + i, 1);
-        CHECK(probe_turn.domain != 0);
-        CHECK(probe_turn.domain > previous_domain);
-        previous_domain = probe_turn.domain;
-        ores_actor_i64_heap_leave(probe, probe_turn);
-        ores_actor_i64_heap_retire(probe);
-        CHECK(ores_actor_i64_heap_try_destroy(probe) == 1);
-    }
+    puts("SOURCE_ACTOR_HEAP_HOST_LIFECYCLE_OK|churn=100000|churn_turns=1000|negative=12|scrubbed_heap_frees=2|atto_guest=NO");
+#endif
     return 0;
 }

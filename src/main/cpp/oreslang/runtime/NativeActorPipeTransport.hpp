@@ -28,11 +28,6 @@ namespace oreslang::runtime {
  * owning scheduler CONTROL/USER lane, never inline in a producer thread.
  *
  * Does not lower source PipelineExpr or spawn guest actors.
- * WARNING: public host methods take a textual source selector, NOT an
- * authenticated actor capability. Only the trusted supervisor/embedding
- * runtime may supply those selectors. Guest lowering must bind sender
- * instance identity and generation before entering this host substrate;
- * matching a guessed source string alone grants no routing authority.
  */
 class NativeActorPipeTransport final {
 public:
@@ -50,12 +45,10 @@ public:
             std::vector<PipeStage> stages, std::size_t edge_capacity,
             std::size_t worker_capacity,
             std::size_t buffered_byte_capacity = 64 * 1024 * 1024,
-            std::size_t buffered_message_capacity = 65536,
-            std::size_t pending_reader_capacity = 65536)
+            std::size_t buffered_message_capacity = 65536)
         : schema_(check_actor_pipeline(stages)),
           max_buffered_bytes_(buffered_byte_capacity),
-          max_buffered_messages_(buffered_message_capacity),
-          max_pending_readers_(pending_reader_capacity) {
+          max_buffered_messages_(buffered_message_capacity) {
         initialize(registry, supervisor, edge_capacity, worker_capacity);
     }
 
@@ -71,12 +64,10 @@ public:
             std::vector<PipeConnection> connections,
             std::size_t edge_capacity, std::size_t worker_capacity,
             std::size_t buffered_byte_capacity = 64 * 1024 * 1024,
-            std::size_t buffered_message_capacity = 65536,
-            std::size_t pending_reader_capacity = 65536)
+            std::size_t buffered_message_capacity = 65536)
         : schema_(check_actor_pipeline_graph(stages, connections)),
           max_buffered_bytes_(buffered_byte_capacity),
-          max_buffered_messages_(buffered_message_capacity),
-          max_pending_readers_(pending_reader_capacity) {
+          max_buffered_messages_(buffered_message_capacity) {
         initialize(registry, supervisor, edge_capacity, worker_capacity);
     }
 
@@ -96,47 +87,17 @@ public:
     std::size_t buffered_message_count() const noexcept {
         return buffered_message_count_.load(std::memory_order_acquire);
     }
-    std::size_t pending_reader_count() const noexcept {
-        return pending_reader_count_.load(std::memory_order_acquire);
-    }
 
-#if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS) || defined(ORES_ACTOR_PIPE_TEST_FAULT_INJECTION)
+#if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS)
     // Build-time test seam only. Cannot be invoked from production binaries
     // or from guest Oreslang code; the native scheduler remains authoritative.
     void fail_next_writer_promotion_for_test() noexcept {
         fail_next_promotion_.store(true, std::memory_order_release);
     }
-#ifdef ORES_ACTOR_PIPE_TEST_FAULT_INJECTION
-    // Compatibility with the parent's isolated promotion fault regression.
-    // Both macro names remain restricted to native test executables.
-    void test_fail_next_writer_promotion() noexcept {
-        fail_next_promotion_.store(true, std::memory_order_release);
-    }
-#endif
-
-    // Exercise the reservation rollback on both initial queued admission
-    // and pending-writer insertion, without modifying production builds.
+    // Inject one allocation failure after admission credits have been
+    // reserved but before an outgoing payload becomes publicly queued.
     void fail_next_buffered_enqueue_for_test() noexcept {
         fail_next_enqueue_.store(true, std::memory_order_release);
-    }
-
-    // Fail after graph credit reservation, but before PendingWrite/promise
-    // allocation. This proves every partially charged admission refunds both
-    // credits, and quota denial does not allocate an unused PendingWrite.
-    void fail_next_pending_allocation_for_test() noexcept {
-        fail_next_pending_allocation_.store(true, std::memory_order_release);
-    }
-
-    // Verify that a failed waiting-reader deque allocation returns the
-    // graph-wide reader promise credit without publishing a dangling reader.
-    void fail_next_reader_enqueue_for_test() noexcept {
-        fail_next_reader_enqueue_.store(true, std::memory_order_release);
-    }
-
-    // Simulate failure while preparing the single terminal STOP exception.
-    // This seam is not present in production binaries or guest code.
-    void fail_next_close_exception_for_test() noexcept {
-        fail_next_close_exception_.store(true, std::memory_order_release);
     }
 #endif
 
@@ -160,58 +121,32 @@ public:
         if (buffered &&
                 payload.size() > max_edge_buffered_bytes - link.buffered_bytes)
             return failed_void("native actor pipe edge byte credit exhausted");
-        // Promotion OOM may free a buffered slot while older writers
-        // remain queued. Enforce pending-writer capacity independently of
-        // buffer occupancy; a new write must not bypass old reservations.
-        if (buffered && link.writers.size() >= link.capacity)
+        if (link.messages.size() == link.capacity && buffered
+                && link.writers.size() >= link.capacity)
             return failed_void("native actor pipe pending-write budget exceeded");
-        // Reject over-budget DATA before allocating a pending-write object,
-        // promise, or shared Future. Otherwise even rejected requests consume
-        // transient heap under sustained graph quota exhaustion.
-        const auto bytes = payload.size();
-        if (buffered) {
-            if (!reserve_graph_buffered_message())
-                return failed_void("native actor pipe graph message budget exhausted");
-            if (!reserve_graph_buffered_bytes(bytes)) {
-                buffered_message_count_.fetch_sub(1, std::memory_order_acq_rel);
-                return failed_void("native actor pipe graph byte credit exhausted");
-            }
-        }
-        std::shared_ptr<PendingWrite> pending;
-        std::shared_future<void> future;
-        try {
-#if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS) || defined(ORES_ACTOR_PIPE_TEST_FAULT_INJECTION)
-            if (fail_next_pending_allocation_.exchange(false, std::memory_order_acq_rel))
-                throw std::bad_alloc();
-#endif
-            pending = std::make_shared<PendingWrite>(std::move(payload));
-            future = pending->promise.get_future().share();
-        } catch (...) {
-            // Includes OOM in PendingWrite, promise shared state, or share().
-            // An awaiting reader is untouched until both objects exist.
-            if (buffered) {
-                graph_buffered_bytes_.fetch_sub(bytes, std::memory_order_acq_rel);
-                buffered_message_count_.fetch_sub(1, std::memory_order_acq_rel);
-            }
-            throw;
-        }
+        auto pending = std::make_shared<PendingWrite>(std::move(payload));
+        auto future = pending->promise.get_future().share();
         if (!buffered) {
             auto recipient = std::move(link.readers.front());
             link.readers.pop_front();
-            // Direct handoff releases the graph-wide pending reader promise.
-            pending_reader_count_.fetch_sub(1, std::memory_order_acq_rel);
             recipient->set_value(std::move(pending->payload));
             pending->promise.set_value();
             return future;
         }
+        const auto bytes = pending->payload.size();
+        if (!reserve_graph_buffered_message())
+            return failed_void("native actor pipe graph message budget exhausted");
+        if (!reserve_graph_buffered_bytes(bytes)) {
+            buffered_message_count_.fetch_sub(1, std::memory_order_acq_rel);
+            return failed_void("native actor pipe graph byte credit exhausted");
+        }
         // Queued payloads and pending writers both own one reservation.
         // A deque allocation failure must not leak credit or a hidden Future.
-        // Preserve FIFO after a failed promotion created a queue gap.
-        const bool queued = link.writers.empty()
-            && link.messages.size() < link.capacity;
+        const bool queued = link.messages.size() < link.capacity;
         try {
-#if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS) || defined(ORES_ACTOR_PIPE_TEST_FAULT_INJECTION)
-            if (fail_next_enqueue_.exchange(false, std::memory_order_acq_rel))
+#if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS)
+            if (fail_next_enqueue_.exchange(
+                    false, std::memory_order_acq_rel))
                 throw std::bad_alloc();
 #endif
             if (queued)
@@ -226,6 +161,57 @@ public:
         link.buffered_bytes += bytes;
         if (queued) pending->promise.set_value();
         return future;
+    }
+
+    /**
+     * Host-only, all-or-nothing emission from ONE receive turn to ONE
+     * bounded downstream edge. This is not cross-edge forward_all: the DAG
+     * fan-out contract reports per-edge partial admission independently.
+     *
+     * This strict nonblocking path refuses a reader-waiter or pending writer
+     * rather than bypassing FIFO or settling a Future before publication.
+     * The caller may suspend/retry on a later authorized scheduler turn.
+     */
+    bool try_write_turn_atomic(
+            std::size_t edge, const std::vector<std::string>& payloads) {
+        std::shared_lock<std::shared_mutex> publication(publication_mutex_);
+        auto& link = at(edge);
+        std::lock_guard<std::mutex> lock(link.mutex);
+        if (closed_.load(std::memory_order_acquire) || link.closed)
+            throw std::logic_error("native actor pipe is closed");
+        if (payloads.empty()) return true;
+        if (!link.writers.empty() || !link.readers.empty())
+            return false; // no admission may pass earlier waiting work
+        if (payloads.size() > link.capacity - link.messages.size())
+            return false;
+        std::size_t bytes = 0;
+        for (const auto& payload : payloads) {
+            if (payload.size() > max_payload_bytes)
+                throw std::invalid_argument("native actor pipe payload exceeds byte budget");
+            if (payload.size() >
+                    max_edge_buffered_bytes - link.buffered_bytes - bytes)
+                return false;
+            bytes += payload.size();
+        }
+
+        // All potentially throwing copies/allocations finish before any
+        // mailbox DATA or message/byte credit becomes publicly visible.
+        std::deque<std::string> prepared(link.messages);
+        for (const auto& payload : payloads) prepared.push_back(payload);
+        if (!reserve_graph_buffered_messages(payloads.size()))
+            return false;
+        if (!reserve_graph_buffered_bytes(bytes)) {
+            buffered_message_count_.fetch_sub(
+                payloads.size(), std::memory_order_acq_rel);
+            return false;
+        }
+
+        // std::deque::swap with equal std::allocator is noexcept. Under
+        // the edge lock + close publication barrier this is one commit:
+        // no reader observes a prefix and no STOP interleaves with it.
+        link.messages.swap(prepared);
+        link.buffered_bytes += bytes;
+        return true;
     }
 
     std::shared_future<std::string> read_async(std::size_t edge) {
@@ -258,7 +244,7 @@ public:
                 // strand its admission Future. The consumed reader still
                 // receives its previously-admitted message.
                 try {
-#if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS) || defined(ORES_ACTOR_PIPE_TEST_FAULT_INJECTION)
+#if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS)
                     if (fail_next_promotion_.exchange(
                             false, std::memory_order_acq_rel))
                         throw std::bad_alloc();
@@ -279,38 +265,11 @@ public:
         } else if (closed_.load(std::memory_order_acquire) || link.closed) {
             receiver->set_exception(std::make_exception_ptr(
                     std::logic_error("native actor pipe is closed")));
-        } else if (!link.writers.empty()) {
-            // Multiple failed promotions can leave zero buffered DATA
-            // with charged older writers. Deliver the oldest directly:
-            // registering a reader would otherwise strand both.
-            auto waiting = std::move(link.writers.front());
-            link.writers.pop_front();
-            const auto bytes = waiting->payload.size();
-            link.buffered_bytes -= bytes;
-            graph_buffered_bytes_.fetch_sub(bytes, std::memory_order_acq_rel);
-            buffered_message_count_.fetch_sub(1, std::memory_order_acq_rel);
-            receiver->set_value(std::move(waiting->payload));
-            waiting->promise.set_value();
         } else if (link.readers.size() >= link.capacity) {
             receiver->set_exception(std::make_exception_ptr(
                     std::logic_error("native actor pipe pending-read budget exceeded")));
         } else {
-            if (!try_reserve_pending_reader()) {
-                receiver->set_exception(std::make_exception_ptr(
-                    std::logic_error("native actor pipe global pending-read budget exceeded")));
-            } else {
-                try {
-#if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS) || defined(ORES_ACTOR_PIPE_TEST_FAULT_INJECTION)
-                    if (fail_next_reader_enqueue_.exchange(
-                            false, std::memory_order_acq_rel))
-                        throw std::bad_alloc();
-#endif
-                    link.readers.push_back(std::move(receiver));
-                } catch (...) {
-                    pending_reader_count_.fetch_sub(1, std::memory_order_acq_rel);
-                    throw;
-                }
-            }
+            link.readers.push_back(std::move(receiver));
         }
         return future;
     }
@@ -329,25 +288,21 @@ public:
             const std::string& source, const std::string& payload) {
         const auto& destinations = connected_outlets(source);
         std::vector<RouteEdgeReceipt> results;
-        std::vector<std::promise<void>> failure_slots;
         results.reserve(destinations.size());
-        failure_slots.reserve(destinations.size());
-        // Allocate labels and fallback Future shared states BEFORE publishing
-        // any edge. Otherwise std::bad_alloc from one admission can cause
-        // a second failure inside catch(...) and discard earlier receipts.
-        for (const auto edge : destinations) {
-            failure_slots.emplace_back();
-            auto fallback = failure_slots.back().get_future().share();
-            results.push_back({edge, schema_[edge].target, std::move(fallback)});
-        }
-        // Fanout is independent, not atomic: every branch keeps its result
-        // and each successful Future only acknowledges mailbox admission.
-        for (std::size_t i = 0; i < results.size(); ++i) {
+        // Materialize metadata BEFORE any admission: no allocation of a
+        // destination label can interrupt an already-started fan-out batch.
+        for (const auto edge : destinations)
+            results.push_back({edge, schema_[edge].target, {}});
+        // A closed/saturated edge returns a failed admission Future, not a
+        // missing entry. Every attempted destination remains identifiable.
+        for (auto& result : results) {
+            // Individual admission may throw (e.g. allocation failure) after
+            // earlier destinations have already accepted the payload. Never
+            // discard their receipts or hide partial publication from callers.
             try {
-                auto admission = write_async(results[i].edge_index, payload);
-                results[i].admission = std::move(admission);
+                result.admission = write_async(result.edge_index, payload);
             } catch (...) {
-                failure_slots[i].set_exception(std::current_exception());
+                result.admission = failed_exception(std::current_exception());
             }
         }
         return results;
@@ -377,27 +332,23 @@ public:
         return write_async(destinations.front(), std::move(payload));
     }
 
-    /** Trusted-host policy only: `source` is not an actor capability.
-     * Strict per-source round robin, including routes whose write later
+    /** Strict per-source round robin, including routes whose write later
      * blocks or fails. No skip-on-backpressure and no hidden retry. */
     std::shared_future<void> write_round_robin_async(
             const std::string& source, std::string payload) {
         const auto& destinations = connected_outlets(source);
         std::lock_guard<std::mutex> selection(route_mutex_);
-        // The cursor was preallocated with the trusted graph at initialize().
-        // Never allocate a selector map entry on the first actor message:
-        // that could fail before a strictly counted attempted turn advances.
-        auto& cursor = next_outlet_.at(source);
+        const auto cursor = next_outlet_[source];
         const auto edge = destinations[cursor % destinations.size()];
-        // Attempted turns count even when write_async later fails or throws.
-        cursor = (cursor + 1) % destinations.size();
+        // An attempted turn counts even if write_async fails before it can
+        // return a Future (for example, due to allocation failure). Advancing
+        // after admission would violate the strict RR contract in that case.
+        next_outlet_[source] = (cursor + 1) % destinations.size();
         return write_async(edge, std::move(payload));
     }
 
-    /** Named selection is restricted to an edge owned by the supplied source.
-     * This validates topology only; it does NOT authenticate the caller or
-     * prevent a native host caller from spoofing another source string.
-     * Never expose this entry point as a guest-callable actor method. */
+    /** Named destination selection is restricted to an existing source edge;
+     * a caller cannot use another actor's outbound port by guessing a name. */
     std::shared_future<void> write_to_async(
             const std::string& source, const std::string& target,
             std::string payload) {
@@ -413,13 +364,10 @@ public:
     std::shared_future<void> write_by_key_async(
             const std::string& source, const std::string& key,
             std::string payload) {
-        const auto& destinations = connected_outlets(source);
-        // Retired generations fail before inspecting guest-controlled keys.
-        if (closed_.load(std::memory_order_acquire))
-            return failed_void("native actor pipe is closed");
         if (key.size() > 4096 || !valid_utf8_key(key))
             throw std::invalid_argument(
                 "native actor pipe route key must be bounded canonical UTF-8");
+        const auto& destinations = connected_outlets(source);
         std::uint64_t digest = UINT64_C(14695981039346656037);
         for (const unsigned char byte : key) {
             digest ^= byte;
@@ -430,23 +378,6 @@ public:
     }
 
     void close() noexcept {
-        // Prepare the terminal error once before publishing STOP. Constructing
-        // an exception for each pending Future may allocate and fail after
-        // closure is visible, leaving broken_promise instead of a terminal
-        // failure. Reuse the same exception_ptr for every pending waiter.
-        // If allocation fails here, current_exception() is still a valid
-        // nonallocating failure result for all the already-created promises.
-        std::exception_ptr terminal_error;
-        try {
-#if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS) || defined(ORES_ACTOR_PIPE_TEST_FAULT_INJECTION)
-            if (fail_next_close_exception_.exchange(false, std::memory_order_acq_rel))
-                throw std::bad_alloc();
-#endif
-            terminal_error = std::make_exception_ptr(
-                std::logic_error("native actor pipe is closed"));
-        } catch (...) {
-            terminal_error = std::current_exception();
-        }
         {
             // Serialize terminal publication with ALL admissions, not just
             // per-edge closure. A concurrent close() cannot return before
@@ -462,13 +393,14 @@ public:
                     graph_buffered_bytes_.fetch_sub(
                         waiting->payload.size(), std::memory_order_acq_rel);
                     buffered_message_count_.fetch_sub(1, std::memory_order_acq_rel);
-                    try { waiting->promise.set_exception(terminal_error); }
+                    try { waiting->promise.set_exception(std::make_exception_ptr(
+                            std::logic_error("native actor pipe is closed"))); }
                     catch (...) { }
                 }
                 edge->writers.clear();
                 for (auto& waiting : edge->readers) {
-                    pending_reader_count_.fetch_sub(1, std::memory_order_acq_rel);
-                    try { waiting->set_exception(terminal_error); }
+                    try { waiting->set_exception(std::make_exception_ptr(
+                            std::logic_error("native actor pipe is closed"))); }
                     catch (...) { }
                 }
                 edge->readers.clear();
@@ -502,8 +434,6 @@ private:
             throw std::invalid_argument("native pipeline graph byte budget invalid");
         if (max_buffered_messages_ == 0 || max_buffered_messages_ > 65536)
             throw std::invalid_argument("native pipeline graph message budget invalid");
-        if (max_pending_readers_ == 0 || max_pending_readers_ > 65536)
-            throw std::invalid_argument("native pipeline pending reader capacity outside 1..65536");
         // Allocate all independently bounded edges before publishing the
         // supervised group. Outbound order is caller-defined graph order.
         edges_.reserve(schema_.size());
@@ -511,12 +441,6 @@ private:
             edges_.push_back(std::make_unique<Edge>(edge_capacity));
             outgoing_[schema_[i].source].push_back(i);
         }
-        // Preallocate RR state for every source during trusted graph setup,
-        // before exposing a supervised group or admitting actor messages.
-        // Routing a first message must not allocate selector bookkeeping.
-        next_outlet_.reserve(outgoing_.size());
-        for (const auto& item : outgoing_)
-            next_outlet_.emplace(item.first, 0);
         group_ = registry.create_group(supervisor, worker_capacity);
     }
 
@@ -545,15 +469,16 @@ private:
         return true;
     }
 
-    /** Bound pending reader promises across the entire graph. */
-    bool try_reserve_pending_reader() noexcept {
-        auto used = pending_reader_count_.load(std::memory_order_relaxed);
-        while (used < max_pending_readers_) {
-            if (pending_reader_count_.compare_exchange_weak(
-                    used, used + 1, std::memory_order_acq_rel,
-                    std::memory_order_relaxed)) return true;
-        }
-        return false;
+    bool reserve_graph_buffered_messages(std::size_t count) noexcept {
+        auto current = buffered_message_count_.load(std::memory_order_relaxed);
+        do {
+            if (current > max_buffered_messages_ ||
+                    count > max_buffered_messages_ - current)
+                return false;
+        } while (!buffered_message_count_.compare_exchange_weak(
+            current, current + count, std::memory_order_acq_rel,
+            std::memory_order_relaxed));
+        return true;
     }
 
     bool reserve_graph_buffered_message() noexcept {
@@ -630,9 +555,7 @@ private:
     const std::vector<PipeConnection> schema_;
     const std::size_t max_buffered_bytes_;
     const std::size_t max_buffered_messages_;
-    const std::size_t max_pending_readers_;
     std::atomic<std::size_t> buffered_message_count_{0};
-    std::atomic<std::size_t> pending_reader_count_{0};
     std::vector<std::unique_ptr<Edge>> edges_;
     std::unordered_map<std::string, std::vector<std::size_t>> outgoing_;
     // Held only for deterministic round-robin selection, never on guest
@@ -645,12 +568,9 @@ private:
     std::shared_mutex publication_mutex_;
     std::atomic<bool> closed_{false};
     std::atomic<std::size_t> graph_buffered_bytes_{0};
-#if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS) || defined(ORES_ACTOR_PIPE_TEST_FAULT_INJECTION)
+#if defined(ORESLANG_ACTOR_PIPE_FAULT_TESTS)
     std::atomic<bool> fail_next_promotion_{false};
     std::atomic<bool> fail_next_enqueue_{false};
-    std::atomic<bool> fail_next_pending_allocation_{false};
-    std::atomic<bool> fail_next_reader_enqueue_{false};
-    std::atomic<bool> fail_next_close_exception_{false};
 #endif
 };
 

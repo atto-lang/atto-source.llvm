@@ -1,124 +1,60 @@
-# Oreslang LLVM backend
+> **AI agent instructions (organization-wide):** Before working on code, issues, or pull requests, read and follow the [organization `AGENTS.md`](https://github.com/atto-lang/.github/blob/main/AGENTS.md), including its **merge-first stealth-development policy**. Honor any repository-local `AGENTS.md`, explicit holds, and GitHub-enforced rules.
 
-Native companion to [oreslang-source.java](https://github.com/ores-truffle-oreslang/oreslang-source.java).
-Tracks [LLVM port issue #1](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/1).
+# atto-source.llvm
 
-**Status: small experimental source-to-LLVM compiler, not Java language/runtime parity.**
+LLVM-based AttoLang compiler and native runtime for high-performance and real-time systems.
 
-Static select, channels, reusable `SelectPlan`, and mutable `DynamicSelectPlan`
-are **not implemented** in the LLVM compiler. The CI regression fixtures
-reject them without producing IR. See [the native select parity contract](docs/SELECT_PLAN_PARITY.md).
+## Naming and specification migration
 
-## Implemented slice (October 2026)
+This is the canonical [AttoLang backend repository](https://github.com/atto-lang/atto-source.llvm). Use `.atto` for portable AttoLang source and update local remotes to `https://github.com/atto-lang/atto-source.llvm.git`; do not use historical repository links or naming in new examples.
 
-- Parse one file with one or more `fnc`/`routine` declarations returning `int`, with optional
-  `pub` and one optional `define module M [as] ... end` wrapper.
-- Typed `int` parameters, `return` expressions, integer literals with underscores,
-  unary `-`, parentheses, `+`, `-`, `*`, parameter references and same-module function calls.
-- Forward declarations enable calls before definitions and recursion (not bounded recursion).
-- Reject undeclared names, duplicate function/parameter names, mismatched call arities,
-  overflowed positive i64 literals, malformed syntax, and unsupported language features.
-- Lower each function to i64 LLVM IR, verify the entire LLVM module before printing IR.
-- CI covers positive/negative source-to-IR contracts and Clang compilation/execution of
-  standalone `main` functions, when Clang is present.
-- A narrow nonescaping **stack-only class** form: `define class Box as` with
-  `let int` fields initialized by literals; `let Box b = new Box()` inside
-  a function; reading `b.field` in an integer expression. Compiles to LLVM
-  stack `alloca` storage, with no tracing GC or native malloc. Returning class objects or unsupported moves/shares fails closed; admitted
-  call-scoped borrows are checked by the current ownership CFG.
-- `OwnedHeap.hpp` provides move-only native RAII owners, runtime borrow leases,
-  accounting and deterministic destruction. `EpochArena.hpp` provides
-  actor-carrier-local, bounded typed regions with reverse-order drop and
-  quiescence fences. Both have CTest and sanitizers; general `.ores` objects
-  are **not yet lowered into these allocators**.
+- **Normative grammar and semantics:** [atto-spec](https://github.com/atto-lang/atto-spec). Check the current versioned contracts for ownership operations (`borrow!`, `take!`, `share!`, `copy!`, `copy!!`), implicit argument borrowing, `lt!` binders, `eq`/`neq` value equality, `susp` effects and file/module `define const`. These are *specification targets*, not claims of executable support in this backend.
+- **Positive and negative guest execution evidence:** [atto-platform-conformance](https://github.com/atto-lang/atto-platform-conformance) and [atto-compilers-parity-testing](https://github.com/atto-lang/atto-compilers-parity-testing). Report `passed`, `failed`, `unsupported` or `not executed`, and pin exact compiler, source tree, target and toolchain.
+- **Portable shared sources and target constraints:** [atto-common-source](https://github.com/atto-lang/atto-common-source) and [atto-target-profiles](https://github.com/atto-lang/atto-target-profiles). Keep backend-specific gaps explicit, and do not infer guest parity from host tests or zero-step CI runs.
 
-Oreslang `int` still lowers to `i64` for guest functions. For a
-zero-argument `main()` (unqualified or `module.main`), native compilation
-emits a separate `i32 @main()` C/OS wrapper that calls the Oreslang
-entrypoint. An unqualified guest main gets an internal generated symbol;
-a module-qualified main retains its own exported guest symbol. Falling off a
-`main(): void` body returns status `0`. An integer `main()` must return
-a code within `0..255`; values outside that range return failure status `1`
-rather than silently truncating to an unrelated shell status. Native source
-`std.process.exit()` and exception effects remain unsupported and fail closed.
+## Scope
 
-The `int` to `i64` mapping, wraparound arithmetic and other non-entrypoint
-calling conventions are still **provisional** and do not imply Java parity.
-The native slice does not support `-9223372036854775808` as one literal.
-Wasm32 remains governed by its distinct embedder/WASI entrypoint ABI.
+This repository is the AttoLang ecosystem home for:
 
-## Build and test
+- LLVM lowering, ownership-aware runtime semantics, native actor isolation, and target-specific code generation.
+- Compatibility with the [canonical language specification](https://github.com/atto-lang/atto-spec) where applicable.
+- Evidence-based tests, benchmark results, and cross-backend conformance reporting.
 
-Requires LLVM development libraries 14+, CMake 3.20+, C++17, Python3 and ideally Clang.
+## Architecture and compatibility
 
-```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
-cmake --build build --parallel 2
-ctest --test-dir build --output-on-failure
-./build/oreslang-llvmc tests/fixtures/forward-call-main.ores > /tmp/guest.ll
-clang -x ir /tmp/guest.ll -o /tmp/guest
-/tmp/guest
-echo $? # 42
-```
+AttoLang is designed around actors, explicit ownership, and portable concurrency semantics. Backend-specific optimizations must not silently change the shared language contract. Runtime capabilities, target restrictions, and unsupported features should be documented explicitly.
 
-The compiler CLI prints LLVM IR; the AOT driver below links it into a host executable.
-Direct object output and a versioned ABI remain unimplemented.
+## Building and testing
 
-Unsupported actors, async/await, channels, traits, general heap-allocated classes,
-imports, tuples, recursive/cyclic owned objects, tracing GC, HFT scheduling
-and compiler-integrated native actor memory domains **fail closed**.
-The narrow stack-only class subset and native RAII runtime primitives above
-are the first tested steps toward an ownership-first backend.
+Consult the checked-in source tree and CI workflows for verified commands and supported targets. Add target-specific build instructions and exact-head execution results as they become available; do not treat a passing host-unit test as proof of guest-language conformance.
 
-Native I/O API naming: blocking I/O operations will require the `_blocking` suffix; async I/O may use `_async`. This is a documented target contract, **not yet an implemented compiler check**.
+## Project status
 
-See [source parity contract](docs/SOURCE_PARITY.md), [LLVM roadmap](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/issues/1),
-and the distinct [Java cyclic graph work](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/474).
+This README describes the repository's intended responsibilities. Feature support and release readiness must be established from implementation, tests, and CI evidence rather than this description alone.
 
-## Standalone AOT executable
+## Related repositories
 
-After building the compiler, compile its supported **host** subset without a JIT:
+- [AttoLang organization](https://github.com/atto-lang)
+- [Language specification](https://github.com/atto-lang/atto-spec)
+- [Platform conformance](https://github.com/atto-lang/atto-platform-conformance)
+- [Commercial infrastructure](https://github.com/atto-co)
 
-```sh
-CLANG=clang scripts/compile-aot.sh tests/fixtures/forward-call-main.ores /tmp/ores-app
-/tmp/ores-app
-```
+## Repository ownership and contribution routing
 
-This driver emits verified IR, invokes Clang with `-O2`, and atomically publishes
-an executable. It needs the compiler and Clang only at build time; the output
-requires neither Java nor an Ores interpreter. A failed compile/link preserves
-any existing output. No unsupported source falls back to interpretation.
-This is not a static-linking or cross-compilation guarantee, and it does not
-make Spin compile: imports, actors, channels and async HTTP still require guest
-lowering and native runtime integration. See [the full-AOT target](docs/FULL_AOT.md).
+**Belongs here:** LLVM frontend/lowering, native code generation, ownership and borrow checks, tenant/actor heap and stack ABI, native toolchains and sanitizer-backed execution.
 
-## Experimental Cortex-M3 native AOT (scalar subset)
+**Belongs elsewhere:** JVM, .NET and Wasm backend-specific lowering belongs in their respective atto-source.* repos; target declarations live in atto-target-profiles.
 
-`oreslang-llvmc --target=thumbv7m-none-eabi` now admits a deliberately narrow
-freestanding `int` function subset, emits ARM-targeted LLVM IR and rejects
-actors, owners, suspension, non-scalar locals, guest `main` and unsupported
-runtime features. Clang 18 cross-compiles the IR into 32-bit ARM ELF objects.
-This **does not** constitute general embedded actor/runtime support.
+**Security and portability boundary:** Bound allocations/indices and 32-bit actor heap offsets, fence tenant generations and overflow, contain actor stack traps to the owning actor, and prove real native guest execution.
 
-**Verified firmware smoke:** the exact compiler source change
-`ba8552bc9ca8cc4e9edc3b7f665ed2a1ed9a5b39`, combined with
-`oreslang-platform.embedded@5705a25b0dc5ee9ddb1a7c15ebe747142d51975c`,
-produced Zephyr 4.3.0 firmware that ran on QEMU Cortex-M3 and logged
-`ORESLANG_CORTEXM_AOT_PASS value=42`.
-[GitHub Actions evidence](https://github.com/canonical-cloud/canonical-docs/actions/runs/38646752678).
-See [target constraints](docs/CORTEXM_SCALAR_IR.md).
+AttoLang is the canonical project identity. Use `.atto` source, `atto-*` package and repository names, and the active AttoLang CLI contract for current documentation. Do not duplicate normative semantics from [atto-spec](https://github.com/atto-lang/atto-spec).
 
+**Evidence gate:** record exact compiler/runtime head and tree, target/toolchain, nonzero executed steps, positive and negative guest results, and explicit passed/failed/unsupported/not-executed states. Host-only CI and `steps=[]` do not establish guest support. README scope is not a feature-completeness claim.
 
-## Experimental Cortex-M3 source actor bootstrap
+## Experimental Rust-hosted native AOT and actor slice
 
-The compiler's `--target=thumbv7m-none-eabi` target now includes a
-separately bounded scalar-actor slice, in addition to pure `int` functions.
-It admits source declarations and a restricted `main` with `spawn`, literal
-`send`, and `stop`, exposing `oreslang_cortexm_bootstrap` and
-compiler-generated actor init/handler ABI functions. The embedded platform
-provides the static adapter; this is **not** full actor lowering, inter-actor
-handler sends, suspension, or standard OresVM on Cortex-M.
-See [admission limits](docs/CORTEXM_SCALAR_IR.md).
+The separate `Cargo.toml`, `frontend/`, `src/main.rs`, `src/target_native.rs`, and `runtime/` path stages an **experimental bounded native compiler and actor runtime** alongside the existing checked C++ LLVM compiler slice. It is not a replacement for the canonical language specification or a claim that both compiler pipelines have identical feature coverage.
 
-See [value-boundary audit and admission tests](docs/VALUE_BOUNDARIES.md) for
-aggregate, call, string, conditional and async feature limits.
+For the supported host profile, build the Rust-hosted compiler with `cargo build --offline --release --bin atto-llvm`. The source-owned smoke and actor regression scripts are `ci/test_native_aot.sh` and `ci/test_native_actors.sh`. See [native-AOT limits](docs/native-aot.md), [actor runtime scope](docs/native-actors.md) and [receiver method / sealed-state scope](docs/native-mtd-critical.md).
+
+The independent [exact-head private CI evidence](https://github.com/athlet-o/athleto-e2e/actions/runs/43669427959) covers the original isolated Rust-hosted compiler snapshot: compiled native actor scalar cases, negative compiler admissions, sanitizer checks, and protocol scalar fixtures. **That run does not certify the subsequently combined mainline tree.** In particular this slice does not implement complete actor supervision, full ownership across suspension, general FFI, QUIC/TLS/QPACK networking or five-backend parity. The HTTP/3 ABI contract is a proposed interface, not a working network engine.

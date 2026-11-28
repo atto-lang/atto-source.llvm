@@ -1,0 +1,41 @@
+name: Return-first arrow and bullet browser-source Wasm checks
+on:
+  pull_request:
+    paths:
+      - 'frontend/src/lexer.rs'
+      - 'frontend/src/parser.rs'
+      - 'frontend/tests/return_first_bullet.rs'
+      - 'frontend/Cargo.toml'
+      - 'frontend/Cargo.lock'
+      - '.github/workflows/browser-return-first-bullet.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  exact-browser-source-wasm:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact immutable Git checkout
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          for path in frontend/src/lexer.rs frontend/src/parser.rs frontend/tests/return_first_bullet.rs; do
+            test "$(git ls-files -s -- "$path" | cut -d' ' -f1)" = "100644"
+          done
+          printf 'head=%s tree=%s\n' "$EXPECTED_HEAD" "$(git rev-parse HEAD^{tree})"
+      - name: Run Rust frontend parser and guest Wasm-emission tests
+        run: |
+          cargo test --locked --manifest-path frontend/Cargo.toml --test return_first_bullet
+          cargo test --locked --manifest-path frontend/Cargo.toml --lib
+      - name: Bound claim
+        run: |
+          echo 'Browser subset source->Wasm compilation checks only; no native C++ LLVM parity or executed Wasm guest certified here.'

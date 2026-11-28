@@ -1,0 +1,6 @@
+fnc cleanup(int n): void { return; }
+pub fnc main(): int {
+    const int outer = 9;
+    defer 5 |> (|int x| -> || -> { cleanup(outer); });
+    return 42;
+}

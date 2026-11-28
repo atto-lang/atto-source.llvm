@@ -1,0 +1,111 @@
+name: Canonical typed Pointer<int> LLVM native AOT M2a
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'src/main/cpp/oreslang/frontend/Parser.hpp'
+      - 'src/main/cpp/oreslang/frontend/PointerIntSyntax.hpp'
+      - 'src/main/cpp/oreslang/frontend/StaticFfiI64Aot.hpp'
+      - 'src/main/cpp/oreslang/frontend/ModuleLoader.cpp'
+      - 'src/main/cpp/oreslang/frontend/ModuleLoader.hpp'
+      - 'src/main/cpp/oreslang/types/PointerIntHIR.hpp'
+      - 'src/main/cpp/oreslang/types/PointerIntOwnership.hpp'
+      - 'src/main/cpp/oreslang/types/OwnershipChecker.cpp'
+      - 'src/main/cpp/oreslang/types/NativeScalarTypes.cpp'
+      - 'tests/native_ownership_bang_aliases_test.cpp'
+      - 'src/main/cpp/oreslang/backend/PointerIntCodegen.hpp'
+      - 'src/main/cpp/oreslang/backend/LlvmCodegen.cpp'
+      - 'tests/pointer_int_hir_admission.cpp'
+      - 'tests/rust_native_e2e.rs'
+      - 'tests/rust_native_e2e/**'
+      - 'docs/POINTER_LOCAL_REF_NATIVE_AOT_V1.md'
+      - 'src/main/cpp/oreslang/main.cpp'
+      - 'tests/pointer_int_native_e2e.py'
+      - 'tests/static_ffi_i64_native_e2e.py'
+      - 'tests/ffi_normal_i64_native_e2e.py'
+      - 'docs/NORMAL_FFI_I64_AOT_M1.md'
+      - 'docs/STATIC_FFI_I64_NATIVE_AOT_M0.md'
+      - 'tests/guard_native_e2e.py'
+      - 'docs/POINTER_INT_AOT_M1.md'
+      - '.github/workflows/pointer-int-native-aot.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  pointer-int-native-aot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      LLVM_DIR: /usr/lib/llvm-18/lib/cmake/llvm
+    steps:
+      - name: Checkout exact reviewed source without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact source head, tree and pointer compiler/test Git blobs
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git hash-object src/main/cpp/oreslang/frontend/Parser.cpp)" = d98605299097d661fcd11a5d2f92033cd04de6e8
+          test "$(git hash-object src/main/cpp/oreslang/frontend/PointerIntSyntax.hpp)" = 63921f51d49d4f5b8779b7833ff1a5ad066ba456
+          test "$(git hash-object src/main/cpp/oreslang/types/PointerIntHIR.hpp)" = 3ecee944fb0cb5b3139950d431ba78a09907a219
+          test "$(git hash-object src/main/cpp/oreslang/types/PointerIntOwnership.hpp)" = 591ea792e175f34ea0819cfc2d59ee7b069df7ca
+          test "$(git hash-object src/main/cpp/oreslang/backend/PointerIntCodegen.hpp)" = 9ccf8cafcddc4f659461830c995a210df502751e
+          test "$(git hash-object tests/pointer_int_hir_admission.cpp)" = 1f1c7fadf8c3adaba5c12299fa9a1b5fc9870ade
+          test ! -e src/main/cpp/oreslang/frontend/PointerIntAot.hpp
+          test "$(git hash-object tests/pointer_int_native_e2e.py)" = e9f104ba81e6bcc4e4e88f088cebd24e1ebba0a7
+          test "$(git hash-object src/main/cpp/oreslang/main.cpp)" = cd0a3501a3f6a06b537a005e04e3287ea7c5f32b
+          git rev-parse HEAD HEAD^{tree}
+          git status --porcelain
+      - name: Install LLVM18 and Clang18 real native toolchain
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq llvm-18-dev clang-18 lld-18 libzstd-dev cmake file
+          test -d "$LLVM_DIR"
+      - name: Build compiler from reviewed exact source
+        run: |
+          set -euo pipefail
+          cmake -S . -B build/pointer-m1 -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$LLVM_DIR"
+          cmake --build build/pointer-m1 --target oreslang-llvmc -j2
+          test -x build/pointer-m1/oreslang-llvmc
+          sha256sum build/pointer-m1/oreslang-llvmc
+      - name: Exercise shared nominal pointer HIR ownership against forged ASTs
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -I src/main/cpp tests/pointer_int_hir_admission.cpp -o /tmp/pointer-hir-ownership
+          /tmp/pointer-hir-ownership
+      - name: Execute compiled bounded Pointer<int> native guests and ASan UBSan negatives
+        run: |
+          set -euo pipefail
+          python3 tests/pointer_int_native_e2e.py --compiler build/pointer-m1/oreslang-llvmc --clang /usr/bin/clang-18
+      - name: Execute Rust native compiler/Clang guest driver (including local rt/bang pointers)
+        run: |
+          set -euo pipefail
+          rustc --version
+          rustc --edition=2021 -O tests/rust_native_e2e.rs -o "$RUNNER_TEMP/atto-rust-native-e2e"
+          "$RUNNER_TEMP/atto-rust-native-e2e" "$PWD/build/pointer-m1/oreslang-llvmc" /usr/bin/clang-18
+      - name: Regression — execute existing compiled scalar guard guests
+        run: |
+          set -euo pipefail
+          python3 tests/guard_native_e2e.py --compiler build/pointer-m1/oreslang-llvmc --clang /usr/bin/clang-18
+      - name: Execute source-compiled static i64 C downcalls and no-IR rejects
+        run: |
+          set -euo pipefail
+          python3 tests/static_ffi_i64_native_e2e.py --compiler build/pointer-m1/oreslang-llvmc --clang /usr/bin/clang-18
+      - name: Execute normal compiler C i64 restricted FFI native guests and negatives
+        run: |
+          set -euo pipefail
+          python3 tests/ffi_normal_i64_native_e2e.py --compiler build/pointer-m1/oreslang-llvmc --clang /usr/bin/clang-18
+      - name: Accurate evidence limits
+        run: |
+          echo 'POINTER_INT_CANONICAL_FRONTEND_HIR=RESTRICTED_OPT_IN_ONLY'
+          echo 'GENERAL_POINTER_T_HEAP_AOT=UNSUPPORTED'
+          echo 'POINTER_LOCAL_REF_INT=OPT_IN_COMPILED_GUEST_TEST_REQUIRED'
+          echo 'POINTER_BORROW_SHARE_ACTOR_TRANSFER=NOT_EXECUTED'
+          echo 'OTHER_BACKEND_PARITY=NOT_EXECUTED'
+          echo 'STATIC_FFI_I64=OPT_IN_PROOF_ONLY_NOT_SIGNED_OR_SUPERVISED'
+          echo 'NORMAL_COMPILER_FFI_I64=CLI_GATED_EXPERIMENT_NOT_SIGNED_PERMISSION'

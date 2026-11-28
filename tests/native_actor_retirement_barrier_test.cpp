@@ -11,6 +11,20 @@
 #include <stdexcept>
 #include <thread>
 
+namespace oreslang::runtime {
+struct NativeSourceCleanupGateTestPeer {
+    static bool claim(NativeSourceCleanupGate& g, NativeSourceCleanupTicket t) noexcept {
+        return g.try_claim_cleanup(t);
+    }
+    static bool yield(NativeSourceCleanupGate& g, NativeSourceCleanupTicket t) noexcept {
+        return g.yield_cleanup(t);
+    }
+    static bool complete(NativeSourceCleanupGate& g, NativeSourceCleanupTicket t) noexcept {
+        return g.complete_cleanup(t);
+    }
+};
+} // namespace oreslang::runtime
+
 using namespace oreslang::runtime;
 using Poll = NativeActorRetirementBarrier::Poll;
 using Kind = ActorResourceRegistry::Kind;
@@ -205,10 +219,214 @@ static void done_waits_for_group_detachment() {
     ref.get_done().get();
 }
 
+static void foreign_registry_cannot_release_live_heap_callback() {
+    NativeActorResourceQuarantine quarantine(1);
+    NativeActorGroup group(306, 1);
+    auto registry = std::make_shared<ActorResourceRegistry>(7, 3);
+    ActorResourceRegistry foreign(7, 3);
+    auto* heap = ores_actor_i64_heap_open(7, 3, 1);
+    int freed = 0;
+    registry->register_resource(Kind::native_allocation, [heap, &freed] {
+        require(ores_actor_i64_heap_try_destroy(heap) == 1, "heap still pinned");
+        ++freed;
+    });
+    // A real external callback must hold its registry pin until it stops
+    // touching heap storage. Equal numeric identities do not release that pin.
+    const auto held = registry->acquire_callback();
+    const auto other = foreign.acquire_callback();
+    NativeActorRetirementBarrier* barrier = nullptr;
+    auto ref = group.adopt(306, 7, 3, [&] {
+        ores_actor_i64_heap_retire(heap);
+        barrier->retire();
+    });
+    NativeActorRetirementBarrier owned(registry, group.runtime_finalizer(ref), quarantine);
+    barrier = &owned;
+    require(group.mark_ready(ref), "actor readiness");
+    group.close();
+    bool rejected = false;
+    try { registry->release_callback(other); }
+    catch (const std::logic_error&) { rejected = true; }
+    require(rejected, "foreign registry released the live heap callback");
+    require(owned.poll() == Poll::pending && freed == 0,
+            "foreign callback ticket authorized heap destruction");
+    require(ref.get_done().wait_for(std::chrono::milliseconds(0))
+                    == std::future_status::timeout, "foreign ticket fabricated done");
+    registry->release_callback(held);
+    require(owned.poll() == Poll::completed && freed == 1, "own callback did not drain heap");
+    ref.get_done().get();
+    require(owned.poll() == Poll::completed && freed == 1, "heap destroyed twice");
+    foreign.release_callback(other);
+    foreign.retire();
+    require(foreign.try_reclaim().status == ActorResourceRegistry::Reclaim::complete,
+            "foreign registry lost its own callback");
+}
+
+static void foreign_release_races_with_retirement_and_last_callback() {
+    for (unsigned round = 0; round < 32; ++round) {
+        NativeActorResourceQuarantine quarantine(1);
+        NativeActorGroup group(307, 1);
+        auto registry = std::make_shared<ActorResourceRegistry>(7, 3);
+        ActorResourceRegistry foreign(7, 3);
+        auto* heap = ores_actor_i64_heap_open(7, 3, 1);
+        std::atomic<int> freed{0};
+        registry->register_resource(Kind::native_allocation, [&] {
+            require(ores_actor_i64_heap_try_destroy(heap) == 1, "heap still pinned");
+            freed.fetch_add(1, std::memory_order_relaxed);
+        });
+        const auto held = registry->acquire_callback();
+        const auto other = foreign.acquire_callback();
+        NativeActorRetirementBarrier* barrier = nullptr;
+        auto ref = group.adopt(307, 7, 3, [&] {
+            ores_actor_i64_heap_retire(heap);
+            barrier->retire();
+        });
+        NativeActorRetirementBarrier owned(registry, group.runtime_finalizer(ref), quarantine);
+        barrier = &owned;
+        require(group.mark_ready(ref), "actor readiness");
+        std::atomic<bool> early_done{false}, final_release{false};
+        std::exception_ptr attacker_error, release_error, stop_error;
+        std::uint64_t rejected = 0;
+        std::thread attacker([&] {
+            const auto attempt = [&] {
+                try { registry->release_callback(other); }
+                catch (const std::logic_error&) { ++rejected; return; }
+                throw std::runtime_error("foreign callback released live activity during race");
+            };
+            try { for (unsigned i = 0; i < 64; ++i) attempt(); }
+            catch (...) { attacker_error = std::current_exception(); }
+            early_done.store(true, std::memory_order_release);
+            try {
+                // Keep attacking while group.close retires the actor, then
+                // race the valid final release and concurrent barrier polls.
+                while (!final_release.load(std::memory_order_acquire)) {
+                    attempt();
+                    std::this_thread::yield();
+                }
+                for (unsigned i = 0; i < 128; ++i) attempt();
+            }
+            catch (...) { attacker_error = std::current_exception(); }
+        });
+        std::thread stopper([&] {
+            while (!early_done.load(std::memory_order_acquire)) std::this_thread::yield();
+            try { group.close(); } catch (...) { stop_error = std::current_exception(); }
+        });
+        std::thread callback([&] {
+            while (!final_release.load(std::memory_order_acquire)) std::this_thread::yield();
+            try { registry->release_callback(held); }
+            catch (...) { release_error = std::current_exception(); }
+        });
+        stopper.join();
+        // Capture observations before releasing the held pin; defer failure
+        // reporting until all workers join so no test thread outlives storage.
+        const bool pinned = owned.poll() == Poll::pending && freed.load() == 0
+            && ref.get_done().wait_for(std::chrono::milliseconds(0)) == std::future_status::timeout;
+        final_release.store(true, std::memory_order_release);
+        bool valid_poll = true;
+        for (unsigned i = 0; i < 256; ++i) {
+            const auto result = owned.poll();
+            valid_poll = valid_poll && (result == Poll::pending || result == Poll::completed);
+            std::this_thread::yield();
+        }
+        attacker.join();
+        callback.join();
+        for (const auto& error : {attacker_error, release_error, stop_error})
+            if (error) std::rethrow_exception(error);
+        require(pinned && valid_poll && rejected >= 192, "retirement race lost its pin or accepted a foreign ticket");
+        require(owned.poll() == Poll::completed && freed.load() == 1, "racing callback did not reclaim exactly once");
+        ref.get_done().get();
+        require(owned.poll() == Poll::completed && freed.load() == 1, "racing done reclaimed twice");
+        foreign.release_callback(other);
+        foreign.retire();
+        require(foreign.try_reclaim().status == ActorResourceRegistry::Reclaim::complete, "foreign callback was consumed");
+    }
+}
+
+static void deferred_source_cleanup_physically_fences_actor_done() {
+    NativeActorResourceQuarantine quarantine(1);
+    NativeActorGroup group(410, 1);
+    auto registry = std::make_shared<ActorResourceRegistry>(17, 1);
+    auto receipt = std::make_shared<NativeSourceCleanupGate>(
+            NativeSourceCleanupTicket{17, 1, 99});
+    const NativeSourceCleanupTicket ticket{17, 1, 99};
+    std::atomic<int> freed{0};
+    registry->register_resource(Kind::native_allocation, [&] { ++freed; });
+    // A second suspended child pins the actor even after this one finishes.
+    const auto outstanding_child = registry->acquire_loan();
+    NativeActorRetirementBarrier* barrier = nullptr;
+    auto ref = group.adopt(410, 17, 1, [&] { barrier->retire(); });
+    bool wrong_incarnation_denied = false;
+    try {
+        auto stale = std::make_shared<NativeSourceCleanupGate>(
+                NativeSourceCleanupTicket{17, 2, 99});
+        NativeActorRetirementBarrier invalid(registry, group.runtime_finalizer(ref),
+                                             quarantine, stale);
+    } catch (const std::invalid_argument&) {
+        wrong_incarnation_denied = true;
+    }
+    require(wrong_incarnation_denied, "foreign cleanup receipt admitted");
+    NativeActorRetirementBarrier owned(registry, group.runtime_finalizer(ref),
+                                       quarantine, receipt);
+    barrier = &owned;
+    require(group.mark_ready(ref), "cleanup proof actor ready");
+    group.close();
+    require(owned.poll() == Poll::pending && freed == 0,
+            "scheduler close without cleanup proof freed arena");
+    require(receipt->request_cancel(ticket), "cancel request");
+    require(owned.poll() == Poll::pending, "cancel request faked physical done");
+    require(NativeSourceCleanupGateTestPeer::claim(*receipt, ticket), "cleanup turn claim");
+    require(!NativeSourceCleanupGateTestPeer::claim(*receipt, ticket), "duplicate cleanup turn claim");
+    require(owned.poll() == Poll::pending, "incomplete cleanup turn freed arena");
+    require(NativeSourceCleanupGateTestPeer::yield(*receipt, ticket), "cleanup await yield");
+    require(owned.poll() == Poll::pending, "yielded cleanup freed arena");
+    require(NativeSourceCleanupGateTestPeer::claim(*receipt, ticket), "cleanup resume on owner lane");
+    require(NativeSourceCleanupGateTestPeer::complete(*receipt, ticket), "cleanup completion");
+    require(owned.poll() == Poll::pending && freed == 0,
+            "another suspended continuation lost its physical lifetime pin");
+    registry->release_loan(outstanding_child);
+    require(owned.poll() == Poll::completed && freed == 1,
+            "physically completed cleanup failed to enable actor retirement");
+    ref.get_done().get();
+    require(!receipt->request_cancel(ticket), "late cancel after physical done");
+}
+
+// No synthetic native-allocation callback here: a deliberately incomplete
+// cleanup must remain unreclaimed, and a sanitizing test must not leak a
+// fake arena during process teardown. The success test checks real closers.
+static void failed_source_cleanup_keeps_actor_arena_retained() {
+    NativeActorResourceQuarantine quarantine(1);
+    NativeActorGroup group(411, 1);
+    auto registry = std::make_shared<ActorResourceRegistry>(18, 1);
+    auto receipt = std::make_shared<NativeSourceCleanupGate>(
+            NativeSourceCleanupTicket{18, 1, 102});
+    const NativeSourceCleanupTicket ticket{18, 1, 102};
+    NativeActorRetirementBarrier* barrier = nullptr;
+    auto ref = group.adopt(411, 18, 1, [&] { barrier->retire(); });
+    NativeActorRetirementBarrier owned(registry, group.runtime_finalizer(ref),
+                                       quarantine, receipt);
+    barrier = &owned;
+    require(group.mark_ready(ref), "failed cleanup actor ready");
+    group.close();
+    require(receipt->request_cancel(ticket), "failed cleanup cancel request");
+    require(NativeSourceCleanupGateTestPeer::claim(*receipt, ticket), "failed cleanup claim");
+    require(receipt->fail_cleanup(ticket), "failed cleanup marker");
+    require(!NativeSourceCleanupGateTestPeer::complete(*receipt, ticket), "failed cleanup claimed completion");
+    require(owned.poll() == Poll::cleanup_incomplete
+                && registry->phase() == ActorResourceRegistry::Phase::retiring,
+            "failed cleanup reclaimed actor resources");
+    require(ref.get_done().wait_for(std::chrono::milliseconds(0))
+                 == std::future_status::timeout,
+            "missing cleanup created a false get_done");
+}
+
 int main() {
+    deferred_source_cleanup_physically_fences_actor_done();
+    failed_source_cleanup_keeps_actor_arena_retained();
     successful_heap_retirement();
     failed_ffi_revocation_is_quarantined();
     quarantine_saturation_does_not_settle_done();
     done_waits_for_group_detachment();
     physical_reclamation_waits_for_admitted_actor_turn();
+    foreign_registry_cannot_release_live_heap_callback();
+    foreign_release_races_with_retirement_and_last_callback();
 }
+
