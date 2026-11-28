@@ -76,6 +76,96 @@ These requirements are not implemented by this documentation change.
 The current LLVM bootstrap must keep rejecting unsupported select syntax
 rather than emitting IR with unsound ownership assumptions.
 
+## October 26 — first scheduler-native selectable send substrate
+
+The native runtime now has a **host/runtime-only** first slice for a mailbox
+send candidate. This does not enable any guest `select` syntax yet.
+
+The slice deliberately reuses the scheduler's existing bounded
+`send_async` descriptor pool and target-local FIFO credit arbitration.
+A generation-fenced `OresNativeSelectArbiter` owns one common winner cell;
+the send descriptor retains only one opaque select token. When target mailbox
+credit becomes available, the scheduler:
+
+1. preflights execution-id and worker capacity while holding its existing
+   admission mutex;
+2. atomically commits the shared select winner;
+3. enqueues the mailbox payload **only if that send arm won**.
+
+A losing or sealed send arm becomes CANCELLED without message publication.
+STOP or a **post-registration** send failure is a terminal select event: it may
+win the common selection and preserve the exact failure, or becomes CANCELLED
+if another arm already won. In contrast, descriptor/waiter quota exhaustion
+while registering the arm is a **select setup failure**, not a ready arm; the
+arm detaches without claiming the winner and the coordinator must clean up the
+partial selection. If another arm commits while that setup failure is being
+classified, the send arm reports CANCELLED rather than surfacing a stale
+RESOURCE_EXHAUSTED result over an already-completed selection.
+
+Registration itself is part of the generation lifetime fence: an arm enters
+`active_tokens` while still REGISTERING, before rechecking OPEN/generation.
+Therefore seal -> rearm cannot reset arm state underneath an in-flight
+registration. Selection generations are strictly monotonic and never reusable;
+same/older generations and terminal generation exhaustion fail closed. Stale
+selection/arm generations fail closed. The select arbiter is fixed-capacity and
+performs no allocation or guest callback during commit.
+
+A source registration may also transfer its arm into a source-owned **BOUND**
+state. For selectable send this happens at scheduler submission: after the
+handoff, a copied generic token no longer has authority to call the generic
+commit/detach APIs. Only the scheduler may commit that BOUND arm at the real
+mailbox-credit boundary, or detach it during cancellation/setup failure. This
+prevents a coordinator or stale helper from naming the send arm as winner before
+the destination can actually accept the message.
+
+The runtime now also has one common, pre-reserved continuation wake per select
+generation. It is separate from every source descriptor and retains a
+generation-scoped physical loan on the arbiter. A winning source publishes this
+wake only after its winner commit; losing sources leave it untouched for the
+actual winner. The wake carries winner-arm identity as result metadata and runs
+on the selecting actor's authenticated continuation lane. Arbiter rearm requires
+both zero active arm tokens **and zero physical select loans**. Wake identity is
+cleared before the physical-loan count reaches zero, so a later generation
+cannot alias a RESERVED/READY/EXECUTING callback from the previous generation.
+
+This is intentionally **not** implemented by wrapping a normal READY
+`send_async` Future after the fact. Ordinary READY already means irrevocable
+mailbox admission, which is too late for a losing select arm to roll back.
+
+Static FAIR state is also scoped to the compiler source site, not to the
+process/VM group. The current two-send source scaffold keeps a fixed 64-entry
+table keyed by the compiler source token; each site owns its own monotonic
+ticket and normalizes that ticket by the arm count. Different static select
+sites therefore cannot perturb each other's first/next arm order. The table is
+bounded and site/ticket exhaustion fails closed rather than allocating or
+wrapping. This matches the Java static-ticket contract and must eventually be
+extended with explicit actor/site identity when native select is admitted
+inside actor methods.
+
+Additional stale-generation hardening is normative for this substrate:
+
+- the generation-scoped `arm_count` is atomic metadata and is published before
+  the OPEN release-store; registration acquires OPEN before reading the bound,
+  then rechecks generation/bound after taking its active-token fence;
+- seal requires the caller's exact selection generation. A delayed cancellation
+  or finalizer from generation N cannot detach registrations in N+1;
+- async scheduler callbacks observe the winner through a generation-fenced
+  query using the generation carried by their descriptor/common-wake capability.
+  A stale completion cannot attribute a later generation's winner to itself.
+
+Current non-claims remain important:
+- the source parser/type checker still rejects native static/dynamic select;
+- the common wake is runtime substrate only; compiler-generated select
+  continuation capture/result storage is not yet lowered from `.ores`;
+- Channel/Future/stream arms are not yet integrated with this arbiter;
+- FAIR/priority/random source policies are not yet implemented;
+- object mailbox payloads remain outside the current scalar source slice.
+
+The next vertical step is compiler-owned select continuation/result storage
+using this common generation wake, followed by one static two-arm compiled
+`.ores` fixture. Until that source lowering is complete, existing fail-closed
+select fixtures must remain unchanged.
+
 ## Native implementation acceptance requirements
 
 1. Typed channel cases (read/write/default), copy/ownership rules, and

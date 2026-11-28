@@ -1467,7 +1467,30 @@ if(BUILD_TESTING)
     set_tests_properties(source_actor_send_async_real_mailbox_admission
         PROPERTIES TIMEOUT 45)
 
-
+    add_executable(oreslang-source-actor-select-send2-admission-test
+        tests/source_actor_select_send2_admission_test.c
+        src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+        src/main/cpp/oreslang/runtime/NativeOresVM.c
+        src/main/cpp/oreslang/runtime/NativeActorFuture.c
+        src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+        src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c
+        src/main/cpp/oreslang/runtime/NativeContinuationStore.c
+        src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c
+        src/main/cpp/oreslang/runtime/NativeLogicalTrace.c)
+    target_include_directories(oreslang-source-actor-select-send2-admission-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-source-actor-select-send2-admission-test PRIVATE
+        Threads::Threads)
+    target_compile_features(oreslang-source-actor-select-send2-admission-test PRIVATE c_std_11)
+    target_compile_definitions(oreslang-source-actor-select-send2-admission-test PRIVATE
+        ORESLANG_SOURCE_ACTOR_TESTING=1)
+    target_compile_options(oreslang-source-actor-select-send2-admission-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME source_actor_select_send2_real_mailbox_admission
+        COMMAND oreslang-source-actor-select-send2-admission-test)
+    set_tests_properties(source_actor_select_send2_real_mailbox_admission
+        PROPERTIES TIMEOUT 45)
 
     if(ORE_CLANG)
         add_test(NAME source_actor_compiled_native_lifecycle
@@ -1692,6 +1715,23 @@ if(BUILD_TESTING)
     add_test(NAME native_actor_async_send_future_fifo_and_lifecycle
         COMMAND oreslang-native-async-send-future-test)
     set_tests_properties(native_actor_async_send_future_fifo_and_lifecycle
+        PROPERTIES TIMEOUT 90)
+
+    # First heterogeneous-select substrate for mailbox send. It reuses the
+    # scheduler's async-send descriptor and commits the common winner before
+    # enqueue, so losing arms never publish a message.
+    add_executable(oreslang-native-selectable-send-test
+        tests/native_selectable_send_admission_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-selectable-send-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-native-selectable-send-test PRIVATE c_std_11)
+    target_compile_options(oreslang-native-selectable-send-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-selectable-send-test PRIVATE Threads::Threads)
+    add_test(NAME native_selectable_send_winner_and_stop_linearization
+        COMMAND oreslang-native-selectable-send-test)
+    set_tests_properties(native_selectable_send_winner_and_stop_linearization
         PROPERTIES TIMEOUT 90)
 
     # Frozen payload + exact target resource loan + transferred real envelope.
