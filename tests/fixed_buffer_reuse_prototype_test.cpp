@@ -18,7 +18,31 @@ void operator delete(void* p, std::size_t) noexcept { std::free(p); }
 void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 static void check(bool b) { if (!b) std::abort(); }
 using Pool = oreslang::runtime::FixedBufferReusePrototype<4, 64>;
+template<std::size_t N> static void ring_regression() {
+    using P = oreslang::runtime::FixedBufferReusePrototype<N, 8>;
+    P p;
+    std::array<std::optional<typename P::Lease>, N> leases{};
+    const auto before = allocations.load();
+    for (unsigned round = 0; round < 1000; ++round) {
+        for (std::size_t i = 0; i < N; ++i) {
+            leases[i] = p.try_acquire();
+            check(leases[i].has_value());
+            for (std::size_t j = 0; j < i; ++j)
+                check(p.backing_slot(*leases[i]) != p.backing_slot(*leases[j]));
+            for (std::size_t k = 0; k < 8; ++k)
+                check(p.read(*leases[i], k) == 0 && p.write(*leases[i], k, 255));
+        }
+        check(!p.try_acquire());
+        for (std::size_t i = N; i > 0; --i) {
+            const auto old = *leases[i-1];
+            check(p.release(old) && !p.release(old) && !p.read(old, 0));
+        }
+        check(p.outstanding() == 0);
+    }
+    check(allocations.load() == before);
+}
 int main() {
+    ring_regression<1>(); ring_regression<3>(); ring_regression<7>(); ring_regression<64>();
     Pool pool, foreign;
     const auto before = allocations.load();
     for (int i = 0; i < 250000; ++i) {

@@ -10,6 +10,7 @@
 #include "oreslang/runtime/NativeExecutionContext.h"
 #include "oreslang/runtime/NativePhysicalTurnGate.h"
 #include <pthread.h>
+#include <errno.h> /* ENOTSUP for the musl affinity fallback */
 #include <sched.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -65,6 +66,7 @@ typedef struct {
     unsigned spawned, retired;
     uint64_t generation;
     uint64_t resource_loans; /* exact-incarnation external physical resources */
+    size_t done_waiters; /* observers pinned across cond_wait */
     uint64_t accepted_user_messages;
     uint64_t processed_user_messages;
     uint64_t abandoned_user_messages;
@@ -927,7 +929,7 @@ static int create_carrier(pthread_t* tid, void* context) {
             rc = pthread_attr_setschedparam(&attr, &param);
         }
     }
-#if defined(__linux__)
+#if defined(__linux__) && defined(__GLIBC__)
     /* Pin in the attributes, not after start: the carrier never executes an
      * instruction (or takes a turn) on a CPU outside its reservation. */
     if (rc == 0 && s->cpu_affinity_configured) {
@@ -936,6 +938,11 @@ static int create_carrier(pthread_t* tid, void* context) {
         CPU_SET(s->cpus[slot->index % s->cpu_count], &set);
         rc = pthread_attr_setaffinity_np(&attr, sizeof(set), &set);
     }
+#elif defined(__linux__)
+    /* musl has no pthread_attr_setaffinity_np. Pinning after start would let
+     * the carrier run outside its reservation, so pinned schedulers fail
+     * closed here; unpinned schedulers are unaffected. */
+    if (rc == 0 && s->cpu_affinity_configured) rc = ENOTSUP;
 #endif
     if (rc == 0) rc = pthread_create(tid, &attr, carrier, context);
     if (pthread_attr_destroy(&attr) != 0) abort();
@@ -1814,14 +1821,72 @@ int ores_native_actor_scheduler_wait_done(OresNativeActorScheduler* s,
         return 0;
     }
     ActorLane* lane = &s->actors[actor.actor_slot];
+    if (lane->done_waiters == SIZE_MAX) { unlock(s); return 0; }
+    ++lane->done_waiters;
     while (lane_has_work(lane) || lane->active || lane->wake_live
         || lane->resource_loans
         || ores_execution_phase(&lane->authority) != ORES_EXEC_TERMINATED
         || !lane->terminal_valid) {
         if (pthread_cond_wait(&s->drained, &s->lock) != 0) abort();
     }
+    --lane->done_waiters;
     unlock(s);
     return 1;
+}
+
+/* Opt-in trusted VM leaf reclamation. The caller separately confirms host
+ * finalizers and owns VM registration. No TASK/WAKE profile is admitted
+ * until its external continuation ownership can be proven. */
+int ores_native_actor_scheduler_reclaim_supervised_leaf_v1(
+        OresNativeActorScheduler* s, OresNativeActorRef actor) {
+    if (!s || executing == s) return 0;
+    lock(s);
+    int ok = !s->retired && !s->wake_callback && !s->task_callback
+        && matching(s, actor);
+    ActorLane* a = ok ? &s->actors[actor.actor_slot] : NULL;
+    if (ok) ok = a->retired && a->terminal_valid && a->supervisor_bound
+        && a->failure_state == 3 && a->failure_next == RQ_NIL
+        && a->failure_tail == RQ_NIL && !a->active && !a->carrier_owner_valid
+        && !lane_has_work(a) && !a->wake_live && !a->resource_loans
+        && !a->done_waiters;
+    if (ok) {
+        for (size_t i = 0; i < s->actor_count; ++i) {
+            const ActorLane* child = &s->actors[i];
+            if (child->spawned && child->supervisor_bound
+                && child->supervisor.scheduler_domain == actor.scheduler_domain
+                && child->supervisor.actor_slot == actor.actor_slot
+                && child->supervisor.generation == actor.generation) { ok = 0; break; }
+        }
+        for (int k = 0; k < TURN_CLASSES; ++k)
+            if (a->rq_in[k] || a->rq_next[k] != RQ_NIL || a->rq_prev[k] != RQ_NIL)
+                ok = 0;
+    }
+    const uint64_t next = ok ? ores_execution_restart(&a->authority) : 0;
+    if (next) {
+        /* Preserve the authority mutex, monotonic turn sequence and fixed
+         * ring allocations; scrub prior incarnation data and receipts. */
+        memset(a->messages, 0, s->per_actor_capacity * sizeof(uint64_t));
+        memset(a->mail_sequences, 0, s->per_actor_capacity * sizeof(uint64_t));
+        a->head = a->tail = a->queued = 0;
+        a->task_head = a->task_tail = a->task_queued = 0;
+        a->wake_cursor = 0;
+        a->has_control = a->control_is_failure = 0;
+        a->control_payload = 0;
+        a->supervisor = (OresNativeActorRef){0};
+        a->supervisor_bound = a->failure_state = 0;
+        a->failure = (OresNativeActorTerminalFailure){0};
+        a->accepted_user_messages = a->processed_user_messages = a->abandoned_user_messages = 0;
+        a->requested_terminal_kind = 0;
+        a->terminal_valid = 0;
+        a->terminal = (OresNativeActorTerminalState){0};
+        a->allocation_domain = (OresNativeAllocationDomainRef){0};
+        a->last_carrier1 = 0; /* no prior-incarnation affinity hint */
+        a->generation = next;
+        a->spawned = a->retired = 0;
+        RQ_VALIDATE(s);
+    }
+    unlock(s);
+    return next != 0;
 }
 void ores_native_actor_scheduler_retire(OresNativeActorScheduler* s) {
     if (!s) abort();

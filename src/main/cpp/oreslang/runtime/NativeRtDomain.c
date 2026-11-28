@@ -5,6 +5,7 @@
 #define _POSIX_C_SOURCE 200809L
 #endif
 #include "oreslang/runtime/NativeRtDomain.h"
+#include <errno.h>
 #include <pthread.h>
 #include <sched.h>
 #include <stdatomic.h>
@@ -416,13 +417,16 @@ int ores_rt_domain_start(OresRtDomain* d) {
             if (rc == 0) rc = pthread_attr_setschedpolicy(&attr, SCHED_FIFO);
             if (rc == 0) rc = pthread_attr_setschedparam(&attr, &p);
         }
-#if defined(__linux__)
+#if defined(__linux__) && defined(__GLIBC__)
         if (rc == 0 && d->pinned) {
             cpu_set_t set;
             CPU_ZERO(&set);
             CPU_SET(d->cpus[created], &set);
             rc = pthread_attr_setaffinity_np(&attr, sizeof(set), &set);
         }
+#elif defined(__linux__)
+        /* musl: no attribute-level pinning; a pinned RT domain fails closed. */
+        if (rc == 0 && d->pinned) rc = ENOTSUP;
 #endif
         if (rc == 0)
             rc = pthread_create(&d->core[created].thread, &attr, rt_carrier,

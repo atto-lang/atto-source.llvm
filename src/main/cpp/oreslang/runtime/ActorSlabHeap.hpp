@@ -132,9 +132,10 @@ private:
         return static_cast<std::uint16_t>(fit < kBitmapBytes * 8 ? fit : kBitmapBytes * 8);
     }
 
+    static constexpr std::uint32_t kHandleLive = std::uint32_t{1} << 31;
     struct HandleEntry final {
         std::uint32_t ref;  // Offset32 word when live; next free slot + 1 when free
-        std::uint32_t gen;  // current generation (1-based); 0 = quarantined
+        std::uint32_t gen;  // generation plus internal live flag; 0 = quarantined
     };
 
     std::byte* base_ = nullptr;
@@ -506,7 +507,9 @@ public:
         free_slot_head_ = e.ref;
         if (free_slot_head_ == kNone) free_slot_tail_ = kNone;
         e.ref = obj.value.storage();
-        return {SlabStatus::Ok, Handle32{(e.gen << slot_bits_) | (slot + 1)}};
+        const auto generation = e.gen;
+        e.gen |= kHandleLive;
+        return {SlabStatus::Ok, Handle32{(generation << slot_bits_) | (slot + 1)}};
     }
 
     Result<Ref> resolve_handle(Handle32 handle) const noexcept {
@@ -516,7 +519,8 @@ public:
         if (handle_capacity_ == 0 || slot1 == 0 || slot1 > handle_capacity_)
             return {SlabStatus::InvalidRef, {}};
         const HandleEntry& e = handles_[slot1 - 1];
-        if (e.gen == 0 || (handle.word >> slot_bits_) != e.gen) return {SlabStatus::StaleHandle, {}};
+        if ((e.gen & kHandleLive) == 0 || (handle.word >> slot_bits_) != (e.gen & ~kHandleLive))
+            return {SlabStatus::StaleHandle, {}};
         return {SlabStatus::Ok, Ref::from_storage(e.ref)};
     }
 
@@ -527,13 +531,14 @@ public:
         if (s != SlabStatus::Ok) return s;
         const std::uint32_t slot = (handle.word & ((std::uint32_t{1} << slot_bits_) - 1)) - 1;
         HandleEntry& e = handles_[slot];
-        if (e.gen == max_gen_) {
+        const auto generation = e.gen & ~kHandleLive;
+        if (generation == max_gen_) {
             e = HandleEntry{kNone, 0}; // quarantine: never wrap, never reuse
             ++quarantined_;
             stats_.quarantined_handles = quarantined_;
             return SlabStatus::Ok;
         }
-        e = HandleEntry{kNone, e.gen + 1};
+        e = HandleEntry{kNone, generation + 1};
         // FIFO: append to the tail so every slot ages at the same rate.
         if (free_slot_tail_ != kNone) handles_[free_slot_tail_ - 1].ref = slot + 1;
         else free_slot_head_ = slot + 1;

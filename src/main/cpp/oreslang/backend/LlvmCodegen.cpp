@@ -1,3 +1,4 @@
+#include "oreslang/types/NativeNumericErrorAbi.hpp"
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/backend/PointerIntCodegen.hpp"
 #include "oreslang/backend/NativeFlatClasses.hpp"
@@ -39,6 +40,15 @@ namespace oreslang {
 
 // Guest identifiers exclude $, so native selector suffixes cannot alias source names.
 namespace {
+
+template <typename Map>
+const typename Map::mapped_type& require_native_entry(const Map& map,
+        const std::string& key, const char* context) {
+    const auto found = map.find(key);
+    if (found == map.end())
+        throw std::out_of_range(std::string("native lowering missing ") + context + " for '" + key + "'");
+    return found->second;
+}
 
 std::string field_key(const std::string& receiver, const std::string& field) {
     return receiver + "." + field;
@@ -90,12 +100,13 @@ struct RegionMoveLowering {
     // Source-owned Box<int> identifiers remain non-Copy even though the
     // native owned region stores their values as opaque generation tokens.
     const std::unordered_set<std::string>* native_box_names = nullptr;
+    bool hosted_trap_arithmetic = false;
 };
 
 llvm::Value* receiver_array_region(const Expression& receiver, const RegionMoveLowering* moves) {
     if (receiver.kind == Expression::Kind::Field && receiver.left &&
             moves->class_array_regions)
-        return moves->class_array_regions->at(native_place_key(*receiver.left));
+        return require_native_entry(*moves->class_array_regions, native_place_key(*receiver.left), "array receiver region");
     return moves->array_region;
 }
 
@@ -108,11 +119,11 @@ llvm::Value* array_handle_address(const Expression& receiver,
     if (!moves) throw std::runtime_error("native Array<int> operation lacks region");
     if (receiver.kind == Expression::Kind::Variable && moves->array_names &&
             moves->array_names->count(receiver.name))
-        return storage.at(receiver.name);
+        return require_native_entry(storage, receiver.name, "array receiver storage");
     if (receiver.kind == Expression::Kind::Field && receiver.left &&
             moves->array_fields) {
         const std::string key = native_place_key(receiver);
-        if (moves->array_fields->count(key)) return fields.at(key);
+        if (moves->array_fields->count(key)) return require_native_entry(fields, key, "array field storage");
     }
     throw std::runtime_error("native Array<int> receiver is not an owned place");
 }
@@ -163,6 +174,36 @@ llvm::Value* checked_signed_arithmetic(llvm::IRBuilder<>& builder,
     return value;
 }
 
+// Closed trap expressions have no calls, owners or suspension. The shared
+// overflow edge short-circuits later operands; ordinary lowering is unchanged.
+llvm::Value* lower_trapped_overflow(const Expression& e, llvm::IRBuilder<>& builder,
+                                    llvm::Type* i64, llvm::BasicBlock* failure) {
+    using K = Expression::Kind;
+    if (e.kind == K::Integer)
+        return llvm::ConstantInt::getSigned(i64, e.integer);
+    const bool negate = e.kind == K::Negate;
+    if (!negate && e.kind != K::Add && e.kind != K::Subtract && e.kind != K::Multiply)
+        throw std::runtime_error("unproved arithmetic operand in native trap");
+    if (!e.left || (!negate && !e.right))
+        throw std::runtime_error("incomplete native trap arithmetic");
+    auto* lhs = negate ? llvm::ConstantInt::get(i64, 0)
+                       : lower_trapped_overflow(*e.left, builder, i64, failure);
+    auto* rhs = lower_trapped_overflow(negate ? *e.left : *e.right, builder, i64, failure);
+    const auto op = negate || e.kind == K::Subtract ? llvm::Intrinsic::ssub_with_overflow
+        : e.kind == K::Multiply ? llvm::Intrinsic::smul_with_overflow
+        : llvm::Intrinsic::sadd_with_overflow;
+    auto* module = builder.GetInsertBlock()->getModule();
+    auto* function = builder.GetInsertBlock()->getParent();
+    auto* intrinsic = native_intrinsic(*module, op, {i64});
+    auto* checked = builder.CreateCall(intrinsic, {lhs, rhs}, "trap.arithmetic.checked");
+    auto* value = builder.CreateExtractValue(checked, {0}, "trap.arithmetic.value");
+    auto* overflow = builder.CreateExtractValue(checked, {1}, "trap.arithmetic.overflow");
+    auto* proceed = llvm::BasicBlock::Create(builder.getContext(), "trap.arithmetic.ok", function);
+    builder.CreateCondBr(overflow, failure, proceed);
+    builder.SetInsertPoint(proceed);
+    return value;
+}
+
 llvm::Value* lower(const Expression& expr,
                    llvm::IRBuilder<>& builder,
                    llvm::Type* i64,
@@ -176,15 +217,47 @@ llvm::Value* lower(const Expression& expr,
             // or silently reinterpret an unrelated native handle.
             return lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
         case Expression::Kind::SumConstruct: {
-            // Independent backend gate: a trap-origin Ok may only wrap the
-            // statically total integer subset. Never accidentally catch host,
-            // ordinary guest, panic or cancellation errors by fabricating Some.
-            if (expr.trap_origin && (expr.name != "Ok" ||
-                    expr.arguments.size() != 1 ||
-                    !native_trap_pure_integer(*expr.arguments.front()) ||
-                    expr.sum_type != "Result<int,Error>"))
-                throw std::runtime_error("unproved native trap AST reached LLVM codegen");
             const auto& type = native_sum(*moves->sum_program, expr.sum_type);
+            // Only the compiler-owned closed trap slice may mint this Error
+            // carrier. Do not admit calls, host effects or arbitrary Error objects.
+            if ((type.trap_error && !expr.trap_origin) ||
+                    (expr.trap_origin && (!type.trap_error ||
+                    type.kind != NativeSumType::Kind::Result ||
+                    type.value_type != ScalarType::I64 || expr.name != "Ok" ||
+                    expr.arguments.size() != 1 || !expr.arguments.front() ||
+                    !native_trap_pure_integer(*expr.arguments.front()) ||
+                    expr.sum_type != "Result<int,Error>")))
+                throw std::runtime_error("unproved native trap AST reached LLVM codegen");
+            if (expr.trap_origin && moves->hosted_trap_arithmetic &&
+                    expr.arguments.front()->kind != Expression::Kind::Integer) {
+                // Stable arithmetic Error ABI ID; still opaque to source.
+                constexpr auto overflow_id = static_cast<std::uint32_t>(types::NativeNumericError::ArithmeticOverflow);
+                auto* function = builder.GetInsertBlock()->getParent();
+                auto* failed = llvm::BasicBlock::Create(builder.getContext(), "trap.arithmetic.err", function);
+                auto* join = llvm::BasicBlock::Create(builder.getContext(), "trap.arithmetic.result", function);
+                auto* payload = lower_trapped_overflow(*expr.arguments.front(), builder, i64, failed);
+                auto* success = builder.GetInsertBlock();
+                builder.CreateBr(join);
+                builder.SetInsertPoint(failed);
+                builder.CreateBr(join);
+                builder.SetInsertPoint(join);
+                auto* tag = builder.CreatePHI(i64, 2, "trap.result.tag");
+                auto* ok = builder.CreatePHI(i64, 2, "trap.result.ok");
+                auto* error = builder.CreatePHI(i64, 2, "trap.result.error");
+                tag->addIncoming(llvm::ConstantInt::get(i64, 0), success);
+                tag->addIncoming(llvm::ConstantInt::get(i64, 1), failed);
+                ok->addIncoming(payload, success);
+                ok->addIncoming(llvm::ConstantInt::get(i64, 0), failed);
+                error->addIncoming(llvm::ConstantInt::get(i64, 0), success);
+                error->addIncoming(llvm::ConstantInt::get(i64, overflow_id), failed);
+                auto* fields = entry_alloca(builder, i64, llvm::ConstantInt::get(i64, 3), "trap.result.fields");
+                builder.CreateStore(tag, fields);
+                builder.CreateStore(ok, builder.CreateGEP(i64, fields, llvm::ConstantInt::get(i64, 1)));
+                builder.CreateStore(error, builder.CreateGEP(i64, fields, llvm::ConstantInt::get(i64, 2)));
+                return builder.CreateCall(moves->record_new,
+                    {llvm::ConstantInt::get(i64, moves->record_schemas->at(expr.sum_type)),
+                     llvm::ConstantInt::get(i64, 3), fields}, "trap.result");
+            }
             const bool option = type.kind == NativeSumType::Kind::Option;
             const std::size_t count = option ? 2 : 3;
             const bool error = expr.name == "Err";
@@ -330,7 +403,7 @@ llvm::Value* lower(const Expression& expr,
                     llvm::ConstantInt::get(i64, moves->record_schemas->at(cls.name)),
                     llvm::ConstantInt::get(i64, cls.fields.size()), values}, "return.record.handle");
             }
-            llvm::Value* stored = builder.CreateLoad(i64, storage.at(expr.name),
+            llvm::Value* stored = builder.CreateLoad(i64, require_native_entry(storage, expr.name, "variable storage"),
                 expr.name + ".read");
             if (moves && moves->live_flags &&
                     moves->live_flags->count(expr.name))
@@ -698,6 +771,76 @@ llvm::Value* lower(const Expression& expr,
             result->addIncoming(rightCanonical, rhsExit);
             return result;
         }
+        case Expression::Kind::ClosedRecur: {
+            if (!valid_closed_recur(expr))
+                throw std::runtime_error("E_VALUE_LOOP_PROFILE: invalid closed recur lowering");
+            using K = Expression::Kind;
+            std::unordered_map<std::string, llvm::Value*> state;
+            auto operand = [&](auto&& self, const Expression& e) -> llvm::Value* {
+                if (e.kind == K::Integer) return llvm::ConstantInt::getSigned(i64, e.integer);
+                if (e.kind == K::Boolean) return llvm::ConstantInt::get(i64, e.boolean ? 1 : 0);
+                if (e.kind == K::Variable) return state.at(e.name);
+                auto* lhs = self(self, *e.left);
+                if (e.kind == K::Negate)
+                    return checked_signed_arithmetic(builder, llvm::Intrinsic::ssub_with_overflow,
+                        llvm::ConstantInt::get(i64, 0), lhs, "recur.neg");
+                auto* rhs = self(self, *e.right);
+                llvm::Value* cmp = nullptr;
+                switch (e.kind) {
+                    case K::Add: return checked_signed_arithmetic(builder, llvm::Intrinsic::sadd_with_overflow, lhs, rhs, "recur.add");
+                    case K::Subtract: return checked_signed_arithmetic(builder, llvm::Intrinsic::ssub_with_overflow, lhs, rhs, "recur.sub");
+                    case K::Multiply: return checked_signed_arithmetic(builder, llvm::Intrinsic::smul_with_overflow, lhs, rhs, "recur.mul");
+                    case K::Equal: cmp = builder.CreateICmpEQ(lhs, rhs); break;
+                    case K::NotEqual: cmp = builder.CreateICmpNE(lhs, rhs); break;
+                    case K::Less: cmp = builder.CreateICmpSLT(lhs, rhs); break;
+                    case K::LessEqual: cmp = builder.CreateICmpSLE(lhs, rhs); break;
+                    case K::Greater: cmp = builder.CreateICmpSGT(lhs, rhs); break;
+                    case K::GreaterEqual: cmp = builder.CreateICmpSGE(lhs, rhs); break;
+                    default: throw std::runtime_error("invalid closed recur operand");
+                }
+                return builder.CreateZExt(cmp, i64);
+            };
+            std::vector<llvm::Value*> initial;
+            for (std::size_t i = 0; i < expr.recur_names.size(); ++i) {
+                auto* v = operand(operand, *expr.recur_initializers[i]);
+                initial.push_back(v);
+                state.emplace(expr.recur_names[i], v);
+            }
+            auto* entry = builder.GetInsertBlock();
+            auto* fn = entry->getParent();
+            auto* header = llvm::BasicBlock::Create(builder.getContext(), "recur.header", fn);
+            auto* join = llvm::BasicBlock::Create(builder.getContext(), "recur.join", fn);
+            builder.CreateBr(header);
+            builder.SetInsertPoint(header);
+            std::vector<llvm::PHINode*> phis;
+            for (std::size_t i = 0; i < initial.size(); ++i) {
+                auto* phi = builder.CreatePHI(i64, 2, "recur.state");
+                phi->addIncoming(initial[i], entry);
+                phis.push_back(phi);
+                state.at(expr.recur_names[i]) = phi;
+            }
+            std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>> exits;
+            for (std::size_t i = 0; i < expr.recur_predicates.size(); ++i) {
+                auto* condition = operand(operand, *expr.recur_predicates[i]);
+                auto* taken = llvm::BasicBlock::Create(builder.getContext(), "recur.break", fn);
+                auto* next = llvm::BasicBlock::Create(builder.getContext(), "recur.next", fn);
+                builder.CreateCondBr(builder.CreateICmpNE(condition, llvm::ConstantInt::get(i64, 0)), taken, next);
+                builder.SetInsertPoint(taken);
+                auto* value = operand(operand, *expr.recur_results[i]);
+                exits.emplace_back(value, builder.GetInsertBlock());
+                builder.CreateBr(join);
+                builder.SetInsertPoint(next);
+            }
+            std::vector<llvm::Value*> updates;
+            for (const auto& update : expr.recur_updates) updates.push_back(operand(operand, *update));
+            auto* backedge = builder.GetInsertBlock();
+            for (std::size_t i = 0; i < phis.size(); ++i) phis[i]->addIncoming(updates[i], backedge);
+            builder.CreateBr(header);
+            builder.SetInsertPoint(join);
+            auto* result = builder.CreatePHI(i64, static_cast<unsigned>(exits.size()), "recur.result");
+            for (const auto& exit : exits) result->addIncoming(exit.first, exit.second);
+            return result;
+        }
         case Expression::Kind::Conditional: {
             // Type admission has proven a bool condition and compatible arm
             // result types; ownership admission has proven a valid affine join.
@@ -747,7 +890,7 @@ llvm::Value* lower(const Expression& expr,
         case Expression::Kind::Call: {
             const std::string call_selector = native_function_slot(
                 expr.name, expr.arguments.size());
-            llvm::Function* callee = functions.at(call_selector);
+            llvm::Function* callee = require_native_entry(functions, call_selector, "call declaration");
             if (moves && moves->frozen_scalar_dispatch) {
                 const auto* witness = moves->frozen_scalar_dispatch->find_direct(call_selector);
                 if (witness) {
@@ -773,9 +916,9 @@ llvm::Value* lower(const Expression& expr,
             }
             const std::vector<std::size_t> no_hidden;
             const auto& hidden = moves && moves->class_array_parameters
-                ? moves->class_array_parameters->at(native_function_slot(expr.name, expr.arguments.size())) : no_hidden;
+                ? require_native_entry(*moves->class_array_parameters, call_selector, "call region parameters") : no_hidden;
             const bool owning = moves && moves->owning_results &&
-                moves->owning_results->at(native_function_slot(expr.name, expr.arguments.size()));
+                require_native_entry(*moves->owning_results, call_selector, "call owning-result metadata");
             if (callee->arg_size() != expr.arguments.size() + hidden.size() + (owning ? 2 : 0)) {
                 throw std::runtime_error("native named call argument count mismatch");
             }
@@ -851,18 +994,23 @@ static std::string emit_verified_llvm_ir_impl(const Program& source, bool wasm32
                                   const std::vector<CheckedSourceRoutineV1>& checked_routines,
                                   const std::vector<CheckedLogSiteV1>& checked_sites,
                                   bool tenant_vm_guest,
-                                  const std::unordered_set<std::string>& interface_declarations) {
+                                  const std::unordered_set<std::string>& interface_declarations,
+                                  const char* hosted_linux_triple = nullptr) {
+    if (hosted_linux_triple && (wasm32_target || cortex_m_target || bounded_allocator_provider ||
+            tenant_vm_guest || !isolate_entry.empty() || actor_region_v1 ||
+            !checked_routines.empty() || !checked_sites.empty() || !interface_declarations.empty()))
+        throw std::runtime_error("hosted Linux cross target conflicts with unqualified lowering profile");
     for (const auto& fn : source.functions)
         for (const auto& binding : fn.locals)
             if (binding.native_box_i64 &&
                     (wasm32_target || cortex_m_target ||
-                     !isolate_entry.empty() || tenant_vm_guest || sizeof(void*) != 8 ||
+                     !isolate_entry.empty() || tenant_vm_guest || hosted_linux_triple || sizeof(void*) != 8 ||
                      fn.name != "main" || !fn.parameters.empty()))
                 throw std::runtime_error(
                     "ATTO_BOX_MAIN_V1_REJECT: Box<int> requires hosted native 64-bit main ABI");
     if (source.pointer_int_plan) {
         if (wasm32_target || cortex_m_target || bounded_allocator_provider ||
-                tenant_vm_guest || !source.functions.empty() ||
+                tenant_vm_guest || hosted_linux_triple || !source.functions.empty() ||
                 !source.actors.empty() || !source.classes.empty() ||
                 !source.imports.empty())
             throw std::runtime_error(
@@ -1118,7 +1266,7 @@ static std::string emit_verified_llvm_ir_impl(const Program& source, bool wasm32
     }
     if (wasm32_target && cortex_m_target) throw std::runtime_error("conflicting LLVM target selectors");
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
-        if (wasm32_target || !source.classes.empty() || !source.actors.empty())
+        if (wasm32_target || hosted_linux_triple || !source.classes.empty() || !source.actors.empty())
             throw std::runtime_error("experimental scalar loop unsupported target/owners");
         return emit_scalar_while_frame_llvm_ir(*source.functions.front().scalar_while);
     }
@@ -1368,6 +1516,25 @@ static std::string emit_verified_llvm_ir_impl(const Program& source, bool wasm32
         if (actual.getPointerSizeInBits(0) != profile.pointer_bits()
                 || actual.isLittleEndian() != (profile.endian() == "little"))
             throw std::runtime_error("wasm32 target ABI/data layout mismatch");
+    }
+    if (hosted_linux_triple) {
+        // Same IR as the host target, stamped for another hosted Linux machine.
+        // The guest heap word stays 32-bit on every one of these (Offset32).
+        if (wasm32_target || cortex_m_target || tenant_vm_guest || bounded_allocator_provider)
+            throw std::runtime_error("hosted Linux cross target conflicts with another target selector");
+        const auto profile = TargetAbi::parse(hosted_linux_triple);
+        if (!profile.experimental_hosted_linux_ir())
+            throw std::runtime_error("target has no hosted Linux IR lowering");
+#if LLVM_VERSION_MAJOR >= 21
+        module.setTargetTriple(llvm::Triple(std::string(profile.triple())));
+#else
+        module.setTargetTriple(std::string(profile.triple()));
+#endif
+        module.setDataLayout(std::string(profile.data_layout()));
+        const auto& actual = module.getDataLayout();
+        if (actual.getPointerSizeInBits(0) != profile.pointer_bits()
+                || actual.isLittleEndian() != (profile.endian() == "little"))
+            throw std::runtime_error("hosted Linux target ABI/data layout mismatch");
     }
     auto* i64 = llvm::Type::getInt64Ty(context);
     llvm::Type* i32 = llvm::Type::getInt32Ty(context);
@@ -2016,6 +2183,9 @@ static std::string emit_verified_llvm_ir_impl(const Program& source, bool wasm32
         region_moves.native_box_names = &native_box_names;
         region_moves.sum_program = &source;
         region_moves.sum_check = sum_check;
+        region_moves.hosted_trap_arithmetic = !wasm32_target && !cortex_m_target &&
+            !bounded_allocator_provider && !tenant_vm_guest && !actor_region_v1 &&
+            source.actors.empty();
         region_moves.frozen_scalar_dispatch = &frozen_i64_dispatch;
         region_moves.frozen_scalar_callees = &frozen_scalar_callees;
         region_moves.frozen_scalar_symbols = &frozen_scalar_symbols;
@@ -2575,7 +2745,7 @@ static std::string emit_verified_llvm_ir_impl(const Program& source, bool wasm32
                         storage, field_storage, declarations, &region_moves);
                 }
                 init = new_checked_array(local.name);
-                result.array_shadow = array_failure_places.at(local.name);
+                result.array_shadow = require_native_entry(array_failure_places, local.name, "scoped array cleanup shadow");
                 array_names.insert(local.name);
                 if (local.initializer) {
                     if (!array_region || !array_failure || !array_failure_status)
@@ -3073,15 +3243,15 @@ static std::string emit_verified_llvm_ir_impl(const Program& source, bool wasm32
                     llvm::Value* source_place = nullptr;
                     if (expr.kind == Expression::Kind::Variable) {
                         source_key = field_key(expr.name, field.name);
-                        source_place = field_storage.at(source_key);
+                        source_place = require_native_entry(field_storage, source_key, "owning return field storage");
                     } else {
-                        source_key = constructor_sources.at(field.name);
-                        source_place = storage.count(source_key) ? storage.at(source_key) : field_storage.at(source_key);
+                        source_key = require_native_entry(constructor_sources, field.name, "owning return constructor source");
+                        source_place = storage.count(source_key) ? require_native_entry(storage, source_key, "owning return local storage") : require_native_entry(field_storage, source_key, "owning return projected storage");
                     }
                     auto* index = llvm::ConstantInt::get(i64, position++);
                     builder.CreateStore(destination, builder.CreateGEP(loan_ptr, destinations, index));
                     builder.CreateStore(source_place, builder.CreateGEP(loan_ptr, sources, index));
-                    shadows.push_back(array_failure_places.at(source_key));
+                    shadows.push_back(require_native_entry(array_failure_places, source_key, "owning return cleanup shadow"));
                 } else {
                     auto* value = expr.kind == Expression::Kind::Variable
                         ? builder.CreateLoad(i64, field_storage.at(field_key(expr.name, field.name)))
@@ -4158,10 +4328,10 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                                   const std::string& isolate_entry, bool actor_region_v1,
                                   const std::vector<CheckedSourceRoutineV1>& checked_routines,
                                   const std::vector<CheckedLogSiteV1>& checked_sites,
-                                  bool tenant_vm_guest) {
+                                  bool tenant_vm_guest, const char* hosted_linux_triple) {
     return emit_verified_llvm_ir_impl(source, wasm32_target, cortex_m_target,
         bounded_allocator_provider, isolate_entry, actor_region_v1,
-        checked_routines, checked_sites, tenant_vm_guest, {});
+        checked_routines, checked_sites, tenant_vm_guest, {}, hosted_linux_triple);
 }
 
 std::string emit_verified_scalar_namespace_consumer(

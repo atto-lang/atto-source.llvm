@@ -125,8 +125,17 @@ public:
         if (max_items == 0) return result;
         std::lock_guard<std::mutex> lock(mutex_);
         if (closed_) return result;
-        const auto count = max_items < by_deadline_.size()
-                ? max_items : by_deadline_.size();
+        // Reserve only the due prefix. Polling before the first deadline
+        // must not allocate a delivery buffer; sparse expiry must not size
+        // the buffer from unrelated future timers. Count under the same lock
+        // before changing registrations, preserving exception safety.
+        std::size_t count = 0;
+        for (auto it = by_deadline_.begin();
+             it != by_deadline_.end() && count < max_items &&
+             it->first.first <= now_ns; ++it) {
+            ++count;
+        }
+        if (count == 0) return result;
         result.reserve(count);
         while (result.size() < max_items && !by_deadline_.empty()) {
             const auto it = by_deadline_.begin();

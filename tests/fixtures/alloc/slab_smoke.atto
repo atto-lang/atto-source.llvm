@@ -1,7 +1,7 @@
 import module slab from "atto.alloc/slab";
 // Expected successful guest exit: 0; includes stale and cross-domain checks.
 pub fnc main(): int {
-  let mut slab.Slab slots = slab.new_slab(17, 2);
+  let mut slab.Slab slots = take! slab.new_slab(17, 2);
   let slab.Handle old = slots.insert(0).unwrap();
   let slab.Handle other = slots.insert(-7).unwrap();
   if slots.size() != 2 || slots.read(old).unwrap() != 0; do return 1; fi
@@ -13,7 +13,7 @@ pub fnc main(): int {
      slots.contains(old); do return 4; fi
   if !slots.contains(other) || slots.read(replacement).unwrap() != 44; do return 5; fi
   // Same numeric domain/slot/generation must NOT make a handle transferable.
-  let mut slab.Slab shadow = slab.new_slab(17, 2);
+  let mut slab.Slab shadow = take! slab.new_slab(17, 2);
   let slab.Handle shadow_first = shadow.insert(3).unwrap();
   let slab.Handle shadow_second = shadow.insert(4).unwrap();
   if slots.contains(shadow_second) || shadow.contains(other) ||

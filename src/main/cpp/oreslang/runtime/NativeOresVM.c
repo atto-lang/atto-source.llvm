@@ -433,6 +433,27 @@ int ores_native_vm_publish_supervised_failure(
     return accepted;
 }
 
+/* Explicit opt-in host reclamation after physical DONE, host finalization
+ * and actual supervisor callback acknowledgement. Retain registration on
+ * every denied attempt; clear it only with generation advancement. */
+int ores_native_vm_reclaim_supervised_leaf_v1(
+        OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef child) {
+    if (!vm || !valid_domain(domain)) return 0;
+    control_lock(vm);
+    int ok = !vm->control_retired && child.actor_slot < vm->actor_slots[domain];
+    OresVMSupervisorRegistration* entry = ok ? &vm->supervisors[domain][child.actor_slot] : NULL;
+    if (ok) ok = same_actor(entry->child, child) && entry->host_finalized
+        && entry->terminal_published;
+    if (ok) {
+        for (size_t i = 0; i < vm->actor_slots[domain]; ++i)
+            if (same_actor(vm->supervisors[domain][i].supervisor, child)) { ok = 0; break; }
+    }
+    if (ok) ok = ores_native_actor_scheduler_reclaim_supervised_leaf_v1(vm->schedulers[domain], child);
+    if (ok) *entry = (OresVMSupervisorRegistration){0};
+    control_unlock(vm);
+    return ok;
+}
+
 OresNativeSendStatus ores_native_vm_try_send(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeActorRef ref, uint64_t payload) {

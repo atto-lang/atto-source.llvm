@@ -9,8 +9,11 @@ on:
       - 'docs/security/CI_PRIVATE_SOURCE_MIRRORING.md'
       - 'scripts/audit-private-ci-governance.py'
       - 'scripts/test-audit-private-ci-governance.py'
+      - 'tests/test_private_ci_approval_reset.py'
       - 'scripts/publish-private-ci-source-v3.py'
       - 'scripts/test-publish-private-ci-source-v3.py'
+      - 'scripts/test_private_ci_ref_custody.py'
+      - 'docs/security/ATTO_LLVM_PRIVATE_CI_SOURCE_IDENTITY_REVIEW.md'
       - 'scripts/run-in-private-ci-destination.sh'
   push:
     branches: [main]
@@ -22,8 +25,11 @@ on:
       - 'docs/security/CI_PRIVATE_SOURCE_MIRRORING.md'
       - 'scripts/audit-private-ci-governance.py'
       - 'scripts/test-audit-private-ci-governance.py'
+      - 'tests/test_private_ci_approval_reset.py'
       - 'scripts/publish-private-ci-source-v3.py'
       - 'scripts/test-publish-private-ci-source-v3.py'
+      - 'scripts/test_private_ci_ref_custody.py'
+      - 'docs/security/ATTO_LLVM_PRIVATE_CI_SOURCE_IDENTITY_REVIEW.md'
       - 'scripts/run-in-private-ci-destination.sh'
 permissions:
   contents: read
@@ -37,14 +43,17 @@ jobs:
           persist-credentials: false
       - name: Offline governance regression suite
         run: python3 scripts/test-audit-private-ci-governance.py
+      - name: Bootstrap private-source approval denial regression suite
+        run: python3 -m unittest discover -s tests -p test_private_ci_approval_reset.py -v
       - name: LLVM v3 private publisher regression suite
         run: |
           set -euo pipefail
           bash -n scripts/run-in-private-ci-destination.sh
-          python3 -m py_compile scripts/publish-private-ci-source-v3.py scripts/test-publish-private-ci-source-v3.py
+          python3 -m py_compile scripts/publish-private-ci-source-v3.py scripts/test-publish-private-ci-source-v3.py scripts/test_private_ci_ref_custody.py
           for attempt in 1 2 3; do
-            echo "LLVM private publisher pass ${attempt}/3"
+            echo "LLVM private publisher and ref-custody pass ${attempt}/3"
             python3 scripts/test-publish-private-ci-source-v3.py
+            python3 scripts/test_private_ci_ref_custody.py
           done
       - name: Fail-closed policy structure audit
         run: python3 scripts/audit-private-ci-governance.py

@@ -23,6 +23,12 @@ typedef enum {
     ATTO_TICKET_STARTED = 2,
     ATTO_TICKET_PROCESSED = 3
 } atto_host_ticket_state_v1;
+/* Trusted host placement only. Nonzero tenant is immutable for the actor's
+ * lifetime. The legacy guest spawn ABI remains local-only and cannot mint
+ * remote receipt tickets. This does not authenticate a caller or isolate
+ * native code executing inside the same process.
+ */
+int32_t atto_host_actor_spawn_scoped(int32_t type_id, uint64_t tenant);
 /* Return: 0=admitted, -1=invalid/stale/closed, -2=capacity full.
  * The host must preserve (actor ref, full route, ticket ID) as one tuple.
  * In this native prototype PROCESSSED means the void handler returned;

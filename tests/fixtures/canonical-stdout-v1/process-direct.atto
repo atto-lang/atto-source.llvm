@@ -1,0 +1,5 @@
+pub fnc main(): int {
+  process.stdout.write("A");
+  process.stdout.write("B");
+  return 42;
+}

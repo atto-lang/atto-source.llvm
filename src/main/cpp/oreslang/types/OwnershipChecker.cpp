@@ -313,6 +313,9 @@ void check_call(const Expression& expr, Locals& locals, const Functions& functio
 
 void check_value(const Expression& expr, Locals& locals, const Functions& functions) {
     switch (expr.kind) {
+        case Expression::Kind::ClosedRecur:
+            if (!valid_closed_recur(expr)) reject(expr, "E_VALUE_LOOP_PROFILE: invalid closed recur ownership");
+            return;
         case Expression::Kind::Integer:
         case Expression::Kind::Boolean:
         case Expression::Kind::String:
@@ -504,6 +507,8 @@ void check_value(const Expression& expr, Locals& locals, const Functions& functi
 // the distinct fallthrough path. This is *not* general branch-lifetime proof.
 void check_pure_guard(const Expression& expr, Locals& locals, const Functions& functions) {
     switch (expr.kind) {
+        case Expression::Kind::ClosedRecur:
+            reject(expr, "closed recur is not admitted as a pure guard");
         case Expression::Kind::Integer:
         case Expression::Kind::Boolean:
         case Expression::Kind::String:
@@ -879,6 +884,14 @@ void validate_i64_ownership(Program& program) {
             } else if (binding.record_view) {
                 check_value(*binding.initializer, locals, functions);
                 const bool owning = !class_arrays.at(binding.class_name).empty();
+                if (binding.explicit_factory_take) {
+                    const auto& init = *binding.initializer;
+                    if (!owning || init.kind != Expression::Kind::Call)
+                        reject(init, "explicit factory take requires an owned array-containing class result");
+                    const auto called = functions.find(native_function_slot(init.name, init.arguments.size()));
+                    if (called == functions.end() || called->second->return_class != binding.class_name)
+                        reject(init, "explicit factory take requires matching nominal class result");
+                }
                 if (owning && !binding.owner_mutable)
                     throw std::runtime_error("owning class result requires val or let mut owner");
                 entry.record_view = !owning;

@@ -5,6 +5,9 @@ use std::io::{Read as IoRead, Write as IoWrite};
 use std::process::{Command, Stdio};
 
 mod target_native;
+mod owned_unwind;
+mod effect_check;
+mod native_readonly;
 
 use atto_compiler::ast::{BinOp, Type};
 use atto_compiler::check::{self, Import, TExpr, TFunc, TProgram, TStmt, TE};
@@ -28,6 +31,8 @@ struct FunctionEmitter<'a> {
     terminated: bool,
     block_name: String,
     slots: Vec<Type>,
+    // Only copied scalar parameters whose slots are never written use incoming SSA.
+    direct_params: Vec<bool>,
 }
 
 impl<'a> FunctionEmitter<'a> {
@@ -40,10 +45,39 @@ impl<'a> FunctionEmitter<'a> {
             }
         }
         scalar_type(func.ret)?;
+        let mut direct_params: Vec<bool> = func.params.iter()
+            .map(|ty| program.actors.is_empty() && matches!(*ty, Type::Int | Type::Bool))
+            .collect();
+        Self::scan_parameter_writes(&func.body, &mut direct_params);
         Ok(Self {
             program, func, out: String::new(), counter: 0,
-            terminated: false, block_name: String::new(), slots,
+            terminated: false, block_name: String::new(), slots, direct_params,
         })
+    }
+
+    // Audit every statement in lexical/branch bodies. Unknown IR is
+    // conservatively memory-backed; the existing emitter still rejects it.
+    fn scan_parameter_writes(body: &[TStmt], direct: &mut [bool]) {
+        for stmt in body {
+            match stmt {
+                TStmt::Set(slot, _) => {
+                    if let Some(value) = direct.get_mut(*slot as usize) {
+                        *value = false;
+                    }
+                }
+                TStmt::Block(nested) => Self::scan_parameter_writes(nested, direct),
+                TStmt::If(arms, fallback) => {
+                    for (_, nested) in arms {
+                        Self::scan_parameter_writes(nested, direct);
+                    }
+                    if let Some(nested) = fallback {
+                        Self::scan_parameter_writes(nested, direct);
+                    }
+                }
+                TStmt::GlobalSet(_, _) | TStmt::Expr(_) | TStmt::Return(_) => {}
+                _ => direct.fill(false),
+            }
+        }
     }
 
     fn id(&mut self, prefix: &str) -> String {
@@ -106,6 +140,9 @@ impl<'a> FunctionEmitter<'a> {
             TExpr::Local(slot) => {
                 let idx = *slot as usize;
                 let ty = scalar_type(*self.slots.get(idx).ok_or("E_INTERNAL: bad local slot")?)?;
+                if self.direct_params.get(idx) == Some(&true) {
+                    return Ok(format!("%arg{idx}"));
+                }
                 let tmp = self.id("v");
                 self.instr(format!("%{tmp} = load {ty}, ptr %local{idx}"));
                 Ok(format!("%{tmp}"))
@@ -289,6 +326,17 @@ impl<'a> FunctionEmitter<'a> {
                 ));
                 Ok(String::new())
             }
+            TExpr::InlineTask { body, value } => {
+                self.instr("; InlineTaskEnter (caller TaskId, no dispatch)");
+                self.block(body)?;
+                let result = if let Some(value) = value {
+                    self.expr(value)?
+                } else {
+                    String::new()
+                };
+                self.instr("; InlineTaskExit");
+                Ok(result)
+            }
             TExpr::Ternary(cond, yes, no) => {
                 let cv = self.expr(cond)?;
                 let yes_label = self.id("tern_yes");
@@ -332,6 +380,9 @@ impl<'a> FunctionEmitter<'a> {
             TStmt::Set(slot, value) => {
                 let idx = *slot as usize;
                 let ty = scalar_type(*self.slots.get(idx).ok_or("E_INTERNAL: bad set slot")?)?;
+                if self.direct_params.get(idx) == Some(&true) {
+                    return Err("E_INTERNAL: write to incoming SSA-only parameter".into());
+                }
                 let x = self.expr(value)?;
                 self.instr(format!("store {ty} {x}, ptr %local{idx}"));
             }
@@ -410,6 +461,9 @@ impl<'a> FunctionEmitter<'a> {
         self.label("entry");
         let all_slots = self.slots.clone();
         for (idx, ty) in all_slots.into_iter().enumerate() {
+            if self.direct_params.get(idx) == Some(&true) {
+                continue;
+            }
             let llty = scalar_type(ty)?;
             self.instr(format!("%local{idx} = alloca {llty}"));
             if idx < self.func.params.len() {
@@ -645,6 +699,13 @@ pub fn compile_ir(source: &str) -> Result<String, String> {
 }
 
 fn compile_ir_with_profile(source: &str, profile: LibraryProfile) -> Result<String, String> {
+    compile_ir_with_effect_profile(source, profile, None)
+}
+
+fn compile_ir_with_effect_profile(
+    source: &str, profile: LibraryProfile,
+    effect_profile: Option<effect_check::Profile>,
+) -> Result<String, String> {
     if source.len() > atto_compiler::SOURCE_CAP {
         return Err("E_SOURCE_LIMIT: native Atto input exceeds 64 KiB".into());
     }
@@ -674,6 +735,20 @@ fn compile_ir_with_profile(source: &str, profile: LibraryProfile) -> Result<Stri
         admit_freestanding_tokens(&toks)?;
     }
     let (toks, linked_http) = link_registered_http_import(toks, profile)?;
+    // The explicit source profile selects a separate closed native proof.
+    // Never alter the legacy checker or freestanding/effect admission.
+    if source.lines().next() == Some("// atto-ownership: borrow-default-v1") {
+        if profile != LibraryProfile::Hosted || effect_profile.is_some() || linked_http.is_some() {
+            return Err("E_NATIVE_READONLY: incompatible library/effect profile".into());
+        }
+        // Check original parsed declarations; target-link rewrites must not
+        // remove unsupported declarations before whole-profile admission.
+        let program = atto_compiler::parser::Parser::new(toks).parse_program()
+            .map_err(|e| e.to_string())?;
+        native_readonly::admit_source(&program)?;
+        let candidate = check::check_native_readonly_candidate(&program).map_err(|e| e.to_string())?;
+        return native_readonly::emit(&program, &candidate);
+    }
     let mut program = if target_native::requires_target_link(&toks) {
         target_native::lower(&toks)?
     } else {
@@ -687,6 +762,11 @@ fn compile_ir_with_profile(source: &str, profile: LibraryProfile) -> Result<Stri
         program.funcs.extend(library.funcs);
     }
     let typed = check::check(&program).map_err(|e|e.to_string())?;
+    if let Some(strict) = effect_profile {
+        // Full typed tree, before backend IR or any output-file creation.
+        // This is a source-effect gate only, never WCET/AOT certification.
+        effect_check::admit(&typed, strict)?;
+    }
     if profile == LibraryProfile::FreestandingCore {
         if !typed.imports.is_empty() {
             return Err("E_FREESTANDING_FORBIDDEN_IMPORT: typed host imports".into());
@@ -917,22 +997,49 @@ fn validate_native_artifact(path: &std::path::Path) -> Result<(), String> {
 
 fn cli() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let (src, out, emit_only, profile) = match args.as_slice() {
-        [src, flag, out] if flag == "-o" => (src, out, false, LibraryProfile::Hosted),
-        [src, flag, out, mode] if flag == "-o" && mode == "--emit-llvm" =>
-            (src, out, true, LibraryProfile::Hosted),
-        [src, flag, out, mode, profile]
-            if flag == "-o" && mode == "--emit-llvm" && profile == "--freestanding-core" =>
-            (src, out, true, LibraryProfile::FreestandingCore),
+    // Isolated library ABI: explicit IR only, never an executable main.
+    if let [src, flag, out, mode] = args.as_slice() {
+        if flag == "-o" && mode == "--owned-unwind-v1" {
+            if !src.ends_with(".atto") { return Err("E_SOURCE: input must have the .atto extension".into()); }
+            let content = std::fs::read_to_string(src).map_err(|e|format!("E_INPUT: {e}"))?;
+            let ir = owned_unwind::compile(&content)?;
+            let (staged, mut file) = OutputStage::create(std::path::Path::new(src),std::path::Path::new(out))?;
+            file.write_all(ir.as_bytes()).map_err(|e|format!("E_OUTPUT: {e}"))?;
+            file.flush().map_err(|e|format!("E_OUTPUT: {e}"))?;
+            drop(file);return staged.publish();
+        }
+    }
+    let (src, out, options) = match args.as_slice() {
+        [src, flag, out, options @ ..] if flag == "-o" =>
+            (src, out, options),
         _ => return Err(
-            "usage: atto-llvm input.atto -o output [--emit-llvm [--freestanding-core]]".into()
+            "usage: atto-llvm input.atto -o output [--emit-llvm] [--freestanding-core] [--effect-check=pure|deterministic|no-alloc]".into()
         ),
     };
+    let mut emit_only = false;
+    let mut profile = LibraryProfile::Hosted;
+    let mut effect_profile = None;
+    for option in options {
+        match option.as_str() {
+            "--emit-llvm" if !emit_only => emit_only = true,
+            "--freestanding-core" if profile == LibraryProfile::Hosted =>
+                profile = LibraryProfile::FreestandingCore,
+            x if x.starts_with("--effect-check=") && effect_profile.is_none() => {
+                effect_profile = Some(effect_check::Profile::from_flag(
+                    &x["--effect-check=".len()..]
+                ).ok_or("E_EFFECT_PROFILE: unknown strict profile")?);
+            }
+            _ => return Err(format!("E_ARGS: unknown or repeated option {option}")),
+        }
+    }
+    if profile == LibraryProfile::FreestandingCore && !emit_only {
+        return Err("E_ARGS: --freestanding-core requires --emit-llvm".into());
+    }
     if !src.ends_with(".atto") {
         return Err("E_SOURCE: input must have the .atto extension".into());
     }
     let content = std::fs::read_to_string(src).map_err(|e|format!("E_INPUT: {e}"))?;
-    let ir = compile_ir_with_profile(&content, profile)?;
+    let ir = compile_ir_with_effect_profile(&content, profile, effect_profile)?;
     let (staged, mut stage_file) = OutputStage::create(
         std::path::Path::new(src), std::path::Path::new(out)
     )?;
@@ -1193,6 +1300,73 @@ mod attached_actor_state_native_no_ir {
             let error=compile_ir(input).expect_err(
                 "full guarded Counter actor startup/message lowering is not proven");
             assert!(!error.is_empty());
+        }
+    }
+}
+
+#[cfg(test)]
+mod incoming_scalar_ssa_tests {
+    use super::compile_ir;
+
+    #[test]
+    fn fixed_parameter_has_no_binding_stack_slot() {
+        let source = "fnc id(int n): int { return n; } pub fnc main(): int { return id(42); }";
+        let ir = compile_ir(source).expect("fixed scalar call");
+        assert!(ir.contains("ret i64 %arg0"), "{ir}");
+        assert!(!ir.contains("alloca"), "{ir}");
+    }
+
+    #[test]
+    fn unmodified_legacy_mut_parameter_is_still_ssa() {
+        let a = "fnc id(int n): int { return n; } pub fnc main(): int { return id(42); }";
+        let b = a.replace("int n", "int mut n");
+        assert_eq!(compile_ir(a).unwrap(), compile_ir(&b).unwrap());
+    }
+
+    #[test]
+    fn conditional_write_retains_slot_and_caller_value() {
+        let source = "fnc bump(int mut n): int { if n > 0 then n = n + 2; fi return n; } pub fnc main(): int { val int n = 20; return bump(n) + n; }";
+        let ir = compile_ir(source).expect("legacy writable copied scalar");
+        assert!(ir.contains("%local0 = alloca i64"), "{ir}");
+        assert!(ir.contains("store i64 %arg0, ptr %local0"), "{ir}");
+        assert!(ir.contains("load i64, ptr %local0"), "{ir}");
+    }
+
+    #[test]
+    fn fixed_parameter_assignment_still_rejected() {
+        let source = "fnc bump(int n): int { n = n + 2; return n; } pub fnc main(): int { return bump(40); }";
+        assert!(compile_ir(source).is_err());
+    }
+}
+
+#[cfg(test)]
+mod native_readonly_tests {
+    use super::*;
+    const SOURCE: &str = "// atto-ownership: borrow-default-v1\ndefine class Parcel as pub let int padding = 99; pub let int value = 21; end\nfnc get(Parcel p): int { return p.value; }\nfnc forward(Parcel p): int { return get(p); }\npub fnc main(): int { let p = new Parcel(); return forward(p) + get(p); }";
+
+    #[test]
+    fn native_readonly_pointer_is_incoming_ssa_and_root_object_is_allocated_once() {
+        let ir = compile_ir(SOURCE).expect("closed native readonly source");
+        assert!(ir.contains("define internal i64 @atto_ro_f0(ptr %arg0)"));
+        assert!(ir.contains("getelementptr i8, ptr %arg0, i64 8"));
+        assert!(ir.contains("call i64 @atto_ro_f0(ptr %arg0)"));
+        assert_eq!(ir.matches("alloca ").count(), 1);
+        assert!(!ir.contains("alloca ptr") && !ir.contains("store ptr") && !ir.contains("load ptr"));
+        assert!(!ir.contains("noalias"));
+        assert!(compile_ir(&SOURCE.replace("// atto-ownership: borrow-default-v1\n", "")).is_err());
+    }
+
+    #[test]
+    fn native_readonly_fails_closed_on_escaping_or_unproved_shapes() {
+        for s in [
+            SOURCE.replace("return get(p);", "return forward(p);"),
+            SOURCE.replace("return get(p);", "let q = p; return get(q);"),
+            SOURCE.replace("return get(p);", "return get(new Parcel());"),
+            SOURCE.replace("return p.value;", "p.value = 42; return p.value;"),
+            SOURCE.replace("return forward(p) + get(p);", "return forward(new Parcel());"),
+            SOURCE.replace("int padding = 99", "int padding = 98 + 1"),
+        ] {
+            assert!(compile_ir(&s).is_err(), "{s}");
         }
     }
 }

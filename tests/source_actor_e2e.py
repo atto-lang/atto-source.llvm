@@ -38,6 +38,9 @@ def expected_prefix_last(name, actor_index, processed):
     if name == "source-actor-interleaved-stop.ores":
         sequences = ([1], [3, 4])
         return sum(sequences[actor_index][:processed])
+    if name == "source-actor-counter-four-mailbox.ores":
+        sequences = ([1, 2, 3, 4], [7, 8])
+        return sum(sequences[actor_index][:processed])
     return sum([1, 2][:processed])
 
 def parse_actor_receipt(line):
@@ -115,6 +118,7 @@ def main():
         ("source-actor-method-keyword.ores", 1, 2, 3),
         ("source-actor-bare-method.ores", 1, 2, 3),
         ("source-actor-send.ores", 1, 2, 3),
+        ("source-actor-grouped-empty.ores", 1, 2, 3),
         ("source-actor-typed-ref.ores", 1, 2, 3),
         ("source-actor-await-ready.ores", 1, 2, 3),
         ("source-actor-await-worker.ores", 1, 2, 3),
@@ -122,6 +126,7 @@ def main():
         ("source-actor-await-done.ores", 1, 0, None),
         ("source-actor-five-workers.ores", 5, 2, 3),
         ("source-actor-fifo-ten.ores", 1, 10, 2853116705),
+        ("source-actor-counter-four-mailbox.ores", 2, None, None),
         ("source-actor-scoped-owned-i64.ores", 1, 8, 1004),
         ("source-actor-two-owned-heaps.ores", 2, 4, None),
         ("actor-logical-frame-aot-two-actors.atto", 2, 1, None),
@@ -185,6 +190,15 @@ def main():
         "source-actor-send-return-after-take-reject.ores": "use of explicitly moved int",
         "source-actor-send-expression-after-take-reject.ores": "use of explicitly moved int",
         "source-actor-send-class-value-reject.ores": "ownership violation: class is non-Copy",
+        # Native actor DATA is scalar i64 only. No owned array handle or
+        # borrowed reference may be silently reinterpreted as a scalar
+        # message until the typed buffer ABI and Sendable proof are lowered.
+        "source-actor-send-owned-array-reject.ores":
+            "native actor Array<T> DATA send requires typed owned-buffer mailbox lowering",
+        "source-actor-send-borrowed-array-reject.ores":
+            "native actor Array<T> DATA send requires typed owned-buffer mailbox lowering",
+        "source-actor-send-unmoved-array-reject.ores":
+            "native actor Array<T> DATA send requires typed owned-buffer mailbox lowering",
         "source-actor-send-moved-class-field-reject.ores": "ownership violation: use-after-move class field",
         "source-actor-send-field-take-reject.ores": "ownership violation: use-after-move class field",
         # Explicitly refuse source contracts that need typed actor field
@@ -199,6 +213,14 @@ def main():
         ) else []
         result = run([args.compiler, *flags, str(fixtures / name)])
         assert result.returncode != 0 and diagnostic in result.stderr, (name, diagnostic, result.stderr)
+        if name in {
+            "source-actor-send-owned-array-reject.ores",
+            "source-actor-send-borrowed-array-reject.ores",
+            "source-actor-send-unmoved-array-reject.ores",
+        }:
+            # A crash with a matching diagnostic is not a semantic rejection.
+            assert result.returncode == 1, ("buffer payload reject must exit 1", name, result.returncode)
+            assert "AddressSanitizer" not in result.stderr and "Segmentation fault" not in result.stderr, name
         assert not result.stdout.strip(), ("unsafe LLVM IR emitted for rejected source", name)
     print(f"PASS {len(negatives)} no-IR actor ownership and await boundary cases", flush=True)
     with tempfile.TemporaryDirectory(prefix="oreslang-native-source-actor-") as temp:
@@ -328,6 +350,7 @@ def main():
                 expected_accepted = (
                     [1, 2][i]
                     if name == "source-actor-interleaved-stop.ores"
+                    else [4, 2][i] if name == "source-actor-counter-four-mailbox.ores"
                     else count)
                 assert accepted == expected_accepted, (
                     name, i, accepted, expected_accepted)
