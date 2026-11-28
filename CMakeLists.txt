@@ -2605,6 +2605,23 @@ if(BUILD_TESTING)
                 --sanitizers)
         set_tests_properties(native_checked_array_source_failure_cleanup
             native_checked_array_source_failure_asan_ubsan PROPERTIES TIMEOUT 180)
+        # Actual compiler-generated owning factory frames must propagate a
+        # checked allocation/transfer failure before the terminal handoff.
+        add_test(NAME native_ordered_owner_failure_cleanup
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_ordered_owner_failure_source.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_NATIVE_ARRAY_CLANG}"
+                --source-root "${CMAKE_CURRENT_SOURCE_DIR}")
+        add_test(NAME native_ordered_owner_failure_asan_ubsan
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_ordered_owner_failure_source.py"
+                --compiler "$<TARGET_FILE:oreslang-llvmc>"
+                --clang "${ORE_NATIVE_ARRAY_CLANG}"
+                --source-root "${CMAKE_CURRENT_SOURCE_DIR}"
+                --sanitizers)
+        set_tests_properties(native_ordered_owner_failure_cleanup
+            native_ordered_owner_failure_asan_ubsan PROPERTIES TIMEOUT 180)
     endif()
 
     # Real native guest class-owned Array<int> fields, independent of the

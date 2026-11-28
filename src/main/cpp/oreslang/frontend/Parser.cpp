@@ -4986,7 +4986,7 @@ private:
         std::function<Statement()> foreach_statement;
         std::function<Statement()> scalar_loop_statement;
         std::size_t scalar_loop_depth = 0;
-        auto scoped_local = [&]() {
+        auto scoped_local = [&](bool ordered_root) {
             Statement statement; statement.kind = Statement::Kind::ScopedLocal;
             statement.offset = token_.offset;
             const bool default_readonly =
@@ -5061,8 +5061,23 @@ private:
                 fail("TYPE_ALIAS_KIND_MISMATCH: trait/interface cannot be a scalar branch local");
             else if (is_sum_name(type)) local->sum_type = type;
             else {
-                if (mutable_slot) fail("native branch-local class owner requires destructor/drop lowering");
+                if (mutable_slot && (!ordered_root || !explicit_mutable ||
+                        value.name != "main" || !value.parameters.empty() ||
+                        value.return_type != ScalarType::I64 || !value.return_class.empty() ||
+                        value.returns_void))
+                    fail("native branch-local class owner requires destructor/drop lowering");
                 local->class_name = type; local->record_view = true;
+                if (mutable_slot) {
+                    require("="); require("rt"); require("take");
+                    local->initializer = expression();
+                    if (local->initializer->kind != Expression::Kind::Call)
+                        fail("ordered class owner requires direct owned factory result");
+                    local->explicit_factory_take = true;
+                    local->assignable = false;
+                    require(";");
+                    class_receivers_.insert(local->name);
+                    statement.branch_local = std::move(local); return statement;
+                }
             }
             require("="); local->initializer = expression(); require(";");
             if (!local->class_name.empty()) class_receivers_.insert(local->name);
@@ -5339,7 +5354,7 @@ private:
                 if (token_.text == "const" || token_.text == "val" || token_.text == "let" ||
                         token_.text == "int" || token_.text == "bool" ||
                         token_.text == "string" || token_.text == "String") {
-                    actions.push_back(scoped_local());
+                    actions.push_back(scoped_local(false));
                     continue;
                 }
                 auto target = primary();
@@ -5951,7 +5966,7 @@ private:
             if (token_.text == "const" || token_.text == "val" || token_.text == "let" ||
                         token_.text == "int" || token_.text == "bool" ||
                         token_.text == "string" || token_.text == "String") {
-                value.statements.push_back(scoped_local()); continue;
+                value.statements.push_back(scoped_local(true)); continue;
             }
             if (token_.text == "await") {
                 const std::size_t await_offset = token_.offset;
