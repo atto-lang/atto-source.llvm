@@ -9,11 +9,15 @@
       "test_plans": {
         "ci/test-plans/llvm-pr669.json": {
           "blob_sha": "e20cd3b2a4d0c7224988b430d3209b6660486e65",
-          "allowed_prs": [669]
+          "allowed_prs": [
+            669
+          ]
         },
         "ci/test-plans/llvm-pr674.json": {
           "blob_sha": "7e68d0853d21e131a5870cc006dbf6691ace4878",
-          "allowed_prs": [674]
+          "allowed_prs": [
+            674
+          ]
         }
       }
     }

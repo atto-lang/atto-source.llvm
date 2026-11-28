@@ -1,0 +1,5 @@
+fnc cleanup(int n): void { return; }
+pub fnc main(): int {
+    defer true |> (|bool x| -> || -> { cleanup(x); });
+    return 42;
+}

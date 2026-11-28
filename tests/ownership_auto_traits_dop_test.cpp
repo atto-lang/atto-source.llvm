@@ -81,7 +81,73 @@ int main() {
 
     AutoType denied = scalar();
     denied.negative.insert(AutoTrait::Send);
-    REQUIRE(!oreslang::types::infer_auto_traits(denied).send);
+    const auto no_send = oreslang::types::infer_auto_traits(denied);
+    REQUIRE(!no_send.send && !no_send.share);
+    denied.negative.clear();
+    denied.negative.insert(AutoTrait::Sync);
+    const auto no_sync = oreslang::types::infer_auto_traits(denied);
+    REQUIRE(no_sync.send && !no_sync.sync && !no_sync.share);
+
+    AutoType share_only_dyn;
+    share_only_dyn.kind = AutoTypeKind::Dyn;
+    share_only_dyn.shareable_domain = true;
+    share_only_dyn.dyn_bounds = {AutoTrait::Share};
+    const auto share_only_caps = oreslang::types::infer_auto_traits(share_only_dyn);
+    REQUIRE(!share_only_caps.send && !share_only_caps.sync && !share_only_caps.share);
+    share_only_dyn.dyn_bounds.insert(AutoTrait::Send);
+    REQUIRE(!oreslang::types::infer_auto_traits(share_only_dyn).share);
+    share_only_dyn.dyn_bounds.erase(AutoTrait::Send);
+    share_only_dyn.dyn_bounds.insert(AutoTrait::Sync);
+    REQUIRE(!oreslang::types::infer_auto_traits(share_only_dyn).share);
+    share_only_dyn.dyn_bounds.insert(AutoTrait::Send);
+    REQUIRE(oreslang::types::infer_auto_traits(share_only_dyn).share);
+
+    AutoType raw_caps;
+    raw_caps.kind = AutoTypeKind::Nominal;
+    raw_caps.complete_nominal_layout = true;
+    raw_caps.shareable_domain = true;
+    raw_caps.negative.insert(AutoTrait::Send);
+    REQUIRE(!oreslang::types::infer_auto_traits(raw_caps).share);
+    const oreslang::types::Capabilities inconsistent{false, true, true};
+    REQUIRE(!inconsistent.has(AutoTrait::Share));
+
+    // Every combination of dyn bounds, negative traits, and actor-sharing
+    // domain must preserve Share => Send && Sync. Keep these runtime REQUIREs
+    // active in optimized/NDEBUG test builds.
+    for (int bounds = 0; bounds < 8; ++bounds) {
+        for (int domain = 0; domain < 2; ++domain) {
+            for (int negatives = 0; negatives < 8; ++negatives) {
+                AutoType candidate;
+                candidate.kind = AutoTypeKind::Dyn;
+                candidate.shareable_domain = domain != 0;
+                for (int index = 0; index < 3; ++index) {
+                    AutoTrait trait = index == 0 ? AutoTrait::Send
+                            : (index == 1 ? AutoTrait::Sync : AutoTrait::Share);
+                    if ((bounds & (1 << index)) != 0) candidate.dyn_bounds.insert(trait);
+                    if ((negatives & (1 << index)) != 0) candidate.negative.insert(trait);
+                }
+                const auto caps = oreslang::types::infer_auto_traits(candidate);
+                const bool expected_send = (bounds & 1) != 0 && (negatives & 1) == 0;
+                const bool expected_sync = (bounds & 2) != 0 && (negatives & 2) == 0;
+                const bool expected_share = domain != 0 && (bounds & 4) != 0
+                        && (negatives & 4) == 0 && expected_send && expected_sync;
+                REQUIRE(caps.send == expected_send);
+                REQUIRE(caps.sync == expected_sync);
+                REQUIRE(caps.share == expected_share);
+            }
+        }
+    }
+
+    AutoType opaque_nominal;
+    opaque_nominal.kind = AutoTypeKind::Nominal;
+    const auto opaque_caps = oreslang::types::infer_auto_traits(opaque_nominal);
+    REQUIRE(!opaque_caps.send && !opaque_caps.sync && !opaque_caps.share);
+
+    AutoType proven_empty_nominal;
+    proven_empty_nominal.kind = AutoTypeKind::Nominal;
+    proven_empty_nominal.complete_nominal_layout = true;
+    const auto empty_caps = oreslang::types::infer_auto_traits(proven_empty_nominal);
+    REQUIRE(empty_caps.send && empty_caps.sync && !empty_caps.share);
 
     for (auto layout : {oreslang::dop::Layout::AoS,
                         oreslang::dop::Layout::SoA,
@@ -134,6 +200,38 @@ int main() {
     try { require_internally_valid({whole, x_write}); }
     catch (const std::invalid_argument&) { rejected = true; }
     REQUIRE(rejected);
+
+    // Write granules: rows [0,12) and [12,24) are logically disjoint, but with
+    // 8-lane AoSoA tiles both writers touch tile [8,16).
+    auto tiled = [](std::uint64_t begin, std::uint64_t end, std::uint64_t granule,
+                    std::uint64_t epoch = 7) {
+        return Place(oreslang::dop::Layout::AoSoA, "world", "moving", "Position", "x",
+                     Range(begin, end), epoch, granule);
+    };
+    REQUIRE(!overlaps(tiled(0, 12, 8), tiled(12, 24, 8)));
+    REQUIRE(conflicts(Loan{tiled(0, 12, 8), Access::Write}, Loan{tiled(12, 24, 8), Access::Write}));
+    REQUIRE(conflicts(Loan{tiled(0, 12, 8), Access::Write}, Loan{tiled(12, 24, 8), Access::Read}));
+    REQUIRE(!can_run_concurrently({Loan{tiled(0, 12, 8), Access::Write}},
+                                  {Loan{tiled(12, 24, 8), Access::Write}}));
+    REQUIRE(!conflicts(Loan{tiled(0, 12, 8), Access::Read}, Loan{tiled(12, 24, 8), Access::Read}));
+    REQUIRE(!conflicts(Loan{tiled(0, 16, 8), Access::Write}, Loan{tiled(16, 32, 8), Access::Write}));
+    // The coarser granule of either side decides.
+    REQUIRE(conflicts(Loan{tiled(0, 16, 1), Access::Write}, Loan{tiled(16, 32, 32), Access::Write}));
+    // Widening saturates at the top of the row space.
+    constexpr auto top = std::numeric_limits<std::uint64_t>::max();
+    REQUIRE(conflicts(Loan{tiled(top - 3, top, 1024), Access::Write},
+                      Loan{tiled(top - 1030, top - 1020, 1024), Access::Write}));
+    // Stale epochs still fail closed for read/read.
+    rejected = false;
+    try { (void)conflicts(Loan{tiled(0, 8, 8), Access::Read}, Loan{tiled(0, 8, 8, 6), Access::Read}); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    REQUIRE(rejected);
+    for (std::uint64_t bad : {std::uint64_t{0}, std::uint64_t{3}, std::uint64_t{12}, std::uint64_t{2048}}) {
+        rejected = false;
+        try { (void)tiled(0, 8, bad); } catch (const std::invalid_argument&) { rejected = true; }
+        REQUIRE(rejected);
+    }
+    REQUIRE(place(oreslang::dop::Layout::SoA, std::nullopt, std::nullopt, std::nullopt, std::nullopt).granule == 1);
 
     return 0;
 }

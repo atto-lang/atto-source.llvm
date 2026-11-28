@@ -1,0 +1,5 @@
+// define activity Fake as
+/* define workflow Fake as */
+pub fnc main(): int {
+  return 42;
+}

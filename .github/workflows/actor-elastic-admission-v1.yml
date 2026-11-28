@@ -1,0 +1,26 @@
+name: Actor elastic admission v1 (native host only)
+on:
+  pull_request:
+    paths:
+      - 'runtime/actor_elastic_admission_v1.*'
+      - 'tests/actor_elastic_admission_v1_test.c'
+      - 'ci/test_actor_elastic_admission_v1.sh'
+      - '.github/workflows/actor-elastic-admission-v1.yml'
+  push:
+    paths:
+      - 'runtime/actor_elastic_admission_v1.*'
+      - 'tests/actor_elastic_admission_v1_test.c'
+      - 'ci/test_actor_elastic_admission_v1.sh'
+      - '.github/workflows/actor-elastic-admission-v1.yml'
+permissions:
+  contents: read
+jobs:
+  native-host-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check GCC + Clang baseline and ASan/UBSan native tests
+        run: bash ci/test_actor_elastic_admission_v1.sh
+      - name: Classification
+        run: echo 'HOST_NATIVE_ONLY - no compiler generated AttoLang guest exercised'

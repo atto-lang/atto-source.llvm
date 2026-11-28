@@ -1,0 +1,168 @@
+{
+  "schema": "atto.llvm.target-mtd-critical-aot.v1",
+  "status": "PASS_BOUND_NATIVE_RECEIVERS_AND_SEALED_SCALAR_CRITICAL_CALLBACKS",
+  "source": {
+    "repository": "atto-lang/atto-source.llvm",
+    "verified_commit": "93e20d12b0284233e1dcb6aa98076f4fd119d2ed",
+    "exact_git_tree": "a6d2f2ab5155fac02d29fec426c2014c30ad4a98",
+    "blob_count": 63,
+    "codegen_blob": "ba2435fead6deed14f0fa225466a70e1da1b6b4c",
+    "target_ast_linker_blob": "2121531dab025aa9e719f128b49dcbd531c3f45d",
+    "target_header_grammar_blob": "d3e368e6fa3ed855cd376909120bd11691013afd",
+    "checked_production_typechecker_blob": "18c9b7e3e9696bfdd56fa5130f52a9a71a796c43",
+    "native_actor_runtime_blob": "95780f61ed1deba59a2375710a25eee6e9e5b86a",
+    "native_guest_test_script_blob": "886b8e78e9a15b60069839b044ea5505446c33ed"
+  },
+  "runner": {
+    "repo": "athlet-o/athleto-e2e",
+    "run": "https://github.com/athlet-o/athleto-e2e/actions/runs/43666674489",
+    "mirror_snapshot": "fe327e516ad59bd355e024d4440df6786e1d6b98",
+    "workflow_commit": "ff6980ab449c3b7908b6a04d6ed9fd7c21453c90",
+    "conclusion": "success",
+    "full_tree_match": true,
+    "no_cross_org_checkout_secret": true,
+    "toolchain": "Rust 1.85.1, Ubuntu Clang 18.1.3, Linux x86-64"
+  },
+  "executable_scope": {
+    "guest_source": ".atto",
+    "program_entry": "main(): int",
+    "new_syntax": "use namespace; declare actor; define actor with receive; out-of-line mtd",
+    "actual_native_machine_code": true,
+    "no_wasm_or_jit_guest": true,
+    "no_guest_gc_in_bounded_profile": true,
+    "receiver_resolution": "nominal actor type, method name, arity, checked production AST and type checker",
+    "scalar_params": [
+      "int",
+      "bool"
+    ],
+    "scalar_returns": [
+      "int",
+      "bool",
+      "void"
+    ],
+    "guard_read": "one scalar state field, no effects",
+    "guard_write": "one pure integer assignment using scalar state fields and function params",
+    "state_access_runtime": "serialized one-thread-per-actor mailbox worker, private arena and logical ownership",
+    "concurrent_reader_writer_locks": false,
+    "full_borrow_checker": false
+  },
+  "verified": {
+    "compiled_native_actor_fixtures": 6,
+    "executions_per_fixture": 20,
+    "total_native_atto_actor_executions": 120,
+    "negative_actor_compilation_fixtures": 15,
+    "negative_diagnostic_matches_required": true,
+    "two_actor_types_same_mtd_name_pass": true,
+    "independent_actor_guarded_state_pass": true,
+    "direct_state_access_rejected": true,
+    "critical_read_mutation_rejected": true,
+    "critical_write_requires_mut_self": true,
+    "binder_escape_rejected": true,
+    "await_in_critical_rejected": true,
+    "nested_critical_rejected": true,
+    "effectful_critical_rejected": true,
+    "unsupported_critical_expression_rejected": true,
+    "duplicate_receiver_rejected": true,
+    "unlinked_forward_actor_rejected": true,
+    "unrelocated_nominal_type_rejected": true,
+    "abi_concurrent_producers": 4,
+    "abi_actor_instances": 8,
+    "abi_messages_per_run": 1600,
+    "abi_stress_runs": 5,
+    "abi_total_admitted_messages": 8000,
+    "actor_sanitizers_asan_ubsan_passed": true,
+    "previous_native_scalar_protocol_checks": 1255,
+    "output_atomicity_tests_passed": true,
+    "rust_compiler_unit_tests_passed": 4,
+    "historical_python_evidence_tests_passed": 9
+  },
+  "positive_guest_blobs": [
+    {
+      "path": "tests/actors/pass/187-namespace-two-receivers.atto",
+      "git_blob": "bc8cbe1d9a6d14163bc4c1ac860e50bf08a21579",
+      "executions": 20
+    },
+    {
+      "path": "tests/actors/pass/188-critical-read-write.atto",
+      "git_blob": "3550660aa86317c4d9c08366e278e2b25ff8c68d",
+      "executions": 20
+    }
+  ],
+  "negative_guest_blobs": [
+    {
+      "path": "tests/actors/fail/189-target-direct-state-in-receive.atto",
+      "git_blob": "63aa2946aaad15324b70987500891b83f8e9694c",
+      "diagnostic": "E_SEALED"
+    },
+    {
+      "path": "tests/actors/fail/190-target-direct-state-in-mtd.atto",
+      "git_blob": "934c03a336000d9f446c322ab724ec5fe8b5fea8",
+      "diagnostic": "E_SEALED"
+    },
+    {
+      "path": "tests/actors/fail/191-target-critical-read-mutation.atto",
+      "git_blob": "823ca9b9de6ce0647a281548f43194d978e7da33",
+      "diagnostic": "E_READONLY"
+    },
+    {
+      "path": "tests/actors/fail/192-target-critical-state-escape.atto",
+      "git_blob": "345f02958e2ce250531398992f58173e183c9eb2",
+      "diagnostic": "E_ESCAPE"
+    },
+    {
+      "path": "tests/actors/fail/193-target-critical-suspension.atto",
+      "git_blob": "6012ef9237241940d2aa301bad6892530d7744f1",
+      "diagnostic": "E_BORROW"
+    },
+    {
+      "path": "tests/actors/fail/194-target-unlinked-forward.atto",
+      "git_blob": "f38dbb70875c6e333037cacfb597daabc0c6bb0a",
+      "diagnostic": "E_UNLINKED"
+    },
+    {
+      "path": "tests/actors/fail/195-target-mtd-duplicate.atto",
+      "git_blob": "c8e4111ea700a76213f6badb53bc142ce429772d",
+      "diagnostic": "E_DUPLICATE"
+    },
+    {
+      "path": "tests/actors/fail/196-target-immutable-critical-write.atto",
+      "git_blob": "ae14c1de73d52b9438aa92f1406734c6e94cde91",
+      "diagnostic": "E_MUTABILITY"
+    },
+    {
+      "path": "tests/actors/fail/197-target-critical-host-effect.atto",
+      "git_blob": "cfeddf3e4fdc916426744f549fcbd167b964dd03",
+      "diagnostic": "E_UNSUPPORTED_CRITICAL"
+    },
+    {
+      "path": "tests/actors/fail/198-target-nested-critical.atto",
+      "git_blob": "8e923d56656aa71f38cb17cc4399846e51d9b373",
+      "diagnostic": "E_BORROW"
+    },
+    {
+      "path": "tests/actors/fail/199-target-read-complex-unsupported.atto",
+      "git_blob": "369216a000b68001e918d74860e66dba243081ed",
+      "diagnostic": "E_UNSUPPORTED_CRITICAL"
+    },
+    {
+      "path": "tests/actors/fail/200-target-unrelocated-type.atto",
+      "git_blob": "fcc06e6926b715ae9c2a3f8b079e2c27be803ec8",
+      "diagnostic": "E_UNSUPPORTED_NATIVE_TYPE"
+    }
+  ],
+  "unsupported": {
+    "true_concurrent_read_write_locks": false,
+    "general_borrow_checker": false,
+    "async_inside_critical": false,
+    "nested_callbacks": false,
+    "dynamic_effectful_state_callbacks": false,
+    "full_actor_supervisor_control": false,
+    "typed_result_mailbox_send": false,
+    "per_actor_close_cancel_restart": false,
+    "work_stealing_scheduler": false,
+    "full_language_aot": false,
+    "full_language_zero_gc": false,
+    "real_quic_tls_http3_network": false,
+    "java_net_standalone_wasm_backend_parity": false
+  }
+}

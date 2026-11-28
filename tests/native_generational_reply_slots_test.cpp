@@ -14,6 +14,8 @@ template<typename F> void denied(F&& f) {
 }
 
 int main() {
+    denied([] { NativeGenerationalReplySlots excessive(65'537); });
+    denied([] { NativeGenerationalReplySlots empty(0); });
     NativeGenerationalReplySlots registry(2048);
     const auto actor = registry.endpoint(NativeGenerationalReplySlots::Role::Actor);
     const auto child = registry.endpoint(NativeGenerationalReplySlots::Role::Actor);
@@ -23,6 +25,14 @@ int main() {
     assert(policy.ticket.reply(supervisor, "active"));
     assert(stats.ticket.reply(actor, 42));
     assert(policy.future.get() == "active" && stats.future.get() == 42);
+    assert(registry.pending_count() == 0);
+
+    // Admission failure retires the ticket before guest work begins.
+    auto rejectedAdmission = registry.reserve<int>(actor, child);
+    assert(rejectedAdmission.ticket.fail_admission(actor,
+        std::make_exception_ptr(std::runtime_error("mailbox full"))));
+    denied([&] { rejectedAdmission.future.get(); });
+    assert(!rejectedAdmission.ticket.reply(child, 99));
     assert(registry.pending_count() == 0);
 
     // Distinct generation even if physical slot is reused.

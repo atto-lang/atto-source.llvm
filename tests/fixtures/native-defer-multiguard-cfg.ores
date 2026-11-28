@@ -9,17 +9,17 @@ fnc add_one(borrow mut Counter c): void {
   c.value = c.value + 1;
   return;
 }
-fnc tick(borrow mut Counter c, int guard): int {
-  defer add_one(rt borrow mut c);
-  defer multiply_two(rt borrow mut c);
-  if (guard eq 0) { return 0; } fi
-  if (guard eq 1) { return 1; } fi
+fnc tick(borrow mut Counter c, int selector): int {
+  defer add_one(rt mut borrow c);
+  defer multiply_two(rt mut borrow c);
+  if (selector eq 0) { return 0; } fi
+  if (selector eq 1) { return 1; } fi
   return 2;
 }
 pub fnc main(): int {
   let mut Counter c = new Counter();
-  tick(rt borrow mut c, 0);
-  tick(rt borrow mut c, 1);
-  tick(rt borrow mut c, 2);
+  tick(rt mut borrow c, 0);
+  tick(rt mut borrow c, 1);
+  tick(rt mut borrow c, 2);
   return c.value;
 }

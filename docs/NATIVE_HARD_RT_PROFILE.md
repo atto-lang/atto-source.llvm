@@ -106,3 +106,23 @@ This profile is not yet the complete hard-RT runtime. The next gates are:
 4. produce a linked-image allowlist audit;
 5. attach WCET and response-time evidence;
 6. make the final build manifest the authority for any hard-RT certification claim.
+
+## Dedicated async and generic source fields (October 2026 gate)
+
+The native AST stores `source_tasks`, `future_pipelines`, `async_source_i64`,
+and actor lifecycle readiness/done waits outside ordinary scalar expression
+and statement fields. Strict source admission must not conclude that a function
+is pure merely because its `result` expression is a scalar literal. The
+transitive analyzer now treats each of these as a `suspend` effect and rejects
+them with `RT002_UNBOUNDED_BLOCKING`, including when reachable through an
+otherwise pure helper chain. Unreachable helpers remain outside the selected
+entry closure. A generic source declaration with no proven concrete
+specialization fails closed with `RT005_DYNAMIC_CODE`.
+
+This patch is a source-level safety correction, **not** support for hard-RT
+async tasks and not a native artifact timing proof. Future qualified async
+execution needs verified bounded scheduler, continuation-frame, cancellation,
+allocation, synchronization and target-specific timing summaries before the
+strict profile can admit it. The regression is
+`native_realtime_transitive_effect_analysis`, backed by actual native AST
+analysis in `tests/realtime_analysis_test.cpp`.

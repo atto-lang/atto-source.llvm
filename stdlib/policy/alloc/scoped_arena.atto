@@ -1,0 +1,50 @@
+// LLVM-local TARGET surface, not currently compiler-admitted or guest-executed.
+// OwnedArena and ArenaSlice are compiler-sealed AOT runtime types, never host pointers.
+// The compiler MUST reject this module until affine drop glue, region-bound slice
+// lifetimes and the sealed native provider are all implemented and verified.
+import module limits from "atto.core/arena_limits";
+
+define class ScopedArena as
+  private let mut OwnedArena storage = OwnedArena.empty();
+
+  constructor(int quota_bytes) throws Error {
+    if quota_bytes < 0 then
+      throw ArenaAllocationError("negative arena quota");
+    fi
+    // The provider binds the current tenant/owner/incarnation and reserves
+    // its physical+metadata quota before publishing a region.
+    self.storage = OwnedArena.create_bounded(quota_bytes);
+  }
+
+  pub static fnc with_quota(int quota_bytes): ScopedArena throws Error {
+    return new ScopedArena(quota_bytes);
+  }
+
+  pub used_bytes(): int {
+    return self.storage.used_bytes();
+  }
+
+  pub quota_bytes(): int {
+    return self.storage.quota_bytes();
+  }
+
+  // Proposed compiler-inserted, nonthrowing, nonsuspending class drop hook.
+  // Retire seals admission and runs statically known owned-value destructors
+  // once; physical release follows the final proven quiescence barrier.
+  // There is no background tracing collector or guest-visible free pointer.
+  on_drop(): void {
+    self.storage.retire();
+  }
+end
+
+// ArenaSlice is a region-bound borrowed capability; no escape, cross-owner
+// send, or suspension is valid without a compiler-proven pinned lifetime.
+pub mtd (mut self: ScopedArena) allocate_zeroed(int count, int alignment): ArenaSlice throws Error {
+  if limits.arena_end_offset(self.storage.used_bytes(), count, alignment,
+                             self.storage.quota_bytes()) < 0 then
+    throw ArenaAllocationError("arena capacity, size or alignment invalid");
+  fi
+  // Must be atomic: budget, alignment, generation, owner and zeroing checks
+  // occur before the borrowed slice becomes observable.
+  return self.storage.allocate_zeroed(count, alignment);
+}

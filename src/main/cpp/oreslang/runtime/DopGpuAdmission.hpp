@@ -163,9 +163,10 @@ static_assert(std::is_nothrow_move_constructible_v<gpu::BufferFence::PairTickets
 static_assert(std::is_nothrow_move_constructible_v<ClaimedGpuBinding>,
               "typed GPU claim return must not throw after atomic fence admission");
 
-// A typed preflight is only advisory until this transaction claims BOTH
-// allocation fences. The provider remains responsible for real device
-// provenance and per-tenant quotas. A failed claim changes neither fence.
+// A typed preflight is only advisory until this transaction RESERVES BOTH
+// allocation fences. Reservation is not physical submission: a trusted
+// provider must either mark the exact pair submitted after enqueue succeeds or
+// abort the exact unsubmitted pair if enqueue never happened.
 inline ClaimedGpuBinding claim_gpu(const Kernel& kernel, GpuTarget target,
                                   const DeviceBuffer& input, const DeviceBuffer& output) {
     auto binding = preflight_gpu(kernel, target, input, output);
@@ -177,7 +178,8 @@ inline ClaimedGpuBinding claim_gpu(const Kernel& kernel, GpuTarget target,
 
 /** Queue-targeted trusted-host claim. Unlike the legacy queue-neutral
  * helper, a provider calling this path cannot claim wrong-device buffers.
- * Successful host fence admission is NOT physical launch/queue capacity. */
+ * Successful host fence admission is a reservation, NOT physical launch/queue
+ * capacity and NOT proof that the command reached hardware. */
 inline QueueClaimedGpuBinding claim_gpu_for_queue(
         const Kernel& kernel, GpuTarget target,
         const DeviceBuffer& input, const DeviceBuffer& output,
@@ -193,5 +195,37 @@ inline QueueClaimedGpuBinding claim_gpu_for_queue(
             ClaimedGpuBinding{std::move(binding), std::move(tickets)},
             std::move(selected)};
 }
+
+
+inline void mark_gpu_submitted(
+        const DeviceBuffer& input,
+        const DeviceBuffer& output,
+        const ClaimedGpuBinding& admitted) {
+    gpu::BufferFence::mark_pair_submitted(
+            input.fence, output.fence, admitted.tickets);
+}
+
+inline void abort_gpu_before_enqueue(
+        const DeviceBuffer& input,
+        const DeviceBuffer& output,
+        const ClaimedGpuBinding& admitted) {
+    gpu::BufferFence::abort_unsubmitted_pair(
+            input.fence, output.fence, admitted.tickets);
+}
+
+inline void mark_gpu_submitted(
+        const DeviceBuffer& input,
+        const DeviceBuffer& output,
+        const QueueClaimedGpuBinding& admitted) {
+    mark_gpu_submitted(input, output, admitted.claim());
+}
+
+inline void abort_gpu_before_enqueue(
+        const DeviceBuffer& input,
+        const DeviceBuffer& output,
+        const QueueClaimedGpuBinding& admitted) {
+    abort_gpu_before_enqueue(input, output, admitted.claim());
+}
+
 
 } // namespace oreslang::dop

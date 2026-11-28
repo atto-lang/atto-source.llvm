@@ -1,0 +1,5 @@
+fnc helper(): int {
+    val Box<int> counter = Box<int>(42);
+    return counter.get();
+}
+pub fnc main(): int { return helper(); }

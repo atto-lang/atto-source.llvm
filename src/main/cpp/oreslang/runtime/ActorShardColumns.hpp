@@ -304,7 +304,10 @@ public:
             std::uint32_t lanes = 1)
         : scheduler_(scheduler), owner_(owner),
           actor_budget_(actor_budget), vm_budget_(vm_budget),
-          plan_(layout, rows, fields, sizeof(double), alignof(double), lanes) {
+          // Natural size alignment, not alignof(double): i386 SysV reports 4,
+          // which dop::Layout rejects (scalar 8 > alignment 4) and which would
+          // also give columns a different layout than every other host.
+          plan_(layout, rows, fields, sizeof(double), sizeof(double), lanes) {
         require_owner();
         if (rows == 0 || plan_.byte_length() > 16U * 1024U * 1024U
             || plan_.byte_length() > std::numeric_limits<std::size_t>::max()) {

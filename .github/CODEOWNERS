@@ -18,3 +18,16 @@
 /scripts/test-publish-private-ci-source.py @ORESoftware
 /scripts/audit-private-ci-governance.py @ORESoftware
 /scripts/test-audit-private-ci-governance.py @ORESoftware
+
+# Native frontend/runtime, ABI, and conformance trust boundaries.
+/src/ @ORESoftware
+/contracts/ @ORESoftware
+/tests/ @ORESoftware
+/.oreslang/ @ORESoftware
+
+# Native formal verification, language specs, tooling and proof evidence.
+/formal/ @ORESoftware
+/spec/ @ORESoftware
+/tools/ @ORESoftware
+/verification/ @ORESoftware
+/docs/security/ @ORESoftware

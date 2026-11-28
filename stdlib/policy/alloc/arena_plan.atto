@@ -1,0 +1,52 @@
+// LLVM-local native Atto arena lifecycle admission (pure policy only).
+// No allocation, handle minting, freeing, scheduling or authority is performed.
+// The trusted allocator must independently validate owner, incarnation,
+// generation, alignment, loans, destructor ordering and physical byte bounds.
+//
+// -1 means invalid arguments or rejected transition. Capacity is inclusive.
+pub fnc arena_reservation_end(int cursor_bytes, int requested_bytes, int capacity_bytes): int {
+  if cursor_bytes < 0 then return -1; fi
+  if requested_bytes < 0 then return -1; fi
+  if capacity_bytes < 0 then return -1; fi
+  if cursor_bytes > capacity_bytes then return -1; fi
+  if requested_bytes > capacity_bytes - cursor_bytes then return -1; fi
+  return cursor_bytes + requested_bytes;
+}
+
+// No rewind while ANY live loan exists. Conservative until region-scoped
+// loan tracking is proven; returned mark is not a release authorization.
+pub fnc arena_rewind_target(int mark_bytes, int cursor_bytes, int capacity_bytes, int live_loans): int {
+  if mark_bytes < 0 then return -1; fi
+  if cursor_bytes < 0 then return -1; fi
+  if capacity_bytes < 0 then return -1; fi
+  if live_loans != 0 then return -1; fi
+  if cursor_bytes > capacity_bytes then return -1; fi
+  if mark_bytes > cursor_bytes then return -1; fi
+  return mark_bytes;
+}
+
+// Only a nonempty LIFO tail allocation is eligible for release.
+// Real release must additionally authenticate a non-forgeable allocation token.
+pub fnc arena_tail_release_valid(int allocation_start, int allocation_bytes, int cursor_bytes, int capacity_bytes, int live_loans): bool {
+  if allocation_start < 0 then return false; fi
+  if allocation_bytes <= 0 then return false; fi
+  if cursor_bytes < 0 then return false; fi
+  if capacity_bytes < 0 then return false; fi
+  if live_loans != 0 then return false; fi
+  if cursor_bytes > capacity_bytes then return false; fi
+  if allocation_start > cursor_bytes then return false; fi
+  return allocation_bytes == cursor_bytes - allocation_start;
+}
+
+// A conservative closure preflight, NOT proof that destruction has occurred.
+pub fnc arena_can_close(int live_allocations, int live_loans, int pending_cleanups): bool {
+  return live_allocations == 0 && live_loans == 0 && pending_cleanups == 0;
+}
+
+// Generation 0 is reserved and wraparound is forbidden.
+pub fnc arena_plan_next_generation(int current, int maximum): int {
+  if current < 1 then return -1; fi
+  if maximum < 1 then return -1; fi
+  if current >= maximum then return -1; fi
+  return current + 1;
+}

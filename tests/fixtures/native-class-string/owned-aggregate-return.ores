@@ -1,0 +1,34 @@
+define class PathSegment as
+  pub val int kind;
+  pub val String value;
+end
+define class PathPattern as
+  val String template_value;
+  val Array<PathSegment> segments_value;
+  pub template() -> String { return self.template_value; }
+  pub size() -> int { return self.segments_value.size; }
+  pub segment_at(int index) -> PathSegment { return self.segments_value.get(index); }
+end
+fnc make_path(bool early) -> PathPattern {
+  val Array<PathSegment> segments = new Array<PathSegment>();
+  segments.add(new PathSegment(0, "foo"));
+  segments.add(new PathSegment(1, "id"));
+  val Array<PathSegment> other = new Array<PathSegment>();
+  other.add(new PathSegment(0, "foo"));
+  other.add(new PathSegment(1, "id"));
+  if (early) { return new PathPattern("/foo/:id", segments); } fi
+  return new PathPattern("/foo/:id", rt take other);
+}
+fnc forward() -> PathPattern { return make_path(true); }
+fnc return_local() -> PathPattern {
+  val PathPattern value = make_path(false);
+  return value;
+}
+pub routine main(): int {
+  val PathPattern first = forward();
+  val PathPattern second = return_local();
+  val PathSegment segment = second.segment_at(1);
+  stdio.println(first.template());
+  stdio.println(segment.value);
+  return first.size() == 2 && second.size() == 2 ? 0 : 1;
+}
