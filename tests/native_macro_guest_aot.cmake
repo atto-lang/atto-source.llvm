@@ -7,8 +7,15 @@ execute_process(COMMAND "${COMPILER}" "${FIXTURE}"
 if(NOT emitted_status EQUAL 0)
     message(FATAL_ERROR "typed macro failed before native IR: ${diagnostic}")
 endif()
-if(NOT guest_ir MATCHES "ret i64 42")
-    message(FATAL_ERROR "compiled macro must lower to native i64 return 42")
+# Scalar literal quote can be verified by a direct constant return. A
+# structural typed template may emit arithmetic instructions instead, so for
+# those cases the compiler-generated IR must be linked and EXECUTED (exit 42).
+# Do not replace the emitted IR with a synthetic return-42 module.
+if(NOT DEFINED REQUIRE_LITERAL_IR_RETURN)
+    set(REQUIRE_LITERAL_IR_RETURN ON)
+endif()
+if(REQUIRE_LITERAL_IR_RETURN AND NOT guest_ir MATCHES "ret i64 42")
+    message(FATAL_ERROR "compiled scalar macro must lower to native i64 return 42")
 endif()
 if(guest_ir MATCHES "@quote\\(|@unquote\\(|@eval\\(")
     message(FATAL_ERROR "compile-time macro leaked into native guest IR")

@@ -43,19 +43,31 @@ inline std::uint64_t reserve_actor_owned_heap_id(
 template<std::size_t Bytes, std::size_t Slots>
 class ActorOwnedHeap final {
     static_assert(Bytes > 0 && Slots > 0, "bounded positive heap required");
+    static_assert(Slots < std::numeric_limits<std::uint32_t>::max(),
+                  "slot index (and Slots + 1 hole table) must fit 32 bits");
 
 public:
+    // Heap-internal bookkeeping is 32-bit whenever the bounded capacity fits,
+    // independent of host pointer width. A 64-bit host therefore pays the same
+    // per-slot metadata as a 32-bit host instead of twice as much. Arithmetic
+    // is still done in std::size_t; only *storage* is narrowed, and every
+    // stored value is <= Bytes, so the narrowing is lossless by construction.
+    using offset_type = std::conditional_t<
+        (Bytes <= std::numeric_limits<std::uint32_t>::max()),
+        std::uint32_t, std::size_t>;
+    using slot_index_type = std::uint32_t;
+
     class Handle final {
         friend class ActorOwnedHeap;
         std::uint64_t heap_ = 0;
         std::uint64_t incarnation_ = 0;
-        std::size_t slot_ = 0;
         std::uint64_t generation_ = 0;
+        slot_index_type slot_ = 0;
 
         Handle(std::uint64_t heap, std::uint64_t incarnation,
-               std::size_t slot, std::uint64_t generation) noexcept
+               slot_index_type slot, std::uint64_t generation) noexcept
             : heap_(heap), incarnation_(incarnation),
-              slot_(slot), generation_(generation) {}
+              generation_(generation), slot_(slot) {}
     public:
         Handle() = default; // default handle is invalid
         bool operator==(const Handle& rhs) const noexcept {
@@ -65,25 +77,31 @@ public:
     };
 
 private:
+    // Generation stays 64-bit: a 32-bit generation could be exhausted by
+    // ~4e9 reuses of one hot slot, and exhaustion must never re-admit ABA.
     struct Slot {
-        std::size_t offset = 0;
-        std::size_t length = 0;
+        std::uint64_t generation = 1;
+        offset_type offset = 0;
+        offset_type length = 0;
         // Physical allocation extent starts here, including its alignment
         // padding. Slots own the entire extent until deterministic drop.
-        std::size_t rewind_to = 0;
-        std::uint64_t generation = 1;
+        offset_type rewind_to = 0;
         bool live = false;
     };
 
     struct Hole {
-        std::size_t offset = 0;
-        std::size_t length = 0;
+        offset_type offset = 0;
+        offset_type length = 0;
     };
+
+    static constexpr offset_type narrow(std::size_t value) noexcept {
+        return static_cast<offset_type>(value);
+    }
 
     // The byte array itself lives in native memory, not a Java object heap.
     alignas(std::max_align_t) std::array<std::byte, Bytes> memory_{};
     std::array<Slot, Slots> slots_{};
-    std::array<std::size_t, Slots> free_slots_{};
+    std::array<slot_index_type, Slots> free_slots_{};
     // One authoritative sorted free-range table, statically bounded and
     // never requiring malloc/GC during an actor allocation or drop.
     std::array<Hole, Slots + 1> holes_{};
@@ -116,15 +134,16 @@ private:
             const bool merge_after = i < hole_count_
                 && end == holes_[i].offset;
             if (merge_before && merge_after) {
-                holes_[i - 1].length += end - start + holes_[i].length;
+                holes_[i - 1].length = narrow(
+                    holes_[i - 1].length + (end - start) + holes_[i].length);
                 std::move(holes_.begin() + i + 1, holes_.begin() + hole_count_,
                           holes_.begin() + i);
                 --hole_count_;
             } else if (merge_before) {
-                holes_[i - 1].length += end - start;
+                holes_[i - 1].length = narrow(holes_[i - 1].length + (end - start));
             } else if (merge_after) {
-                holes_[i].offset = start;
-                holes_[i].length += end - start;
+                holes_[i].offset = narrow(start);
+                holes_[i].length = narrow(holes_[i].length + (end - start));
             } else {
                 // With at most Slots live objects and extents kept disjoint,
                 // the number of free interior ranges is <= Slots + 1.
@@ -132,7 +151,7 @@ private:
                 std::move_backward(holes_.begin() + i,
                                    holes_.begin() + hole_count_,
                                    holes_.begin() + hole_count_ + 1);
-                holes_[i] = Hole{start, end - start};
+                holes_[i] = Hole{narrow(start), narrow(end - start)};
                 ++hole_count_;
             }
         }
@@ -215,6 +234,13 @@ public:
     // The native FFI and ActorRef ABI remain pointer-width independent.
     using CompactRef = CompressedActorRef;
     static_assert(sizeof(CompactRef) == 4, "actor-local edge must occupy four bytes");
+    // Allocations that may become compact() targets must request at least
+    // this alignment. Do not pass alignof(T) for such objects: on i386 SysV
+    // alignof(int64_t) == 4, which compact() correctly refuses to encode.
+    static constexpr std::size_t compact_alignment =
+        static_cast<std::size_t>(CompactRef::alignment);
+    static_assert(alignof(std::max_align_t) >= compact_alignment,
+                  "host cannot place objects on the ref32 quantum");
 
     // Turn a currently live, generationally checked heap allocation into a
     // compact local offset. Only 8-byte-aligned object starts are representable
@@ -288,8 +314,8 @@ public:
             // The allocation owns the alignment padding; the suffix remains
             // available for subsequent allocations with any valid alignment.
             Hole& hole = holes_[hole_index];
-            hole.offset += extent_bytes;
-            hole.length -= extent_bytes;
+            hole.offset = narrow(hole.offset + extent_bytes);
+            hole.length = narrow(hole.length - extent_bytes);
             if (hole.length == 0) {
                 std::move(holes_.begin() + hole_index + 1,
                           holes_.begin() + hole_count_,
@@ -298,12 +324,13 @@ public:
             }
         }
 
-        const std::size_t slot_id = free_count_ != 0
-            ? free_slots_[--free_count_] : next_slot_++;
+        const auto slot_id = free_count_ != 0
+            ? free_slots_[--free_count_]
+            : static_cast<slot_index_type>(next_slot_++);
         auto& slot = slots_[slot_id];
-        slot.rewind_to = extent_start;
-        slot.offset = payload_offset;
-        slot.length = count;
+        slot.rewind_to = narrow(extent_start);
+        slot.offset = narrow(payload_offset);
+        slot.length = narrow(count);
         slot.live = true;
         ++live_count_;
         return Handle(heap_identity_, incarnation_, slot_id, slot.generation);
@@ -316,7 +343,8 @@ public:
         if (slot.generation == std::numeric_limits<std::uint64_t>::max())
             return false;
         const std::size_t extent_start = slot.rewind_to;
-        const std::size_t extent_end = slot.offset + slot.length;
+        const std::size_t extent_end =
+            static_cast<std::size_t>(slot.offset) + slot.length;
         // Scrub alignment padding as well as the payload. No stale bytes
         // from a prior extent can be observed on later recycling.
         std::fill_n(memory_.data() + extent_start, extent_end - extent_start,

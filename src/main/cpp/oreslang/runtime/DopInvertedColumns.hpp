@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -75,6 +76,9 @@ class InvertedColumns {
         std::array<bool, field_count> writers{};
         std::mutex mutex;
         std::uint64_t owner;
+        // Increment before structural operations, including potentially
+        // partial capacity changes on failed allocation. Never wrap.
+        std::uint64_t layout_epoch = 1;
         // Capability stays alive while any issued handle holds it; cannot be
         // reconstructed from predictable owner/slot/generation integers.
         std::shared_ptr<const unsigned char> issuer = std::make_shared<const unsigned char>(0);
@@ -90,6 +94,34 @@ class InvertedColumns {
         for (std::size_t i = 0; i < field_count; ++i)
             if (s.readers[i] || s.writers[i]) return true;
         return false;
+    }
+    // Close marks checked operations invalid immediately. An issued host
+    // span may still be in use while a loan survives owner destruction:
+    // writing to its backing before release would introduce a data race.
+    // Reclaim/scrub only after the final loan releases its accounting.
+    static void scrub_if_quiescent(State& s) noexcept {
+        if (!s.closed || any_loans(s)) return;
+        std::apply([](auto&... column) {
+            (std::fill(column.begin(), column.end(),
+                       typename std::decay_t<decltype(column)>::value_type{}), ...);
+        }, s.columns);
+        std::fill(s.row_slots.begin(), s.row_slots.end(), 0);
+        for (Slot& slot : s.slots) {
+            slot.row = 0;
+            slot.generation = 0;
+            slot.live = false;
+        }
+        std::fill(s.free_slots.begin(), s.free_slots.end(), 0);
+    }
+    static void invalidate_layout(State& s) {
+        if (s.layout_epoch == std::numeric_limits<std::uint64_t>::max())
+            throw std::overflow_error("inverted layout epoch exhausted");
+        ++s.layout_epoch;
+    }
+    static void require_layout_guard(const State& s, const auto& guard) {
+        ensure_open(s);
+        if (guard.issuer_.get() != s.issuer.get() || guard.epoch_ != s.layout_epoch)
+            throw std::logic_error("stale or foreign inverted layout guard");
     }
     static std::size_t resolve(const State& s, const auto& h) {
         ensure_open(s);
@@ -122,6 +154,27 @@ class InvertedColumns {
     static void reserve_columns(State& s, std::size_t n, std::index_sequence<I...>) {
         (std::get<I>(s.columns).reserve(n), ...);
     }
+    // push() must pre-allocate so the append below cannot throw, but
+    // vector::reserve(n) allocates exactly n. Reserving row + 1 on every push
+    // therefore reallocated and copied every column on every insert (O(n^2)
+    // build). Grow geometrically instead; capacity only ever increases.
+    template<class Vector>
+    static void ensure_capacity(Vector& v, std::size_t needed) {
+        if (v.capacity() >= needed) return;
+        const std::size_t limit = v.max_size();
+        if (needed > limit) throw std::length_error("inverted column capacity exhausted");
+        const std::size_t doubled = v.capacity() > limit / 2 ? limit : v.capacity() * 2;
+        v.reserve(doubled > needed ? doubled : needed);
+    }
+    template<std::size_t... I>
+    static void grow_columns(State& s, std::size_t n, std::index_sequence<I...>) {
+        (ensure_capacity(std::get<I>(s.columns), n), ...);
+    }
+    template<std::size_t... I>
+    static bool columns_have_capacity(const State& s, std::size_t n,
+                                      std::index_sequence<I...>) {
+        return ((std::get<I>(s.columns).capacity() >= n) && ...);
+    }
     template<std::size_t... I>
     static void append_columns(State& s, const std::tuple<Fields...>& values,
                                std::index_sequence<I...>) {
@@ -149,6 +202,19 @@ class InvertedColumns {
     }
 
 public:
+    // Compiler/JIT layout guard: storage identity + monotonic physical epoch.
+    // This is not a pointer, a row capability, a source-code generation guard,
+    // or permission to skip field-loan, bounds, or generation checks.
+    class LayoutGuard {
+        std::shared_ptr<const unsigned char> issuer_;
+        std::uint64_t epoch_;
+        LayoutGuard(std::shared_ptr<const unsigned char> issuer, std::uint64_t epoch)
+            : issuer_(std::move(issuer)), epoch_(epoch) {}
+        friend class InvertedColumns;
+    public:
+        std::uint64_t epoch() const noexcept { return epoch_; }
+    };
+
     class Handle {
         // Native host callers cannot mint row capabilities from public
         // numeric coordinates or mutate them to alias another live row.
@@ -242,6 +308,7 @@ public:
             std::lock_guard<std::mutex> lock(hold->mutex);
             if constexpr (Write) hold->writers[I] = false;
             else --hold->readers[I];
+            scrub_if_quiescent(*hold);
         }
     };
 
@@ -253,10 +320,13 @@ public:
     InvertedColumns(InvertedColumns&&) = delete;
     InvertedColumns& operator=(InvertedColumns&&) = delete;
     ~InvertedColumns() {
-        // Outstanding loans retain backing state until their release, so
-        // destruction cannot free memory under a borrower.
+        // Revocation is immediate under the owner lock. Outstanding loans
+        // keep the backing storage alive; scrubbing them now could race
+        // an already-issued host-only span. The final Loan::release()
+        // performs the deferred wipe immediately before state reclamation.
         std::lock_guard<std::mutex> lock(state_->mutex);
         state_->closed = true;
+        scrub_if_quiescent(*state_);
     }
 
     std::size_t size() const {
@@ -274,6 +344,41 @@ public:
         const auto slot_index = state_->row_slots[row];
         const auto& slot = state_->slots[slot_index];
         return Handle{state_->issuer, state_->owner, slot_index, slot.generation};
+    }
+
+    // Capture without exposing an interior address. The guard does not imply
+    // row-value immutability or cover the compiler's code-generation epoch.
+    LayoutGuard capture_layout_guard() const {
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        ensure_open(*state_);
+        return LayoutGuard{state_->issuer, state_->layout_epoch};
+    }
+
+    // Guard validation and the actual checked access happen under ONE lock.
+    // A separate validate-then-dereference sequence would race swap-delete,
+    // capacity growth, migration, and owner destruction.
+    template<std::size_t I>
+    auto read_index_guarded(const LayoutGuard& guard, std::int64_t row_index) const
+            -> std::tuple_element_t<I, std::tuple<Fields...>> {
+        static_assert(I < field_count);
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        require_layout_guard(*state_, guard);
+        const auto row = checked_dense_row(*state_, row_index);
+        if (state_->writers[I])
+            throw std::logic_error("column has a mutable loan");
+        return std::get<I>(state_->columns)[row];
+    }
+
+    template<std::size_t I>
+    void write_index_guarded(const LayoutGuard& guard, std::int64_t row_index,
+            std::tuple_element_t<I, std::tuple<Fields...>> value) {
+        static_assert(I < field_count);
+        std::lock_guard<std::mutex> lock(state_->mutex);
+        require_layout_guard(*state_, guard);
+        const auto row = checked_dense_row(*state_, row_index);
+        if (state_->writers[I] || state_->readers[I])
+            throw std::logic_error("column has an outstanding loan");
+        std::get<I>(state_->columns)[row] = value;
     }
 
     /**
@@ -339,6 +444,14 @@ public:
         State& s = *state_;
         ensure_open(s);
         if (any_loans(s)) throw std::logic_error("cannot reserve borrowed inverted columns");
+        // A true no-op reserve never relocates metadata or columns and must
+        // preserve an issued layout guard, matching the Java backend.
+        if (s.row_slots.capacity() >= capacity && s.slots.capacity() >= capacity &&
+                columns_have_capacity(s, capacity, std::index_sequence_for<Fields...>{}))
+            return;
+        // A growth attempt can partially relocate earlier vectors before a
+        // later allocator fails. Invalidate *before* the first allocation.
+        invalidate_layout(s);
         s.row_slots.reserve(capacity);
         s.slots.reserve(capacity);
         reserve_columns(s, capacity, std::index_sequence_for<Fields...>{});
@@ -351,11 +464,12 @@ public:
         const auto row = s.row_slots.size();
         if (row == std::numeric_limits<std::size_t>::max())
             throw std::overflow_error("inverted row count exhausted");
+        invalidate_layout(s);
         // Allocate everything before changing logical size. If allocation
         // throws, no row/slot/column sizes change.
-        s.row_slots.reserve(row + 1);
-        if (s.free_slots.empty()) s.slots.reserve(s.slots.size() + 1);
-        reserve_columns(s, row + 1, std::index_sequence_for<Fields...>{});
+        ensure_capacity(s.row_slots, row + 1);
+        if (s.free_slots.empty()) ensure_capacity(s.slots, s.slots.size() + 1);
+        grow_columns(s, row + 1, std::index_sequence_for<Fields...>{});
         const bool reuse = !s.free_slots.empty();
         const auto slot = reuse ? s.free_slots.back() : s.slots.size();
         append_columns(s, std::tuple<Fields...>(fields...), std::index_sequence_for<Fields...>{});
@@ -374,9 +488,10 @@ public:
         State& s = *state_;
         const auto row = resolve(s, h);
         if (any_loans(s)) throw std::logic_error("cannot erase borrowed inverted columns");
+        invalidate_layout(s);
         const auto last = s.row_slots.size() - 1;
         const bool recycle = s.slots[h.slot_].generation != std::numeric_limits<std::uint64_t>::max();
-        if (recycle) s.free_slots.reserve(s.free_slots.size() + 1);
+        if (recycle) ensure_capacity(s.free_slots, s.free_slots.size() + 1);
         erase_columns(s, row, last, std::index_sequence_for<Fields...>{});
         if (row != last) {
             const auto displaced = s.row_slots[last];

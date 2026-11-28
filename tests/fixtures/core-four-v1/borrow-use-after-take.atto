@@ -1,0 +1,5 @@
+// LLVM compile-negative: a compiler-owned core policy cannot revive a taken owner.
+import module cell from "core/cell";
+pub fnc main(int value): int {
+  return take!value + value;
+}

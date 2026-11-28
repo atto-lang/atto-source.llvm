@@ -42,6 +42,30 @@ int main(int argc, char** argv) {
          "native tilde map/record literal unsupported"},
         {"tilde-record-literal-native-reject.ores", false,
          "native tilde map/record literal unsupported"},
+        {"dispatch-value-match-wildcard-then-default-reject.ores", false,
+         "native value match wildcard arm must be last"},
+        {"dispatch-do-match-wildcard-then-default-reject.ores", false,
+         "native do match wildcard arm must be last"},
+        {"dispatch-value-match-duplicate-case-reject.ores", false,
+         "duplicate native value match pattern"},
+        {"dispatch-do-match-duplicate-case-reject.ores", false,
+         "duplicate native do match pattern"},
+        {"dispatch-value-structural-field-reject.ores", false,
+         "native structural field pattern requires a stack-constructed const class local"},
+        {"dispatch-do-structural-field-reject.ores", false,
+         "native structural field pattern requires a stack-constructed const class local"},
+        {"dispatch-value-record-field-reject.ores", false,
+         "native tilde map/record literal unsupported"},
+        {"dispatch-do-record-field-reject.ores", false,
+         "native tilde map/record literal unsupported"},
+        {"dispatch-value-public-class-field-run.ores", true, ""},
+        {"dispatch-do-public-class-field-run.ores", true, ""},
+        {"dispatch-value-private-class-field-reject.ores", false, "native structural field pattern requires a declared public primitive field"},
+        {"dispatch-value-mutable-class-owner-reject.ores", false, "native structural field pattern requires a stack-constructed const class local"},
+        {"dispatch-value-structural-mixed-fields-reject.ores", false, "native ordinary structural match cannot prove differently named field arms disjoint"},
+        {"dispatch-value-structural-duplicate-reject.ores", false, "duplicate native structural field match pattern"},
+        {"dispatch-value-structural-multi-field-reject.ores", false, "native structural field pattern supports exactly one field"},
+        {"dispatch-value-structural-wrong-type-reject.ores", false, "native structural field pattern literal type does not match declared field"},
         {"dispatch-value-match-default-fallthrough-run.ores", true, ""},
         {"dispatch-do-match-default-fallthrough-run.ores", true, ""},
         {"dispatch-value-match-duplicate-pattern-reject.ores", false,
@@ -55,7 +79,21 @@ int main(int argc, char** argv) {
         {"tilde-explicit-record-native-reject.ores", false,
          "native tilde map/record literal unsupported"},
         {"tilde-ambiguous-empty-native-reject.ores", false,
-         "native tilde map/record literal unsupported"}
+         "native tilde map/record literal unsupported"},
+        {"dispatch-value-match-default-fallback-run.ores", true, ""},
+        {"dispatch-do-match-default-fallback-run.ores", true, ""},
+        {"dispatch-value-match-default-duplicate-reject.ores", false,
+         "native value match can contain only one default arm"},
+        {"dispatch-do-match-default-duplicate-reject.ores", false,
+         "native do match can contain only one default arm"},
+        {"dispatch-value-match-on-default-reject.ores", false,
+         "native value match fallback must use 'default ->' without 'on'"},
+        {"dispatch-do-match-on-default-reject.ores", false,
+         "native do match fallback must use 'default ->' without 'on'"},
+        {"dispatch-value-match-default-guard-reject.ores", false,
+         "native value match default arm cannot have a guard or binding"},
+        {"dispatch-do-match-default-guard-reject.ores", false,
+         "native do match default arm cannot have a guard or binding"}
     };
     std::size_t checked = 0;
     for (const auto& c : cases) {
@@ -72,6 +110,40 @@ int main(int argc, char** argv) {
                 (!c.accept && diagnostic.find(c.diagnostic) == std::string::npos)) {
             std::cerr << "FAIL " << c.filename << " accepted=" << accepted
                       << " expected=" << c.accept << " diagnostic=" << diagnostic << "\n";
+            return 1;
+        }
+        ++checked;
+    }
+    // Actual native parser admissions for the restricted scalar pipeline slice.
+    // These are not AOT execution receipts.
+    struct PipelineCase { std::string expr; bool accept; };
+    const std::vector<PipelineCase> pipelines{
+        {"2 |> match<int> over { on 1 -> 11, on 2 -> 42, default -> 99, }", true},
+        {"2 |> match over on 2 -> 41, default -> 0, end |> increment", true},
+        {"2 |> match over { on 2 -> { 41; }, default -> 0, } |> increment", true},
+        {"match<int> 2 over { on 2 -> 42, default -> 0, }", true},
+        {"2 |> match over { on 2 -> 42, }", false},
+        {"2 |> match 2 over { on 2 -> 42, default -> 0, }", false},
+        {"2 |> match over { default -> 0, on 2 -> 42, }", false},
+        {"2 |> match over { on 2 -> 42, default -> 0, end", false},
+        {"increment(1) |> match over { on 2 -> 42, default -> 0, }", false},
+        {"42 |> match over { on 42 -> 100; is int -> -20; }", true},
+        {"7 |> match over { on 42 -> 100; on is int -> -20; }", true},
+        {"true |> match over { is bool -> 42; }", true},
+        {"7 |> match over { is bool -> 42; }", false},
+        {"7 |> match over { is int -> 42; on _ -> 0; }", false},
+        {"7 |> match over { 7 -> 42; on _ -> 0; }", false},
+        {"7 |> match over { _ -> 42; }", false}
+    };
+    for (const auto& c : pipelines) {
+        bool accepted = false;
+        try {
+            const auto source = "fnc increment(int n): int { return n + 1; } "
+                "pub fnc main(): int { return " + c.expr + "; }";
+            accepted = !oreslang::parse_program(source).functions.empty();
+        } catch (const std::exception&) {}
+        if (accepted != c.accept) {
+            std::cerr << "FAIL pipeline fixture: " << c.expr << "\n";
             return 1;
         }
         ++checked;

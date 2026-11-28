@@ -1,0 +1,38 @@
+// core/option: freestanding helpers over the compiler-provided Option<int>.
+// Option/Some/None are prelude nominals; this unit adds combinators.
+define module option as
+
+  pub fnc is_some(Option<int> value): bool {
+    return value.is_some();
+  }
+
+  pub fnc is_none(Option<int> value): bool {
+    return value.is_none();
+  }
+
+  pub fnc unwrap_or(Option<int> value, int fallback): int {
+    return value.unwrap_or(fallback);
+  }
+
+  pub fnc or(Option<int> first, Option<int> second): Option<int> {
+    if first.is_some(); do
+      return first;
+    fi
+    return second;
+  }
+
+  pub fnc from_bool(bool present, int value): Option<int> {
+    if present; do
+      return Some(value);
+    fi
+    return None;
+  }
+
+  pub fnc ok_or(Option<int> value, int error): Result<int, int> {
+    if value.is_some(); do
+      return Ok(value.unwrap_or(0));
+    fi
+    return Err(error);
+  }
+
+end

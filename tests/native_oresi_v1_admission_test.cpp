@@ -56,7 +56,7 @@ static DependencyPin lock(const std::string& ns,
 static_assert(!std::is_assignable_v<Verified&, Verified>,
     "an admitted export table must never become mutable after verification");
 static_assert(!std::is_constructible_v<Verified, std::string, std::string,
-    std::map<std::string, std::vector<Export>>>,
+    std::string, std::string, std::string, std::map<std::string, std::vector<Export>>>,
     "only admit() may construct a Verified export proof");
 
 int main() {
@@ -134,7 +134,7 @@ int main() {
     fails("invalid locked",[&]{(void)admit(bad_instance,{{"math",math}});});
 
     auto legacy_pkg=pin;legacy_pkg.package_instance_id="foo@sha:"+std::string(64,'1');
-    require(admit(legacy_pkg,{{"math",math}}).package_instance_id==
+    require(admit(legacy_pkg,{{"math",math}}).package_instance_id()==
             legacy_pkg.package_instance_id,"sha-colon package ID rejected");
     auto second_pkg=pin;second_pkg.package_instance_id="acme/math@1#"+std::string(64,'b');
     const auto other=admit(second_pkg,{{"math",math}});
@@ -227,5 +227,92 @@ int main() {
         require(sha256(input)==expected,"SHA256 padding boundary mismatch");
     }
 
+
+    // Build canonical v1 envelopes with restricted signatures; the original
+    // Java fixture remains unchanged and must never authorize native calls.
+    auto scalar_fixture = [](const std::vector<std::string>& signatures,
+                             const std::string& target = "llvm-aot-v1") {
+        std::vector<std::uint8_t> bytes={'O','R','E','S','I',0,1};
+        str(bytes,"math");str(bytes,"atto-llvm-1");
+        str(bytes,target);str(bytes,"ownership-strict-v1");
+        u32(bytes,static_cast<std::uint32_t>(signatures.size()+1));
+        entry(bytes,"algebra",0,"algebra","");
+        for (const auto& sig : signatures) entry(bytes,"algebra",1,"value",sig);
+        return bytes;
+    };
+    auto scalar_lock = [](const std::vector<std::uint8_t>& bytes) {
+        auto p=lock("math",bytes);
+        p.compiler_version="atto-llvm-1";p.target_abi="llvm-aot-v1";
+        return p;
+    };
+    auto bind = [](const Verified& v) {
+        return bind_scalar_i64_import(v,"math","algebra","value",
+                                     "atto-llvm-1","ownership-strict-v1");
+    };
+    static_assert(!std::is_constructible_v<ScalarI64Import,std::string,
+        std::string,std::string,std::string>);
+    static_assert(!std::is_assignable_v<ScalarI64Import&,ScalarI64Import>);
+    const auto scalar=scalar_fixture({"():int"});
+    const auto scalar_pin=scalar_lock(scalar);
+    const auto proof=admit(scalar_pin,{{"math",scalar}});
+    const auto binding=bind(proof);
+    require(binding.function_name()=="value" && binding.module_name()=="algebra" &&
+            binding.namespace_name()=="math","typed import identity mismatch");
+    require(binding.release_bound_symbol().size()==81 &&
+            binding.release_bound_symbol()==bind(proof).release_bound_symbol(),
+            "deterministic physical symbol mismatch");
+    auto other_release=scalar_pin;
+    other_release.package_instance_id="acme/math@2#"+std::string(64,'b');
+    require(bind(admit(other_release,{{"math",scalar}})).release_bound_symbol()!=
+            binding.release_bound_symbol(),"distinct release symbols alias");
+    fails("compiler/ABI/profile mismatch",[&]{(void)bind(guest);});
+    fails("compiler/ABI/profile mismatch",[&]{
+        (void)bind_scalar_i64_import(proof,"math","algebra","value","wrong","ownership-strict-v1");});
+    fails("compiler/ABI/profile mismatch",[&]{
+        (void)bind_scalar_i64_import(proof,"math","algebra","value","atto-llvm-1","wrong");});
+    fails("missing or ambiguous",[&]{
+        (void)bind_scalar_i64_import(proof,"math","algebra","missing","atto-llvm-1","ownership-strict-v1");});
+    fails("module not exported",[&]{
+        (void)bind_scalar_i64_import(proof,"math","hidden","value","atto-llvm-1","ownership-strict-v1");});
+    fails("invalid scalar import identifier",[&]{
+        (void)bind_scalar_i64_import(proof,"math","algebra","../value","atto-llvm-1","ownership-strict-v1");});
+    for (const auto& sigs : std::vector<std::vector<std::string>>{
+            {"():bool"},{"(int a):int"},{"():int","(int a):int"},{"():int using ffi"}}) {
+        auto bytes=scalar_fixture(sigs);
+        fails("unsupported scalar import signature",[&]{
+            (void)bind(admit(scalar_lock(bytes),{{"math",bytes}}));});
+    }
+    auto changed=scalar;changed.back()^=1;
+    fails("digest mismatch",[&]{(void)bind(admit(scalar_pin,{{"math",changed}}));});
+
+    // Compatible releases share only the independently selected logical slot,
+    // never the exact release proof or release-bound symbol.
+    ScalarLogicalSlotPin slot{"acme/app-link","billing",scalar_pin.package_instance_id,
+                              "atto-llvm-1","ownership-strict-v1"};
+    auto stable = [&](const Verified& v, const ScalarLogicalSlotPin& pin) {
+        return stable_scalar_link_symbol(v,pin,"math","algebra","value");
+    };
+    const auto old_symbol=stable(proof,slot);
+    require(old_symbol.size()==79 && old_symbol!=binding.release_bound_symbol(),
+            "stable symbol domain mismatch");
+    const auto next_proof=admit(other_release,{{"math",scalar}});
+    auto next_slot=slot;next_slot.expected_release=other_release.package_instance_id;
+    require(stable(next_proof,next_slot)==old_symbol,
+            "compatible release must preserve logical slot");
+    fails("invalid or stale scalar logical slot pin",[&]{(void)stable(next_proof,slot);});
+    auto sibling=next_slot;sibling.dependency_slot="billing2";
+    require(stable(next_proof,sibling)!=old_symbol,"side-by-side slot collision");
+    auto domain=slot;domain.link_domain="acme/other-app";
+    require(stable(proof,domain)!=old_symbol,"link-domain collision");
+    auto bad_slot=slot;bad_slot.dependency_slot="../billing";
+    fails("invalid or stale scalar logical slot pin",[&]{(void)stable(proof,bad_slot);});
+    auto bad_policy=slot;bad_policy.feature_policy="other-policy";
+    fails("compiler/ABI/profile mismatch",[&]{(void)stable(proof,bad_policy);});
+    auto incompatible=scalar_fixture({"():bool"});
+    auto incompatible_pin=scalar_lock(incompatible);
+    fails("unsupported scalar import signature",[&]{
+        (void)stable(admit(incompatible_pin,{{"math",incompatible}}),slot);});
+    std::cout<<"VERIFIED_LOGICAL_SCALAR_SLOT|host_only=YES|compatible_release_stable=YES|stale_release=REJECTED\n";
+    std::cout<<"VERIFIED_SCALAR_IMPORT_BINDING|host_only=YES|zero_arg_i64=YES|release_bound=YES\n";
     std::cout<<"Native .oresi host preflight passed; no Atto guest or binary linker executed\n";
 }

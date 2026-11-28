@@ -1,11 +1,15 @@
 #pragma once
 
+#include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
+#include "oreslang/types/PointerIntHIR.hpp"
 #include "oreslang/types/FunctionEffects.hpp"
 #include "oreslang/types/FuturePipelineContract.hpp"
 #include "oreslang/types/NativeHasFutureContract.hpp"
@@ -24,6 +28,9 @@ struct NativeSumType {
     std::string name;
     ScalarType value_type = ScalarType::I64;
     ScalarType error_type = ScalarType::I64;
+    // Result<_, Error>: the error slot holds a sanitized trap message and is
+    // minted only by `trap` (spec ch. 7); source cannot construct or read it.
+    bool trap_error = false;
 };
 
 struct GenericTypeArgument {
@@ -39,21 +46,27 @@ struct GenericParameter {
 struct Expression {
     enum class Kind {
         Integer, Boolean, String, Console, Variable,
-        Negate, LogicalNot,
+        Negate, Abs, LogicalNot,
         Add, Subtract, Multiply, Remainder, Modulo, BitXor,
         Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
         LogicalAnd, LogicalOr, LogicalXor,
-        Conditional,
-        Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, Take, Share, Borrow, BorrowMut, Field,
+        Conditional, Cast, ClosedRecur,
+        Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, DeepCopy, Take, Share, Borrow, BorrowMut, Field,
         ShiftLeft, ShiftRight, ShiftUnsignedRight
     };
     Kind kind;
     std::size_t offset = 0;
     std::int64_t integer = 0;
     bool boolean = false;
+    // Minted ONLY by the parser for a compiler-owned Box<int>.get() call.
+    // The raw Box owner is non-Copy and must never lower as an i64 value.
+    bool native_box_read = false;
     mutable ScalarType resolved_type = ScalarType::I64;
+    ScalarType cast_target = ScalarType::I64; // checked, identity-only native scalar cast
     mutable std::string resolved_class;
     std::string name;
+    // Preserve source receiver through native endpoint admission, before lowering.
+    std::string console_receiver;
     std::unique_ptr<Expression> left;
     std::unique_ptr<Expression> right;
     // Conditional is the native scalar form of Oreslang's lazy `? :`.
@@ -73,7 +86,76 @@ struct Expression {
     // Records a compiler-produced caller-side trap; never collapse this to
     // an ordinary Some constructor without independently proving its operand.
     bool trap_origin = false;
+    // A Call produced by an eager `|>` stage (java CallOrigin.VALUE_PIPE_ARGUMENT):
+    // arguments[0] is the piped value. Pipeline edges have their own depth budget.
+    bool pipeline_stage = false;
+    // Private lexical scalar-loop plan. Ordinary visitors must not resolve
+    // these state names against the surrounding callable's ownership scope.
+    std::vector<std::string> recur_names;
+    std::vector<std::unique_ptr<Expression>> recur_initializers;
+    std::vector<std::unique_ptr<Expression>> recur_predicates;
+    std::vector<std::unique_ptr<Expression>> recur_results;
+    std::vector<std::unique_ptr<Expression>> recur_updates;
 };
+
+// Independent structural and typed check, replayed at parser validation,
+// ownership admission and LLVM lowering. No call, external capture, owned
+// value, nested state loop or runtime effect can enter the closed operands.
+inline std::optional<ScalarType> closed_recur_operand(
+        const Expression& e, const std::vector<std::string>& scope, unsigned depth = 0) {
+    using K = Expression::Kind;
+    if (depth > 32 || e.native_box_read || !e.resolved_class.empty() ||
+        !e.sum_type.empty() || !e.arguments.empty() || !e.argument_names.empty() ||
+        !e.type_arguments.empty() || e.type_arguments_present || e.trap_origin ||
+        e.pipeline_stage || e.condition || e.condition_lhs || e.condition_rhs ||
+        e.when_true || e.when_false || !e.recur_names.empty() ||
+        !e.recur_initializers.empty() || !e.recur_predicates.empty() ||
+        !e.recur_results.empty() || !e.recur_updates.empty()) return std::nullopt;
+    if (e.kind == K::Integer || e.kind == K::Boolean)
+        return !e.left && !e.right && e.name.empty()
+            ? std::optional<ScalarType>(e.kind == K::Integer ? ScalarType::I64 : ScalarType::Bool)
+            : std::nullopt;
+    if (e.kind == K::Variable)
+        return !e.left && !e.right && std::find(scope.begin(), scope.end(), e.name) != scope.end()
+            ? std::optional<ScalarType>(ScalarType::I64) : std::nullopt;
+    if (!e.name.empty() || !e.left) return std::nullopt;
+    const auto lhs = closed_recur_operand(*e.left, scope, depth + 1);
+    if (e.kind == K::Negate)
+        return !e.right && lhs == ScalarType::I64 ? lhs : std::nullopt;
+    if (!e.right || lhs != ScalarType::I64 ||
+        closed_recur_operand(*e.right, scope, depth + 1) != ScalarType::I64) return std::nullopt;
+    switch (e.kind) {
+        case K::Add: case K::Subtract: case K::Multiply: return ScalarType::I64;
+        case K::Equal: case K::NotEqual: case K::Less: case K::LessEqual:
+        case K::Greater: case K::GreaterEqual: return ScalarType::Bool;
+        default: return std::nullopt;
+    }
+}
+inline bool valid_closed_recur(const Expression& e) {
+    if (e.kind != Expression::Kind::ClosedRecur || e.recur_names.empty() ||
+        e.recur_names.size() > 8 || e.recur_initializers.size() != e.recur_names.size() ||
+        e.recur_updates.size() != e.recur_names.size() || e.recur_predicates.empty() ||
+        e.recur_predicates.size() > 32 || e.recur_results.size() != e.recur_predicates.size() ||
+        e.left || e.right || e.condition || e.condition_lhs || e.condition_rhs ||
+        e.when_true || e.when_false || !e.arguments.empty() || !e.argument_names.empty() ||
+        !e.name.empty() || e.native_box_read || !e.resolved_class.empty() || !e.sum_type.empty() ||
+        !e.type_arguments.empty() || e.type_arguments_present || e.trap_origin || e.pipeline_stage) return false;
+    std::vector<std::string> scope;
+    for (std::size_t i = 0; i < e.recur_names.size(); ++i) {
+        const auto& name = e.recur_names[i];
+        if (name.empty() || std::find(scope.begin(), scope.end(), name) != scope.end() ||
+            !e.recur_initializers[i] ||
+            closed_recur_operand(*e.recur_initializers[i], scope) != ScalarType::I64) return false;
+        scope.push_back(name);
+    }
+    for (std::size_t i = 0; i < e.recur_predicates.size(); ++i)
+        if (!e.recur_predicates[i] || !e.recur_results[i] ||
+            closed_recur_operand(*e.recur_predicates[i], scope) != ScalarType::Bool ||
+            closed_recur_operand(*e.recur_results[i], scope) != ScalarType::I64) return false;
+    for (const auto& update : e.recur_updates)
+        if (!update || closed_recur_operand(*update, scope) != ScalarType::I64) return false;
+    return true;
+}
 
 // Phase-one native trap supports only total integer-expression structure.
 // Arithmetic overflow remains a terminal panic. This predicate deliberately
@@ -112,6 +194,7 @@ struct LocalBinding {
     std::string name;
     std::unique_ptr<Expression> initializer;
     bool heap_owned = false;
+    bool native_box_i64 = false; // non-Copy Box<int> backed by native owned region
     bool int_array = false; // non-Copy owned i64-slot array local, no escape
     ScalarType array_element_type = ScalarType::I64; // int value or checked immutable String handle
     std::string array_record_class;
@@ -125,7 +208,8 @@ struct LocalBinding {
     std::string move_source;
     bool owner_mutable = false; // explicit let mut; required for exclusive class loan
     bool field_mutable = false; // actor-owned fields only
-    ScalarType scalar_type = ScalarType::I64;
+    mutable ScalarType scalar_type = ScalarType::I64;
+    bool inferred_scalar = false; // resolved by scalar type pass, never assume i64
     std::string pending_type_alias; // transparent compile-time alias identity
     std::size_t offset = 0;
     std::string sum_type;
@@ -136,6 +220,7 @@ struct LocalBinding {
     // binding receives the result of exactly one scheduler-owned Future await.
     std::string future_await_name;
     bool assignable = false; // mutable lexical slot, distinct from referent capability
+    bool explicit_factory_take = false; // direct owned class result, not a place move or record view loan
 };
 
 struct ClassField {
@@ -194,6 +279,7 @@ struct ActorSpawnBinding {
     std::string actor_type;
     SourceType declared_type;
     std::size_t offset = 0;
+    bool after_actor_effect = false;
 };
 
 struct SourceTaskI64Binding {
@@ -289,7 +375,7 @@ struct ActorSend {
 // Preserve the sequence of source-visible actor effects. Separating sends
 // from stops changes program behavior and can hide use-after-stop errors.
 struct ActorAction {
-    enum class Kind { Send, Stop };
+    enum class Kind { Send, Stop, Spawn };
     Kind kind;
     std::size_t index = 0;
 };
@@ -301,7 +387,7 @@ struct ActorFieldWrite {
 };
 
 struct Statement {
-    enum class Kind { Call, FieldWrite, ScalarWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled, ForEach, ForIndex, Return, UsingTelemetrySpan };
+    enum class Kind { Call, FieldWrite, ScalarWrite, Defer, Conditional, ScopedLocal, ArrayCommitFilled, ForEach, ForIndex, Loop, Break, Continue, Return, UsingTelemetrySpan, TelemetryLogInfo };
     Kind kind;
     // Scoped scalar or readonly leaf record. ForEach uses an implicit element
     // binding (no initializer); expression is its named array source and
@@ -310,7 +396,8 @@ struct Statement {
     std::unique_ptr<Expression> expression;
     std::string receiver;
     std::string field;
-    // UsingTelemetrySpan: literal operation name, alias is compile-time-only;
+    // UsingTelemetrySpan or TelemetryLogInfo: literal operation/log message;
+    // alias is compile-time-only;
     // no guest-visible pointer, dynamic handle or actor message transfer.
     std::string telemetry_operation;
     // ForIndex: branch_local initializer, condition and checked next value.
@@ -328,12 +415,19 @@ struct Statement {
     std::unique_ptr<Expression> condition_rhs;
     std::vector<Statement> then_statements;
     std::vector<Statement> else_statements;
+    // Only statically lowered factory callbacks carry this marker.
+    // Ordinary delayed direct calls retain their legacy contract.
+    bool static_defer_factory = false;
 };
 
 // Side-effect-free equality guard with return-only taken branch.
 // All locals and ordinary statements precede guards; branch-local objects
 // and suspension remain unsupported until path-sensitive cleanup is proven.
 struct GuardedReturn {
+    // The new else-free 'guard cond { return value; }' is an early exit on
+    // FALSE. Legacy 'if cond { return value; } fi' returns on TRUE.
+    // Keep the polarity explicit: AST paths, typers and cleanup are shared.
+    bool return_on_false = false;
     std::unique_ptr<Expression> condition;
     std::unique_ptr<Expression> lhs; // stacked equality-only compatibility
     std::unique_ptr<Expression> rhs;
@@ -362,6 +456,10 @@ struct Function {
     // First executable source Task slice: one capture-free Task<int> in trusted
     // zero-argument main, submitted before ordinary locals and awaited once.
     std::vector<SourceTaskI64Binding> source_tasks;
+    // Compiler-staged actor-only suspension edge. This is not a runtime
+    // capability or a codegen-ready continuation: LLVM emission MUST deny
+    // any actor carrying this marker until actor-owned frame lowering exists.
+    std::string actor_task_await_name;
     // First executable Future-aware value-pipeline slice. Async producers are
     // compiled as scheduler work; sync unary stages execute on that carrier.
     std::vector<SourceFuturePipelineI64Binding> future_pipelines;
@@ -381,7 +479,7 @@ struct Function {
     std::string ready_future_actor;
     std::vector<ActorSend> actor_sends;
     std::vector<std::string> actor_stops;
-    std::vector<ActorAction> actor_actions; // source order of send/stop
+    std::vector<ActorAction> actor_actions; // source order of send/stop/late spawn
     std::vector<ActorFieldWrite> actor_field_writes;
     bool returns_void = false;
     ScalarType return_type = ScalarType::I64;
@@ -396,6 +494,7 @@ struct Function {
     bool exported = false;
     std::string method_owner; // compiler-owned class method privilege, never source syntax
     bool native_internal = false; // linker-owned private imported implementation
+    bool foreign_import = false; // exact approved C symbol, declaration-only, never guest-implemented
     // Explicit compiler-owned host C u32 trampoline, never the guest i64 ABI.
     // Only the browser v1 ABI version symbol is admitted in the first slice.
     std::string c_export_u32_symbol;
@@ -409,6 +508,9 @@ enum class MaxActorThreads : std::uint8_t { LOW = 1, MEDIUM = 2, HIGH = 3 };
 
 struct ActorDecl {
     std::string name;
+    // Contract metadata: native scalar actor transport is always int-only.
+    // Explicit 'sends' remains rejected until transitive effects exist.
+    bool declared_receives_i64 = false;
     std::vector<LocalBinding> fields; // bounded, actor-confined integer slots
     Function on_message; // exactly one synchronous pub on_message(int): int
     std::size_t offset = 0;
@@ -463,11 +565,22 @@ struct CooperativeScalarLoop {
     std::size_t offset = 0;
 };
 
+// Generator-v1 delegation is restricted to named, zero-argument, side-effect-
+// free literal generators in the same translation unit. The parser resolves
+// these ordered steps into bounded scalar yields before LLVM emission; general
+// iterator ownership and cleanup have NOT been lowered.
+struct ScalarGeneratorStep {
+    bool delegate = false;
+    std::string target;
+    std::int64_t value = 0;
+};
+
 // Native generator v1 deliberately starts with a value-only, zero-capture
 // Iterator<int> activation. Each activation is represented by a caller-owned,
 // pinned frame in LLVM IR; no native stack or tracing-GC object survives a pull.
 struct ScalarGenerator {
     std::string name;
+    std::vector<ScalarGeneratorStep> steps;
     std::vector<std::int64_t> yields;
     std::size_t offset = 0;
     bool exported = false;
@@ -503,7 +616,59 @@ struct TypeConstraintDescriptor {
     bool validation_required = true;
 };
 
+struct FileExport {
+    enum class Visibility { Public, Package };
+    enum class Kind { Inferred, Class, Fnc };
+    std::string name;
+    Visibility visibility = Visibility::Public;
+    Kind kind = Kind::Inferred;
+    std::size_t offset = 0;
+};
+
+// Distinct nominal *value-schema* declaration, never an inverted class
+// alias. This parser milestone records type/field/mutability intent only;
+// source lowering remains denied until the production parser and ownership verifier admit it.
+enum class InvertedScalarKind { I64, Bool, F64 };
+struct InvertedStructField {
+    std::string name;
+    InvertedScalarKind type = InvertedScalarKind::I64;
+    bool mutable_field = false; // unmarked fields are implicit immutable val
+    std::size_t offset = 0;
+};
+struct InvertedStructDecl {
+    std::string name;
+    std::vector<InvertedStructField> fields;
+    bool exported = false;
+    std::size_t offset = 0;
+};
+
+// One strictly local and bounded source-to-MIR slice. These are parsed
+// production source operations, NOT LLVM IR or a compiler authorization;
+// an independent typed HIR/MIR verifier must admit the complete stream.
+struct InvertedSourceOperation {
+    enum class Kind { Push, WriteField, EraseSwap, ReturnRead };
+    Kind kind = Kind::Push;
+    std::size_t index = 0;
+    std::string field;
+    std::array<std::int64_t, 2> values{};
+    std::int64_t value = 0;
+};
+struct InvertedSourceMain {
+    std::string schema_name;
+    std::string owner_name;
+    std::size_t capacity = 0;
+    std::vector<InvertedSourceOperation> operations;
+};
+
 struct Program {
+    // Host compilation authority, injected by the trusted CLI/loader only.
+    // Source code cannot forge this bit; parsed programs default denied.
+    bool foreign_i64_granted = false;
+    // M2a: same nominal HIR is consumed by canonical parser, existing
+    // ownership checker and LLVM backend. No raw pointer-as-i64 may enter
+    // ordinary source Expression or ScalarType storage.
+    std::unique_ptr<pointer_int_aot::Plan> pointer_int_plan;
+    std::vector<FileExport> exports;
     std::vector<ModuleImport> imports;
     std::vector<NamespaceImportSyntax> namespace_imports;
     std::vector<CooperativeScalarLoop> cooperative_loops;
@@ -518,6 +683,10 @@ struct Program {
     std::vector<TypeConstraintDescriptor> type_constraint_descriptors;
     std::vector<std::string> conforms;
     std::vector<NativeSumType> sum_types;
+    // Compiler-owned staged inverted schema/operation descriptors. Current
+    // production source parser still fails closed; this is not a guest feature.
+    std::vector<InvertedStructDecl> inverted_structs;
+    std::optional<InvertedSourceMain> inverted_main;
 };
 
 // Parse a constrained native subset: i64 expressions, call-scoped borrows and
@@ -526,12 +695,17 @@ struct Program {
 // is one zero-local actor lifecycle await in trusted zero-argument main:
 // direct/typed get_ready readiness or explicit ActorRef.get_done().
 Program parse_program(std::string_view source, bool experimental_owned_int = false,
-                      bool experimental_rt_scalar_loop = false);
+                      bool experimental_rt_scalar_loop = false,
+                      bool experimental_pointer_int_aot = false,
+                      int language_version = 0);
 
 // Internal module-linking stages: syntax trees are NOT admitted for codegen.
 // resolve_and_validate_program must run after all module names are resolved.
 Program parse_unresolved_program(std::string_view source, bool experimental_owned_int = false,
-                                 bool experimental_rt_scalar_loop = false);
+                                 bool experimental_rt_scalar_loop = false,
+                                 bool experimental_pointer_int_aot = false,
+                                 int language_version = 0,
+                                 bool relative_import_unit = false);
 // HOST-ONLY preparatory AST: caller must supply already authenticated frozen
 // source bytes, and only the verified package graph may consume the result.
 // Unlike parse_program(), this must never authorize IR or guest execution.

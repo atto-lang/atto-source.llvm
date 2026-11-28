@@ -1,0 +1,60 @@
+name: Incoming scalar SSA exact-head guest
+on:
+  pull_request:
+    paths:
+      - 'src/main.rs'
+      - '.github/workflows/incoming-scalar-ssa-exact-head.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-incoming-ssa:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact source and tools
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git write-tree)" = "$(git rev-parse HEAD^{tree})"
+          git rev-parse HEAD HEAD^{tree}
+          rustup toolchain install 1.85.1 --profile minimal
+          rustc +1.85.1 --version
+          clang --version
+      - name: Run compiler regression and build
+        run: |
+          set -euo pipefail
+          cargo +1.85.1 test --offline --bin atto-llvm
+          cargo +1.85.1 build --offline --release --bin atto-llvm
+      - name: Verify IR and execute native guests at O0 and O2
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          printf '%s\n' 'fnc id(int n): int { return n; } pub fnc main(): int { return id(42); }' > "$work/fixed.atto"
+          printf '%s\n' 'fnc id(int mut n): int { return n; } pub fnc main(): int { return id(42); }' > "$work/marked.atto"
+          printf '%s\n' 'fnc bump(int mut n): int { if n > 0 then n = n + 2; fi return n; } pub fnc main(): int { val int n = 20; return bump(n) + n; }' > "$work/writable.atto"
+          printf '%s\n' 'fnc bump(int n): int { n = n + 2; return n; } pub fnc main(): int { return bump(40); }' > "$work/reject.atto"
+          for name in fixed marked writable; do
+            target/release/atto-llvm "$work/$name.atto" -o "$work/$name.ll" --emit-llvm
+            for opt in 0 2; do
+              clang -x ir -O"$opt" "$work/$name.ll" -o "$work/$name-$opt"
+              status=0
+              timeout 10s "$work/$name-$opt" || status=$?
+              test "$status" = 42
+              echo "$name O$opt guest exit=$status"
+            done
+          done
+          cmp "$work/fixed.ll" "$work/marked.ll"
+          grep -q 'ret i64 %arg0' "$work/fixed.ll"
+          if grep -q alloca "$work/fixed.ll"; then exit 1; fi
+          grep -q 'store i64 %arg0, ptr %local0' "$work/writable.ll"
+          if target/release/atto-llvm "$work/reject.atto" -o "$work/reject.ll" --emit-llvm >"$work/reject.log" 2>&1; then exit 1; fi
+          test ! -e "$work/reject.ll"
+          sha256sum "$work/"*.ll

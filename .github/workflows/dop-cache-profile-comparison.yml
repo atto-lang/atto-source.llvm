@@ -1,0 +1,104 @@
+name: DOP cache profile comparability unit tests
+on:
+  pull_request:
+    paths:
+      - 'scripts/profile_cache_locality.py'
+      - 'scripts/compare_dop_cache_profiles.py'
+      - 'scripts/test_profile_cache_locality.py'
+      - 'scripts/test_compare_dop_cache_profiles.py'
+      - 'tests/native_actor_shard_layout_bench.cpp'
+      - 'docs/DOP_PROFILE_COMPARABILITY_GATE_2026_11_01.md'
+      - '.github/workflows/dop-cache-profile-comparison.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compare-cache-profiles:
+    # A source-only test does not authorize checking out a fork's private branch.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact cache-profile source
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse --verify HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          printf 'Profile source head=%s tree=%s\n' \
+            "$(git rev-parse --verify HEAD)" "$(git rev-parse --verify HEAD^{tree})"
+      - name: Run actual profile parser and triplet rejection suites
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -v -s scripts -p 'test_*cache*py'
+  native-shard-sanitizers:
+    # Host C++ correctness and memory-safety only; no perf or guest-AOT claims.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact native benchmark source
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse --verify HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          printf 'Benchmark source head=%s tree=%s\n' \
+            "$(git rev-parse --verify HEAD)" "$(git rev-parse --verify HEAD^{tree})"
+      - name: Install native sanitizer build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends llvm-dev clang cmake ninja-build
+          command -v clang
+          command -v clang++
+          command -v llvm-config
+      - name: Build native host benchmark and layout tests with ASan and UBSan
+        shell: bash
+        run: |
+          set -euo pipefail
+          LLVM_DIR="$(llvm-config --cmakedir)"
+          cmake -S . -B "$RUNNER_TEMP/dop-cache-sanitized" -G Ninja \
+            -DBUILD_TESTING=ON -DLLVM_DIR="$LLVM_DIR" \
+            -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            "-DCMAKE_C_FLAGS=-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer" \
+            "-DCMAKE_CXX_FLAGS=-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer" \
+            "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
+          cmake --build "$RUNNER_TEMP/dop-cache-sanitized" \
+            --target oreslang-native-actor-shard-bench \
+              oreslang-native-actor-shard-layout-test --parallel 2
+          test -x "$RUNNER_TEMP/dop-cache-sanitized/oreslang-native-actor-shard-bench"
+          sha256sum "$RUNNER_TEMP/dop-cache-sanitized/oreslang-native-actor-shard-bench"
+      - name: Execute native actor AoS SoA AoSoA sanitizer matrix
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euo pipefail
+          binary="$RUNNER_TEMP/dop-cache-sanitized/oreslang-native-actor-shard-bench"
+          for layout in aos soa aosoa; do
+            for rows in 1 17 1025 100000; do
+              timeout --signal=TERM --kill-after=3s 60s \
+                "$binary" --layout "$layout" --rows "$rows" --iterations 2
+            done
+          done
+          ctest --test-dir "$RUNNER_TEMP/dop-cache-sanitized" \
+            -R '^native_actor_owned_aos_soa_aosoa_dense_kernel$' \
+            --output-on-failure --timeout 120
+          test "$(git rev-parse --verify HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          test -z "$(git status --porcelain --untracked-files=all)"

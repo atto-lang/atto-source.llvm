@@ -13,6 +13,7 @@
 
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "actor heap check failed at %d\n", __LINE__); return 1; } } while (0)
 
+#if !defined(ORES_HEAP_NO_LINK_WRAP)
 /* Linker --wrap intercepts calls from production ActorOwnedI64Heap.c,
  * not its C++ test host's unrelated allocator traffic. Check actual bytes
  * BEFORE real free at O0/O2, never after the allocation lifetime ends.
@@ -49,6 +50,7 @@ extern "C" void __wrap_free(void* p) {
     ++scrubbed_physical_frees;
     __real_free(p);
 }
+#endif /* !ORES_HEAP_NO_LINK_WRAP */
 
 enum Misuse { WRONG_OWNER, WRONG_EPOCH, FORGED_SLOT, DROP_LOANED, WRITE_LOANED, STALE_SLOT_REUSED, FOREIGN_SLOT, DOUBLE_LOAN_RELEASE, REENTER, CALL_AFTER_RETIRE, CROSS_CARRIER_TOKEN, NESTED_DIFFERENT_HEAP };
 static void invalid_call(enum Misuse which) {
@@ -199,8 +201,23 @@ int main(void) {
     OresActorSlot saved = ores_actor_i64_heap_new(heap, first, 40);
     CHECK(ores_actor_i64_heap_read(heap, first, saved) == 40);
     OresActorLoan suspended = ores_actor_i64_heap_borrow(heap, first, saved);
+    /* A live actor cannot take a second physical turn, even on its
+     * current native carrier. Busy admission leaves its output untouched. */
+    OresActorTurn denied = {0, 0};
+    CHECK(ores_actor_i64_heap_try_enter(heap, 29, 7, &denied) == 0);
+    CHECK(denied.domain == 0 && denied.epoch == 0);
+    bool competitor_denied = false;
+    std::thread competitor([&] {
+        OresActorTurn busy = {91, 92};
+        competitor_denied = ores_actor_i64_heap_try_enter(heap, 29, 7, &busy) == 0
+            && busy.domain == 91 && busy.epoch == 92;
+    });
+    competitor.join();
+    CHECK(competitor_denied);
     ores_actor_i64_heap_leave(heap, first); /* simulates await/suspension */
-    OresActorTurn next = ores_actor_i64_heap_enter(heap, 29, 7);
+    OresActorTurn next = {0, 0};
+    CHECK(ores_actor_i64_heap_try_enter(heap, 29, 7, &next) == 1);
+    CHECK(next.domain == first.domain && next.epoch > first.epoch);
     CHECK(ores_actor_i64_heap_read(heap, next, saved) == 40);
     ores_actor_i64_heap_leave(heap, next); /* shared loan still protects saved */
     /* A different native thread executes the next actor turn. */
@@ -237,8 +254,10 @@ int main(void) {
     CHECK(rejects(CROSS_CARRIER_TOKEN));
     CHECK(rejects(NESTED_DIFFERENT_HEAP));
     CHECK(test_long_lived_source_actor_heap_churn() == 0);
+#if !defined(ORES_HEAP_NO_LINK_WRAP) /* Apple ld has no --wrap: no pre-free scrub evidence there */
     CHECK(tracked_heap_count == 0);
     CHECK(scrubbed_physical_frees == 2);
+#endif
     puts("SOURCE_ACTOR_HEAP_HOST_LIFECYCLE_OK|churn=100000|churn_turns=1000|negative=12|scrubbed_heap_frees=2|atto_guest=NO");
 #endif
     return 0;

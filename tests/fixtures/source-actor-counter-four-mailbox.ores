@@ -1,0 +1,23 @@
+// Two actual generated native actor instances with separate actor-owned heaps.
+// STOP may race with DATA processing; runtime receipts verify the processed
+// prefix of each independently ordered mailbox.
+define actor Counter as {
+    let total: int = 0;
+    pub fnc on_message(int amount): int {
+        total = total + amount;
+        return total;
+    }
+}
+pub fnc main(): int {
+    const left = spawn Counter();
+    const right = spawn Counter();
+    left.send(1);
+    right.send(7);
+    left.send(2);
+    right.send(8);
+    left.send(3);
+    left.send(4);
+    stop left;
+    stop right;
+    return 43;
+}

@@ -18,34 +18,51 @@ for arg in "$@"; do
     exit 1
   fi
 done
-output=
-while [[ $# -gt 0 ]]; do
-  if [[ "$1" == "-o" ]]; then shift; output="$1"; fi
-  shift
+# Probe failure is deliberate; successful cases MUST emit native ELF.
+# A shell-script fake can no longer pass linked-image admission.
+for arg in "$@"; do
+  if [[ "$arg" == */lto-main.ll && "${MOCK_PROBE_EXIT:-0}" == 1 ]]; then
+    exit 1
+  fi
 done
-[[ -n "$output" ]] || exit 2
-printf '#!/bin/sh\nexit %d\n' "${MOCK_PROBE_EXIT:-0}" >"$output"
-chmod +x "$output"
+for arg in "$@"; do
+  if [[ "$arg" == */program.ll ]]; then
+    printf '%s\n' "$@" > "$MOCK_FINAL_LOG"
+    break
+  fi
+done
+exec "$REAL_CLANG" "$@"
 EOF
 chmod +x "$work/mock-compiler" "$work/mock-clang"
+export REAL_CLANG="$(command -v clang)"
+export MOCK_FINAL_LOG="$work/final.log"
 export MOCK_CLANG_LOG="$work/clang.log"
+cat >"$work/mock-auditor" <<'EOF'
+#!/usr/bin/env bash
+test -s "$1"
+EOF
+chmod +x "$work/mock-auditor"
+export ORES_NO_GC_IR_AUDIT="$work/mock-auditor"
 export CLANG="$work/mock-clang"
 export ORESLANG_LLVMC="$work/mock-compiler"
 printf 'previous executable\n' >"$work/app"
 # Baseline must not request LTO.
 : >"$MOCK_CLANG_LOG"
 ORESLANG_AOT_LTO=off bash "$root/scripts/compile-aot.sh" "$work/input.ores" "$work/app"
-! grep -q -- '-flto' "$MOCK_CLANG_LOG"
+if grep -q -- '-flto' "$MOCK_CLANG_LOG" || grep -q -- '-flto' "$MOCK_FINAL_LOG"; then
+  echo 'baseline unexpectedly enabled LTO' >&2; exit 1
+fi
 # Full and Thin modes run an executable two-unit LLVM IR canary plus final IR link.
 for mode in full thin; do
   : >"$MOCK_CLANG_LOG"
+  rm -f "$MOCK_FINAL_LOG"
   ORESLANG_AOT_LTO="$mode" bash "$root/scripts/compile-aot.sh" "$work/input.ores" "$work/app"
   if [[ "$mode" == full ]]; then
-    grep -qx -- '-flto' "$MOCK_CLANG_LOG"
+    grep -qx -- '-flto' "$MOCK_FINAL_LOG"
   else
-    grep -qx -- '-flto=thin' "$MOCK_CLANG_LOG"
+    grep -qx -- '-flto=thin' "$MOCK_FINAL_LOG"
   fi
-  grep -qx -- '-fuse-ld=lld' "$MOCK_CLANG_LOG"
+  grep -qx -- '-fuse-ld=lld' "$MOCK_FINAL_LOG"
   grep -q -- '/lto-helper.ll' "$MOCK_CLANG_LOG"
   grep -q -- '/lto-main.ll' "$MOCK_CLANG_LOG"
 done
@@ -63,4 +80,4 @@ if ORESLANG_AOT_LTO=bogus bash "$root/scripts/compile-aot.sh" "$work/input.ores"
   echo 'unexpected acceptance of unknown LTO mode' >&2; exit 1
 fi
 [[ "$(cat "$work/app")" == preserved ]]
-echo 'LTO driver policy smoke passed (mock linker only; no real LTO claim).'
+echo 'LTO driver policy smoke passed (real Clang/LLD, synthetic IR producer; no source compiler claim).'

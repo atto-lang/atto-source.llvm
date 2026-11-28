@@ -1,0 +1,8 @@
+namespace counter;
+declare pub actor Counter;
+define state on actor Counter as {
+    let int total : 0;
+}
+mtd (Counter actor) receive(ActorMail<int> mail): void {
+    self.handle_state(critical-write |s| -> { s.total = s.total + mail.value; });
+}

@@ -1,0 +1,41 @@
+name: TenantVM object handles (trusted host only)
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/OresVM.hpp'
+      - 'src/main/cpp/oreslang/runtime/OresIsolateVM.hpp'
+      - 'tests/native_oresvm_object_handles_test.cpp'
+      - '.github/workflows/tenantvm-object-handles-native.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  object-handles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [g++, clang++]
+        profile: [O2-NDEBUG, ASAN-UBSAN]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and execute native host objects at exact checkout
+        shell: bash
+        env:
+          CXX: ${{ matrix.compiler }}
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          set -euo pipefail
+          flags=(-std=c++17 -Wall -Wextra -Wpedantic -Werror -pthread -Isrc/main/cpp)
+          if [[ "$PROFILE" == ASAN-UBSAN ]]; then
+            flags+=(-O1 -g -DNDEBUG -fsanitize=address,undefined -fno-omit-frame-pointer)
+          else
+            flags+=(-O2 -DNDEBUG)
+          fi
+          "$CXX" "${flags[@]}" tests/native_oresvm_object_handles_test.cpp -o "$RUNNER_TEMP/tenantvm-object-handles"
+          ASAN_OPTIONS=detect_leaks=1 "$RUNNER_TEMP/tenantvm-object-handles"
+          echo "HOST_ONLY_EXECUTED: compiler=$CXX profile=$PROFILE sha=$GITHUB_SHA"

@@ -16,6 +16,53 @@ static void check(bool ok, const char* explanation) {
 }
 
 int main() {
+    // Signed-nanosecond adapter for guest Atto std/time. The native queue
+    // itself remains uint64 and requires a trusted owner clock at this edge.
+    {
+        NativeTimerQueue queue(2);
+        bool negativeStart = false, negativeDelay = false, negativePoll = false;
+        try { (void) queue.arm_after_atto(-1, 1); }
+        catch (const std::invalid_argument&) { negativeStart = true; }
+        try { (void) queue.arm_after_atto(1, -1); }
+        catch (const std::invalid_argument&) { negativeDelay = true; }
+        try { (void) queue.poll_atto(-1, 1); }
+        catch (const std::invalid_argument&) { negativePoll = true; }
+        check(negativeStart && negativeDelay && negativePoll,
+              "Atto negative timestamp/duration crossed the native queue");
+        check(queue.outstanding() == 0,
+              "invalid Atto admission allocated a timer handle");
+
+        bool overflow = false;
+        try {
+            (void) queue.arm_after_atto(
+                std::numeric_limits<std::int64_t>::max(), 1);
+        } catch (const std::overflow_error&) { overflow = true; }
+        check(overflow, "Atto signed deadline overflow was accepted");
+        check(queue.outstanding() == 0, "overflow reserved a timer");
+
+        const auto token = queue.arm_after_atto(100, 10);
+        check(queue.poll_atto(109, 1).empty(), "Atto timer fired before deadline");
+        auto due = queue.poll_atto(110, 1);
+        check(due.size() == 1 && due[0].handle == token,
+              "Atto timer did not fire at inclusive deadline");
+        check(queue.claim_delivery(token), "Atto delivery claim failed");
+        check(!queue.claim_delivery(token), "Atto delivery claimed twice");
+
+        const auto zero = queue.arm_after_atto(200, 0);
+        check(queue.poll_atto(199, 1).empty(), "zero-delay Atto timer fired early");
+        check(queue.poll_atto(200, 1).size() == 1, "zero delay did not become due");
+        check(queue.revoke_before_dispatch(zero),
+              "ready Atto timer cancellation was not honored");
+        check(!queue.claim_delivery(zero),
+              "cancelled Atto timer allowed stale scheduler dispatch");
+
+        const auto last = queue.arm_after_atto(
+                std::numeric_limits<std::int64_t>::max() - 1, 1);
+        check(queue.poll_atto(std::numeric_limits<std::int64_t>::max(), 1).size() == 1,
+              "largest signed Atto deadline did not become due");
+        check(queue.claim_delivery(last), "largest deadline delivery failed");
+        check(queue.outstanding() == 0, "Atto timer adapter leaked handles");
+    }
     {
         NativeTimerQueue queue(2);
         const auto later = queue.arm_after(100, 10);
@@ -256,6 +303,38 @@ int main() {
         check(!a.revoke_before_dispatch(token), "revocation allowed after close");
         check(!a.claim_delivery(token), "claim allowed after close");
         check(a.outstanding() == 0, "close leaked ticket");
+    }
+
+    // Idle and sparse expiry polls must not reserve a buffer from the
+    // entire pending population. Linux std::vector capacity is observable
+    // here to catch the former unconditional reserve on the hot path.
+    {
+        NativeTimerQueue q(4096);
+        const auto first = q.arm_after(100, 1);
+        const auto second = q.arm_after(100, 1);
+        for (int i = 0; i < 4094; ++i) (void)q.arm_after(100, 1000);
+        for (int i = 0; i < 1000; ++i) {
+            auto idle = q.poll(100, 4096);
+            check(idle.empty() && idle.capacity() == 0,
+                  "idle poll allocated result storage");
+        }
+        auto sparse = q.poll(101, 4096);
+        check(sparse.size() == 2 && sparse[0].handle == first &&
+                  sparse[1].handle == second,
+              "sparse poll lost deadline/FIFO ordering");
+        check(sparse.capacity() < q.pending(),
+              "sparse poll sized buffer from future timers");
+        check(q.outstanding() == 4096, "polled tickets escaped admission accounting");
+        check(q.claim_delivery(first) && q.revoke_before_dispatch(second),
+              "ready token settlement failed");
+        check(!q.claim_delivery(first) && !q.claim_delivery(second),
+              "settled token revived");
+        check(q.pending() == 4094 && q.outstanding() == 4094,
+              "sparse poll changed future timers");
+        check(q.next_deadline_ns() == 1100, "sparse poll changed next deadline");
+        q.close();
+        check(q.outstanding() == 0 && q.poll(1100, 4096).empty(),
+              "close leaked timer state");
     }
 
 }

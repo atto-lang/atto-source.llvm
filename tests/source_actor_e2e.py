@@ -3,6 +3,7 @@
 import argparse
 import pathlib
 import re
+import hashlib
 import subprocess
 import tempfile
 
@@ -16,6 +17,8 @@ def run(cmd, **kw):
 def expected_prefix_last(name, actor_index, processed):
     if processed == 0:
         return 0
+    if name == "actor-logical-frame-aot-two-actors.atto":
+        return [1, 42][actor_index] if processed else 0
     if name == "source-actor-fifo-ten.ores":
         value = 0
         for n in range(1, processed + 1):
@@ -32,8 +35,13 @@ def expected_prefix_last(name, actor_index, processed):
         for n in range(start, start + processed):
             value = 2 * (value + n)
         return value
+    if name == "source-actor-heap-turnover.ores":
+        return sum(([7, 3], [100, 2], [5])[actor_index][:processed])
     if name == "source-actor-interleaved-stop.ores":
         sequences = ([1], [3, 4])
+        return sum(sequences[actor_index][:processed])
+    if name == "source-actor-counter-four-mailbox.ores":
+        sequences = ([1, 2, 3, 4], [7, 8])
         return sum(sequences[actor_index][:processed])
     return sum([1, 2][:processed])
 
@@ -45,6 +53,9 @@ def parse_actor_receipt(line):
     expected = {
         "constructor_on_worker", "released", "ready",
         "accepted", "processed", "abandoned", "last",
+        # Failed-receive accounting (#1819): turns that completed, turns
+        # that failed, and the last typed failure code.
+        "successful", "failed", "failure_code",
     }
     fields = {}
     for field in parts[1:]:
@@ -66,24 +77,51 @@ def parse_actor_receipt(line):
         assert fields["ready"] == fields["processed"] == fields["last"] == 0, fields
     return fields
 
+
+# Canonical source bytes are also pinned in oreslang-platform-conformance
+# fixtures/mailbox-linearizability-v1/manifest.json. This pins the actual
+# guest fixture being compiled; do not replace it with a host-only simulation.
+_CANONICAL_ACTOR_GUEST_BLOBS = {
+    "source-actor-send.ores": "3050260bd65b019a2b00191fba9086971409511b",
+    "source-actor-interleaved-stop.ores": "c7488835f34e926dfa4c8766c8917301fe84da09",
+    "source-actor-send-after-stop.ores": "ba046cb355fd16d9b5f6f7b39ace45356ef497db",
+}
+
+def require_canonical_actor_guest_blobs(fixtures):
+    for name, expected_blob in _CANONICAL_ACTOR_GUEST_BLOBS.items():
+        path = fixtures / name
+        assert path.is_file() and not path.is_symlink(), (
+            "source actor guest fixture must be a regular file", name)
+        source = path.read_bytes()
+        assert 0 < len(source) < 16384, ("invalid fixture size", name)
+        marker = b"blob " + str(len(source)).encode("ascii") + bytes([0])
+        actual = hashlib.sha1(marker + source).hexdigest()
+        assert actual == expected_blob, (
+            "portable actor fixture drift; update conformance review first",
+            name, actual, expected_blob)
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--compiler", required=True)
     ap.add_argument("--clang", required=True)
     ap.add_argument("--root", required=True)
     ap.add_argument("--sanitize", action="store_true")
+    ap.add_argument("--positive-case", help="One positive guest only; not a full-suite receipt")
     args = ap.parse_args()
     root = pathlib.Path(args.root)
     fixtures = root / "tests" / "fixtures"
+    require_canonical_actor_guest_blobs(fixtures)
     runtime = root / "src" / "main" / "cpp" / "oreslang" / "runtime"
     source_dirs = root / "src" / "main" / "cpp"
     positives = [
         ("source-actor-spawn-stop.ores", 1, 0, None),
+        ("source-actor-lazy-first-carrier.atto", 1, 2, 3),
         # Verify real compiled guest execution, not just IR text admission,
         # for all three source spellings of native instance on_message.
         ("source-actor-method-keyword.ores", 1, 2, 3),
         ("source-actor-bare-method.ores", 1, 2, 3),
         ("source-actor-send.ores", 1, 2, 3),
+        ("source-actor-grouped-empty.ores", 1, 2, 3),
         ("source-actor-typed-ref.ores", 1, 2, 3),
         ("source-actor-await-ready.ores", 1, 2, 3),
         ("source-actor-await-worker.ores", 1, 2, 3),
@@ -91,13 +129,20 @@ def main():
         ("source-actor-await-done.ores", 1, 0, None),
         ("source-actor-five-workers.ores", 5, 2, 3),
         ("source-actor-fifo-ten.ores", 1, 10, 2853116705),
+        ("source-actor-counter-four-mailbox.ores", 2, None, None),
         ("source-actor-scoped-owned-i64.ores", 1, 8, 1004),
         ("source-actor-two-owned-heaps.ores", 2, 4, None),
+        ("actor-logical-frame-aot-two-actors.atto", 2, 1, None),
         ("source-actor-interleaved-stop.ores", 2, None, None),
+        ("source-actor-heap-turnover.ores", 3, None, None),
         ("source-actor-send-moved-value.ores", 1, 2, 3),
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
     ]
     negatives = {
+        "source-actor-late-spawn-before-send-reject.atto": "actor message sent before spawn",
+        "source-actor-late-spawn-missing-stop-reject.atto": "actor reference must be stopped",
+        "source-actor-late-spawn-duplicate-reject.atto": "duplicate actor reference",
+        "source-actor-late-spawn-await-reject.atto": "late actor spawn requires straight-line synchronous root actor bootstrap",
         "source-actor-pipe-unlowered-reject.ores":
             "NATIVE_ACTOR_PIPE_UNSUPPORTED: typed actor pipe requires guest port, mailbox and supervisor lowering",
         "source-actor-transform-pipe-unlowered-reject.ores":
@@ -153,6 +198,15 @@ def main():
         "source-actor-send-return-after-take-reject.ores": "use of explicitly moved int",
         "source-actor-send-expression-after-take-reject.ores": "use of explicitly moved int",
         "source-actor-send-class-value-reject.ores": "ownership violation: class is non-Copy",
+        # Native actor DATA is scalar i64 only. No owned array handle or
+        # borrowed reference may be silently reinterpreted as a scalar
+        # message until the typed buffer ABI and Sendable proof are lowered.
+        "source-actor-send-owned-array-reject.ores":
+            "native actor Array<T> DATA send requires typed owned-buffer mailbox lowering",
+        "source-actor-send-borrowed-array-reject.ores":
+            "native actor Array<T> DATA send requires typed owned-buffer mailbox lowering",
+        "source-actor-send-unmoved-array-reject.ores":
+            "native actor Array<T> DATA send requires typed owned-buffer mailbox lowering",
         "source-actor-send-moved-class-field-reject.ores": "ownership violation: use-after-move class field",
         "source-actor-send-field-take-reject.ores": "ownership violation: use-after-move class field",
         # Explicitly refuse source contracts that need typed actor field
@@ -160,6 +214,12 @@ def main():
         "source-actor-final-group-field-reject.ores": "native final actor fields require typed field initialization and ownership lowering",
         "source-actor-suspend-method-reject.ores": "native suspends actor method requires continuation lowering",
     }
+    if args.positive_case:
+        positives = [case for case in positives if case[0] == args.positive_case]
+        if len(positives) != 1:
+            ap.error("unknown positive guest case")
+        negatives = {}
+        print("SCOPED positive guest only:", args.positive_case, flush=True)
     for name, diagnostic in negatives.items():
         flags = ["--experimental-owned-int"] if (
             name.startswith("source-actor-scoped-owned-")
@@ -167,6 +227,14 @@ def main():
         ) else []
         result = run([args.compiler, *flags, str(fixtures / name)])
         assert result.returncode != 0 and diagnostic in result.stderr, (name, diagnostic, result.stderr)
+        if name in {
+            "source-actor-send-owned-array-reject.ores",
+            "source-actor-send-borrowed-array-reject.ores",
+            "source-actor-send-unmoved-array-reject.ores",
+        }:
+            # A crash with a matching diagnostic is not a semantic rejection.
+            assert result.returncode == 1, ("buffer payload reject must exit 1", name, result.returncode)
+            assert "AddressSanitizer" not in result.stderr and "Segmentation fault" not in result.stderr, name
         assert not result.stdout.strip(), ("unsafe LLVM IR emitted for rejected source", name)
     print(f"PASS {len(negatives)} no-IR actor ownership and await boundary cases", flush=True)
     with tempfile.TemporaryDirectory(prefix="oreslang-native-source-actor-") as temp:
@@ -178,13 +246,20 @@ def main():
             guest = run([args.compiler, *flags, str(fixtures / name)])
             assert guest.returncode == 0, (name, guest.stderr)
             assert guest.stdout.startswith("; ModuleID"), name
-            assert "oreslang_source_actor_spawn" in guest.stdout, name
-            assert "oreslang_source_actor_stop" in guest.stdout, name
+            assert "@llvm.gcroot" not in guest.stdout, name
+            assert "@llvm.experimental.gc.statepoint" not in guest.stdout, name
+            assert 'gc "' not in guest.stdout, name
+            assert "call i64 @oreslang_source_actor_spawn_id(" in guest.stdout, name
+            assert "oreslang_source_actor_stop_id" in guest.stdout, name
+            # These are executable LLVM AOT call sites, not just external declarations.
+            for op in ("push", "store_i64", "load_i64", "pop"):
+                symbol = f"call i32 @oreslang_source_actor_frame_{op}("
+                assert symbol in guest.stdout, (name, "missing generated actor frame operation", symbol)
             if name not in {
                 "source-actor-spawn-stop.ores",
                 "source-actor-await-done.ores",
             }:
-                assert "oreslang_source_actor_send" in guest.stdout, name
+                assert "call void @oreslang_source_actor_send_id(" in guest.stdout, name
             if name in {
                 "source-actor-scoped-owned-i64.ores",
                 "source-actor-two-owned-heaps.ores",
@@ -202,24 +277,45 @@ def main():
             if name in {"source-actor-await-ready.ores",
                         "source-actor-await-worker.ores",
                         "source-actor-future-void-ready.ores"}:
-                assert "oreslang_source_actor_await_ready" in guest.stdout, name
+                assert "oreslang_source_actor_await_ready_id" in guest.stdout, name
                 assert "ready_continuation" in guest.stdout, name
                 # A runtime declaration or source text alone is not an await:
                 # require exactly one generated call to the CONTROL bridge.
                 calls = [line for line in guest.stdout.splitlines()
-                         if "call i64 @oreslang_source_actor_await_ready(" in line]
+                         if "call i64 @oreslang_source_actor_await_ready_id(" in line]
                 assert len(calls) == 1, (name, "expected one guest await", calls)
             if name == "source-actor-await-done.ores":
-                assert "oreslang_source_actor_request_stop" in guest.stdout, name
-                assert "oreslang_source_actor_await_done" in guest.stdout, name
+                assert "oreslang_source_actor_request_stop_id" in guest.stdout, name
+                assert "call i64 @oreslang_source_actor_await_done_id(" in guest.stdout, name
                 assert "done_continuation" in guest.stdout, name
-                assert "call void @oreslang_source_actor_request_stop" in guest.stdout, name
+                assert "call void @oreslang_source_actor_request_stop_id(" in guest.stdout, name
+            if name == "source-actor-heap-turnover.ores":
+                spawns = [m.start() for m in re.finditer(
+                    r"call i64 @oreslang_source_actor_spawn_id\(", guest.stdout)]
+                stops = [m.start() for m in re.finditer(
+                    r"call void @oreslang_source_actor_stop_id\(", guest.stdout)]
+                assert len(spawns) == len(stops) == 3, (name, spawns, stops)
+                assert spawns[0] < spawns[1] < stops[0] < spawns[2] < stops[1] < stops[2], (
+                    name, "late spawn must follow physical stop, while sibling lives")
             if name == "source-actor-interleaved-stop.ores":
                 # IR call ordering must reflect lexical source ordering.
                 # Previous lowering grouped every send before every stop.
-                first_stop = guest.stdout.find("call void @oreslang_source_actor_stop")
-                final_send = guest.stdout.rfind("call void @oreslang_source_actor_send")
+                first_stop = guest.stdout.find("call void @oreslang_source_actor_stop_id(")
+                final_send = guest.stdout.rfind("call void @oreslang_source_actor_send_id(")
                 assert 0 <= first_stop < final_send, (name, "source actor effects reordered")
+            # Actor identity is now a by-value 64-bit incarnation ID,
+            # never a malloc pointer. Unused declarations do not count:
+            # real generated callsites MUST target the checked ABI.
+            forbidden = (
+                "call ptr @oreslang_source_actor_spawn(",
+                "call void @oreslang_source_actor_stop(",
+                "call void @oreslang_source_actor_send(",
+                "call void @oreslang_source_actor_request_stop(",
+                "call i64 @oreslang_source_actor_await_ready(",
+                "call i64 @oreslang_source_actor_await_done(",
+            )
+            assert not any(x in guest.stdout for x in forbidden), (
+                name, "legacy source actor pointer runtime callsite detected")
             ll = pathlib.Path(temp, name + ".ll")
             ll.write_text(guest.stdout)
             exe = pathlib.Path(temp, name + ".guest")
@@ -232,6 +328,7 @@ def main():
                 str(runtime / "NativeOresVM.c"),
                 str(runtime / "NativeActorFuture.c"),
                 str(runtime / "SourceActorBootstrap.c"),
+                str(runtime / "NativeActorLogicalFramesV1.c"),
                 str(runtime / "NativeExecutionContextStore.c"),
                 str(runtime / "NativeContinuationStore.c"),
                 str(runtime / "NativeAwaitTraceBridge.c"),
@@ -242,12 +339,18 @@ def main():
             linked = run(command)
             assert linked.returncode == 0, (name, linked.stderr)
             executed = run([str(exe)])
-            assert executed.returncode == 43, (name, executed.returncode, executed.stderr)
+            expected_exit = 42 if name == "actor-logical-frame-aot-two-actors.atto" else 43
+            assert executed.returncode == expected_exit, (name, executed.returncode, executed.stderr)
             vm_lines = [line for line in executed.stderr.splitlines()
                         if "SOURCE_ACTOR_VM_ROUTING_VERIFIED" in line]
             assert len(vm_lines) == 1 and (
                 "domains=4 main=1 cold_carriers=0" in vm_lines[0]), (
                 name, vm_lines)
+            first_carrier = [line for line in executed.stderr.splitlines()
+                             if line.startswith("SOURCE_ACTOR_FIRST_CARRIER_READY ")]
+            assert first_carrier == [
+                "SOURCE_ACTOR_FIRST_CARRIER_READY main=1 shared=0 private=0 untrusted=0"
+            ], (name, "source actor carrier not ready at publication", first_carrier)
             if name in {"source-actor-await-ready.ores",
                         "source-actor-await-worker.ores",
                         "source-actor-future-void-ready.ores"}:
@@ -272,6 +375,8 @@ def main():
                 expected_accepted = (
                     [1, 2][i]
                     if name == "source-actor-interleaved-stop.ores"
+                    else [2, 2, 1][i] if name == "source-actor-heap-turnover.ores"
+                    else [4, 2][i] if name == "source-actor-counter-four-mailbox.ores"
                     else count)
                 assert accepted == expected_accepted, (
                     name, i, accepted, expected_accepted)
@@ -281,13 +386,21 @@ def main():
                 assert observed_last == expected_prefix_last(
                     name, i, processed), (
                     name, i, processed, observed_last)
+            if name == "source-actor-heap-turnover.ores":
+                group = [line for line in executed.stderr.splitlines()
+                         if line.startswith("SOURCE_ACTOR_GROUP_VERIFIED ")]
+                assert len(group) == 1 and "active=0" in group[0] and "peak=2 " in group[0], (
+                    name, "two live actors maximum, all physically retired", group)
+                assert all(r["failed"] == 0 and r["successful"] == r["processed"]
+                           and r["failure_code"] == 0 for r in receipts), (name, receipts)
             if name == "source-actor-two-owned-heaps.ores":
                 assert [r["last"] for r in receipts] == [
                     expected_prefix_last(name, i, r["processed"])
                     for i, r in enumerate(receipts)
                 ], (name, receipts)
             print("PASS native source actor:", name, "actors", actors, flush=True)
-    print("PASS current-source actor lowering and physical heap reclamation")
+    print("PASS scoped positive guest" if args.positive_case else
+          "PASS current-source actor lowering and physical heap reclamation")
 
 if __name__ == "__main__":
     main()

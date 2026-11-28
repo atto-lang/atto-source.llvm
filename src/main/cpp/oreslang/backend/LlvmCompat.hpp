@@ -1,5 +1,5 @@
 #pragma once
-// LLVM 19-23 abstraction for pointer and lifetime intrinsics.
+// LLVM 14-23 compatibility for native pointers, lifetimes, and intrinsics.
 // The language/ABI does not depend on which LLVM API spells these operations.
 #include <cstdint>
 #include "llvm/ADT/ArrayRef.h"
@@ -10,17 +10,20 @@
 
 namespace oreslang {
 inline llvm::Type* native_pointer_type(llvm::LLVMContext& context, llvm::Type* pointee) {
-#if LLVM_VERSION_MAJOR >= 23
+    // Pointers are opaque from LLVM 17: getPointerTo() already returned this
+    // `ptr` type, and it is deprecated (-Werror) from LLVM 21.
+#if LLVM_VERSION_MAJOR >= 17
     (void)pointee;
     return llvm::PointerType::get(context, 0);
 #else
+    (void)context;
     return pointee->getPointerTo();
 #endif
 }
 
 inline void native_lifetime_start(llvm::IRBuilder<>& builder, llvm::Value* ptr,
                                   std::uint64_t bytes) {
-#if LLVM_VERSION_MAJOR >= 23
+#if LLVM_VERSION_MAJOR >= 22
     (void)bytes;
     builder.CreateLifetimeStart(ptr);
 #else
@@ -30,7 +33,7 @@ inline void native_lifetime_start(llvm::IRBuilder<>& builder, llvm::Value* ptr,
 }
 inline void native_lifetime_end(llvm::IRBuilder<>& builder, llvm::Value* ptr,
                                 std::uint64_t bytes) {
-#if LLVM_VERSION_MAJOR >= 23
+#if LLVM_VERSION_MAJOR >= 22
     (void)bytes;
     builder.CreateLifetimeEnd(ptr);
 #else
@@ -49,6 +52,19 @@ inline llvm::Function* native_intrinsic(llvm::Module& module,
     return llvm::Intrinsic::getOrInsertDeclaration(&module, id, overloads);
 #else
     return llvm::Intrinsic::getDeclaration(&module, id, overloads);
+#endif
+}
+
+// LLVM 23 removed CreateGlobalStringPtr. With opaque pointers, the
+// address of the global array is also the address of its first byte.
+// Keep the legacy helper for typed-pointer LLVM releases.
+inline llvm::Constant* native_global_string_ptr(llvm::IRBuilder<>& builder,
+                                               llvm::StringRef bytes,
+                                               llvm::Twine name) {
+#if LLVM_VERSION_MAJOR >= 23
+    return builder.CreateGlobalString(bytes, name);
+#else
+    return builder.CreateGlobalStringPtr(bytes, name);
 #endif
 }
 

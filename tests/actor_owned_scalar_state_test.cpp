@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -82,13 +83,17 @@ int main() {
                                 return std::int64_t{999};
                             });
                 });
-                const auto nested = state.critical(actor, 100, checked, allowed,
-                        [&](State::Access& inner) -> State::Value {
-                    rejects([&] { (void) access.read("count"); });
-                    check(std::get<std::int64_t>(inner.read("count")) == 1);
-                    return inner.read("count");
+                // Sealed critical sections never nest, not even on the same
+                // continuation (68474643b): a nested read/read or read/write
+                // loan would re-enter state authority inside the caller's
+                // single-transaction effect proof. The rejected admission
+                // must leave the outer loan valid and unchanged.
+                rejects([&] {
+                    (void) state.critical(actor, 100, checked, allowed,
+                            [&](State::Access&) -> State::Value {
+                                return std::int64_t{999};
+                            });
                 });
-                check(std::get<std::int64_t>(nested) == 1);
                 check(std::get<std::int64_t>(access.read("count")) == 1);
             }
             return access.read("count");
@@ -141,6 +146,76 @@ int main() {
         });
         (void) oversize;
     });
+    // Four independent native actor-owned turns produce the same Counter=10
+    // contract as the Java checked-state primitive. These are real checked
+    // native loans; they are not yet LLVM guest source-level state lowering.
+    State left(actor + 40, {{"total", {State::Type::Int, std::int64_t{0}}}});
+    State right(actor + 41, {{"total", {State::Type::Int, std::int64_t{0}}}});
+    std::int64_t left_sum = 0;
+    for (std::int64_t delta : {1, 2, 3, 4}) {
+        left_sum += delta;
+        const auto observed = left.critical(actor + 40, 710, checked, allowed,
+                [&](State::Access& view) -> State::Value {
+            check(!left.ready_to_suspend(actor + 40));
+            return view.add_checked("total", delta);
+        });
+        check(std::get<std::int64_t>(observed) == left_sum);
+        check(left.ready_to_suspend(actor + 40));
+    }
+    check(left_sum == 10);
+    check(std::get<std::int64_t>(right.critical(actor + 41, 711, checked, allowed,
+            [](State::Access& view) -> State::Value {
+        return view.add_checked("total", 7);
+    })) == 7);
+    // A different actor's state is private, not an alias of left.total.
+    check(std::get<std::int64_t>(left.critical(actor + 40, 712, checked, allowed,
+            [](State::Access& view) -> State::Value { return view.read("total"); })) == 10);
+    check(std::get<std::int64_t>(right.critical(actor + 41, 712, checked, allowed,
+            [](State::Access& view) -> State::Value { return view.read("total"); })) == 7);
+    rejects([&] {
+        (void) left.critical(actor + 41, 713, checked, allowed,
+                [](State::Access& view) -> State::Value {
+            return view.add_checked("total", 1);
+        });
+    });
+    rejects([&] {
+        (void) left.critical(actor + 40, 714, checked, readonly,
+                [](State::Access& view) -> State::Value {
+            return view.add_checked("total", 1);
+        });
+    });
+
+    State positive_limit(actor + 42, {{"total", {State::Type::Int,
+            std::numeric_limits<std::int64_t>::max()}}});
+    rejects([&] {
+        (void) positive_limit.critical(actor + 42, 715, checked, allowed,
+                [](State::Access& view) -> State::Value {
+            return view.add_checked("total", 1);
+        });
+    });
+    check(positive_limit.ready_to_suspend(actor + 42));
+    check(std::get<std::int64_t>(positive_limit.critical(
+            actor + 42, 716, checked, allowed,
+            [](State::Access& view) -> State::Value {
+                return view.read("total");
+            })) == std::numeric_limits<std::int64_t>::max());
+    State negative_limit(actor + 43, {{"total", {State::Type::Int,
+            std::numeric_limits<std::int64_t>::min()}}});
+    rejects([&] {
+        (void) negative_limit.critical(actor + 43, 717, checked, allowed,
+                [](State::Access& view) -> State::Value {
+            return view.add_checked("total", -1);
+        });
+    });
+    check(std::get<std::int64_t>(negative_limit.critical(
+            actor + 43, 718, checked, allowed,
+            [](State::Access& view) -> State::Value { return view.read("total"); }))
+            == std::numeric_limits<std::int64_t>::min());
+    left.retire(actor + 40);
+    right.retire(actor + 41);
+    positive_limit.retire(actor + 42);
+    negative_limit.retire(actor + 43);
+
     rejects([&] { state.retire(99); });
     state.retire(actor);
     rejects([&] {

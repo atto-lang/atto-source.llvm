@@ -34,6 +34,15 @@ public:
         const auto approved = admit_critical_handle_state(
                 callback, declared_with, verified_serial_actor);
         if (approved != CriticalStateAdmission::Accept) return approved;
+        // The raw scope token-stack permits trusted low-level nesting.
+        // Sealed guest callbacks must NOT: read/read and read/write alike
+        // would allow re-entrant state authority and invalidate the
+        // caller's single-transaction effect proof. Check before minting
+        // a new generation, preserving the outer loan unchanged.
+        if (state.active || state.depth != 0) {
+            last_scope_result_ = ORES_ACTOR_STATE_BUSY_LOAN;
+            return CriticalStateAdmission::NestedStateLoan;
+        }
         const auto entered = ores_actor_state_enter_continuation(
                 &state, actor_id, continuation_id, &token_);
         last_scope_result_ = entered;

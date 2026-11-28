@@ -40,6 +40,8 @@ PAIR = (
 
 POSITIVE = dict(PORTABLE_POSITIVE)
 POSITIVE.update({
+    "explicit-return-caret-arms": ("pub fnc main(): int { let int answer = true ? { return 40; } : { ^ 7; }; return answer + 2; }", 42),
+    "explicit-false-arm": ("pub fnc main(): int { return false ? 7 : { ^ 42; }; }", 42),
     "parenthesized-condition": ("""
 pub fnc main(): int {
   return ((20 + 1 == 21)) ? 42 : 7;
@@ -47,7 +49,8 @@ pub fnc main(): int {
 """, 42),
     "local-initializer": ("""
 pub fnc main(): int {
-  const answer: int = 7 == 7 ? 40 : 1;
+  // This test observes a runtime PHI, not a compile-time const fold.
+  val int answer = 7 == 7 ? 40 : 1;
   return answer + 2;
 }
 """, 42),
@@ -91,6 +94,10 @@ pub fnc main(): int {
 
 
 NEGATIVE = {
+    "reject-empty-arm": ("pub fnc main(): int { return true ? {} : 7; }", "E_VALUE_ARM"),
+    "reject-bare-record-arm": ("pub fnc main(): int { return true ? {status: 42} : 7; }", "E_VALUE_ARM"),
+    "reject-implicit-tail-arm": ("pub fnc main(): int { return false ? 7 : {42}; }", "E_VALUE_ARM"),
+    "reject-unsupported-prefix": ("pub fnc main(): int { return true ? { const x: int = 42; return x; } : 7; }", "E_VALUE_ARM"),
     "reject-int-truthiness": (
         PORTABLE_REJECT["reject_integer_truthiness"]["source"],
         "ternary condition requires bool, got int",
@@ -107,7 +114,7 @@ fnc choose(int? value): int {
 pub fnc main(): int {
   return choose(42);
 }
-""", "native optional type '?' requires versioned Option/default ABI lowering"),
+""", "E_OPTION_TYPE_ABI_UNSUPPORTED"),
     "reject-optional-presence-still-gated": ("""
 fnc choose(int value?): int {
   return value;
@@ -115,7 +122,7 @@ fnc choose(int value?): int {
 pub fnc main(): int {
   return choose(42);
 }
-""", "native optional parameter presence '?' requires versioned default/presence ABI lowering"),
+""", "E_OPTIONAL_FORMAL_ABI_UNSUPPORTED"),
     "reject-divergent-move-state": (PAIR + """
 pub fnc main(): int {
   let mut Pair p = new Pair();
@@ -143,12 +150,9 @@ def compile_and_run(root, name, source, expected, compiler, clang, sanitize):
     # Tree shaking is part of the semantic gate: callees referenced only
     # from ternary arms must remain reachable even though runtime executes one arm.
     produced = execute([compiler, "--tree-shake", str(src)])
-    if "define class" in source:
-        # Preserve main's conservative constructor-root admission boundary,
-        # while retaining native execution coverage of class-valued effects.
-        assert produced.returncode != 0 and not produced.stdout, name
-        assert "rejects class declarations until class initializer roots are modeled" in produced.stderr, (name, produced.stderr)
-        produced = execute([compiler, str(src)])
+    # Current main models constructor roots. Exercise tree shaking for
+    # the class-valued effect case too: any denial is now a regression.
+    # Do not silently retry without tree shaking.
     assert produced.returncode == 0 and produced.stdout, (name, produced.stderr)
     assert "ternary.true" in produced.stdout, name
     assert "ternary.false" in produced.stdout, name

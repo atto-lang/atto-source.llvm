@@ -55,7 +55,16 @@ public:
         }
         using clock = std::chrono::steady_clock;
         const bool infinite = timeout == std::chrono::milliseconds::max();
-        const auto deadline = infinite ? clock::time_point::max() : clock::now() + timeout;
+        // Clamp before converting milliseconds to the finer native clock
+        // duration. Near-int64-limit inputs must not wrap into the past.
+        // Linux CLOCK_MONOTONIC uses a nonnegative epoch.
+        const auto now = clock::now();
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                clock::time_point::max() - now);
+        const auto deadline = infinite || timeout >= remaining
+                ? clock::time_point::max()
+                : timeout <= std::chrono::milliseconds::zero()
+                    ? now : now + timeout;
         for (;;) {
             if (stop.load(std::memory_order_acquire)) return WaitResult::stopped;
             if (ready()) return WaitResult::ready;

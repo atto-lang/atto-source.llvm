@@ -8,7 +8,7 @@
 
 namespace oreslang {
 namespace {
-enum class Kind { Int, Bool, String, Class, Array, Sum, Void };
+enum class Kind { Int, Bool, String, Class, Array, Sum, Void, NativeBoxI64 };
 struct Type {
     Kind kind = Kind::Int;
     std::string name;
@@ -39,6 +39,11 @@ Type result_type(const Function& fn) {
         ? scalar(fn.return_type) : Type{Kind::Class, fn.return_class};
 }
 Type local_type(const LocalBinding& local) {
+    if (local.native_box_i64) {
+        if (!local.heap_owned || !local.initializer || local.assignable)
+            throw std::runtime_error("malformed affine Box<int> local");
+        return {Kind::NativeBoxI64, {}};
+    }
     if (!local.sum_type.empty()) return {Kind::Sum, local.sum_type};
     if (local.int_array && local.array_element_type != ScalarType::I64 &&
             local.array_element_type != ScalarType::String)
@@ -55,6 +60,9 @@ void require(Type actual, Type expected, std::size_t offset, const std::string& 
 }
 }
 void validate_native_scalar_types(const Program& program) {
+    // This API also accepts compiler-created ASTs; do not assume that a
+    // caller previously ran resolve_native_sums or the text parser.
+    validate_native_sum_registry(program);
     std::unordered_map<std::string, const ClassDecl*> classes;
     std::unordered_map<std::string, const Function*> functions;
     for (const auto& cls : program.classes) classes.emplace(cls.name, &cls);
@@ -79,9 +87,16 @@ void validate_native_scalar_types(const Program& program) {
     };
     std::function<Type(const Expression&, const Locals&)> expression;
     expression = [&](const Expression& e, const Locals& locals) -> Type {
+        validate_native_sum_expression_shape(e);
         const auto evaluate = [&]() -> Type {
         using E = Expression::Kind;
         switch (e.kind) {
+            case E::ClosedRecur:
+                if (!program.actors.empty() || !program.classes.empty() ||
+                    !program.cooperative_loops.empty() || !program.generators.empty() ||
+                    !valid_closed_recur(e))
+                    fail(e.offset, "E_VALUE_LOOP_PROFILE: closed recur requires standalone scalar code");
+                return scalar(false);
             case E::SumConstruct: {
                 const auto& type = native_sum(program, e.sum_type);
                 const bool option = type.kind == NativeSumType::Kind::Option;
@@ -117,16 +132,45 @@ void validate_native_scalar_types(const Program& program) {
                 }
                 return {Kind::Void, {}};
             }
-            case E::Variable: return locals.at(e.name);
+            case E::Variable: {
+                const auto it = locals.find(e.name);
+                if (it == locals.end()) fail(e.offset, "unbound scalar or Box name");
+                if (e.native_box_read) {
+                    if (it->second.kind != Kind::NativeBoxI64)
+                        fail(e.offset, "Box<int>.get() requires compiler-owned Box");
+                    return scalar(false);
+                }
+                if (it->second.kind == Kind::NativeBoxI64)
+                    fail(e.offset, "ATTO_BOX_MAIN_V1_REJECT: Box<int> cannot escape as a scalar");
+                return it->second;
+            }
             case E::Field: return field_type(expression(*e.left, locals), e.name, e.offset);
             case E::Copy: case E::Take: case E::Share: case E::Borrow: case E::BorrowMut:
                 return expression(*e.left, locals);
+            case E::DeepCopy: {
+                const auto operand = expression(*e.left, locals);
+                if (operand.kind != Kind::Int && operand.kind != Kind::Bool)
+                    fail(e.offset, "E_COPY_GRAPH_UNPROVEN: copy!! requires an int or bool value");
+                return operand;
+            }
+            case E::Abs:
+                if (!e.left) fail(e.offset, "abs requires an operand");
+                require(expression(*e.left, locals), scalar(false), e.offset, "abs requires int");
+                return scalar(false);
             case E::Negate:
                 require(expression(*e.left, locals), scalar(false), e.offset, "unary - requires int");
                 return scalar(false);
             case E::LogicalNot:
                 require(expression(*e.left, locals), scalar(true), e.offset, "! requires bool");
                 return scalar(true);
+            case E::Cast: {
+                // Java-parity checked scalar identity cast: a static proof that the
+                // operand already has the target type, never a conversion or bitcast.
+                const Type target = scalar(e.cast_target);
+                require(expression(*e.left, locals), target, e.offset,
+                        "checked identity cast requires an operand of the target type");
+                return target;
+            }
             case E::Equal: case E::NotEqual: {
                 auto left = expression(*e.left, locals), right = expression(*e.right, locals);
                 if (!(left == right) || (left.kind != Kind::Int && left.kind != Kind::Bool && left.kind != Kind::String)) fail(e.offset, "equality operand types");
@@ -163,11 +207,34 @@ void validate_native_scalar_types(const Program& program) {
                 return scalar(false);
             case E::ArrayCall: {
                 const auto owner = expression(*e.left, locals);
+                // The parser admits String.contains_literal(String) as a pure,
+                // checked scalar call that reuses the ArrayCall node; type it
+                // here as bool instead of treating the String as an array.
+                if (e.name == "contains_literal" && owner.kind != Kind::Array) {
+                    require(owner, scalar(ScalarType::String), e.offset,
+                            "String.contains_literal requires a String receiver");
+                    if (e.arguments.size() != 1)
+                        fail(e.offset, "String.contains_literal requires exactly one String argument");
+                    require(expression(*e.arguments[0], locals), scalar(ScalarType::String),
+                            e.arguments[0]->offset, "String.contains_literal requires a String needle");
+                    return scalar(true);
+                }
+                // String.split_literal(String) yields one owned Array<String>.
+                if (e.name == "split_literal" && owner.kind != Kind::Array) {
+                    require(owner, scalar(ScalarType::String), e.offset,
+                            "String.split_literal requires a String receiver");
+                    if (e.arguments.size() != 1)
+                        fail(e.offset, "String.split_literal requires exactly one String delimiter");
+                    require(expression(*e.arguments[0], locals), scalar(ScalarType::String),
+                            e.arguments[0]->offset, "String.split_literal requires a String delimiter");
+                    return Type{Kind::Array, "String"};
+                }
                 if (owner.kind != Kind::Array) fail(e.offset, "array receiver");
                 const Type element = owner.name == "String" ? scalar(ScalarType::String) : owner.name == "int" ? scalar(false)
                     : Type{Kind::Class, immutable_record(owner.name).name};
                 for (std::size_t i = 0; i < e.arguments.size(); ++i) {
-                    const bool index = (e.name == "get" || e.name == "set") && i == 0;
+                    const bool index = (e.name == "get" ||
+                        e.name == "get_copy" || e.name == "set") && i == 0;
                     if (!index && element.kind == Kind::Class &&
                             e.arguments[i]->kind != E::RecordConstruct &&
                             e.arguments[i]->kind != E::Call && e.arguments[i]->kind != E::Conditional &&
@@ -175,6 +242,12 @@ void validate_native_scalar_types(const Program& program) {
                         fail(e.offset, "record arrays require a new immutable record or existing array element");
                     require(expression(*e.arguments[i], locals), index ? scalar(false) : element,
                             e.arguments[i]->offset, index ? "array index requires int" : "array element type mismatch");
+                }
+                if (e.name == "get_copy") {
+                    if (owner.name != "int" || e.sum_type != "Option<int>" ||
+                        e.arguments.size() != 1)
+                        fail(e.offset, "Array.get_copy requires exact Copy<int> and tagged Option<int>");
+                    return {Kind::Sum, "Option<int>"};
                 }
                 return e.name == "get" ? element : scalar(false);
             }
@@ -256,7 +329,10 @@ void validate_native_scalar_types(const Program& program) {
             if (binding.initializer) {
                 const bool discarded_effect = binding.name.rfind("$effect", 0) == 0 &&
                     binding.initializer->kind == Expression::Kind::Console;
-                require(expression(*binding.initializer, locals), discarded_effect ? Type{Kind::Void, {}} : local_type(binding), binding.offset, "local initializer type");
+                require(expression(*binding.initializer, locals), binding.native_box_i64
+                        ? scalar(false)
+                        : discarded_effect ? Type{Kind::Void, {}} : local_type(binding),
+                        binding.offset, "local initializer type");
             }
             for (std::size_t i = 0; i < binding.constructor_arguments.size(); ++i) {
                 const auto& cls = *classes.at(binding.class_name);
@@ -270,6 +346,7 @@ void validate_native_scalar_types(const Program& program) {
         std::function<void(const std::vector<Statement>&, Locals&)> statements;
         statements = [&](const std::vector<Statement>& items, Locals& scope) {
             for (const auto& item : items) {
+                validate_native_sum_statement_shape(item);
                 if (item.kind == Statement::Kind::UsingTelemetrySpan) {
                     // Compiler-owned AOT tracing token is not a scalar,
                     // class, field receiver or guest-visible local. Recurse

@@ -97,17 +97,18 @@ done
 # of MEDIUM/HIGH. This is host frontend validation, not parallel actors.
 for toolchain in gcc clang; do
   cxx="$([[ "$toolchain" == gcc ]] && printf 'g++' || printf 'clang++')"
-  "$cxx" -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror -pthread \
-    -fsanitize=address,undefined -fno-omit-frame-pointer \
-    -I"$source_root" \
-    tests/actor_max_threads_source_admission_test.cpp \
-    "$source_root/oreslang/frontend/Parser.cpp" \
-    "$source_root/oreslang/frontend/MethodResolver.cpp" \
-    "$source_root/oreslang/types/NativeScalarTypes.cpp" \
-    "$source_root/oreslang/types/OwnershipChecker.cpp" \
-    -o "$tmp/actor-max-threads-$toolchain"
+  # Use the production CMake target, which supplies LLVM headers as
+  # SYSTEM includes and links the real LLVM Support implementation.
+  build="$tmp/frontend-$toolchain"
+  cmake -S "$repo_root" -B "$build" -DBUILD_TESTING=ON \
+    -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER="$toolchain" \
+    -DCMAKE_CXX_COMPILER="$cxx" \
+    '-DCMAKE_CXX_FLAGS=-O1 -g -pthread -fsanitize=address,undefined -fno-omit-frame-pointer' \
+    '-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined'
+  cmake --build "$build" --target oreslang-native-actor-max-threads-admission-test -j2
   ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
   UBSAN_OPTIONS=halt_on_error=1 \
-    timeout 30s "$tmp/actor-max-threads-$toolchain"
+    ctest --test-dir "$build" -R '^native_actor_max_threads_source_admission$' \
+      --output-on-failure --no-tests=error
   printf 'PASS: %s typed actor-thread frontend admission (ASan+UBSan)\n' "$toolchain"
 done

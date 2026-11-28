@@ -40,20 +40,26 @@ class Verified {
     // namespace export table after SHA/profile verification.
     const std::string alias_;
     const std::string package_instance_id_;
+    const std::string compiler_version_, target_abi_, feature_policy_;
     const std::map<std::string, std::vector<Export>> namespaces_;
     // Only the validated admission function may construct this proof object.
     friend Verified admit(const DependencyPin&,
         const std::map<std::string, std::vector<std::uint8_t>>&);
     Verified(std::string alias, std::string package_instance_id,
+             std::string compiler, std::string target, std::string policy,
              std::map<std::string, std::vector<Export>> namespaces)
         : alias_(std::move(alias)),
           package_instance_id_(std::move(package_instance_id)),
-          namespaces_(std::move(namespaces)) {}
+          compiler_version_(std::move(compiler)), target_abi_(std::move(target)),
+          feature_policy_(std::move(policy)), namespaces_(std::move(namespaces)) {}
 public:
     const std::string& alias() const noexcept { return alias_; }
     const std::string& package_instance_id() const noexcept {
         return package_instance_id_;
     }
+    const std::string& compiler_version() const noexcept { return compiler_version_; }
+    const std::string& target_abi() const noexcept { return target_abi_; }
+    const std::string& feature_policy() const noexcept { return feature_policy_; }
     std::size_t namespace_count() const noexcept { return namespaces_.size(); }
     const std::vector<Export>& namespace_exports(const std::string& name) const {
         auto it = namespaces_.find(name);
@@ -356,7 +362,111 @@ inline Verified admit(const DependencyPin& pin,
             detail::reject("locked .oresi ABI/profile mismatch");
         checked_namespaces.emplace(ns.name,std::move(decoded.exports));
     }
-    return Verified{pin.alias,pin.package_instance_id,std::move(checked_namespaces)};
+    return Verified{pin.alias,pin.package_instance_id,pin.compiler_version,
+                    pin.target_abi,pin.feature_policy,std::move(checked_namespaces)};
+}
+
+
+// Restricted scalar import binding for a future native compiler integration.
+// The host must supply an independently verified expected compiler/profile.
+// A pinned foreign-target envelope cannot become a native callable. No object
+// bytes, relocations, source-body substitution or executable authority here.
+class ScalarI64Import {
+    const std::string package_, ns_, module_, name_;
+    friend ScalarI64Import bind_scalar_i64_import(
+        const Verified&, std::string_view, std::string_view, std::string_view,
+        std::string_view, std::string_view);
+    ScalarI64Import(std::string package, std::string ns, std::string module,
+                    std::string name)
+        : package_(std::move(package)), ns_(std::move(ns)),
+          module_(std::move(module)), name_(std::move(name)) {}
+public:
+    const std::string& package_instance_id() const noexcept { return package_; }
+    const std::string& namespace_name() const noexcept { return ns_; }
+    const std::string& module_name() const noexcept { return module_; }
+    const std::string& function_name() const noexcept { return name_; }
+    // The only admitted physical signature is a zero-argument signed i64.
+    // Stable across repeated admission of the SAME locked package instance;
+    // intentionally not a body-edit-stable logical slot across releases.
+    std::string release_bound_symbol() const {
+        std::vector<std::uint8_t> bytes;
+        for (const auto* part : {&package_, &ns_, &module_, &name_}) {
+            bytes.insert(bytes.end(), part->begin(), part->end());
+            bytes.push_back(0); // each field admitted without NUL
+        }
+        return "__atto_import_v1_" + detail::sha256(bytes);
+    }
+};
+
+inline ScalarI64Import bind_scalar_i64_import(
+        const Verified& proof, std::string_view ns, std::string_view module,
+        std::string_view name, std::string_view expected_compiler,
+        std::string_view expected_policy) {
+    if (expected_compiler.empty() || expected_policy.empty() ||
+        proof.target_abi() != "llvm-aot-v1" ||
+        proof.compiler_version() != expected_compiler ||
+        proof.feature_policy() != expected_policy)
+        detail::reject("scalar import compiler/ABI/profile mismatch");
+    for (const auto part : {ns, module, name}) {
+        if (part.size() > 128u || !detail::ident(std::string(part)) ||
+            detail::reserved_name(std::string(part)))
+            detail::reject("invalid scalar import identifier");
+    }
+    const auto entries = proof.module_exports(std::string(ns), std::string(module));
+    std::size_t matching = 0;
+    for (const auto& entry : entries) {
+        if (entry.kind != 1u || entry.name != name) continue;
+        if (entry.signature != "():int")
+            detail::reject("unsupported scalar import signature");
+        ++matching;
+    }
+    if (matching != 1u) detail::reject("missing or ambiguous scalar import");
+    return ScalarI64Import(proof.package_instance_id(), std::string(ns),
+                           std::string(module), std::string(name));
+}
+
+
+// Host-owned lock selection, not a guest supplied alias. A stable slot must
+// identify a dependency instance in the consumer's link domain; side-by-side
+// versions use different slots. The exact release is still checked separately.
+// This is a metadata planner, NOT executable artifact admission.
+struct ScalarLogicalSlotPin {
+    std::string link_domain;
+    std::string dependency_slot;
+    std::string expected_release;
+    std::string compiler_version;
+    std::string feature_policy;
+};
+
+inline std::string stable_scalar_link_symbol(
+        const Verified& proof, const ScalarLogicalSlotPin& trusted_pin,
+        std::string_view ns, std::string_view module, std::string_view name) {
+    if (!detail::package_instance(trusted_pin.link_domain) ||
+        !detail::alias(trusted_pin.dependency_slot) ||
+        trusted_pin.expected_release != proof.package_instance_id() ||
+        trusted_pin.compiler_version.size()>256u ||
+        trusted_pin.feature_policy.size()>256u ||
+        !detail::package_instance(trusted_pin.compiler_version) ||
+        !detail::package_instance(trusted_pin.feature_policy))
+        detail::reject("invalid or stale scalar logical slot pin");
+    const auto binding = bind_scalar_i64_import(proof,ns,module,name,
+        trusted_pin.compiler_version,trusted_pin.feature_policy);
+    // Length framing and explicit domain/physical ABI avoid concatenation
+    // ambiguity and collisions with release-bound symbols. Release identity
+    // must NOT enter the stable symbol, but must enter the final release lock.
+    std::vector<std::uint8_t> bytes;
+    auto field = [&](std::string_view value) {
+        const auto n = static_cast<std::uint32_t>(value.size());
+        for (int i=3;i>=0;--i) bytes.push_back(static_cast<std::uint8_t>(n>>(8*i)));
+        bytes.insert(bytes.end(),value.begin(),value.end());
+    };
+    field("atto-scalar-logical-slot-v1");
+    field(trusted_pin.link_domain);field(trusted_pin.dependency_slot);
+    field(proof.compiler_version());field(proof.target_abi());
+    field(proof.feature_policy());field("i64()");
+    field(binding.namespace_name());field(binding.module_name());
+    field(binding.function_name());
+    return "__atto_slot_v1_" + detail::sha256(bytes);
 }
 
 } // namespace oreslang::package_interface

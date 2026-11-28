@@ -13,6 +13,7 @@
 #include <mutex>
 #include <shared_mutex>
 #include <stdexcept>
+#include <thread>
 
 namespace oreslang::runtime {
 class SharedDomainArena final {
@@ -29,9 +30,18 @@ public:
         std::shared_lock<std::shared_mutex> read_;
         std::unique_lock<std::shared_mutex> write_;
         bool exclusive_;
+        const std::thread::id owner_carrier_;
+        Lease* previous_ = nullptr;
+        inline static thread_local Lease* active_lease_ = nullptr;
+        static bool holds(const SharedDomainArena* arena) noexcept {
+            for (const Lease* held = active_lease_; held; held = held->previous_)
+                if (held->arena_ == arena) return true;
+            return false;
+        }
         Lease(SharedDomainArena& arena, std::uint64_t actor, std::uint64_t incarnation,
               Grant grant, bool exclusive)
-            : arena_(&arena), exclusive_(exclusive) {
+            : arena_(&arena), exclusive_(exclusive), owner_carrier_(std::this_thread::get_id()) {
+            if (holds(&arena)) throw std::logic_error("shared region recursive lease denied");
             if (!actor || !incarnation)
                 throw std::logic_error("shared region actor identity and incarnation required");
             // Actor carrier threads must not park behind another actor's
@@ -45,9 +55,12 @@ public:
                 if (!read_.owns_lock()) throw std::logic_error("shared region busy");
             }
             arena.validate_grant(grant, actor, incarnation, exclusive_);
+            previous_ = active_lease_;
+            active_lease_ = this;
         }
         void require_live(bool write = false) const {
-            if (!arena_ || arena_->closing_.load(std::memory_order_acquire) ||
+            if (owner_carrier_ != std::this_thread::get_id() || !arena_ ||
+                arena_->closing_.load(std::memory_order_acquire) ||
                 (write && !exclusive_))
                 throw std::logic_error("shared region lease revoked or insufficient rights");
         }
@@ -65,6 +78,11 @@ public:
         Lease& operator=(const Lease&) = delete;
         Lease(Lease&&) = delete; // moved-from lease must never outlive its lock
         Lease& operator=(Lease&&) = delete;
+        ~Lease() noexcept {
+            if (owner_carrier_ != std::this_thread::get_id() || active_lease_ != this)
+                std::terminate();
+            active_lease_ = previous_;
+        }
         Handle allocate(std::size_t bytes) {
             require_live(true);
             if (bytes == 0 || bytes > SlotBytes) throw std::out_of_range("shared region slot bytes");
@@ -111,6 +129,7 @@ public:
     ~SharedDomainArena() noexcept {
         // Destruction requires completed CONTROL retirement and no live
         // actor lease. Never scrub storage beneath a concurrent carrier.
+        if (Lease::holds(this)) std::terminate();
         std::unique_lock<std::shared_mutex> lock(mutex_, std::try_to_lock);
         if (!lock.owns_lock() || !retired_) std::terminate();
         for (auto& s : slots_) scrub(s.data);
@@ -120,6 +139,7 @@ public:
                 bool allow_read, bool allow_write) {
         // Like actor lease admission, membership grants may not park a CONTROL
         // carrier behind a guest-held critical lease.
+        if (Lease::holds(this)) throw std::logic_error("shared region busy");
         std::unique_lock lock(mutex_, std::try_to_lock);
         if (!lock.owns_lock()) throw std::logic_error("shared region busy");
         if (closing_.load(std::memory_order_acquire) || !actor || !incarnation
@@ -141,6 +161,7 @@ public:
     // CONTROL never waits on a guest-held reader/writer lease. The caller may
     // retry after actor lease quiescence; no state is mutated on contention.
     bool try_revoke(Grant grant) {
+        if (Lease::holds(this)) return false;
         std::unique_lock lock(mutex_, std::try_to_lock);
         if (!lock.owns_lock()) return false;
         validate_grant(grant, 0, 0, false);
@@ -164,6 +185,7 @@ public:
     // Returning false means existing readers/writers have not yet quiesced.
     bool try_retire() {
         closing_.store(true, std::memory_order_release);
+        if (Lease::holds(this)) return false;
         std::unique_lock lock(mutex_, std::try_to_lock);
         if (!lock.owns_lock()) return false;
         if (retired_) return true;
