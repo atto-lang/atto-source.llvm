@@ -101,6 +101,7 @@ struct RegionMoveLowering {
     // native owned region stores their values as opaque generation tokens.
     const std::unordered_set<std::string>* native_box_names = nullptr;
     bool hosted_trap_arithmetic = false;
+    bool ordered_owner_status = false;
 };
 
 llvm::Value* receiver_array_region(const Expression& receiver, const RegionMoveLowering* moves) {
@@ -977,8 +978,29 @@ llvm::Value* lower(const Expression& expr,
                 ordered.push_back(moves->result_destination);
                 ordered.push_back(moves->result_region);
             }
-            return builder.CreateCall(callee, ordered,
+            auto* call = builder.CreateCall(callee, ordered,
                 callee->getReturnType()->isVoidTy() ? "" : "call");
+            if (owning && moves->ordered_owner_status) {
+                if (!moves->resource_failure || !moves->array_failure_status)
+                    throw std::runtime_error("ordered factory call lacks caller failure cleanup");
+                auto* function = builder.GetInsertBlock()->getParent();
+                auto& context = function->getContext();
+                auto* ok = llvm::BasicBlock::Create(context, "owning.call.ok", function);
+                auto* denied = llvm::BasicBlock::Create(context, "owning.call.denied", function);
+                builder.CreateCondBr(builder.CreateICmpEQ(call, llvm::ConstantInt::get(i64, 0)), ok, denied);
+                builder.SetInsertPoint(denied);
+                auto* valid = builder.CreateOr(
+                    builder.CreateICmpEQ(call, llvm::ConstantInt::get(i64, 1)),
+                    builder.CreateICmpEQ(call, llvm::ConstantInt::get(i64, 2)));
+                auto* status = builder.CreateSelect(valid,
+                    builder.CreateTrunc(call, builder.getInt32Ty()),
+                    llvm::ConstantInt::get(builder.getInt32Ty(), 0xffffffffULL));
+                builder.CreateStore(status, moves->array_failure_status);
+                builder.CreateBr(moves->resource_failure);
+                builder.SetInsertPoint(ok);
+                return llvm::ConstantInt::get(i64, 0);
+            }
+            return call;
         }
     }
     throw std::runtime_error("invalid expression kind while lowering LLVM IR");
@@ -1347,6 +1369,27 @@ static std::string emit_verified_llvm_ir_impl(const Program& source, bool wasm32
         scan_string(e->when_true.get()); scan_string(e->when_false.get());
         for (const auto& arg : e->arguments) scan_string(arg.get());
     };
+    // Confine the internal status-return experiment to an ordered-owner
+    // compilation unit; keep the established ABI for unrelated modules.
+    const bool ordered_owner_status = std::any_of(source.functions.begin(), source.functions.end(),
+        [](const Function& fn) {
+            return std::any_of(fn.statements.begin(), fn.statements.end(), [](const Statement& s) {
+                return s.kind == Statement::Kind::ScopedLocal && s.branch_local &&
+                    s.branch_local->explicit_factory_take;
+            });
+        });
+    if (ordered_owner_status) {
+        for (const auto& fn : source.functions) {
+            if (!class_owns_arrays(fn.return_class)) continue;
+            // The status convention is not an exported ABI. No effects
+            // after result transfer: a failure must imply no publication.
+            if ((fn.exported && !fn.native_internal) || fn.foreign_import ||
+                std::any_of(fn.statements.begin(), fn.statements.end(), [](const Statement& s) {
+                    return s.kind == Statement::Kind::Defer;
+                }) || !fn.caught_throw_defers.empty())
+                throw std::runtime_error("E_ORDERED_OWNER_PROFILE: owning factory export/defer requires transactional ABI");
+        }
+    }
     std::function<void(const Statement&)> scan_statement = [&](const Statement& s) {
         if (s.branch_local && s.branch_local->explicit_factory_take &&
                 (wasm32_target || cortex_m_target || bounded_allocator_provider ||
@@ -2108,7 +2151,7 @@ static std::string emit_verified_llvm_ir_impl(const Program& source, bool wasm32
         // shadow assigned at its original allocation. Moving an owner
         // changes the place, never the token or its failure cleanup authority.
         std::unordered_map<std::string, llvm::Value*> array_failure_places;
-        if (array_owner_count || !hidden.empty()) {
+        if (array_owner_count || !hidden.empty() || (ordered_owner_status && owning_return)) {
             array_handle_shadows = builder.CreateAlloca(i64,
                 llvm::ConstantInt::get(i64, array_owner_count), "array.failure.owners");
             for (std::size_t k = 0; k < array_owner_count; ++k) {
@@ -2145,8 +2188,12 @@ static std::string emit_verified_llvm_ir_impl(const Program& source, bool wasm32
             // A failed open published no native array, but a separate
             // experimental owned-int region may need deterministic cleanup.
             if (region != nullptr) builder.CreateCall(regionClose, {region});
-            builder.CreateCall(arrayUnhandled, {open_status});
-            builder.CreateUnreachable();
+            if (ordered_owner_status && owning_return)
+                builder.CreateRet(builder.CreateZExt(open_status, i64));
+            else {
+                builder.CreateCall(arrayUnhandled, {open_status});
+                builder.CreateUnreachable();
+            }
             builder.SetInsertPoint(opened);
             array_region = builder.CreateLoad(native_ptr, open_out, "native.int.array.region");
             }
@@ -2160,6 +2207,7 @@ static std::string emit_verified_llvm_ir_impl(const Program& source, bool wasm32
             &array_field_keys, array_failure, array_failure_status, &owned_failure_handles,
             &record_classes, &record_schemas, record_new, record_get, record_check,
             &class_array_regions, &class_array_parameters, &owning_results};
+        region_moves.ordered_owner_status = ordered_owner_status;
         if (actor_region_v1) {
             region_moves.actor_region_fields = &actor_region_fields;
             region_moves.actor_region_read_i64 = actorRegionGuestRead;
@@ -3554,9 +3602,14 @@ static std::string emit_verified_llvm_ir_impl(const Program& source, bool wasm32
                 llvm::Type::getInt32Ty(context), 2), memory_error);
             for (llvm::BasicBlock* failure : {quota_error, memory_error}) {
                 builder.SetInsertPoint(failure);
-                // No return to a frame whose owners were already destroyed.
-                builder.CreateCall(arrayUnhandled, {typed_status});
-                builder.CreateUnreachable();
+                // After callee cleanup, propagate the internal failure
+                // status to caller cleanup. This is not a usable guest value.
+                if (ordered_owner_status && owning_return)
+                    builder.CreateRet(builder.CreateZExt(typed_status, i64));
+                else {
+                    builder.CreateCall(arrayUnhandled, {typed_status});
+                    builder.CreateUnreachable();
+                }
             }
             builder.SetInsertPoint(invalid_status);
             builder.CreateCall(arrayAbort, {});
