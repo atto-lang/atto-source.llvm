@@ -9,7 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define CHECK(x) do { if (!(x)) abort(); } while (0)
+#define CHECK(x) do { if (!(x)) { fprintf(stderr, "SELECT_SEND_FAIL %s:%d: %s\n", __FILE__, __LINE__, #x); abort(); } } while (0)
 
 typedef struct {
     atomic_int block;
