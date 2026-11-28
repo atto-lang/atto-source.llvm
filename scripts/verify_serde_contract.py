@@ -5,7 +5,10 @@ This is intentionally not a compiler, codec, or runtime conformance test.
 A runtime or CI parity claim needs independently executed tests on its exact tree.
 """
 import hashlib
+import errno
+import os
 import json
+import math
 import stat
 from pathlib import Path
 
@@ -39,8 +42,36 @@ def unique_set(values, field):
     return set(values)
 
 
+def exact_fields(obj, expected, field):
+    require(type(obj) is dict and set(obj) == set(expected),
+            field + ' contains unknown or missing policy fields')
+
+
+def strict_float(token):
+    value = float(token)
+    require(math.isfinite(value), 'nonfinite JSON numeric token')
+    return value
+
+
+def reject_json_constant(token):
+    raise ContractError('nonfinite JSON constant: ' + token)
+
+
+def decode_document(raw):
+    require(type(raw) is bytes, 'policy JSON must be exact bytes')
+    require(len(raw) <= MAX_CONTRACT_BYTES, 'oversized policy JSON')
+    try:
+        return json.loads(raw.decode('utf-8', errors='strict'),
+                          object_pairs_hook=unique_object,
+                          parse_float=strict_float,
+                          parse_constant=reject_json_constant)
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise ContractError('invalid JSON / UTF-8') from exc
+
+
 def verify_document(doc):
-    require(type(doc) is dict, 'contract must be an object')
+    exact_fields(doc, {'contract', 'status', 'boundaries', 'invariants',
+                       'wire_profile', 'verification'}, 'root')
     require(doc.get('contract') == 'oreslang.sendable-serializable.v1', 'wrong contract revision')
     require(doc.get('status') == 'normative_security_invariants_not_feature_support',
             'policy is not runtime implementation evidence')
@@ -49,8 +80,12 @@ def verify_document(doc):
             {'actor_data', 'network_data', 'supervisor_control'}, 'boundary domain drift')
     actor, network, control = (bounds[key] for key in
                                ('actor_data', 'network_data', 'supervisor_control'))
-    for label, section in [('actor', actor), ('network', network), ('control', control)]:
-        require(type(section) is dict, label + ' boundary must be an object')
+    exact_fields(actor, {'requirements', 'format', 'forbid',
+                         'unimplemented_policy'}, 'actor boundary')
+    exact_fields(network, {'requirements', 'formats',
+                           'unimplemented_policy'}, 'network boundary')
+    exact_fields(control, {'requirements', 'forbid',
+                           'unimplemented_policy'}, 'control boundary')
     require(actor.get('unimplemented_policy') == 'reject_before_enqueue', 'actor fail-open')
     require(network.get('unimplemented_policy') == 'reject_before_io', 'network fail-open')
     require(control.get('unimplemented_policy') == 'reject_without_data_fallback', 'control downgrade')
@@ -74,9 +109,21 @@ def verify_document(doc):
             'actor_data_envelope', 'network_data_codec', 'userland_serializable',
             'userland_sendable_authorization'})}
     for field, (values, mandatory) in required.items():
-        require(mandatory <= unique_set(values, field), field + ' missing mandatory guarantees')
+        require(mandatory == unique_set(values, field),
+                field + ' missing mandatory or contains unknown guarantees')
     invariants = doc.get('invariants')
-    require(type(invariants) is dict and invariants, 'missing invariants')
+    exact_fields(invariants, {
+        'sendable_is_not_serializable', 'serializable_is_not_sendable',
+        'shared_safe_is_not_sendable', 'codec_objects_are_not_data',
+        'source_imports_and_generics_are_resolved_before_admission',
+        'incoming_bytes_never_select_type_or_codec',
+        'schema_hash_is_not_an_authentication_mac',
+        'receiver_pins_schema_before_first_send',
+        'failed_admission_does_not_consume_sender_ownership',
+        'partial_mailbox_admission_is_forbidden',
+        'capabilities_cannot_be_nested_in_data',
+        'unsupported_shapes_fail_closed'
+    }, 'sealed invariants')
     require(all(value is True for value in invariants.values()), 'invariant disabled')
     for key in ('sendable_is_not_serializable', 'serializable_is_not_sendable',
                 'shared_safe_is_not_sendable', 'codec_objects_are_not_data',
@@ -89,7 +136,10 @@ def verify_document(doc):
                 'capabilities_cannot_be_nested_in_data', 'unsupported_shapes_fail_closed'):
         require(invariants.get(key) is True, 'missing sealed invariant ' + key)
     wire = doc.get('wire_profile')
-    require(type(wire) is dict, 'missing wire profile')
+    exact_fields(wire, {'messagepack_wire_major', 'messagepack_envelope_fields',
+                        'portable_scalar_subset', 'typed_collections',
+                        'unsupported_without_verified_runtime_codec',
+                        'invalid_bytes_reject'}, 'wire profile')
     require(type(wire.get('messagepack_wire_major')) is int and
             wire['messagepack_wire_major'] == 2, 'wrong actor wire major')
     require(wire.get('messagepack_envelope_fields') ==
@@ -97,14 +147,20 @@ def verify_document(doc):
     for field, mandatory in {
         'portable_scalar_subset': {'bool', 'signed_i64', 'finite_f64', 'valid_utf8'},
         'typed_collections': {'tuple', 'fixed_array', 'fixed_list', 'array', 'list'},
-        'unsupported_without_verified_runtime_codec': {'option', 'result', 'capability'},
+        'unsupported_without_verified_runtime_codec': {
+            'option', 'result', 'record', 'enum', 'class', 'unsigned_integer',
+            'bigint', 'decimal', 'complex', 'capability'},
         'invalid_bytes_reject': {'invalid_utf8', 'noncanonical_numbers',
                                  'oversized_lengths', 'wrong_shape',
                                  'schema_mismatch', 'wire_downgrade'},
     }.items():
-        require(mandatory <= unique_set(wire.get(field), field), field + ' drift')
+        require(mandatory == unique_set(wire.get(field), field),
+                field + ' missing or contains unknown wire entries')
     verification = doc.get('verification')
-    require(type(verification) is dict, 'missing verification policy')
+    exact_fields(verification, {
+        'categories', 'requires_executable_code_to_claim_implemented',
+        'unimplemented_feature_must_be_marked_unsupported'
+    }, 'verification')
     require(verification.get('requires_executable_code_to_claim_implemented') is True,
             'static policy cannot certify runtimes')
     require(verification.get('unimplemented_feature_must_be_marked_unsupported') is True,
@@ -112,7 +168,7 @@ def verify_document(doc):
     require({'positive_scalar', 'nested_capability_reject', 'network_without_permission_reject',
              'control_in_data_reject', 'schema_version_mismatch_reject',
              'sender_snapshot_mutation', 'rejected_send_ownership_rollback',
-             'bounded_decode', 'generation_replay_reject', 'cross_backend_golden_bytes'} <=
+             'bounded_decode', 'generation_replay_reject', 'cross_backend_golden_bytes'} ==
             unique_set(verification.get('categories'), 'verification categories'),
             'missing runtime conformance category')
     return True
@@ -120,20 +176,34 @@ def verify_document(doc):
 
 def verify_file(path=CONTRACT):
     path = Path(path)
-    require(stat.S_ISREG(path.lstat().st_mode) and not path.is_symlink(),
-            'contract must be a regular file, not a symlink')
-    # Reject giant inputs before allocating a copy in memory. lstat above also
-    # makes a checked-out symlinked contract an explicit error.
-    require(path.stat().st_size <= MAX_CONTRACT_BYTES, 'oversized contract')
-    raw = path.read_bytes()
-    require(len(raw) <= MAX_CONTRACT_BYTES, 'oversized contract')
+    # Keep the integrity check on one descriptor. A separate lstat()/read_bytes()
+    # would allow a symlink swap between checking the path and opening it.
+    # NONBLOCK also prevents a malicious FIFO from hanging before fstat rejects it.
+    if not getattr(os, 'O_NOFOLLOW', 0) or not getattr(os, 'O_NONBLOCK', 0):
+        raise ContractError('no safe nofollow/nonblocking open available')
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, 'O_CLOEXEC', 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise ContractError('contract must not be a symlink') from exc
+        raise
+    try:
+        # Validate the opened descriptor BEFORE fdopen: fdopen can itself
+        # reject directories, leaving ownership of fd ambiguous.
+        info = os.fstat(fd)
+        require(stat.S_ISREG(info.st_mode), 'contract must be a regular file')
+        require(info.st_size <= MAX_CONTRACT_BYTES, 'oversized contract')
+        with os.fdopen(fd, 'rb') as stream:
+            fd = -1  # stream has taken ownership; it closes on every exit.
+            raw = stream.read(MAX_CONTRACT_BYTES + 1)
+            require(len(raw) <= MAX_CONTRACT_BYTES, 'oversized contract')
+    finally:
+        if fd >= 0:
+            os.close(fd)
     digest = hashlib.sha256(raw).hexdigest()
     require(digest == EXPECTED_SHA256, 'contract bytes drift; bump policy version deliberately')
-    try:
-        doc = json.loads(raw.decode('utf-8', errors='strict'), object_pairs_hook=unique_object)
-    except (UnicodeError, json.JSONDecodeError) as exc:
-        raise ContractError('invalid JSON / UTF-8') from exc
-    verify_document(doc)
+    verify_document(decode_document(raw))
     return digest
 
 

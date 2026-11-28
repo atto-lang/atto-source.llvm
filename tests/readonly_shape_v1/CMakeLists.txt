@@ -1,0 +1,13 @@
+cmake_minimum_required(VERSION 3.20)
+project(atto_readonly_shape_witness_v1 LANGUAGES CXX)
+enable_testing()
+add_executable(readonly-shape-witness-v1 ../native_readonly_shape_projection_v1_test.cpp)
+target_compile_features(readonly-shape-witness-v1 PRIVATE cxx_std_17)
+target_compile_options(readonly-shape-witness-v1 PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_test(NAME readonly-shape-witness-v1 COMMAND readonly-shape-witness-v1)
+
+add_executable(readonly-shape-native-ast-v1 ../native_readonly_shape_ast_layout_v1_test.cpp)
+target_include_directories(readonly-shape-native-ast-v1 PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../src/main/cpp")
+target_compile_features(readonly-shape-native-ast-v1 PRIVATE cxx_std_17)
+target_compile_options(readonly-shape-native-ast-v1 PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_test(NAME readonly-shape-native-ast-v1 COMMAND readonly-shape-native-ast-v1)

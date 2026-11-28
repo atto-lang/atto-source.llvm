@@ -32,6 +32,34 @@ read. `Observable<T>` multicast requires per-subscriber bounded credits,
 delivery policy and independent cancellation. A channel/stream conversion may
 not invent unbounded buffering or a background guest thread.
 
+## Canonical reactive terminal ABI
+
+A backend must not infer terminal meaning from `Option<T>` alone.
+
+The lossless **consumer signal** is:
+
+`Result<Option<T>, Option<E>>`
+
+- `Ok(Some(value))` = NEXT(value)
+- `Ok(None)` = COMPLETE
+- `Err(None)` = CANCELLED
+- `Err(Some(error))` = ERROR(error)
+
+This nesting deliberately preserves `T = Option<U>` and
+`T = Result<A,B>` as ordinary NEXT data. An optional error payload is also
+unambiguous: ERROR(None) is `Err(Some(None))`, distinct from CANCELLED.
+
+A producer data channel normally carries the three-way frame
+`Result<Option<T>, E>` (NEXT / COMPLETE / explicit ERROR). Consumer
+cancellation is local control and must not be serialized into the producer
+frame unless a higher-level wire protocol explicitly owns such a cancellation
+message.
+
+A backend without source `Channel<T>`, Future selection, or the closed
+Option/Result lowering required by this ABI must reject the reactive source
+before lowering. Native mailbox/Future helpers and syntax-only negative tests
+do not count as implementation.
+
 ## Mailboxes and serial actors
 
 The actor mailbox transports typed `Envelope<Message>` using a private
@@ -71,6 +99,56 @@ cancellation, and supervisor state. The **mailbox layer**, not ordinary
   post-stop resume must be rejected. Physical state deallocation requires
   quiescence of active carriers, loans and transport I/O.
 
+### Awaitable actor-mailbox admission linearization
+
+Awaitable actor send is a mailbox operation layered over bounded Channel
+mechanics, not a retry loop and not another unbounded queue.
+
+- `send(message)` remains an immediate admission attempt. A full USER lane
+  fails with an explicit mailbox-full result; it never parks a carrier.
+- `send_async(message)` / selectable outbox admission may suspend the logical
+  producer, but the runtime must retain only a finite number of producer
+  admissions. The bound covers the whole pre-publication cohort — payload
+  preparation/freeze, registered waiters, transferred credits and committing
+  envelopes — not merely entries already visible in a waiter deque. This bound
+  is independent of queued message count, bytes, checked-out frames and select
+  registrations.
+- The payload's ownership/freeze/copy snapshot and retained-byte accounting are
+  established before the producer can remain pending. A suspended producer may
+  not retain an unaccounted mutable graph whose eventual contents differ from
+  the requested send.
+- The "mailbox full?" observation and waiter registration share one admission
+  linearization domain with slot release. A check-then-register design is
+  invalid: capacity becoming free between those two operations must not leave a
+  producer asleep forever.
+- Releasing a USER slot either returns that credit to the free pool or transfers
+  it directly to one already-admitted producer waiter. A transferred credit
+  stays charged during handoff so a racing synchronous sender cannot steal it.
+- Cancellation may withdraw a producer only **before** credit transfer commits.
+  Once transfer wins, ownership admission is irrevocable; a later cancellation
+  detaches observation rather than pretending an accepted message was rolled
+  back. Any failure before envelope publication returns/transfers the credit
+  exactly once.
+- Waiter cancellation, STOP, graceful sealing and actor failure detach pending
+  registrations atomically. Future settlement and continuation wakeup occur
+  only after mailbox/accounting/lifecycle locks are released; runtime callbacks
+  may re-enter actor APIs and therefore cannot run under those locks.
+- A pending producer that retains target-owned payload bytes or a transferred
+  mailbox credit is a physical transport loan. Actor DONE, arena/heap release
+  and code-generation reclamation must remain fenced until that loan either
+  publishes an envelope or returns all retained resources exactly once.
+- An actor holding the serial logical lifetime must not await capacity in its
+  own mailbox when only that same lifetime can release the required credit.
+  Detect this dependency and fail with a structured would-deadlock diagnostic.
+- A mailbox credit acknowledges **admission**, never handler completion,
+  network flush, peer receipt or physical quiescence. Those require their own
+  drain/reply/ACK/fence protocols.
+
+These rules are observable semantics. Java may implement them with actor-owned
+bounded waiter descriptors and LLVM may use generation-fenced scheduler
+continuations/port credits; neither backend may expose pthread/JVM blocking,
+poll/yield retry loops, or unbounded waiter retention as equivalent behavior.
+
 A long-lived WebSocket/TCP stream can hold a serial actor's only lease
 indefinitely. The recommended design is a **connection actor** per stream
 with independent bounded queues; a serial coordination actor handles
@@ -103,6 +181,45 @@ read/write directions and capabilities. Backpressure must propagate through
 the whole graph to the OS adapter; OS write **admission** is not flush,
 remote receipt, or peer application processing.
 
+## Admission-domain isolation
+
+A bounded Channel implementation must not make one unrelated runtime/context
+consume another runtime's normal retained-select budget. Source Channels and
+their select registrations belong to an explicit runtime/execution admission
+domain with finite pending-selection and pending-arm quotas.
+
+The implementation may still use a process-wide arbitration coordinator for
+atomic winner semantics, but it should retain a larger finite process emergency
+ceiling only as defense in depth. Ordinary domain A saturation must not deny
+domain B merely because both share a JVM/process coordinator. A multi-Channel
+atomic select is same-domain by default; crossing domains requires an explicit
+verified bridge or fails closed. Raw host/interop Channel handles must prove
+they belong to the receiving source context's domain (or traverse such a
+bridge) before guest read/write/select/close authority is exposed.
+Future-only select must still be charged to
+the caller's domain rather than escaping accounting because it has no Channel
+arm. Runtime-owned actor infrastructure (mailbox USER/CONTROL lanes, actor
+output streams, group Mailman outboxes, event-bus subscriptions, and equivalent
+backend-internal Channel users) must be charged to the owning runtime/domain,
+not silently to a process host-default bucket. Source Channels created inside
+an actor turn are actor-local capabilities (raw Channel handles do not cross
+actor mailboxes) and must receive an actor-local normal admission budget rather
+than sharing the entire context/runtime budget with sibling actors. Actor
+termination fences that source domain outside actor lifecycle locks; physical
+actor finalization waits for the fence. A graceful guest teardown retains the
+domain through its final teardown turn and fences it immediately afterward.
+Domain teardown atomically
+detaches/fails its pending selections and refunds both domain and process
+accounting exactly once. Structured channel-specific terminal publication
+happens before a residual runtime-domain fence so shutdown does not replace a
+more precise EOF/error/actor-termination result with a generic domain-close
+diagnostic.
+
+Ready operations retain the existing progress rule: a transient registration
+may probe/commit an immediately ready buffer/rendezvous before retained-pending
+quota rejection. Admission domains are accounting/authority boundaries, not
+one-thread/one-executor-per-Channel scheduling domains.
+
 ## Terminal ordering, fairness and trust
 
 1. A stream/channel completes with exactly one terminal outcome:
@@ -115,7 +232,11 @@ remote receipt, or peer application processing.
    an outstanding read. A new reader cannot use a stale lease.
 4. Bounded byte quotas include queued and *checked-out/unacknowledged* payloads;
    credit returns only after handler / device / transport ownership fences.
-   Pending producer registrations also need finite quotas.
+   Pending producer registrations also need finite quotas. A domain-local
+   generic Channel may retain a value only while that value remains charged to
+   its owning heap/arena; a stream, mailbox or transport adapter that copies,
+   freezes or serializes the value must charge the copied bytes to its own
+   finite budget before retaining the producer registration.
 5. FAIR select rotates deterministically; PRIORITY and RANDOM require
    explicit selection. A full waiter quota may reject a pending registration,
    **but cannot prevent an immediately ready rendezvous from committing**.

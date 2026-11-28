@@ -1,0 +1,103 @@
+name: Native Atto signed-time timer queue boundary
+
+on:
+  push:
+    branches:
+      - 'feat/atto-std-time-*'
+  pull_request:
+    paths:
+      - 'stdlib/std/time.atto'
+      - 'src/main/cpp/oreslang/runtime/NativeTimerQueue.hpp'
+      - 'tests/native_timer_queue_test.cpp'
+      - 'ci/test_std_time_guest_admission.sh'
+      - 'tests/fixtures/std-time-borrow-*.atto'
+      - 'tests/fixtures/std-time-core-negative-*.atto'
+      - 'examples/atto-time-contract.atto'
+      - '.github/workflows/atto-time-native-timer.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-timer-signed-boundary:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Immutable exact head checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify source SHA and tree
+        shell: bash
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          test -z "$(git status --porcelain)"
+          echo "SOURCE_SHA=$(git rev-parse HEAD)"
+          echo "SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Compile real native C++17 runtime timer test
+        shell: bash
+        run: |
+          set -euo pipefail
+          g++ --version
+          g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror \
+            -pthread -I src/main/cpp \
+            tests/native_timer_queue_test.cpp -o /tmp/atto-native-timer-test
+          test -x /tmp/atto-native-timer-test
+      - name: Execute signed Atto timing and cancellation race tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          /tmp/atto-native-timer-test
+          echo "EXECUTED_NATIVE_ATTO_TIME_TIMER_TEST=PASS"
+      - name: GCC and Clang ASan+UBSan native timer boundary tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          for compiler in g++ clang++; do
+            command -v "$compiler"
+            compiler_label="${compiler//+/x}"
+            artifact="/tmp/atto-native-time-${compiler_label}-sanitized"
+            "$compiler" -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror \
+              -fsanitize=address,undefined -fno-omit-frame-pointer \
+              -pthread -I src/main/cpp \
+              tests/native_timer_queue_test.cpp -o "$artifact"
+            test -x "$artifact"
+            ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+            UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+              timeout 75s "$artifact"
+            echo "EXECUTED_NATIVE_ATTO_TIME_SANITIZERS=PASS compiler=$compiler"
+          done
+
+  native-time-guest-aot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Immutable exact current head checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Validate checked-out PR source tree
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          test -z "$(git status --porcelain)"
+          git rev-parse 'HEAD^{tree}'
+      - name: Compile and execute real module-qualified Atto time guest
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc --version
+          cargo --version
+          clang --version | head -1
+          # Exit 78 means actual native compiler explicitly lacks this
+          # library/lowering. CI remains red until a real guest passes.
+          bash ci/test_std_time_guest_admission.sh

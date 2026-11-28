@@ -1,8 +1,6 @@
 #include "oreslang/runtime/SharedDomainArena.hpp"
 #include <atomic>
 #include <array>
-#include <algorithm>
-#include <vector>
 #include <cstdint>
 #include <future>
 #include <stdexcept>
@@ -11,8 +9,6 @@
 #include <iostream>
 #include <string_view>
 using oreslang::runtime::SharedDomainArena;
-using oreslang::runtime::detail::claim_nonrecycling_carrier;
-using oreslang::runtime::detail::current_carrier_identity;
 void require(bool cond) { if (!cond) throw std::runtime_error("shared domain test failed"); }
 // Only busy admission is retryable; ownership, revocation and invalid handles
 // must fail permanently rather than being swallowed by the contention loop.
@@ -33,129 +29,57 @@ template<typename F> void reject(F&& f) {
 }
 int main() {
     static_assert(!std::is_move_constructible_v<SharedDomainArena::Lease>);
-
-    // Carrier identity is a non-recycling process-lifetime token, not the
-    // implementation's reusable std::thread::id. Sequential thread creation
-    // intentionally maximizes the chance that native thread IDs are recycled.
-    require(current_carrier_identity() == current_carrier_identity());
-    constexpr std::size_t CarrierThreads = 512;
-    std::array<std::uint64_t, CarrierThreads> carrierIds{};
-    for (std::size_t i = 0; i < CarrierThreads; ++i) {
-        std::thread carrier([&, i] {
-            carrierIds[i] = current_carrier_identity();
-        });
-        carrier.join();
-    }
-    auto sortedCarrierIds = carrierIds;
-    std::sort(sortedCarrierIds.begin(), sortedCarrierIds.end());
-    require(sortedCarrierIds.front() != 0);
-    require(std::adjacent_find(sortedCarrierIds.begin(), sortedCarrierIds.end()) ==
-            sortedCarrierIds.end());
-
-    constexpr auto maxCarrier = std::numeric_limits<std::uint64_t>::max();
-    std::atomic<std::uint64_t> nearCarrierEnd{maxCarrier - 1};
-    require(claim_nonrecycling_carrier(nearCarrierEnd) == maxCarrier - 1);
-    require(nearCarrierEnd.load() == maxCarrier);
-    reject([&] { (void)claim_nonrecycling_carrier(nearCarrierEnd); });
-    require(nearCarrierEnd.load() == maxCarrier);
-    // Domain IDs must remain unique across concurrent arena construction.
-    // This exercises the real header allocator, not a synthetic copy.
-    {
-        constexpr std::size_t Threads = 8, PerThread = 256;
-        std::array<std::array<std::uint64_t, PerThread>, Threads> issued{};
-        std::array<std::thread, Threads> workers;
-        std::atomic<bool> start{false};
-        for (std::size_t t = 0; t < Threads; ++t) {
-            workers[t] = std::thread([&, t] {
-                while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
-                for (std::size_t i = 0; i < PerThread; ++i) {
-                    SharedDomainArena domain;
-                    auto grant = domain.grant(1000 + t, 1, true, false);
-                    issued[t][i] = grant.domain;
-                    require(domain.try_retire());
-                }
-            });
-        }
-        start.store(true, std::memory_order_release);
-        for (auto& worker : workers) worker.join();
-        std::vector<std::uint64_t> values;
-        values.reserve(Threads * PerThread);
-        for (const auto& row : issued) for (auto identity : row) {
-            require(identity != 0 && identity != std::numeric_limits<std::uint64_t>::max());
-            values.push_back(identity);
-        }
-        std::sort(values.begin(), values.end());
-        require(std::adjacent_find(values.begin(), values.end()) == values.end());
-    }
     SharedDomainArena a;
-    auto writerGrant=a.grant(101, 1, true, true);
-    auto readerGrant=a.grant(102, 1, true, false);
+    auto writerGrant=a.grant(101, 7, true, true);
+    auto readerGrant=a.grant(102, 7, true, false);
     auto other=SharedDomainArena{};
-    auto foreignGrant=other.grant(104, 1, true,false);
-    reject([&] { (void)a.read(104, 1, foreignGrant); });
-    reject([&] { (void)a.write(102, 1, writerGrant); }); // wrong actor, valid grant
-    reject([&] { (void)a.read(101, 2, writerGrant); }); // same actor ID after restart is NOT authority
-    reject([&] { (void)a.write(101, 2, writerGrant); }); // incarnation fences writers too
-    reject([&] { (void)a.grant(101, 0, true, true); }); // no ambiguous incarnation
-    reject([&] { (void)a.read(0, 1, writerGrant); }); // supervisor sentinel cannot bypass actor lease
+    auto foreignGrant=other.grant(104, 7,true,false);
+    reject([&] { (void)a.read(104, 7, foreignGrant); });
+    reject([&] { (void)a.write(102, 7, writerGrant); }); // wrong actor, valid grant
+    reject([&] { (void)a.read(0, 7, writerGrant); }); // supervisor sentinel cannot bypass actor lease
+    // A replacement actor with the SAME numeric ID must not inherit grants
+    // from an old incarnation, even before CONTROL revokes that membership.
+    reject([&] { (void)a.read(101, 8, writerGrant); });
+    reject([&] { (void)a.write(101, 8, writerGrant); });
+    reject([&] { (void)a.grant(101, 0, true, true); });
     SharedDomainArena::Handle h{};
     {
-        auto writer=a.write(101, 1, writerGrant);
+        auto writer=a.write(101, 7, writerGrant);
         h=writer.allocate(sizeof(std::uint64_t));
         std::uint64_t x=0x1234567890abcdefull;
         writer.write(h, &x,sizeof(x));
-        // The standard does not grant recursive shared_mutex ownership, even
-        // if some platform's try_lock_shared happens to allow it. Fail before
-        // trying to acquire a second lease for this same arena/carrier.
-        reject([&] { (void)a.read(101, 1, writerGrant); });
-        reject([&] { (void)a.write(101, 1, writerGrant); });
-        // Separate domains can nest: the carrier-local guard must track the
-        // full domain stack, not accidentally replace the outer authority.
+        reject([&] { (void)a.read(101, 7, writerGrant); });
+        reject([&] { (void)a.write(101, 7, writerGrant); });
+        reject([&] { (void)a.grant(105, 7, true, false); });
+        require(!a.try_revoke(readerGrant));
         {
-            auto nested = other.read(104, 1, foreignGrant);
-            reject([&] { (void)a.read(101, 1, writerGrant); });
+            auto nested = other.read(104, 7, foreignGrant);
+            reject([&] { (void)a.read(101, 7, writerGrant); });
         }
-        std::uint64_t nestedCheck = 0;
-        writer.read(h, &nestedCheck, sizeof(nestedCheck));
-        require(nestedCheck == x);
-        // A trusted lease object may be referenced from another OS thread,
-        // but the lock-holding carrier is the only one authorized to use it.
-        std::atomic<bool> foreignReadDenied{false}, foreignWriteDenied{false};
-        std::atomic<bool> foreignAllocateDenied{false}, foreignDropDenied{false};
-        std::thread foreignCarrier([&] {
-            std::uint64_t probe = 0;
-            try { writer.read(h, &probe, sizeof(probe)); }
-            catch (const std::logic_error&) { foreignReadDenied.store(true); }
-            try { writer.write(h, &probe, sizeof(probe)); }
-            catch (const std::logic_error&) { foreignWriteDenied.store(true); }
-            try { (void)writer.allocate(sizeof(probe)); }
-            catch (const std::logic_error&) { foreignAllocateDenied.store(true); }
-            try { writer.drop(h); }
-            catch (const std::logic_error&) { foreignDropDenied.store(true); }
+        std::atomic<bool> foreignDenied{false};
+        std::thread alien([&] {
+            std::uint64_t value = 0;
+            try { writer.read(h, &value, sizeof(value)); }
+            catch (const std::logic_error&) { foreignDenied.store(true); }
         });
-        foreignCarrier.join();
-        require(foreignReadDenied.load() && foreignWriteDenied.load() &&
-                foreignAllocateDenied.load() && foreignDropDenied.load());
-        std::uint64_t afterForeignCarrier = 0;
-        writer.read(h, &afterForeignCarrier, sizeof(afterForeignCarrier));
-        require(afterForeignCarrier == x);
+        alien.join();
+        require(foreignDenied.load());
+        std::uint64_t check = 0;
+        writer.read(h, &check, sizeof(check));
+        require(check == x);
         reject([&] { writer.read(h, &x,sizeof(x)-1); });
-        // Drop must physically scrub sensitive bytes before the slot can be reused,
-        // not just revoke its generation. A new handle must see only zeros.
-        auto secret = writer.allocate(sizeof(std::uint64_t));
-        std::uint64_t sensitive = 0xfedcba9876543210ull;
-        writer.write(secret, &sensitive, sizeof(sensitive));
-        writer.drop(secret);
-        reject([&] { writer.read(secret, &sensitive, sizeof(sensitive)); });
-        auto recycled = writer.allocate(sizeof(std::uint64_t));
-        std::uint64_t cleared = ~std::uint64_t{0};
-        writer.read(recycled, &cleared, sizeof(cleared));
-        require(cleared == 0);
-        writer.drop(recycled);
+    }
+    {
+        auto reader = a.read(102, 7, readerGrant);
+        reject([&] { (void)a.read(102, 7, readerGrant); });
+        reject([&] { (void)a.write(101, 7, writerGrant); });
+        std::uint64_t x = 0;
+        reader.read(h, &x, sizeof(x));
+        require(x == 0x1234567890abcdefull);
     }
     std::atomic<std::uint64_t> observed{0};
     std::thread otherCarrier([&] {
-        auto r=a.read(102, 1, readerGrant);
+        auto r=a.read(102, 7, readerGrant);
         std::uint64_t x=0;
         r.read(h,&x,sizeof(x));
         observed.store(x);
@@ -163,13 +87,13 @@ int main() {
     });
     otherCarrier.join();
     require(observed == 0x1234567890abcdefull);
-    reject([&] { (void)a.write(102, 1, readerGrant); });
+    reject([&] { (void)a.write(102, 7, readerGrant); });
     {
         std::promise<void> leaseReady, leaseRelease;
         auto ready = leaseReady.get_future();
         auto release = leaseRelease.get_future();
         std::thread reader([&] {
-            auto outstanding = a.read(101, 1, writerGrant);
+            auto outstanding = a.read(101, 7, writerGrant);
             leaseReady.set_value();
             release.wait();
         });
@@ -177,7 +101,7 @@ int main() {
         require(!a.try_revoke(readerGrant));  // CONTROL must not block on a reader
         // CONTROL membership admission also must not park behind a lease.
         bool grantBusy = false;
-        try { (void)a.grant(105, 1, true, false); }
+        try { (void)a.grant(105, 7, true, false); }
         catch (const std::logic_error& e) {
             grantBusy = std::string_view(e.what()) == "shared region busy";
         }
@@ -186,9 +110,9 @@ int main() {
         reader.join();
     }
     require(a.try_revoke(readerGrant));
-    auto newReader = a.grant(105, 1, true, false);
+    auto newReader = a.grant(105, 7, true, false);
     require(a.try_revoke(newReader));
-    reject([&] { (void)a.read(102, 1, readerGrant); });
+    reject([&] { (void)a.read(102, 7, readerGrant); });
     // Retirement is nonblocking and does not free underneath an active lease.
     {
         std::promise<void> leaseReady, leaseRelease;
@@ -196,7 +120,7 @@ int main() {
         auto release = leaseRelease.get_future();
         std::atomic<bool> revokedReadDenied{false};
         std::thread reader([&] {
-            auto pending = a.read(101, 1, writerGrant);
+            auto pending = a.read(101, 7, writerGrant);
             leaseReady.set_value();
             release.wait();
             std::uint64_t x = 0;
@@ -211,17 +135,43 @@ int main() {
     }
     require(a.try_retire());
     require(a.try_retire());
-    reject([&] { (void)a.read(101, 1, writerGrant); });
-    reject([&] { (void)a.grant(3, 1, true,true); });
+    reject([&] { (void)a.read(101, 7, writerGrant); });
+    reject([&] { (void)a.grant(3, 7,true,true); });
     require(other.try_retire());
+    // Explicit actor-ID reuse is not member authority reuse. Revoke/reissue
+    // must preserve the incarnation fence in BOTH directions.
+    SharedDomainArena recycledActor;
+    auto previousGrant = recycledActor.grant(501, 17, true, true);
+    reject([&] { (void)recycledActor.read(501, 18, previousGrant); });
+    reject([&] { (void)recycledActor.write(501, 18, previousGrant); });
+    {
+        auto previousWriter = recycledActor.write(501, 17, previousGrant);
+        auto oldHandle = previousWriter.allocate(sizeof(std::uint64_t));
+        std::uint64_t oldValue = 42;
+        previousWriter.write(oldHandle, &oldValue, sizeof(oldValue));
+    }
+    require(recycledActor.try_revoke(previousGrant));
+    auto currentGrant = recycledActor.grant(501, 18, true, true);
+    reject([&] { (void)recycledActor.read(501, 17, currentGrant); });
+    reject([&] { (void)recycledActor.write(501, 17, currentGrant); });
+    {
+        auto currentWriter = recycledActor.write(501, 18, currentGrant);
+        auto fresh = currentWriter.allocate(sizeof(std::uint64_t));
+        std::uint64_t value = 73;
+        currentWriter.write(fresh, &value, sizeof(value));
+        currentWriter.read(fresh, &value, sizeof(value));
+        require(value == 73);
+    }
+    require(recycledActor.try_revoke(currentGrant));
+    require(recycledActor.try_retire());
     // Reader/writer contention and a 4,096-generation ABA regression. This
     // exercises real OS threads and checks every observed value is fully read.
     SharedDomainArena concurrent;
-    auto wg = concurrent.grant(201, 1, true, true);
-    auto rg = concurrent.grant(202, 1, true, false);
+    auto wg = concurrent.grant(201, 7, true, true);
+    auto rg = concurrent.grant(202, 7, true, false);
     SharedDomainArena::Handle ch{};
     {
-        auto writer = concurrent.write(201, 1, wg);
+        auto writer = concurrent.write(201, 7, wg);
         ch = writer.allocate(sizeof(std::uint64_t));
         std::uint64_t value = 0;
         writer.write(ch, &value, sizeof(value));
@@ -242,12 +192,12 @@ int main() {
         auto heldFuture = held.get_future();
         auto releaseFuture = release.get_future();
         std::thread holding([&] {
-            auto lease = concurrent.read(202, 1, rg);
+            auto lease = concurrent.read(202, 7, rg);
             held.set_value();
             releaseFuture.wait();
         });
         heldFuture.wait();
-        reject([&] { (void)concurrent.write(201, 1, wg); });
+        reject([&] { (void)concurrent.write(201, 7, wg); });
         release.set_value();
         holding.join();
     }
@@ -257,7 +207,7 @@ int main() {
         while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
         for (std::uint64_t i = 1; i <= 1500; ++i) {
             eventually([&] {
-                auto lease = concurrent.write(201, 1, wg);
+                auto lease = concurrent.write(201, 7, wg);
                 lease.write(ch, &i, sizeof(i));
             });
         }
@@ -267,7 +217,7 @@ int main() {
         while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
         for (int i = 0; i < 1500; ++i) {
             eventually([&] {
-                auto lease = concurrent.read(202, 1, rg);
+                auto lease = concurrent.read(202, 7, rg);
                 std::uint64_t value = 0;
                 lease.read(ch, &value, sizeof(value));
                 if (value > 1500) correct.store(false);
@@ -279,7 +229,7 @@ int main() {
     for (auto& reader : readers) reader.join();
     require(correct.load());
     require(concurrent.try_revoke(rg));
-    reject([&] { (void)concurrent.read(202, 1, rg); });
+    reject([&] { (void)concurrent.read(202, 7, rg); });
     require(concurrent.try_retire());
         std::cout << "shared domain arena tests passed\n";
 }

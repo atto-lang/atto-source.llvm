@@ -1,0 +1,6 @@
+pub fnc main(): int {
+    return match<int> -9223372036854775808 over
+        on -9223372036854775808 -> { 42; }
+        on _ -> { 0; }
+    end;
+}

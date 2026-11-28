@@ -16,8 +16,11 @@ namespace oreslang::runtime {
 // owner of T. Graph links are non-owning (domain, slot, generation) identities:
 // cycles cannot form reference-count ownership cycles.
 //
-// All calls must be serialized on the owning actor's execution lane. A lease
-// blocks deletion/retirement even across a carrier migration; the runtime must
+// All calls must be serialized on the owning actor's execution lane. Read
+// leases expose const T only; with_mut requires no live lease and disallows
+// nested arena access during the mutation callback. A read lease protects
+// its node, while a separate region pin delays domain teardown without
+// blocking ordinary writes. Both block retirement until released; the runtime must
 // ensure all suspended continuations and FFI leases have ended before teardown.
 //
 // This is an allocation-bounded C++ substrate, NOT source-to-native Oreslang
@@ -54,8 +57,12 @@ private:
     const std::uint64_t domain_;
     std::size_t size_ = 0;
     std::size_t leases_ = 0;
+    std::size_t lifetime_pins_ = 0; // region lifetime, not read authority
     bool closed_ = false;
     bool retiring_ = false;
+    bool mutating_ = false; // exclusive stack-only write capability
+    bool constructing_ = false; // forbid constructor reentrancy before publish
+    bool retire_requested_ = false; // monotonic fence for new access
 
     static std::uint64_t unique_domain() noexcept {
         const auto id = next_domain_.fetch_add(1, std::memory_order_relaxed);
@@ -65,7 +72,7 @@ private:
     }
 
     bool live(Handle h) const noexcept {
-        return !closed_ && !retiring_ && h.domain == domain_
+        return !closed_ && !retiring_ && !mutating_ && !constructing_ && !retire_requested_ && h.domain == domain_
                && h.slot < Capacity && slots_[h.slot].value.has_value()
                && slots_[h.slot].generation == h.generation;
     }
@@ -81,8 +88,8 @@ private:
 public:
     class Lease final {
         DeterministicGraphArena* owner_ = nullptr;
-        T* value_ = nullptr;
-        Lease(DeterministicGraphArena& owner, T& value) noexcept
+        const T* value_ = nullptr;
+        Lease(DeterministicGraphArena& owner, const T& value) noexcept
             : owner_(&owner), value_(&value) { ++owner.leases_; }
         friend class DeterministicGraphArena;
     public:
@@ -93,9 +100,31 @@ public:
               value_(std::exchange(other.value_, nullptr)) {}
         Lease& operator=(Lease&&) = delete;
         ~Lease() noexcept { if (owner_) --owner_->leases_; }
-        T& get() const noexcept { return *value_; }
-        T* operator->() const noexcept { return value_; }
-        T& operator*() const noexcept { return *value_; }
+        const T& get() const noexcept { return *value_; }
+        const T* operator->() const noexcept { return value_; }
+        const T& operator*() const noexcept { return *value_; }
+    };
+
+    // The scheduler retains this stack-only/move-only lifetime hold in an
+    // admitted Task/FFI continuation frame until physical completion. It does
+    // not grant read/write authority to a node; a separate borrow is required.
+    // All acquisition and release run on the owning serialized execution lane.
+    class RegionPin final {
+        DeterministicGraphArena* owner_ = nullptr;
+        explicit RegionPin(DeterministicGraphArena& owner) noexcept
+            : owner_(&owner) { ++owner.lifetime_pins_; }
+        friend class DeterministicGraphArena;
+    public:
+        RegionPin(const RegionPin&) = delete;
+        RegionPin& operator=(const RegionPin&) = delete;
+        RegionPin(RegionPin&& other) noexcept
+            : owner_(std::exchange(other.owner_, nullptr)) {}
+        RegionPin& operator=(RegionPin&&) = delete;
+        ~RegionPin() noexcept { reset(); }
+        void reset() noexcept {
+            if (auto* owner = std::exchange(owner_, nullptr))
+                --owner->lifetime_pins_;
+        }
     };
 
     DeterministicGraphArena() noexcept : domain_(unique_domain()) {}
@@ -111,18 +140,44 @@ public:
 
     std::size_t size() const noexcept { return size_; }
     std::size_t active_leases() const noexcept { return leases_; }
+    std::size_t active_lifetime_pins() const noexcept { return lifetime_pins_; }
     bool closed() const noexcept { return closed_; }
+    bool retirement_requested() const noexcept { return retire_requested_; }
+    // Stop new borrows and mutations immediately. Existing loans are still
+    // valid until release; close() must retry after actual quiescence.
+    // A cancellation request is not itself a release/acknowledgement.
+    void begin_retire() noexcept { retire_requested_ = true; }
+
+    std::optional<RegionPin> hold_region() noexcept {
+        if (closed_ || retiring_ || mutating_ || constructing_
+            || retire_requested_ || lifetime_pins_ == std::numeric_limits<std::size_t>::max())
+            return std::nullopt;
+        return std::optional<RegionPin>(RegionPin(*this));
+    }
 
     template<class... Args>
     std::optional<Handle> emplace(Args&&... args) {
-        if (closed_ || retiring_ || size_ == Capacity) return std::nullopt;
+        if (closed_ || retiring_ || mutating_ || constructing_ || retire_requested_
+            || size_ == Capacity)
+            return std::nullopt;
         for (std::size_t i = 0; i < Capacity; ++i) {
             auto& slot = slots_[i];
             if (slot.value || slot.generation == std::numeric_limits<std::uint64_t>::max())
                 continue;
             // Construct before publishing the slot. A throwing constructor
             // cannot expose a partially initialized or double-owned value.
+            constructing_ = true;
+            struct ConstructionScope {
+                bool& constructing;
+                ~ConstructionScope() noexcept { constructing = false; }
+            } guard{constructing_};
             slot.value.emplace(std::forward<Args>(args)...);
+            // A constructor may request STOP through the trusted supervisor;
+            // never publish its new slot after that retirement fence.
+            if (retire_requested_) {
+                slot.value.reset();
+                return std::nullopt;
+            }
             slot.degree = 0;
             ++size_;
             return Handle{domain_, static_cast<std::uint32_t>(i), slot.generation};
@@ -131,8 +186,29 @@ public:
     }
 
     std::optional<Lease> borrow(Handle h) noexcept {
-        if (!live(h)) return std::nullopt;
+        if (!live(h) || leases_ == std::numeric_limits<std::size_t>::max())
+            return std::nullopt;
         return std::optional<Lease>(Lease(*this, *slots_[h.slot].value));
+    }
+
+    // Exclusive in-place mutation: no heap guard, no snapshot, no element copy.
+    // A read lease, retiring domain or nested callback prevents admission.
+    // Callback borrows must remain lexical; source-level escape checking is
+    // still required before exposing this primitive to Oreslang guest code.
+    template<class Fn>
+    bool with_mut(Handle h, Fn&& action) {
+        static_assert(std::is_invocable_v<Fn&, T&>,
+                      "with_mut requires a callable accepting T&");
+        static_assert(std::is_void_v<std::invoke_result_t<Fn&, T&>>,
+                      "with_mut must not return an escaping reference or value");
+        if (!live(h) || leases_ != 0) return false;
+        mutating_ = true;
+        struct WriteScope {
+            bool& flag;
+            ~WriteScope() noexcept { flag = false; }
+        } guard{mutating_};
+        std::forward<Fn>(action)(*slots_[h.slot].value);
+        return true;
     }
 
     bool connect(Handle source, Handle target) noexcept {
@@ -180,7 +256,8 @@ public:
     // lease count enforces one necessary condition, not the full scheduler proof.
     bool close() noexcept {
         if (closed_) return true;
-        if (retiring_ || leases_ != 0) return false;
+        if (retiring_ || mutating_ || constructing_ || leases_ != 0
+            || lifetime_pins_ != 0) return false;
         retiring_ = true;
         // Reverse slot order gives deterministic teardown independent of
         // cycles in the non-owning adjacency graph.

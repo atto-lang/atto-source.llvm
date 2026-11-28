@@ -1,0 +1,8 @@
+// Real native LLVM phase-one guest: both spellings yield Ok(int).
+// Compiler-generated IR must pass the no-GC audit and run at O0 and O2.
+// This does NOT implement ordinary throw catching or nested Result.
+pub fnc main(): int {
+  val Result<int, Error> bare = trap (20 + 1);
+  val Result<int, Error> bang = trap! (20 + 1);
+  return bare.unwrap_or(0) + bang.unwrap_or(0);
+}

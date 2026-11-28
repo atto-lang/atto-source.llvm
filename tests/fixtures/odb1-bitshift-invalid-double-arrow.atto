@@ -1,0 +1,2 @@
+// `<<` is the typed channel/stream I/O, never a bit shift: must not compile.
+pub fnc main(): int { return 1 << 2; }

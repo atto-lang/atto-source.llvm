@@ -1,0 +1,79 @@
+name: Declared actor LLVM namespace AOT and critical state gate
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'tests/native_declared_actor_critical_counter_gate_test.c'
+      - 'tests/fixtures/declared-actor-namespace-v1/**'
+      - 'tests/fixtures/declared-actor-use-namespace-reject.atto'
+      - 'tests/fixtures/use-namespace-llvm-scalar-main.atto'
+      - 'tests/fixtures/use-namespace-nonliteral-reject.atto'
+      - 'tests/fixtures/use-namespace-multifunction-reject.atto'
+      - 'tests/cmake/native_declared_actor_llvm_frontend_gate.cmake'
+      - 'docs/DECLARED_ACTOR_CRITICAL_STATE_PARITY_STAGING.md'
+      - 'CMakeLists.txt'
+      - '.github/workflows/declared-actor-llvm-aot-gate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-declared-actor-admission:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact source head without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Exact-head and fixture receipt
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet
+          printf 'RECEIPT llvm_source_head=%s\n' "$EXPECTED_HEAD"
+          printf 'RECEIPT llvm_source_tree=%s\n' "$(git rev-parse HEAD^{tree})"
+          for path in \
+              tests/fixtures/use-namespace-llvm-scalar-main.atto \
+              tests/fixtures/use-namespace-nonliteral-reject.atto \
+              tests/fixtures/use-namespace-multifunction-reject.atto \
+              tests/fixtures/declared-actor-use-namespace-reject.atto \
+              tests/fixtures/declared-actor-namespace-v1/{actor,contract,state,increment,get_count}.atto; do
+            test -s "$path"
+            sha256sum "$path"
+          done
+
+      - name: Install native LLVM and Clang toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build clang-18 llvm-18-dev libclang-18-dev
+
+      - name: Build native source compiler and critical state gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-declared-actor -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
+            -DLLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm
+          cmake --build build-declared-actor --parallel 2 \
+            --target oreslang-llvmc oreslang-declared-actor-critical-counter-test
+
+      - name: Execute native AOT and state-gate tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build-declared-actor --output-on-failure \
+            -R '^(native_declared_actor_critical_counter_host_state_gate|native_use_namespace_scalar_aot_and_actor_codegen_gate)$'
+          echo 'RECEIPT declared_actor_llvm_two_gates=EXECUTED'

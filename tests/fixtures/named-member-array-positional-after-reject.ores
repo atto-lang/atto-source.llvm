@@ -1,0 +1,6 @@
+// Member syntax must preserve the direct-call rule: positional before named.
+pub fnc main(): int {
+  val Array<int> values = new Array<int>();
+  values.set(index: 0, 42);
+  return 0;
+}

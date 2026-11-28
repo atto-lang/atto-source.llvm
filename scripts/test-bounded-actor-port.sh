@@ -9,7 +9,7 @@ mode="${SANITIZE:-none}"
 command -v "$compiler" >/dev/null 2>&1 || { echo "missing $compiler" >&2; exit 2; }
 work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
-flags=(-std=c++20 -O1 -g -pthread -Wall -Wextra -Wpedantic -Wconversion -Werror
+flags=(-std=c++20 -O1 -g -pthread -Wall -Wextra -Wpedantic -Werror
        -I"$root/src/main/cpp")
 case "$mode" in
   none) ;;

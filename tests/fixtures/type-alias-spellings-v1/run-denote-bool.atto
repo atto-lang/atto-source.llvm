@@ -1,0 +1,3 @@
+denote type Flag = bool;
+fnc identity(Flag b): Flag { return b; }
+pub fnc main(): int { return identity(true) ? 42 : 0; }

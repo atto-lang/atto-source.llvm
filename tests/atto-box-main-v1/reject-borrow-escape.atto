@@ -1,0 +1,5 @@
+fnc inspect(borrow int value): int { return value; }
+pub fnc main(): int {
+    val Box<int> counter = Box<int>(42);
+    return inspect(rt borrow counter.get());
+}

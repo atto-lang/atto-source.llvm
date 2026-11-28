@@ -1,0 +1,166 @@
+name: Linux scoped host filesystem security (host-only)
+on:
+  pull_request:
+    paths:
+      - "native/include/atto/host_fs_broker.h"
+      - "native/include/atto/host_fs_guest_bridge.h"
+      - "native/include/atto/host_fs_signed_ceiling.h"
+      - "native/src/host_fs_broker.c"
+      - "native/src/host_fs_guest_bridge.c"
+      - "native/src/host_fs_signed_ceiling.c"
+      - "native/tests/host_fs_broker_test.c"
+      - "native/tests/host_fs_guest_bridge_test.c"
+      - "native/tests/host_fs_signed_ceiling_test.c"
+      - "native/include/atto/host_fs_async.h"
+      - "native/src/host_fs_async.c"
+      - "native/tests/host_fs_async_test.c"
+      - "native/tests/host_fs_async_contention_test.c"
+      - "native/tests/host_fs_async_broker_test.c"
+      - "src/main/cpp/oreslang/runtime/TenantVmIoAbiV5.h"
+      - "native/tests/host_fs_io_v5_layout_test.c"
+      - "native/include/atto/host_fs_signed_admission.h"
+      - "native/src/host_fs_signed_admission.c"
+      - "native/tests/host_fs_signed_admission_test.c"
+      - "src/main/cpp/oreslang/runtime/TenantVmGuestLoader.hpp"
+      - "src/main/cpp/oreslang/runtime/TenantVmGuestLoader.cpp"
+      - "src/main/cpp/oreslang/runtime/TenantVmSignedFsLoader.hpp"
+      - "src/main/cpp/oreslang/runtime/TenantVmSignedFsLoader.cpp"
+      - "tests/tenant-vm/CMakeLists.txt"
+      - "src/main/cpp/oreslang/runtime/TenantVm.cpp"
+      - "src/main/cpp/oreslang/runtime/TenantVm.hpp"
+      - "src/main/cpp/oreslang/runtime/TenantVmFsTurnAuth.hpp"
+      - "src/main/cpp/oreslang/runtime/TenantVmFsHostDispatch.hpp"
+      - "tests/tenant-vm/fs_lifecycle_test.cpp"
+      - "tests/tenant-vm/fs_host_dispatch_test.cpp"
+      - "tests/tenant-vm/tenant_vm_fs_turn_auth_test.cpp"
+      - "tests/tenant-vm/tenant_vm_test.cpp"
+      - "tests/tenant-vm/signed_fs_loader_test.cpp"
+      - "tests/tenant-vm/signed_fs_guest.c"
+      - "native/CMakeLists.txt"
+      - ".github/workflows/native-host-fs-broker.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  host-security-regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact source and test commit
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -eu
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          git diff --exit-code
+          git rev-parse HEAD^{tree}
+          git hash-object native/src/host_fs_broker.c native/tests/host_fs_broker_test.c
+          git hash-object native/src/host_fs_guest_bridge.c native/tests/host_fs_guest_bridge_test.c
+          git hash-object native/src/host_fs_signed_ceiling.c native/tests/host_fs_signed_ceiling_test.c
+          git hash-object native/src/host_fs_async.c native/tests/host_fs_async_test.c
+          git hash-object native/tests/host_fs_async_contention_test.c
+          git hash-object native/src/host_fs_signed_admission.c native/tests/host_fs_signed_admission_test.c
+          git hash-object src/main/cpp/oreslang/runtime/TenantVmGuestLoader.cpp src/main/cpp/oreslang/runtime/TenantVmSignedFsLoader.cpp
+      - name: GCC and Clang O1/O2 ASan+UBSan (host only)
+        run: |
+          set -eu
+          for compiler in gcc clang; do
+            for optimize in O1 O2; do
+              "$compiler" -std=c11 "-$optimize" -Wall -Wextra -Wconversion -Werror -pedantic -pthread \
+                -fsanitize=address,undefined -fno-omit-frame-pointer \
+                -I native/include native/src/host_fs_broker.c native/tests/host_fs_broker_test.c \
+                -o "/tmp/atto_fs_broker_${compiler}_${optimize}"
+              ASAN_OPTIONS=detect_leaks=1 "/tmp/atto_fs_broker_${compiler}_${optimize}"
+              "$compiler" -std=c11 "-$optimize" -Wall -Wextra -Wconversion -Werror -pedantic -pthread \
+                -fsanitize=address,undefined -fno-omit-frame-pointer \
+                -I native/include native/src/host_fs_broker.c native/src/host_fs_guest_bridge.c \
+                native/tests/host_fs_guest_bridge_test.c -o "/tmp/atto_fs_bridge_${compiler}_${optimize}"
+              ASAN_OPTIONS=detect_leaks=1 "/tmp/atto_fs_bridge_${compiler}_${optimize}"
+              "$compiler" -std=c11 "-$optimize" -Wall -Wextra -Wconversion -Werror -pedantic \
+                -fsanitize=address,undefined -fno-omit-frame-pointer \
+                -I native/include native/src/host_fs_signed_ceiling.c \
+                native/tests/host_fs_signed_ceiling_test.c -lcrypto \
+                -o "/tmp/atto_fs_signed_${compiler}_${optimize}"
+              ASAN_OPTIONS=detect_leaks=1 "/tmp/atto_fs_signed_${compiler}_${optimize}"
+            done
+          done
+      - name: GCC and Clang host worker mock and versioned ABI layout
+        run: |
+          set -eu
+          for compiler in gcc clang; do
+            for optimize in O1 O2; do
+              "$compiler" -std=c11 "-$optimize" -Wall -Wextra -Wconversion -Werror -pedantic -pthread \
+                -fsanitize=address,undefined -fno-omit-frame-pointer -I native/include \
+                native/src/host_fs_async.c native/tests/host_fs_async_test.c \
+                -o "/tmp/atto_fs_async_${compiler}_${optimize}"
+              ASAN_OPTIONS=detect_leaks=1 "/tmp/atto_fs_async_${compiler}_${optimize}"
+              "$compiler" -std=c11 "-$optimize" -Wall -Wextra -Wconversion -Werror -pedantic -pthread \
+                -fsanitize=address,undefined -fno-omit-frame-pointer -I native/include \
+                native/tests/host_fs_async_contention_test.c \
+                -o "/tmp/atto_fs_contention_${compiler}_${optimize}"
+              ASAN_OPTIONS=detect_leaks=1 "/tmp/atto_fs_contention_${compiler}_${optimize}"
+              "$compiler" -std=c11 "-$optimize" -Wall -Wextra -Wconversion -Werror -pedantic -pthread \
+                -fsanitize=address,undefined -fno-omit-frame-pointer -I native/include \
+                native/src/host_fs_broker.c native/src/host_fs_async.c \
+                native/tests/host_fs_async_broker_test.c \
+                -o "/tmp/atto_fs_async_broker_${compiler}_${optimize}"
+              ASAN_OPTIONS=detect_leaks=1 "/tmp/atto_fs_async_broker_${compiler}_${optimize}"
+              "$compiler" -std=c11 "-$optimize" -Wall -Wextra -Wconversion -Werror -pedantic \
+                -fsanitize=address,undefined -fno-omit-frame-pointer -I src/main/cpp \
+                native/tests/host_fs_io_v5_layout_test.c \
+                -o "/tmp/atto_fs_v5_${compiler}_${optimize}"
+              ASAN_OPTIONS=detect_leaks=1 "/tmp/atto_fs_v5_${compiler}_${optimize}"
+            done
+          done
+      - name: Signed broker admission (GCC/Clang, O1/O2 ASan/UBSan)
+        run: |
+          set -eu
+          for compiler in gcc clang; do
+            for optimize in O1 O2; do
+              "$compiler" -std=c11 "-$optimize" -Wall -Wextra -Wconversion -Werror -pedantic -pthread \
+                -fsanitize=address,undefined -fno-omit-frame-pointer -I native/include \
+                native/src/host_fs_broker.c native/src/host_fs_signed_ceiling.c \
+                native/src/host_fs_signed_admission.c native/tests/host_fs_signed_admission_test.c \
+                -lcrypto -o "/tmp/atto_fs_admission_${compiler}_${optimize}"
+              ASAN_OPTIONS=detect_leaks=1 "/tmp/atto_fs_admission_${compiler}_${optimize}"
+            done
+          done
+      - name: CMake and CTest (host only)
+        run: |
+          set -eu
+          cmake -S native -B /tmp/atto-fs-build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build /tmp/atto-fs-build --parallel 2
+          ctest --test-dir /tmp/atto-fs-build --output-on-failure \
+            -R '^linux_(scoped_host_fs_broker|guest_offset_host_fs_bridge|signed_host_fs_ceiling|async_host_fs_queue_mock|async_host_fs_contention_mock|async_host_fs_real_broker|host_fs_io_v5_layout|signed_host_fs_real_broker_admission)$'
+      - name: Sealed-image signed loader (host-only C++ integration)
+        run: |
+          set -eu
+          cmake -S tests/tenant-vm -B /tmp/atto-signed-loader-build -DCMAKE_BUILD_TYPE=Debug
+          cmake --build /tmp/atto-signed-loader-build --target tenant_vm_signed_fs_loader_test --parallel 2
+          ctest --test-dir /tmp/atto-signed-loader-build --output-on-failure \
+            -R '^tenant_vm_signed_fs_loader_host_only$'
+      - name: Authenticated scheduler turn and restart witnesses (host only)
+        run: |
+          set -eu
+          cmake --build /tmp/atto-signed-loader-build --target tenant_vm_fs_turn_auth_test tenant_vm_fs_lifecycle_test tenant_vm_fs_host_dispatch_test tenant_vm_test --parallel 2
+          ctest --test-dir /tmp/atto-signed-loader-build --output-on-failure -R tenant_vm_fs_
+          /tmp/atto-signed-loader-build/tenant_vm_test equal_offsets_are_different_memory
+          /tmp/atto-signed-loader-build/tenant_vm_test messaging_stays_inside_the_vm
+          /tmp/atto-signed-loader-build/tenant_vm_test a_confined_fault_restarts_only_that_actor
+      - name: ASan+UBSan C++ host-only Offset32 dispatch with real Linux broker
+        run: |
+          set -eu
+          cmake -S tests/tenant-vm -B /tmp/atto-host-dispatch-sanitize \
+            -DCMAKE_BUILD_TYPE=Debug -DTENANT_VM_SANITIZE=ON
+          cmake --build /tmp/atto-host-dispatch-sanitize \
+            --target tenant_vm_fs_host_dispatch_test --parallel 2
+          ASAN_OPTIONS=detect_leaks=1 ctest --test-dir /tmp/atto-host-dispatch-sanitize \
+            --output-on-failure -R tenant_vm_fs_host_dispatch_host_only
+      - name: State strict evidence boundaries
+        run: |
+          echo "HOST_ONLY: neither this suite nor the signed v4 fixture compiles or executes an Atto .atto guest."
+          echo "ABI v5 is unadmitted; no authenticated scheduler dispatch, production key store or native syscall fence is certified."

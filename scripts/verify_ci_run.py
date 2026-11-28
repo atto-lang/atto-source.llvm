@@ -34,25 +34,35 @@ HOUSEKEEPING_STEPS = frozenset({
 
 
 def _evidence_label(value, limit=250):
-    # Untrusted REST display labels must be one visible line, without bidi
-    # controls or zero-width formatting. Those can visually impersonate an
-    # approved runner, CI job, or native guest test step in log/report UIs.
+    # REST display labels are security evidence, not merely presentation.
+    # Invisible combining marks (notably U+034F), private-use code points,
+    # unassigned characters and NFKC compatibility glyphs can disguise
+    # housekeeping steps or a runner identity even without bidi controls.
+    # Preserve legible precomposed Unicode (e.g. "unité", "検証").
     return (isinstance(value, str) and bool(value.strip())
-            and len(value) <= limit
-            and not any(unicodedata.category(ch) in ("Cc", "Cf", "Cs", "Zl", "Zp")
-                        for ch in value))
+            and value == value.strip() and len(value) <= limit
+            and unicodedata.normalize("NFKC", value) == value
+            and not any(
+                ch != " " and unicodedata.category(ch)[0] in ("C", "M", "Z")
+                for ch in value))
 
 
 def executable_step_name(name):
-    # Runner-generated lifecycle steps cannot substitute for a required
-    # build, test, or native guest-execution step.
-    return (_evidence_label(name)
-            and name.strip().casefold() not in {s.casefold() for s in HOUSEKEEPING_STEPS}
-            and re.match(r"^(pre|post)\s", name.strip().casefold()) is None)
+    # Collapse repeated whitespace before comparing runner housekeeping names.
+    # "Set  up job" must not become synthetic evidence of an executed test.
+    if not _evidence_label(name):
+        return False
+    canonical = " ".join(name.casefold().split())
+    return (canonical not in {s.casefold() for s in HOUSEKEEPING_STEPS}
+            and re.match(r"^(pre|post) ", canonical) is None)
 
 
 class Denied(ValueError):
     """Fail-closed verification: this run cannot support a CI execution claim."""
+
+
+class NotExecuted(Denied):
+    """Authenticated metadata shows that no workflow job body executed."""
 
 
 def _sha(value):
@@ -179,6 +189,79 @@ def _api_get(path):
     return _strict_api_json(raw)
 
 
+def _fetch_jobs(fetch, prefix, run_id, attempt):
+    """Fetch the complete independently pinned attempt job set without pagination gaps."""
+    jobs = []
+    total = None
+    for page in range(1, MAX_PAGES + 1):
+        payload = _object(fetch(prefix + "/actions/runs/" + str(run_id)
+                                + "/attempts/" + str(attempt) + "/jobs?per_page=100&page=" + str(page)),
+                          "workflow jobs")
+        reported_total = payload.get("total_count")
+        if type(reported_total) is not int or reported_total < 1 or reported_total > 1000:
+            raise Denied("workflow jobs total is invalid or excessive")
+        if total is None:
+            total = reported_total
+        elif total != reported_total:
+            raise Denied("workflow job pages disagree on count")
+        found = payload.get("jobs")
+        if not isinstance(found, list) or len(found) > 100:
+            raise Denied("workflow jobs page malformed")
+        jobs.extend(found)
+        if len(jobs) >= total:
+            break
+        if len(found) != 100:
+            raise Denied("incomplete GitHub Actions job pagination")
+    if not jobs or len(jobs) != total:
+        raise Denied("not all GitHub Actions jobs were retrieved")
+    return jobs
+
+
+def _reject_non_success_run(jobs, run_id, commit, attempt):
+    """Classify a completed non-success run without mistaking no-runner for tests.
+
+    NOT_EXECUTED is intentionally narrow: every job must be bound to the exact
+    run/attempt/HEAD, completed with a non-success conclusion, have no allocated
+    runner identity, and expose no step records. Any evidence of runner or step
+    execution falls back to ordinary rejection rather than infrastructure
+    classification.
+    """
+    no_job_body_executed = True
+    allowed_conclusions = {
+        "failure", "cancelled", "skipped", "timed_out", "action_required", "stale"
+    }
+    for item in jobs:
+        job = _object(item, "workflow job")
+        _int(job.get("id"), "job id")
+        if (type(job.get("run_id")) is not int or job["run_id"] != run_id
+                or job.get("head_sha") != commit
+                or type(job.get("run_attempt")) is not int
+                or job["run_attempt"] != attempt
+                or job.get("status") != "completed"
+                or job.get("conclusion") not in allowed_conclusions):
+            raise Denied("failed workflow job identity/status mismatch")
+        runner_id = job.get("runner_id")
+        if runner_id is not None:
+            if type(runner_id) is not int or runner_id < 0:
+                raise Denied("failed workflow job runner id is malformed")
+            if runner_id > 0:
+                no_job_body_executed = False
+        runner_name = job.get("runner_name")
+        if runner_name not in (None, ""):
+            if not _evidence_label(runner_name):
+                raise Denied("failed workflow job runner name is malformed")
+            no_job_body_executed = False
+        steps = job.get("steps")
+        if steps is not None and not isinstance(steps, list):
+            raise Denied("failed workflow job steps are malformed")
+        if steps:
+            no_job_body_executed = False
+    if no_job_body_executed:
+        raise NotExecuted(
+            "workflow completed without any allocated runner or executed step records")
+    raise Denied("workflow run did not conclude successfully")
+
+
 def verify(fetch, backend, commit, tree, run_id, required_jobs, required_steps,
            job_step_pairs=None, workflow_path=None, workflow_id=None,
            workflow_blob_sha=None, expected_event=None,
@@ -263,34 +346,14 @@ def verify(fetch, backend, commit, tree, run_id, required_jobs, required_steps,
             or run.get("event") != expected_event
             or type(run.get("workflow_id")) is not int or run["workflow_id"] != workflow_id
             or run.get("path") != expected_run_path
-            or run.get("status") != "completed"
-            or run.get("conclusion") != "success"):
-        raise Denied("workflow run is not a successful exact-repository HEAD execution")
-    jobs = []
-    total = None
-    for page in range(1, MAX_PAGES + 1):
-        payload = _object(fetch(prefix + "/actions/runs/" + str(run_id)
-                                + "/jobs?filter=latest&per_page=100&page=" + str(page)),
-                          "workflow jobs")
-        reported_total = payload.get("total_count")
-        if type(reported_total) is not int or reported_total < 1 or reported_total > 1000:
-            raise Denied("workflow jobs total is invalid or excessive")
-        if total is None:
-            total = reported_total
-        elif total != reported_total:
-            raise Denied("workflow job pages disagree on count")
-        found = payload.get("jobs")
-        if not isinstance(found, list) or len(found) > 100:
-            raise Denied("workflow jobs page malformed")
-        jobs.extend(found)
-        if len(jobs) >= total:
-            break
-        if len(found) != 100:
-            raise Denied("incomplete GitHub Actions job pagination")
-    if not jobs or len(jobs) != total:
-        raise Denied("not all GitHub Actions jobs were retrieved")
+            or run.get("status") != "completed"):
+        raise Denied("workflow run is not a completed exact-repository HEAD execution")
+    jobs = _fetch_jobs(fetch, prefix, run_id, attempt)
+    if run.get("conclusion") != "success":
+        _reject_non_success_run(jobs, run_id, commit, attempt)
     seen_ids, job_names, required_job_steps = set(), set(), set()
     steps_by_job = {}
+    verified_job_evidence = []
     count = 0
     for item in jobs:
         job = _object(item, "workflow job")
@@ -316,7 +379,7 @@ def verify(fetch, backend, commit, tree, run_id, required_jobs, required_steps,
             raise Denied("workflow job completion precedes its start")
         name = job.get("name")
         if not _evidence_label(name):
-            raise Denied("missing or unsafe workflow job name")
+            raise Denied("missing workflow job name")
         if name in job_names:
             raise Denied("ambiguous repeated workflow job name")
         job_names.add(name)
@@ -325,6 +388,7 @@ def verify(fetch, backend, commit, tree, run_id, required_jobs, required_steps,
         if not isinstance(steps, list) or not steps:
             raise Denied("workflow job has zero executed steps")
         ran_useful_step = False
+        meaningful_step_evidence = []
         seen_step_names = set()
         last_number = 0
         previous_step_end = job_start
@@ -345,7 +409,7 @@ def verify(fetch, backend, commit, tree, run_id, required_jobs, required_steps,
             previous_step_end = step_end
             step_name = step.get("name")
             if not _evidence_label(step_name):
-                raise Denied("workflow step has no safe single-line name")
+                raise Denied("workflow step has no name")
             if step_name in seen_step_names:
                 raise Denied("ambiguous duplicate workflow step name in job")
             seen_step_names.add(step_name)
@@ -355,8 +419,25 @@ def verify(fetch, backend, commit, tree, run_id, required_jobs, required_steps,
             if executable_step_name(step_name):
                 ran_useful_step = True
                 count += 1
+                meaningful_step_evidence.append({
+                    "name": step_name,
+                    "category": "indeterminate",
+                    "conclusion": step.get("conclusion"),
+                    "started_at": step.get("started_at"),
+                    "completed_at": step.get("completed_at"),
+                })
         if not ran_useful_step:
             raise Denied("workflow job only executed runner housekeeping")
+        verified_job_evidence.append({
+            "job_id": job_id,
+            "job_name": name,
+            "runner_id": job["runner_id"],
+            "runner_name": job["runner_name"],
+            "conclusion": job.get("conclusion"),
+            "started_at": job.get("started_at"),
+            "completed_at": job.get("completed_at"),
+            "meaningful_steps": meaningful_step_evidence,
+        })
     if not set(required_jobs).issubset(job_names):
         raise Denied("required workflow job is missing")
     if not set(required_steps).issubset(required_job_steps):
@@ -395,14 +476,20 @@ def verify(fetch, backend, commit, tree, run_id, required_jobs, required_steps,
             or final_meta.get("archived") is not False
             or final_meta.get("disabled") is not False):
         raise Denied("source repository changed identity or privacy during evidence collection")
-    return {"backend": backend, "repository": repo, "repository_id": repo_id,
-            "run_id": run_id, "run_attempt": attempt, "workflow_path": workflow_path,
+    return {"schema": "oreslang-parity-execution-evidence-v1",
+            "claim_tier": "RUNNER_EXECUTED",
+            "backend": backend, "repository": repo, "repository_id": repo_id,
+            "run_id": run_id, "run_attempt": attempt,
+            "workflow_id": workflow_id, "workflow_path": workflow_path,
             "workflow_run_path": expected_run_path,
             "event": expected_event,
             "head_commit": commit,
             "head_tree": tree, "workflow_blob_sha": workflow_blob_sha,
             "verified_jobs": len(jobs),
             "successful_non_housekeeping_steps": count,
+            "jobs": verified_job_evidence,
+            "artifacts_verified": False,
+            "artifacts": [],
             "statement": "GITHUB_RUN_EXECUTION_VERIFIED_NOT_GUEST_PARITY_CERTIFIED"}
 
 
@@ -445,6 +532,9 @@ def main(argv=None):
                         expected_event=args.event,
                         expected_run_path=args.workflow_run_path,
                         expected_run_attempt=args.run_attempt)
+    except NotExecuted as exc:
+        print("CI_RUN_EVIDENCE_NOT_EXECUTED: " + str(exc), file=sys.stderr)
+        return 2
     except Denied as exc:
         print("CI_RUN_EVIDENCE_REJECTED: " + str(exc), file=sys.stderr)
         return 1

@@ -1,0 +1,24 @@
+// expect-exit: 42
+// Native import+constructor+mutating method+checked arithmetic guest.
+import module bitset from "atto.alloc/bitset";
+pub fnc main(): int {
+  let mut bits = bitset.new_bitset(128);
+  if bits.count_ones() != 0; do return 1; fi
+  bits.try_set(0, true);
+  bits.try_set(62, true);
+  bits.try_set(63, true);
+  bits.try_set(127, true);
+  if bits.count_ones() != 4; do return 2; fi
+  bits.try_set(63, false);
+  if bits.count_ones() != 3; do return 3; fi
+  bits.try_set(-1, true);
+  if bits.count_ones() != 3; do return 4; fi
+  let mut other = bitset.new_bitset(128);
+  other.try_set(62, true);
+  other.try_set(64, true);
+  bits.try_intersect_with(other);
+  if bits.count_ones() != 1; do return 5; fi
+  bits.clear_all();
+  if bits.count_ones() != 0; do return 6; fi
+  return 42;
+}
