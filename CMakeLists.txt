@@ -5172,6 +5172,28 @@ if(BUILD_TESTING)
     set_tests_properties(native_timer_wheel_engine_and_conformance_vector
         PROPERTIES TIMEOUT 60)
 
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+        add_executable(oreslang-native-timer-driver-init-fault-test
+            tests/native_timer_driver_init_fault_test.c
+            src/main/cpp/oreslang/runtime/NativeTimerWheel.c
+            src/main/cpp/oreslang/runtime/NativeTimerDriver.c)
+        set_target_properties(oreslang-native-timer-driver-init-fault-test PROPERTIES
+            C_STANDARD 11 C_STANDARD_REQUIRED ON)
+        target_include_directories(oreslang-native-timer-driver-init-fault-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_link_libraries(oreslang-native-timer-driver-init-fault-test PRIVATE Threads::Threads)
+        target_compile_options(oreslang-native-timer-driver-init-fault-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+        foreach(sym pthread_condattr_init pthread_condattr_setclock pthread_condattr_destroy
+                    pthread_mutex_init pthread_mutex_destroy pthread_cond_init
+                    pthread_cond_destroy pthread_create)
+            target_link_options(oreslang-native-timer-driver-init-fault-test PRIVATE "-Wl,--wrap=${sym}")
+        endforeach()
+        add_test(NAME native_timer_driver_init_fault_cleanup
+            COMMAND oreslang-native-timer-driver-init-fault-test)
+        set_tests_properties(native_timer_driver_init_fault_cleanup PROPERTIES TIMEOUT 20)
+    endif()
+
     # Pinned native Future<void> lifecycle frame: host callbacks only record
     # completion; resumption is admitted on a parent actor's CONTROL lane.
     # Guest-source await remains compiler-rejected pending typed MIR lowering.
