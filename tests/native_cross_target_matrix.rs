@@ -307,6 +307,8 @@ const EXPECTED_ARITHMETIC_TRAPS: &[&str] = &[
     "tests/fixtures/logical-punctuation-v1/and-reached-rhs-trap.atto",
     "tests/fixtures/logical-punctuation-v1/or-reached-rhs-trap.atto",
     "tests/fixtures/logical-punctuation-v1/xor-eager-trap.atto",
+    // A terminal checked overflow is never an Err: it must trap (main ae526f7ab).
+    "tests/fixtures/trap-int-overflow-terminal.atto",
 ];
 fn run_arithmetic_trap(program: &str, args: &[&str], signal: i32) -> Option<(i32, Vec<u8>, String)> {
     use std::os::unix::process::ExitStatusExt;
