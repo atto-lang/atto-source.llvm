@@ -1,0 +1,2232 @@
+{
+  "schema": "atto-borrow-graph-cases-v1",
+  "version": 1,
+  "rustCanonical": "atto-borrow-mir-v1",
+  "scope": "restricted-acyclic-typed-ownership-CFG-model",
+  "note": "Canonical source-free ownership graph corpus. Single source of truth: backends pin this file by git blob SHA instead of keeping divergent vendored copies. Expected codes are exact canonical codes (L1 compares exact codes).",
+  "backends": [
+    "java",
+    "llvm",
+    "net",
+    "wasm",
+    "forge",
+    "cranelift",
+    "js",
+    "rs",
+    "hdl"
+  ],
+  "cases": [
+    {
+      "id": "C01",
+      "category": "copy",
+      "expected": "accept",
+      "diagnostic": null,
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": true,
+                "send": false
+              },
+              {
+                "op": "Read",
+                "owner": 1
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C02",
+      "category": "move",
+      "expected": "accept",
+      "diagnostic": null,
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "Move",
+                "from": 1,
+                "into": 2
+              },
+              {
+                "op": "Read",
+                "owner": 2
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C03",
+      "category": "move",
+      "expected": "reject",
+      "diagnostic": "E_USE_AFTER_MOVE_OR_DROP",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "Move",
+                "from": 1,
+                "into": 2
+              },
+              {
+                "op": "Read",
+                "owner": 1
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C04",
+      "category": "copy",
+      "expected": "reject",
+      "diagnostic": "E_COPY_PROOF_REQUIRED",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "Copy",
+                "from": 1,
+                "into": 2
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C05",
+      "category": "loans",
+      "expected": "accept",
+      "diagnostic": null,
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "Borrow",
+                "owner": 1,
+                "loan": 10,
+                "kind": "Shared"
+              },
+              {
+                "op": "Borrow",
+                "owner": 1,
+                "loan": 11,
+                "kind": "Shared"
+              },
+              {
+                "op": "Read",
+                "owner": 1
+              },
+              {
+                "op": "EndBorrow",
+                "loan": 11
+              },
+              {
+                "op": "EndBorrow",
+                "loan": 10
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C06",
+      "category": "loans",
+      "expected": "reject",
+      "diagnostic": "E_BORROW_CONFLICT",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "Borrow",
+                "owner": 1,
+                "loan": 10,
+                "kind": "Shared"
+              },
+              {
+                "op": "Borrow",
+                "owner": 1,
+                "loan": 11,
+                "kind": "Mutable"
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C07",
+      "category": "loans",
+      "expected": "accept",
+      "diagnostic": null,
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "Borrow",
+                "owner": 1,
+                "loan": 10,
+                "kind": "Mutable"
+              },
+              {
+                "op": "WriteThrough",
+                "owner": 1,
+                "loan": 10
+              },
+              {
+                "op": "EndBorrow",
+                "loan": 10
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C08",
+      "category": "loans",
+      "expected": "reject",
+      "diagnostic": "E_BORROW_CONFLICT",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "Borrow",
+                "owner": 1,
+                "loan": 10,
+                "kind": "Shared"
+              },
+              {
+                "op": "Write",
+                "owner": 1
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C09",
+      "category": "loans",
+      "expected": "reject",
+      "diagnostic": "E_BORROW_CONFLICT",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "Borrow",
+                "owner": 1,
+                "loan": 10,
+                "kind": "Shared"
+              },
+              {
+                "op": "Drop",
+                "owner": 1
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C10",
+      "category": "suspension",
+      "expected": "reject",
+      "diagnostic": "E_SUSPEND_WITH_LIVE_LOAN",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "Borrow",
+                "owner": 1,
+                "loan": 10,
+                "kind": "Shared"
+              },
+              {
+                "op": "Suspend"
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C11",
+      "category": "suspension",
+      "expected": "accept",
+      "diagnostic": null,
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "Borrow",
+                "owner": 1,
+                "loan": 10,
+                "kind": "Shared"
+              },
+              {
+                "op": "EndBorrow",
+                "loan": 10
+              },
+              {
+                "op": "Suspend"
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C12",
+      "category": "actor",
+      "expected": "reject",
+      "diagnostic": "E_ACTOR_BORROW_ESCAPE",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "ActorHopBorrow",
+                "owner": 1
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C13",
+      "category": "tasks",
+      "expected": "reject",
+      "diagnostic": "E_TASK_CAPTURE_PROOF",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": true,
+                "send": false
+              },
+              {
+                "op": "TaskCaptureCopy",
+                "owner": 1
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C14",
+      "category": "tasks",
+      "expected": "accept",
+      "diagnostic": null,
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": true
+              },
+              {
+                "op": "TaskCaptureMove",
+                "owner": 1
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C15",
+      "category": "loans",
+      "expected": "reject",
+      "diagnostic": "E_UNKNOWN_LOAN",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "EndBorrow",
+                "loan": 10
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C16",
+      "category": "identities",
+      "expected": "reject",
+      "diagnostic": "E_OWNER_DEF_REUSED",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [],
+            "successors": [
+              1,
+              2
+            ]
+          },
+          {
+            "id": 1,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              }
+            ],
+            "successors": [
+              3
+            ]
+          },
+          {
+            "id": 2,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              }
+            ],
+            "successors": [
+              3
+            ]
+          },
+          {
+            "id": 3,
+            "ops": [
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C17",
+      "category": "identities",
+      "expected": "reject",
+      "diagnostic": "E_LOAN_DEF_REUSED",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              }
+            ],
+            "successors": [
+              1,
+              2
+            ]
+          },
+          {
+            "id": 1,
+            "ops": [
+              {
+                "op": "Borrow",
+                "owner": 1,
+                "loan": 10,
+                "kind": "Shared"
+              },
+              {
+                "op": "EndBorrow",
+                "loan": 10
+              }
+            ],
+            "successors": [
+              3
+            ]
+          },
+          {
+            "id": 2,
+            "ops": [
+              {
+                "op": "Borrow",
+                "owner": 1,
+                "loan": 10,
+                "kind": "Shared"
+              },
+              {
+                "op": "EndBorrow",
+                "loan": 10
+              }
+            ],
+            "successors": [
+              3
+            ]
+          },
+          {
+            "id": 3,
+            "ops": [
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C18",
+      "category": "joins",
+      "expected": "reject",
+      "diagnostic": "E_CFG_JOIN_UNPROVEN",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              }
+            ],
+            "successors": [
+              1,
+              2
+            ]
+          },
+          {
+            "id": 1,
+            "ops": [
+              {
+                "op": "Move",
+                "from": 1,
+                "into": 2
+              }
+            ],
+            "successors": [
+              3
+            ]
+          },
+          {
+            "id": 2,
+            "ops": [
+              {
+                "op": "Read",
+                "owner": 1
+              }
+            ],
+            "successors": [
+              3
+            ]
+          },
+          {
+            "id": 3,
+            "ops": [
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C19",
+      "category": "loops",
+      "expected": "reject",
+      "diagnostic": "E_CFG_CYCLE_UNPROVEN",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              }
+            ],
+            "successors": [
+              1
+            ]
+          },
+          {
+            "id": 1,
+            "ops": [
+              {
+                "op": "Read",
+                "owner": 1
+              }
+            ],
+            "successors": [
+              1
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "C20",
+      "category": "effects",
+      "expected": "reject",
+      "diagnostic": "E_MIR_UNSUPPORTED_EFFECT",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "UnknownEffect",
+                "kind": "foreign_call"
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C21",
+      "category": "exits",
+      "expected": "reject",
+      "diagnostic": "E_IMPLICIT_EXIT",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "Read",
+                "owner": 1
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C22",
+      "category": "loans",
+      "expected": "reject",
+      "diagnostic": "E_LOAN_ESCAPE",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "Borrow",
+                "owner": 1,
+                "loan": 10,
+                "kind": "Shared"
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C23",
+      "category": "copy",
+      "expected": "accept",
+      "diagnostic": null,
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": true,
+                "send": false
+              },
+              {
+                "op": "Copy",
+                "from": 1,
+                "into": 2
+              },
+              {
+                "op": "Read",
+                "owner": 1
+              },
+              {
+                "op": "Read",
+                "owner": 2
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C24",
+      "category": "move",
+      "expected": "reject",
+      "diagnostic": "E_USE_AFTER_MOVE_OR_DROP",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "Drop",
+                "owner": 1
+              },
+              {
+                "op": "Drop",
+                "owner": 1
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C25",
+      "category": "loans",
+      "expected": "reject",
+      "diagnostic": "E_MUT_LOAN_REQUIRED",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "Borrow",
+                "owner": 1,
+                "loan": 10,
+                "kind": "Shared"
+              },
+              {
+                "op": "WriteThrough",
+                "owner": 1,
+                "loan": 10
+              },
+              {
+                "op": "EndBorrow",
+                "loan": 10
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C26",
+      "category": "loans",
+      "expected": "reject",
+      "diagnostic": "E_BORROW_CONFLICT",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "Borrow",
+                "owner": 1,
+                "loan": 10,
+                "kind": "Shared"
+              },
+              {
+                "op": "Move",
+                "from": 1,
+                "into": 2
+              },
+              {
+                "op": "EndBorrow",
+                "loan": 10
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C27",
+      "category": "loans",
+      "expected": "reject",
+      "diagnostic": "E_BORROW_CONFLICT",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "Borrow",
+                "owner": 1,
+                "loan": 10,
+                "kind": "Mutable"
+              },
+              {
+                "op": "Read",
+                "owner": 1
+              },
+              {
+                "op": "EndBorrow",
+                "loan": 10
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C28",
+      "category": "deep-copy",
+      "expected": "reject",
+      "diagnostic": "E_DEEP_COPY_PROOF_REQUIRED",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "DeepCopy",
+                "from": 1,
+                "into": 2,
+                "graphProven": false
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C29",
+      "category": "deep-copy",
+      "expected": "accept",
+      "diagnostic": null,
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "DeepCopy",
+                "from": 1,
+                "into": 2,
+                "graphProven": true
+              },
+              {
+                "op": "Read",
+                "owner": 1
+              },
+              {
+                "op": "Read",
+                "owner": 2
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C30",
+      "category": "freeze",
+      "expected": "reject",
+      "diagnostic": "E_FROZEN_WRITE",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "Freeze",
+                "from": 1,
+                "into": 2,
+                "deepProven": true
+              },
+              {
+                "op": "Write",
+                "owner": 2
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C31",
+      "category": "freeze",
+      "expected": "reject",
+      "diagnostic": "E_DEEP_FREEZE_PROOF_REQUIRED",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "Freeze",
+                "from": 1,
+                "into": 2,
+                "deepProven": false
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C32",
+      "category": "freeze",
+      "expected": "reject",
+      "diagnostic": "E_FROZEN_BORROW_MUT",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "Freeze",
+                "from": 1,
+                "into": 2,
+                "deepProven": true
+              },
+              {
+                "op": "Borrow",
+                "owner": 2,
+                "loan": 10,
+                "kind": "Mutable"
+              },
+              {
+                "op": "EndBorrow",
+                "loan": 10
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C33",
+      "category": "freeze",
+      "expected": "reject",
+      "diagnostic": "E_USE_AFTER_MOVE_OR_DROP",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "Freeze",
+                "from": 1,
+                "into": 2,
+                "deepProven": true
+              },
+              {
+                "op": "Read",
+                "owner": 1
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C34",
+      "category": "freeze",
+      "expected": "accept",
+      "diagnostic": null,
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "Freeze",
+                "from": 1,
+                "into": 2,
+                "deepProven": true
+              },
+              {
+                "op": "Borrow",
+                "owner": 2,
+                "loan": 10,
+                "kind": "Shared"
+              },
+              {
+                "op": "Read",
+                "owner": 2
+              },
+              {
+                "op": "EndBorrow",
+                "loan": 10
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C35",
+      "category": "pin",
+      "expected": "reject",
+      "diagnostic": "E_PIN_ADDRESS_PROOF_REQUIRED",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "PinStorage",
+                "owner": 1,
+                "stableAddressProven": false
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C36",
+      "category": "pin",
+      "expected": "reject",
+      "diagnostic": "E_PIN_RELOCATION",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "PinStorage",
+                "owner": 1,
+                "stableAddressProven": true
+              },
+              {
+                "op": "RelocateStorage",
+                "owner": 1
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C37",
+      "category": "pin",
+      "expected": "reject",
+      "diagnostic": "E_ALREADY_PINNED",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "PinStorage",
+                "owner": 1,
+                "stableAddressProven": true
+              },
+              {
+                "op": "PinStorage",
+                "owner": 1,
+                "stableAddressProven": true
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C38",
+      "category": "pin",
+      "expected": "reject",
+      "diagnostic": "E_PIN_BOUNDARY_TRANSFER",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": true
+              },
+              {
+                "op": "PinStorage",
+                "owner": 1,
+                "stableAddressProven": true
+              },
+              {
+                "op": "ActorSendMove",
+                "owner": 1
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C39",
+      "category": "pin",
+      "expected": "accept",
+      "diagnostic": null,
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "Init",
+                "owner": 2,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "PinStorage",
+                "owner": 1,
+                "stableAddressProven": true
+              },
+              {
+                "op": "Read",
+                "owner": 1
+              },
+              {
+                "op": "RelocateStorage",
+                "owner": 2
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C40",
+      "category": "actor",
+      "expected": "reject",
+      "diagnostic": "E_ACTOR_SEND_PROOF_REQUIRED",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "ActorSendMove",
+                "owner": 1
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C41",
+      "category": "actor",
+      "expected": "reject",
+      "diagnostic": "E_USE_AFTER_MOVE_OR_DROP",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": true
+              },
+              {
+                "op": "ActorSendMove",
+                "owner": 1
+              },
+              {
+                "op": "Read",
+                "owner": 1
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C42",
+      "category": "actor",
+      "expected": "reject",
+      "diagnostic": "E_ACTOR_COPY_SEND_PROOF_REQUIRED",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": true
+              },
+              {
+                "op": "ActorSendCopy",
+                "owner": 1
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C43",
+      "category": "actor",
+      "expected": "accept",
+      "diagnostic": null,
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": true,
+                "send": true
+              },
+              {
+                "op": "ActorSendCopy",
+                "owner": 1
+              },
+              {
+                "op": "Read",
+                "owner": 1
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C44",
+      "category": "actor",
+      "expected": "reject",
+      "diagnostic": "E_ACTOR_SEND_PENDING",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": true
+              },
+              {
+                "op": "ActorSendPrepare",
+                "owner": 1,
+                "ticket": 7
+              },
+              {
+                "op": "Read",
+                "owner": 1
+              },
+              {
+                "op": "ActorSendAbort",
+                "ticket": 7
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C45",
+      "category": "actor",
+      "expected": "accept",
+      "diagnostic": null,
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": true
+              },
+              {
+                "op": "ActorSendPrepare",
+                "owner": 1,
+                "ticket": 7
+              },
+              {
+                "op": "ActorSendAbort",
+                "ticket": 7
+              },
+              {
+                "op": "Read",
+                "owner": 1
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C46",
+      "category": "actor",
+      "expected": "reject",
+      "diagnostic": "E_USE_AFTER_MOVE_OR_DROP",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": true
+              },
+              {
+                "op": "ActorSendPrepare",
+                "owner": 1,
+                "ticket": 7
+              },
+              {
+                "op": "ActorSendCommit",
+                "ticket": 7
+              },
+              {
+                "op": "Read",
+                "owner": 1
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C47",
+      "category": "actor",
+      "expected": "reject",
+      "diagnostic": "E_ACTOR_SEND_UNRESOLVED",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": true
+              },
+              {
+                "op": "ActorSendPrepare",
+                "owner": 1,
+                "ticket": 7
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C48",
+      "category": "share",
+      "expected": "reject",
+      "diagnostic": "E_SHARED_FROZEN_PROOF_REQUIRED",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "PublishFrozen",
+                "owner": 1,
+                "region": 3,
+                "syncProven": false
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C49",
+      "category": "weak",
+      "expected": "reject",
+      "diagnostic": "E_WEAK_SHARED_REGION_REQUIRED",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "CreateWeak",
+                "region": 3,
+                "weak": 4,
+                "generationFenced": true
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C50",
+      "category": "weak",
+      "expected": "accept",
+      "diagnostic": null,
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": true
+              },
+              {
+                "op": "PublishFrozen",
+                "owner": 1,
+                "region": 3,
+                "syncProven": true
+              },
+              {
+                "op": "CreateWeak",
+                "region": 3,
+                "weak": 4,
+                "generationFenced": true
+              },
+              {
+                "op": "ProbeWeak",
+                "weak": 4,
+                "generationFenced": true
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C51",
+      "category": "weak",
+      "expected": "reject",
+      "diagnostic": "E_WEAK_GENERATION_PROOF_REQUIRED",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": true
+              },
+              {
+                "op": "PublishFrozen",
+                "owner": 1,
+                "region": 3,
+                "syncProven": true
+              },
+              {
+                "op": "CreateWeak",
+                "region": 3,
+                "weak": 4,
+                "generationFenced": false
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C52",
+      "category": "share",
+      "expected": "reject",
+      "diagnostic": "E_USE_AFTER_MOVE_OR_DROP",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": true
+              },
+              {
+                "op": "PromoteGuarded",
+                "owner": 1,
+                "region": 3
+              },
+              {
+                "op": "Read",
+                "owner": 1
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C53",
+      "category": "tasks",
+      "expected": "reject",
+      "diagnostic": "E_TASK_CAPTURE_PROOF",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "TaskCaptureMove",
+                "owner": 1
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C54",
+      "category": "tasks",
+      "expected": "accept",
+      "diagnostic": null,
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": true,
+                "send": true
+              },
+              {
+                "op": "TaskCaptureCopy",
+                "owner": 1
+              },
+              {
+                "op": "Read",
+                "owner": 1
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C55",
+      "category": "joins",
+      "expected": "accept",
+      "diagnostic": null,
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              }
+            ],
+            "successors": [
+              1,
+              2
+            ]
+          },
+          {
+            "id": 1,
+            "ops": [
+              {
+                "op": "Read",
+                "owner": 1
+              }
+            ],
+            "successors": [
+              3
+            ]
+          },
+          {
+            "id": 2,
+            "ops": [
+              {
+                "op": "Write",
+                "owner": 1
+              }
+            ],
+            "successors": [
+              3
+            ]
+          },
+          {
+            "id": 3,
+            "ops": [
+              {
+                "op": "Read",
+                "owner": 1
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C56",
+      "category": "exits",
+      "expected": "accept",
+      "diagnostic": null,
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              }
+            ],
+            "successors": [
+              1,
+              2
+            ]
+          },
+          {
+            "id": 1,
+            "ops": [
+              {
+                "op": "Move",
+                "from": 1,
+                "into": 2
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          },
+          {
+            "id": 2,
+            "ops": [
+              {
+                "op": "Read",
+                "owner": 1
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C57",
+      "category": "exits",
+      "expected": "reject",
+      "diagnostic": "E_RETURN_WITH_SUCCESSOR",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": [
+              1
+            ]
+          },
+          {
+            "id": 1,
+            "ops": [
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C58",
+      "category": "share",
+      "expected": "reject",
+      "diagnostic": "E_SHARED_FROZEN_PROOF_REQUIRED",
+      "note": "publication requires a Send owner even when Sync is proven",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "PublishFrozen",
+                "owner": 1,
+                "region": 3,
+                "syncProven": true
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    },
+    {
+      "id": "C59",
+      "category": "share",
+      "expected": "reject",
+      "diagnostic": "E_ACTOR_SEND_PROOF_REQUIRED",
+      "note": "guarded promotion requires a Send owner",
+      "graph": {
+        "entry": 0,
+        "blocks": [
+          {
+            "id": 0,
+            "ops": [
+              {
+                "op": "Init",
+                "owner": 1,
+                "copy": false,
+                "send": false
+              },
+              {
+                "op": "PromoteGuarded",
+                "owner": 1,
+                "region": 3
+              },
+              {
+                "op": "Return"
+              }
+            ],
+            "successors": []
+          }
+        ]
+      }
+    }
+  ]
+}
