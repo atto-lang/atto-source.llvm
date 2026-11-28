@@ -208,7 +208,48 @@ static void cancellation_and_ready_publication_are_linearized_by_store_state() {
     }
 }
 
+static void only_claiming_gate_may_finish_resume() {
+    Stores stores;
+    for (std::uint64_t i = 0; i < 256; ++i) {
+        const AsyncIoTicket ticket{13, 8, 2000 + i};
+        auto link = stores.suspend(5000 + i, ticket.actor_id, ticket.generation,
+                                   ticket.operation_id);
+        AsyncIoOperationLifecycle lifecycle(ticket);
+        // Two trusted bindings can exist while the continuation is PENDING.
+        // Only the one that wins READY -> CLAIMED owns retirement authority.
+        AsyncIoContinuationGate first(
+            lifecycle, stores.executions, stores.continuations, link, 17);
+        AsyncIoContinuationGate second(
+            lifecycle, stores.executions, stores.continuations, link, 17);
+        check(lifecycle.finish(ticket, AsyncIoTerminal::success));
+        check(lifecycle.retire(ticket));
+        check(first.notify_ready_after_retirement());
+
+        OresNativeExecutionHandle a{}, b{};
+        bool first_won = false;
+        std::thread competitor([&] {
+            first_won = first.try_resume({77, 10000 + i}, &a);
+        });
+        const bool second_won = second.try_resume({77, 20000 + i}, &b);
+        competitor.join();
+        check(first_won != second_won);
+        auto& winner = first_won ? first : second;
+        auto& loser = first_won ? second : first;
+        check(!loser.finish_resume());
+        check(stores.state(link) == ORES_CONTINUATION_CLAIMED);
+        check(!loser.cancel());
+        check(winner.finish_resume());
+        check(stores.state(link) == ORES_CONTINUATION_COMPLETED);
+        check(!winner.finish_resume());
+        check(!loser.finish_resume());
+        check(ores_native_execution_context_store_release(
+            stores.executions, first_won ? a : b));
+        stores.release(link);
+    }
+}
+
 int main() {
+    only_claiming_gate_may_finish_resume();
     completion_is_not_scheduler_visible_before_physical_retirement();
     cancellation_revokes_waiter_but_still_requires_native_retirement();
     stale_generation_and_operation_identity_are_rejected();
