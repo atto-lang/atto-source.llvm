@@ -133,7 +133,11 @@ fn compile_target(source: &str, native_c: bool, isolated: bool) -> Result<Vec<u8
             lexer::Tok::RBrace => braces = braces.saturating_sub(1),
             lexer::Tok::Ident(word) if braces == 0 => {
                 let next = toks.get(i + 1).map(|token| &token.tok);
-                if word == "declare" || word == "mtd" ||
+                // Out-of-line receiver syntax starts with mtd (...).
+                // In-class mtd name(...) (including mut mtd) belongs to
+                // the ordinary class parser and checked guest lowering.
+                if word == "declare" ||
+                    (word == "mtd" && matches!(next, Some(lexer::Tok::LParen))) ||
                     (word == "use" && matches!(next,
                         Some(lexer::Tok::Ident(name)) if name == "namespace")) {
                     target = true;
