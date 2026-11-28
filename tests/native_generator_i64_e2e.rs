@@ -110,6 +110,11 @@ int main(void) {
     check(forged_done[0]==2 && forged_done[1]==1, "forged terminal rejection mutated frame");
     check(oreslang_rt_gen_values_init(frame)==1, "init failed");
     check(oreslang_rt_gen_values_init(frame)==0, "double init accepted");
+    check(oreslang_rt_gen_values_next(frame,frame)==-1,
+          "next accepted output alias of frame state");
+    check(oreslang_rt_gen_values_next(frame,frame+1)==-1,
+          "next accepted output alias of frame index");
+    check(frame[0]==1 && frame[1]==0, "alias rejection mutated frame");
     const int64_t expected_values[3] = {1, INT64_MIN, INT64_MAX};
     for (size_t i=0; i<3; ++i) {
         value = -1;
@@ -164,6 +169,92 @@ int main(void) {
     assert!(String::from_utf8_lossy(&alias.stdout)
         .contains("define i32 @oreslang_rt_gen_alias_values_init("));
 
+    // Pure same-file yield* is resolved into a bounded native yield sequence
+    // without an escaping iterator loan, producer task or heap frame.
+    let delegated_source = r#"pub gen* inner(): Iterator<int> {
+  yield 20;
+  yield 22;
+  return;
+}
+pub gen* outer(): Iterator<int> {
+  yield 0;
+  yield* inner();
+  yield 1;
+  return;
+}
+pub gen* forwarded(): Iterator<int> {
+  yield* outer();
+  return;
+}
+"#;
+    let delegated = compile(
+        &compiler, &dir.0, "pure-delegation.ores", delegated_source);
+    assert!(delegated.status.success(),
+        "bounded yield* compile failed: {}",
+        String::from_utf8_lossy(&delegated.stderr));
+    let delegated_ir = String::from_utf8_lossy(&delegated.stdout);
+    assert!(delegated_ir.contains("define i32 @oreslang_rt_gen_forwarded_next("),
+        "forwarded native generator ABI missing");
+    let delegated_ll = dir.0.join("pure-delegation.ll");
+    let delegated_c = dir.0.join("pure-delegation-harness.c");
+    let delegated_exe = dir.0.join(if cfg!(windows) {
+        "pure-delegation-harness.exe"
+    } else {
+        "pure-delegation-harness"
+    });
+    fs::write(&delegated_ll, &delegated.stdout).expect("write delegated IR");
+    fs::write(&delegated_c, r#"
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+extern int oreslang_rt_gen_forwarded_init(int64_t*);
+extern int oreslang_rt_gen_forwarded_next(int64_t*, int64_t*);
+extern int oreslang_rt_gen_forwarded_close(int64_t*);
+static void check(int ok, const char* msg) {
+    if (!ok) { fputs(msg, stderr); fputc('\n', stderr); abort(); }
+}
+int main(void) {
+    int64_t first[2] = {0, 0}, second[2] = {0, 0}, v = 0;
+    const int64_t expected[4] = {0, 20, 22, 1};
+    check(oreslang_rt_gen_forwarded_init(first) == 1, "init first");
+    check(oreslang_rt_gen_forwarded_init(second) == 1, "init second");
+    for (size_t i = 0; i < 4; ++i) {
+        check(oreslang_rt_gen_forwarded_next(first, &v) == 1, "first yield");
+        check(v == expected[i], "delegated ordering");
+        if (i == 0) {
+            check(oreslang_rt_gen_forwarded_next(second, &v) == 1,
+                  "second activation yield");
+            check(v == 0, "second activation independence");
+            check(oreslang_rt_gen_forwarded_close(second) == 1, "early close");
+            check(oreslang_rt_gen_forwarded_next(second, &v) == 0,
+                  "early-closed delegate revived");
+        }
+    }
+    check(oreslang_rt_gen_forwarded_next(first, &v) == 0, "missing DONE");
+    check(oreslang_rt_gen_forwarded_next(first, &v) == 0, "DONE not sticky");
+    check(oreslang_rt_gen_forwarded_close(first) == 0, "close after DONE");
+    puts("NATIVE_PURE_DELEGATION_PASS");
+    return 0;
+}
+"#).expect("write delegated harness");
+    let delegate_build = Command::new(&clang)
+        .arg("-O2").arg("-std=c11")
+        .arg("-Wall").arg("-Wextra").arg("-Werror").arg("-pedantic")
+        .arg("-Wno-override-module")
+        .arg(&delegated_c).arg("-x").arg("ir").arg(&delegated_ll)
+        .arg("-o").arg(&delegated_exe).current_dir(&dir.0)
+        .output().expect("build delegated native generator");
+    assert!(delegate_build.status.success(),
+        "delegated native link failed: {}",
+        String::from_utf8_lossy(&delegate_build.stderr));
+    let delegate_run = Command::new(&delegated_exe).current_dir(&dir.0)
+        .output().expect("execute delegated native generator");
+    assert!(delegate_run.status.success(),
+        "delegated native execution failed: {}",
+        String::from_utf8_lossy(&delegate_run.stderr));
+    assert!(String::from_utf8_lossy(&delegate_run.stdout)
+        .contains("NATIVE_PURE_DELEGATION_PASS"));
+
     rejected(&compiler, &dir.0, "starless-generator.ores",
         "pub generator values(): Iterator<int> { yield 1; return; }\n",
         "bare native generator declaration requires 'generator*'");
@@ -208,9 +299,27 @@ gen* values(): Iterator<int> { yield 1; return; }\n";
     rejected(&compiler, &dir.0, "suspend.ores",
         "suspend gen* values(): AsyncIterator<int> { yield 1; return; }\n",
         "suspend gen* requires scheduler-owned async iterator continuation lowering");
-    rejected(&compiler, &dir.0, "delegate.ores",
+    rejected(&compiler, &dir.0, "delegate-not-call.ores",
         "gen* values(): Iterator<int> { yield* other; return; }\n",
-        "yield* requires delegated iterator ownership and close lowering");
+        "expected '('");
+    rejected(&compiler, &dir.0, "delegate-missing.ores",
+        "gen* values(): Iterator<int> { yield* missing(); return; }\n",
+        "native generator yield* target is not a same-file literal generator");
+    rejected(&compiler, &dir.0, "delegate-with-args.ores",
+        "gen* values(): Iterator<int> { yield* other(2); return; }\n",
+        "expected ')'");
+    rejected(&compiler, &dir.0, "delegate-cycle.ores",
+        concat!(
+            "gen* a(): Iterator<int> { yield* b(); return; }\n",
+            "gen* b(): Iterator<int> { yield* a(); return; }\n",
+        ),
+        "native generator yield* cycle");
+    let mut expanded_overflow = String::from("gen* inner(): Iterator<int> {\n");
+    for _ in 0..2049 { expanded_overflow.push_str(" yield 1;\n"); }
+    expanded_overflow.push_str(
+        "}\ngen* outer(): Iterator<int> { yield* inner(); yield* inner(); yield 1; return; }\n");
+    rejected(&compiler, &dir.0, "delegate-expanded-overflow.ores",
+        &expanded_overflow, "exceeds 4096 yielded elements after yield*");
     rejected(&compiler, &dir.0, "return-value.ores",
         "gen* values(): Iterator<int> { return 1; }\n",
         "generator return cannot carry a value");
@@ -225,5 +334,5 @@ gen* values(): Iterator<int> { yield 1; return; }\n";
         "gen* values(): Iterator<int> { yield -9223372036854775809; return; }\n",
         "integer literal overflows signed 64-bit result");
 
-    println!("PASS: native sync gen* source -> LLVM frame -> Clang execution; async/suspend/delegation fail closed");
+    println!("PASS: native sync gen* and pure yield* -> LLVM frame -> Clang execution; async/suspend/impure delegation fail closed");
 }

@@ -1,12 +1,17 @@
 #include "oreslang/runtime/AsyncIoContinuationGate.hpp"
 
 #include <atomic>
-#include <cassert>
 #include <cstdint>
 #include <stdexcept>
 #include <thread>
 
 using namespace oreslang::runtime;
+
+// Unlike C assert, these are always evaluated under NDEBUG / Release.
+// Side-effecting admission operations must never vanish from a test build.
+static void check(bool condition) {
+    if (!condition) throw std::runtime_error("native continuation gate invariant failed");
+}
 
 struct Stores {
     OresNativeExecutionContextStore* executions =
@@ -14,13 +19,13 @@ struct Stores {
     OresNativeContinuationStore* continuations =
         ores_native_continuation_store_open(16, executions);
 
-    Stores() { assert(executions && continuations); }
+    Stores() { check(executions && continuations); }
 
     ~Stores() {
-        assert(ores_native_continuation_store_live(continuations) == 0);
-        assert(ores_native_execution_context_store_live(executions) == 0);
-        assert(ores_native_continuation_store_close(continuations));
-        assert(ores_native_execution_context_store_close(executions));
+        check(ores_native_continuation_store_live(continuations) == 0);
+        check(ores_native_execution_context_store_live(executions) == 0);
+        check(ores_native_continuation_store_close(continuations));
+        check(ores_native_execution_context_store_close(executions));
     }
 
     OresNativeSuspensionLink suspend(
@@ -37,28 +42,28 @@ struct Stores {
         context.allocation.generation = actor_generation;
 
         OresNativeExecutionHandle origin{};
-        assert(ores_native_execution_context_store_insert(
+        check(ores_native_execution_context_store_insert(
             executions, &context, &origin));
 
         OresNativeSuspensionLink link{};
-        assert(ores_native_await_trace_suspend(
+        check(ores_native_await_trace_suspend(
             executions, continuations, origin,
             OresNativeContinuationHandle{},
             ORES_CONTINUATION_BOUNDARY_AWAIT,
             17, operation_id, &link));
-        assert(ores_native_execution_context_store_release(executions, origin));
+        check(ores_native_execution_context_store_release(executions, origin));
         return link;
     }
 
     OresNativeContinuationState state(OresNativeSuspensionLink link) {
         OresNativeContinuationRecord record{};
-        assert(ores_native_continuation_store_get(
+        check(ores_native_continuation_store_get(
             continuations, link.continuation, &record));
         return record.state;
     }
 
     void release(OresNativeSuspensionLink link) {
-        assert(ores_native_continuation_store_release(
+        check(ores_native_continuation_store_release(
             continuations, link.continuation));
     }
 };
@@ -73,30 +78,36 @@ static void completion_is_not_scheduler_visible_before_physical_retirement() {
     AsyncIoContinuationGate gate(
         lifecycle, stores.executions, stores.continuations, link, 17);
 
-    assert(lifecycle.mark_registered(ticket));
-    assert(lifecycle.begin_callback(ticket));
-    assert(lifecycle.finish(ticket, AsyncIoTerminal::success));
-    assert(lifecycle.end_callback(ticket));
+    check(lifecycle.mark_registered(ticket));
+    check(lifecycle.begin_callback(ticket));
+    check(lifecycle.finish(ticket, AsyncIoTerminal::success));
+    check(lifecycle.end_callback(ticket));
 
     // Logical terminal exists, but the kernel registration is still owned.
-    assert(!gate.notify_ready_after_retirement());
-    assert(stores.state(link) == ORES_CONTINUATION_PENDING);
+    check(!gate.notify_ready_after_retirement());
+    check(stores.state(link) == ORES_CONTINUATION_PENDING);
 
-    assert(lifecycle.mark_unregistered(ticket));
-    assert(!gate.notify_ready_after_retirement()); // frame not retired yet
-    assert(lifecycle.retire(ticket));
-    assert(lifecycle.ready_to_reclaim());
+    check(lifecycle.mark_unregistered(ticket));
+    check(!gate.notify_ready_after_retirement()); // frame not retired yet
+    check(lifecycle.retire(ticket));
+    check(lifecycle.ready_to_reclaim());
 
-    assert(gate.notify_ready_after_retirement());
-    assert(stores.state(link) == ORES_CONTINUATION_READY);
+    check(gate.notify_ready_after_retirement());
+    check(stores.state(link) == ORES_CONTINUATION_READY);
 
     OresNativeExecutionHandle resumed{};
     OresNativeExecutionContext resumed_context{};
-    assert(gate.try_resume({77, 1002}, &resumed, &resumed_context));
-    assert(resumed_context.allocation.owner == ticket.actor_id);
-    assert(stores.state(link) == ORES_CONTINUATION_CLAIMED);
-    assert(gate.finish_resume());
-    assert(ores_native_execution_context_store_release(
+    check(gate.try_resume({77, 1002}, &resumed, &resumed_context));
+    check(resumed_context.allocation.owner == ticket.actor_id);
+    check(stores.state(link) == ORES_CONTINUATION_CLAIMED);
+    check(gate.finish_resume());
+    // A completed await has no second guest continuation, even if a
+    // foreign producer repeats its terminal callback after retirement.
+    check(!gate.notify_ready_after_retirement());
+    OresNativeExecutionHandle second{};
+    check(!gate.try_resume({77, 1003}, &second));
+    check(!gate.finish_resume());
+    check(ores_native_execution_context_store_release(
         stores.executions, resumed));
     stores.release(link);
 }
@@ -111,19 +122,19 @@ static void cancellation_revokes_waiter_but_still_requires_native_retirement() {
     AsyncIoContinuationGate gate(
         lifecycle, stores.executions, stores.continuations, link, 17);
 
-    assert(lifecycle.mark_registered(ticket));
-    assert(gate.cancel());
-    assert(lifecycle.terminal() == AsyncIoTerminal::cancelled);
-    assert(stores.state(link) == ORES_CONTINUATION_CANCELLED);
-    assert(!lifecycle.ready_to_reclaim());
+    check(lifecycle.mark_registered(ticket));
+    check(gate.cancel());
+    check(lifecycle.terminal() == AsyncIoTerminal::cancelled);
+    check(stores.state(link) == ORES_CONTINUATION_CANCELLED);
+    check(!lifecycle.ready_to_reclaim());
 
-    assert(lifecycle.mark_unregistered(ticket));
-    assert(lifecycle.retire(ticket));
-    assert(lifecycle.ready_to_reclaim());
-    assert(!gate.notify_ready_after_retirement());
+    check(lifecycle.mark_unregistered(ticket));
+    check(lifecycle.retire(ticket));
+    check(lifecycle.ready_to_reclaim());
+    check(!gate.notify_ready_after_retirement());
 
     OresNativeExecutionHandle resumed{};
-    assert(!gate.try_resume({77, 2002}, &resumed));
+    check(!gate.try_resume({77, 2002}, &resumed));
     stores.release(link);
 }
 
@@ -145,10 +156,10 @@ static void stale_generation_and_operation_identity_are_rejected() {
         } catch (const std::invalid_argument&) {
             rejected = true;
         }
-        assert(rejected);
+        check(rejected);
     }
 
-    assert(ores_native_continuation_store_cancel(
+    check(ores_native_continuation_store_cancel(
         stores.continuations, link.continuation));
     stores.release(link);
 }
@@ -163,8 +174,8 @@ static void cancellation_and_ready_publication_are_linearized_by_store_state() {
         AsyncIoContinuationGate gate(
             lifecycle, stores.executions, stores.continuations, link, 17);
 
-        assert(lifecycle.finish(ticket, AsyncIoTerminal::success));
-        assert(lifecycle.retire(ticket));
+        check(lifecycle.finish(ticket, AsyncIoTerminal::success));
+        check(lifecycle.retire(ticket));
 
         std::atomic<bool> go{false};
         std::atomic<bool> ready{false};
@@ -185,11 +196,11 @@ static void cancellation_and_ready_publication_are_linearized_by_store_state() {
         canceller.join();
 
         const auto state = stores.state(link);
-        assert(state == ORES_CONTINUATION_READY
+        check(state == ORES_CONTINUATION_READY
             || state == ORES_CONTINUATION_CANCELLED);
         if (state == ORES_CONTINUATION_CANCELLED) {
             OresNativeExecutionHandle resumed{};
-            assert(!gate.try_resume({77, 9000 + i}, &resumed));
+            check(!gate.try_resume({77, 9000 + i}, &resumed));
         }
         (void)ready;
         (void)cancelled;
@@ -197,7 +208,48 @@ static void cancellation_and_ready_publication_are_linearized_by_store_state() {
     }
 }
 
+static void only_claiming_gate_may_finish_resume() {
+    Stores stores;
+    for (std::uint64_t i = 0; i < 256; ++i) {
+        const AsyncIoTicket ticket{13, 8, 2000 + i};
+        auto link = stores.suspend(5000 + i, ticket.actor_id, ticket.generation,
+                                   ticket.operation_id);
+        AsyncIoOperationLifecycle lifecycle(ticket);
+        // Two trusted bindings can exist while the continuation is PENDING.
+        // Only the one that wins READY -> CLAIMED owns retirement authority.
+        AsyncIoContinuationGate first(
+            lifecycle, stores.executions, stores.continuations, link, 17);
+        AsyncIoContinuationGate second(
+            lifecycle, stores.executions, stores.continuations, link, 17);
+        check(lifecycle.finish(ticket, AsyncIoTerminal::success));
+        check(lifecycle.retire(ticket));
+        check(first.notify_ready_after_retirement());
+
+        OresNativeExecutionHandle a{}, b{};
+        bool first_won = false;
+        std::thread competitor([&] {
+            first_won = first.try_resume({77, 10000 + i}, &a);
+        });
+        const bool second_won = second.try_resume({77, 20000 + i}, &b);
+        competitor.join();
+        check(first_won != second_won);
+        auto& winner = first_won ? first : second;
+        auto& loser = first_won ? second : first;
+        check(!loser.finish_resume());
+        check(stores.state(link) == ORES_CONTINUATION_CLAIMED);
+        check(!loser.cancel());
+        check(winner.finish_resume());
+        check(stores.state(link) == ORES_CONTINUATION_COMPLETED);
+        check(!winner.finish_resume());
+        check(!loser.finish_resume());
+        check(ores_native_execution_context_store_release(
+            stores.executions, first_won ? a : b));
+        stores.release(link);
+    }
+}
+
 int main() {
+    only_claiming_gate_may_finish_resume();
     completion_is_not_scheduler_visible_before_physical_retirement();
     cancellation_revokes_waiter_but_still_requires_native_retirement();
     stale_generation_and_operation_identity_are_rejected();

@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
 
 permissions:
@@ -11,7 +13,7 @@ permissions:
 
 concurrency:
   group: llvm-ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name != 'merge_group' }}
 
 jobs:
   llvm-smoke:
@@ -33,12 +35,61 @@ jobs:
           git diff --quiet --exit-code
           test -z "$(git ls-files --others --exclude-standard)"
           echo "EXACT_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+          test "$(git hash-object tests/fixtures/numeric-v1/math-i64-ok.ores)" = "6d02ef593be9888364cc6f64c1c42224dcebbdb9"
+          test "$(git hash-object tests/fixtures/numeric-v1/math-i64-abs-min.ores)" = "f9064fc2ee79a2356dc062841330466c3d0df9c7"
+          test "$(git hash-object tests/fixtures/numeric-v1/math-i64-neg-min.ores)" = "c1d1bff1971351814d8161c36c5a5e18d5ae9e26"
       - name: Install LLVM toolchain and native linker
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake clang llvm-dev python3
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
       - name: Compile
         run: cmake --build build --parallel 2
+      - name: Execute core-four ownership compiler guests O0/O2 and zero-IR negatives
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          ORESLANG_LLVMC: build/oreslang-llvmc
+          ORES_NO_GC_IR_AUDIT: build/oreslang-no-gc-ir-audit
+        run: |
+          set -euo pipefail
+          test -x "$ORESLANG_LLVMC"
+          test -x "$ORES_NO_GC_IR_AUDIT"
+          bash scripts/test-core-four-llvm-native.sh \
+            | tee "$RUNNER_TEMP/core-four-llvm-native-receipt.txt"
+          grep -F 'CORE_FOUR_LLVM_LOCAL_GUEST_PASS' "$RUNNER_TEMP/core-four-llvm-native-receipt.txt" | grep -F 'O0|'
+          grep -F 'CORE_FOUR_LLVM_LOCAL_GUEST_PASS' "$RUNNER_TEMP/core-four-llvm-native-receipt.txt" | grep -F 'O2|'
+          grep -F 'CORE_FOUR_LLVM_LOCAL_MATRIX_PASS' "$RUNNER_TEMP/core-four-llvm-native-receipt.txt"
+          for fixture in borrow-use-after-take borrow-escape borrow-conflicting-loans; do
+            grep -F 'CORE_FOUR_LLVM_BORROW_COMPILER_NEGATIVE' "$RUNNER_TEMP/core-four-llvm-native-receipt.txt" \
+              | grep -F "$fixture" | grep -F 'IR=NONE'
+          done
+      - name: Self-test fail-closed Option-pattern evidence harness (synthetic only)
+        run: python3 -m unittest discover -s scripts -p test_option_pattern_contract.py -v
+      - name: Reject unsupported Option pattern syntax using real LLVM compiler
+        run: |
+          python3 scripts/check_option_pattern_contract.py --backend llvm \
+            --revision "${{ github.event.pull_request.head.sha || github.sha }}" --report build/option-pattern-llvm.json \
+            -- ./build/oreslang-llvmc '{source}'
+      - name: Preserve Option-pattern admission report (not parity)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: option-pattern-llvm-admission
+          path: build/option-pattern-llvm.json
+          if-no-files-found: ignore
+      - name: Check Symbol native host regression separately from whole suite
+        run: ctest --test-dir build -R '^native_shared_symbol_image_host_only_v1$' --output-on-failure --timeout 90
+      - name: Symbol immutable image native memory safety (ASan / UBSan)
+        run: |
+          set -euo pipefail
+          clang++ -std=c++17 -O1 -g -pthread -fno-omit-frame-pointer \
+            -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -fsanitize=address,undefined \
+            -I src/main/cpp \
+            tests/native_shared_symbol_literal_image_v1_test.cpp \
+            -o build/native-shared-symbol-image-sanitized
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+          UBSAN_OPTIONS=halt_on_error=1 \
+            ./build/native-shared-symbol-image-sanitized
       - name: Audit full CTest inventory before treating the suite as verified
         run: |
           set -euo pipefail

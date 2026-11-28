@@ -79,6 +79,21 @@ MIXED = """pub fnc main(): int {
   return box + a.get(0);
 }
 """
+EXPLICIT_ARRAY_CTOR = """define class Pair as
+  pub final mut Array<int> first;
+  pub final mut Array<int> second;
+  constructor() {
+    self.first = new Array<int>();
+    self.second = new Array<int>();
+  }
+end
+pub fnc main(): int {
+  let mut Pair p = new Pair();
+  p.first.add(7);
+  p.second.add(35);
+  return p.first.get(0) + p.second.get(0);
+}
+"""
 CLASS = """define class Four as
   pub let mut Array<int> a = new Array<int>();
   pub let mut Array<int> b = new Array<int>();
@@ -208,6 +223,7 @@ def verify(compiler, clang, root, sanitizers):
         for label, src, owned, growing, heap in (
             ("lexical", LEXICAL, 2, 2, 0),
             ("class", CLASS, 4, 4, 0),
+            ("explicit-array-ctor", EXPLICIT_ARRAY_CTOR, 2, 2, 0),
             ("moved-class", MOVED_CLASS, 2, 2, 0),
             ("replaced-field", REPLACED_FIELD, 3, 2, 0),
             ("mixed", MIXED, 1, 1, 1),

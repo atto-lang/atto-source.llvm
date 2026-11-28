@@ -1,0 +1,5 @@
+pub fnc main(): int {
+    val Box<int> counter = Box<int>(42);
+    if (counter.get() eq 0) { return 0; } fi
+    return counter.get();
+}

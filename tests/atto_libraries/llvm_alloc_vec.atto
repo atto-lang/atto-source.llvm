@@ -1,0 +1,5 @@
+// expect-exit: 42
+import module vec from "alloc/vec";
+pub fnc main(): int {
+  return vec.sum_range(5, 4) + vec.replace_middle(1, 2, 3, 16);
+}

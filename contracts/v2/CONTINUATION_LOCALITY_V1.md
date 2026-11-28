@@ -20,10 +20,10 @@ preferred_worker_slot and preferred_worker_generation are scheduler-local metada
 
 ## Verification and limits
 
-The adjacent test_continuation_locality_v1.py runs 18 deterministic reference-model checks, including an adversarial property sweep. It is HOST-ONLY and does not exercise actual scheduler integration, the Oreslang compiler, continuation transfer, physical placement, cancellation paths or critical lowering.
+The adjacent test_continuation_locality_v1.rs runs 22 deterministic reference-model checks, including an adversarial property sweep. It is HOST-ONLY and does not exercise actual scheduler integration, the Oreslang compiler, continuation transfer, physical placement, cancellation paths or critical lowering.
 
 Minimum exact-head **native guest** acceptance for each backend: await releases the carrier; reactor/foreign completion cannot run guest code; one actor never reenters during await; stale cancel/STOP/hot-load continuations are rejected; work progresses under overload/shutdown; CONTROL deadlines are preserved; critical bodies reject transitive suspension; actor-owned heap access survives safe worker migration. Preserve executable test receipts, compiler binary hash, guest stdout/exit code and CI job steps. A zero-step CI failure is not test evidence.
 
 Java has soft actor-lane spill implementation and LLVM has a native scheduler with wake escrow, but this repository-level reference suite does not prove they are wired to an Oreslang continuation. Wasm/.NET have separate host-side actor machinery. Cranelift must reject unsupported suspending features instead of silently accepting them.
 
-To run the reference suite: python3 -m unittest contracts/v2/test_continuation_locality_v1.py
+To run the reference suite: `rustc --edition=2021 --test contracts/v2/test_continuation_locality_v1.rs -o /tmp/continuation-locality-tests && /tmp/continuation-locality-tests`

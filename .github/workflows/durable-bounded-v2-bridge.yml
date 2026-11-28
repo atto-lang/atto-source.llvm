@@ -1,0 +1,37 @@
+name: Draft bounded v2 freestanding native and Wasm bridge
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/backend/DurableBoundedV2*'
+      - 'tests/durable_bounded_v2_bridge*'
+      - '.github/workflows/durable-bounded-v2-bridge.yml'
+permissions:
+  contents: read
+jobs:
+  bridge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Verify exact tree and execute native and Wasm bridge
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          test -z "$(git status --porcelain)"
+          git rev-parse HEAD^{tree}
+          sudo apt-get update -qq
+          sudo apt-get install -y clang lld
+          inc="$PWD/src/main/cpp/oreslang/backend"
+          g++ -std=c++17 -Wall -Wextra -Wpedantic -Werror -UNDEBUG -I"$inc" tests/durable_bounded_v2_bridge_generate.cpp -o "$RUNNER_TEMP/generate"
+          "$RUNNER_TEMP/generate" > "$RUNNER_TEMP/generated.c"
+          clang -std=c11 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -ffreestanding -fno-builtin -I"$inc" -S -emit-llvm "$RUNNER_TEMP/generated.c" -o "$RUNNER_TEMP/generated.ll"
+          clang -c "$RUNNER_TEMP/generated.ll" -o "$RUNNER_TEMP/generated.o"
+          clang++ -std=c++17 -O1 -g -Wall -Wextra -Wpedantic -Werror -UNDEBUG -fsanitize=address,undefined -fno-omit-frame-pointer -no-pie tests/durable_bounded_v2_bridge_native.cpp "$RUNNER_TEMP/generated.o" -o "$RUNNER_TEMP/native"
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 "$RUNNER_TEMP/native"
+          clang -std=c11 -Wall -Wextra -Wpedantic -Werror -ffreestanding -fno-builtin -I"$inc" --target=wasm32 -nostdlib -Wl,--no-entry -Wl,--export=atto_bounded_fields_v2 -Wl,--export=atto_bounded_schema_v2 -Wl,--export=atto_bounded_encode_v2 -Wl,--export=atto_bounded_decode_v2 -Wl,--export=__heap_base -Wl,--initial-memory=327680 -Wl,--max-memory=327680 "$RUNNER_TEMP/generated.c" -o "$RUNNER_TEMP/generated.wasm"
+          node tests/durable_bounded_v2_bridge_wasm.mjs "$RUNNER_TEMP/generated.wasm"

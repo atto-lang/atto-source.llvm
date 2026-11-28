@@ -106,11 +106,16 @@ fn source(kind: &str, owners: &[usize], modes: usize) -> String {
     )
 }
 
+const SHARED_CORPUS_CASES: usize = 166;
+
 fn main() {
     let mut compiler = None;
     let mut clang = None;
     let mut java = None;
     let mut sanitize = false;
+    // Existing suites keep their legacy .ores filename. New Atto std/core
+    // ownership gates must exercise the canonical .atto extension explicitly.
+    let mut source_extension = "ores";
     let mut corpus = None;
     let mut input_corpus = None;
     let mut args = env::args().skip(1);
@@ -120,6 +125,7 @@ fn main() {
             "--clang" => clang = args.next(),
             "--java-command" => java = Some(args.next().expect("--java-command PATH required")),
             "--sanitize" => sanitize = true,
+            "--source-ext=atto" => source_extension = "atto",
             "--emit-corpus" => corpus = Some(args.next().expect("--emit-corpus PATH required")),
             "--corpus" => input_corpus = Some(args.next().expect("--corpus PATH required")),
             _ => panic!("unknown argument: {arg}"),
@@ -181,8 +187,8 @@ fn main() {
         }
         assert_eq!(
             cases.len(),
-            162,
-            "shared corpus must contain all 162 vectors"
+            SHARED_CORPUS_CASES,
+            "shared corpus must contain all 162 generated vectors and 4 heap projection regressions"
         );
     } else {
         for kind in ["int", "bool", "class"] {
@@ -202,7 +208,7 @@ fn main() {
         }
     }
     for (name, code, invalid) in cases {
-        let path = scratch.0.join("case.ores");
+        let path = scratch.0.join(format!("case.{source_extension}"));
         fs::write(&path, code).unwrap();
         let native = run(Command::new(&compiler).arg(&path));
         let diagnostic = String::from_utf8_lossy(&native.stderr);
@@ -284,7 +290,7 @@ fn main() {
         }
     }
     if from_corpus {
-        assert_eq!(accepted + rejected, 162);
+        assert_eq!(accepted + rejected, SHARED_CORPUS_CASES);
     } else {
         assert_eq!((accepted, rejected), (60, 84));
     }

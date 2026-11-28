@@ -1,0 +1,14 @@
+fnc lhs(): int {
+  stdio.stdout.println(1);
+  return 1;
+}
+fnc rhs(): int {
+  stdio.stdout.println(2);
+  return 0;
+}
+pub fnc main(): int {
+  val bool skipped_and = false && (rhs() == 0);
+  val bool skipped_or = true || (rhs() == 0);
+  val int eager_xor = lhs() ^^ rhs();
+  return (!skipped_and && skipped_or && (eager_xor == 1)) ? 42 : 7;
+}

@@ -1,0 +1,185 @@
+name: Actor memory compiler E2E v1 — owned-source slices (llvm)
+on:
+  pull_request:
+    paths:
+      - 'contracts/v1/ACTOR_MEMORY_COMPILER_E2E_V1.md'
+      - 'contracts/v1/actor_memory_compiler_e2e_v1.json'
+      - 'scripts/verify_actor_memory_compiler_e2e_v1.py'
+      - 'scripts/test_actor_memory_compiler_e2e_v1.py'
+      - 'tests/actor_memory_e2e_v1_host.c'
+      - 'tests/source_actor_e2e.py'
+      - 'tests/native_class_owned_array_source.py'
+      - 'src/main/cpp/oreslang/**'
+      - 'verification/Ores.Net.Tests/ActorMemoryE2EV1SelfTest.cs'
+      - 'verification/Ores.Net.Tests/ActorNativeArenaSelfTest.cs'
+      - 'src/test/java/dev/oreslang/runtime/ActorMemoryE2EV1Test.java'
+      - '.github/workflows/actor-memory-compiler-e2e-v1.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  host-and-owned-source-slices:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact checkout and reject false certification
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -n "$(git rev-parse 'HEAD^{tree}')"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          python3 -I scripts/verify_actor_memory_compiler_e2e_v1.py
+          python3 -m unittest discover -s scripts -p 'test_actor_memory_compiler_e2e_v1.py' -v
+      - name: Compile real C arena and execute positive/negative controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          for compiler in gcc clang; do
+            "$compiler" -std=c11 -O2 -Wall -Wextra -Werror \
+              -DORESLANG_TEST_WRAP_ALLOC \
+              -I src/main/cpp tests/actor_memory_e2e_v1_host.c \
+              src/main/cpp/oreslang/runtime/ActorArena.c \
+              -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc \
+              -o "$RUNNER_TEMP/actor-memory-$compiler"
+            "$RUNNER_TEMP/actor-memory-$compiler" \
+              | tee "$RUNNER_TEMP/actor-memory-$compiler.log"
+            grep -Fx 'ACTOR_MEMORY_E2E_V1_HOST_ONLY=PASS' "$RUNNER_TEMP/actor-memory-$compiler.log"
+            grep -Fx 'ACTOR_MEMORY_E2E_V1_LINKED_TURN_ALLOC_CALLS=0' "$RUNNER_TEMP/actor-memory-$compiler.log"
+            grep -Fx 'ACTOR_MEMORY_E2E_V1_COMPILED_GUEST=NOT_EXECUTED' "$RUNNER_TEMP/actor-memory-$compiler.log"
+          done
+          clang -std=c11 -O1 -g -Wall -Wextra -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -DORESLANG_TEST_WRAP_ALLOC \
+            -I src/main/cpp tests/actor_memory_e2e_v1_host.c \
+            src/main/cpp/oreslang/runtime/ActorArena.c \
+            -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc \
+            -o "$RUNNER_TEMP/actor-memory-sanitized"
+          "$RUNNER_TEMP/actor-memory-sanitized" \
+            | tee "$RUNNER_TEMP/actor-memory-sanitized.log"
+          grep -Fx 'ACTOR_MEMORY_E2E_V1_HOST_ONLY=PASS' "$RUNNER_TEMP/actor-memory-sanitized.log"
+          grep -Fx 'ACTOR_MEMORY_E2E_V1_LINKED_TURN_ALLOC_CALLS=0' "$RUNNER_TEMP/actor-memory-sanitized.log"
+      - name: Install prerequisites for actual LLVM guest compilation
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang llvm-dev python3
+          cmake -S . -B build-memory-v1 -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build-memory-v1 --target oreslang-llvmc --parallel 2
+          test -x build-memory-v1/oreslang-llvmc
+      - name: Compile and execute source actor owned-i64 and class-owned array slices
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1
+        run: |
+          set -euo pipefail
+          compiler="$PWD/build-memory-v1/oreslang-llvmc"
+          clang_bin="$(command -v clang)"
+          python3 -I tests/test_source_actor_receipts.py
+          python3 -I tests/source_actor_e2e.py \
+            --compiler "$compiler" --clang "$clang_bin" --root . \
+            | tee "$RUNNER_TEMP/actor-memory-guest-actor.log"
+          python3 -I tests/native_class_owned_array_source.py \
+            --compiler "$compiler" --clang "$clang_bin" --source-root . \
+            | tee "$RUNNER_TEMP/actor-memory-guest-class.log"
+          python3 -I tests/source_actor_e2e.py \
+            --compiler "$compiler" --clang "$clang_bin" --root . --sanitize \
+            | tee "$RUNNER_TEMP/actor-memory-guest-actor-sanitized.log"
+          python3 -I tests/native_class_owned_array_source.py \
+            --compiler "$compiler" --clang "$clang_bin" --source-root . --sanitizers \
+            | tee "$RUNNER_TEMP/actor-memory-guest-class-sanitized.log"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"])
+          expected = {
+              "actor-memory-guest-actor.log": (
+                  "PASS native source actor: source-actor-scoped-owned-i64.ores actors 1",
+                  "PASS native source actor: source-actor-two-owned-heaps.ores actors 2",
+                  "PASS current-source actor lowering and physical heap reclamation"),
+              "actor-memory-guest-class.log": (
+                  "PASS: class-owned Array<int> source:",),
+              "actor-memory-guest-actor-sanitized.log": (
+                  "PASS native source actor: source-actor-scoped-owned-i64.ores actors 1",
+                  "PASS native source actor: source-actor-two-owned-heaps.ores actors 2",
+                  "PASS current-source actor lowering and physical heap reclamation"),
+              "actor-memory-guest-class-sanitized.log": (
+                  "PASS: class-owned Array<int> source:", "(ASan+UBSan)"),
+          }
+          for name, markers in expected.items():
+              lines = (root / name).read_text().splitlines()
+              for marker in markers:
+                  if sum(marker in line for line in lines) != 1:
+                      raise SystemExit(f"guest execution marker missing or duplicated: {name}/{marker}")
+          print("ACTOR_MEMORY_V1_COMPILED_GUEST_SLICES=PASS")
+          PY
+      - name: Write bounded receipt (independent compiled slices; no full-backend certification)
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          TARGET_BACKEND: llvm
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          def git(*args):
+              return subprocess.check_output(["git", *args], text=True).strip()
+          paths = [
+              "contracts/v1/ACTOR_MEMORY_COMPILER_E2E_V1.md",
+              "contracts/v1/actor_memory_compiler_e2e_v1.json",
+              "scripts/verify_actor_memory_compiler_e2e_v1.py",
+              "scripts/test_actor_memory_compiler_e2e_v1.py",
+          ]
+          expected = os.environ["EXPECTED_HEAD"]
+          if git("rev-parse", "HEAD") != expected:
+              raise SystemExit("nonexact HEAD")
+          root = pathlib.Path(os.environ["RUNNER_TEMP"])
+          guest_logs = [
+              "actor-memory-guest-actor.log",
+              "actor-memory-guest-class.log",
+              "actor-memory-guest-actor-sanitized.log",
+              "actor-memory-guest-class-sanitized.log",
+          ]
+          if any(not (root / f).is_file() or not (root / f).stat().st_size for f in guest_logs):
+              raise SystemExit("compiled guest logs missing or empty")
+          receipt = {
+              "schema": "oreslang.actor_memory_compiler_e2e.host_receipt_v1",
+              "backend": os.environ["TARGET_BACKEND"],
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "head": expected,
+              "tree": git("rev-parse", "HEAD^{tree}"),
+              "blobs": {p: git("hash-object", p) for p in paths},
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "host_substrate": "PASS",
+              "linked_actor_turn_alloc_calls": 0,
+              "linked_alloc_coverage": "test/ActorArena translation units only",
+              "compiled_guest": "NARROW_EXECUTED",
+              "compiled_actor_owned_i64": "PASS",
+              "compiled_class_owned_array": "PASS",
+              "compiled_guest_asan_ubsan": "PASS",
+              "actor_owned_class_with_suspend": "NOT_EXECUTED",
+              "guest_lowering_scope": "independent actor i64 and class-owned array slices",
+              "aot": "NARROW_LLVM_NATIVE_EXECUTED",
+              "whole_program_aot_certified": False,
+              "zero_gc_certified": False,
+              "cross_org_private_source_export": False,
+          }
+          pathlib.Path(os.environ["RUNNER_TEMP"], "actor-memory-host-v1.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+          print("ACTOR_MEMORY_HOST_RECEIPT_V1=PASS")
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: actor-memory-host-v1-llvm-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/actor-memory-host-v1.json
+          if-no-files-found: error
+          retention-days: 7

@@ -1,6 +1,7 @@
 //! Execute real LLVM-generated machine code, optionally comparing Java output.
 use std::{
     env, fs,
+    io::Write,
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
     thread,
@@ -17,6 +18,95 @@ fn run(command: &mut Command) -> Output {
         .output()
         .unwrap_or_else(|error| panic!("cannot run {command:?}: {error}"))
 }
+const JAVA_LLVM_STRICT_NINE: [&str; 9] = [
+    "exact-user-program",
+    "string-content-equality",
+    "string-equality-embedded-nul-and-unicode",
+    "http-string-routing-primitives",
+    "source-effect-order",
+    "parameters-and-return",
+    "lazy-conditional",
+    "escaped-unicode",
+    "empty-and-embedded-nul",
+];
+fn valid_git_revision(value: &str) -> bool {
+    value.len() == 40 && value.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+// Binary-safe stdout evidence; unlike UTF-8 conversion, this also retains
+// embedded NUL and exact source output bytes.
+fn hex_encode(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut out = Vec::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(DIGITS[usize::from(*byte >> 4)]);
+        out.push(DIGITS[usize::from(*byte & 0x0f)]);
+    }
+    String::from_utf8(out).expect("hex alphabet is ASCII")
+}
+
+fn evidence_admission(
+    require_java: bool,
+    java: Option<&str>,
+    java_revision: Option<&str>,
+    llvm_revision: Option<&str>,
+    report: Option<&str>,
+) -> Result<(), &'static str> {
+    if !require_java {
+        if report.is_some() || java_revision.is_some() || llvm_revision.is_some() {
+            return Err("revision-stamped evidence requires --require-java");
+        }
+        return Ok(());
+    }
+    if java.map_or(true, |value| value.trim().is_empty()) {
+        return Err("--require-java requires a nonempty --java-command; missing Java must fail closed");
+    }
+    if !java_revision.is_some_and(valid_git_revision) {
+        return Err("--require-java requires a 40-hex --java-revision");
+    }
+    if !llvm_revision.is_some_and(valid_git_revision) {
+        return Err("--require-java requires a 40-hex --llvm-revision");
+    }
+    if report.map_or(true, |value| value.trim().is_empty()) {
+        return Err("--require-java requires a nonempty --report for a durable execution receipt");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{evidence_admission, hex_encode, valid_git_revision};
+
+    const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    #[test]
+    fn rejects_missing_reference_or_provenance() {
+        assert!(evidence_admission(true, None, Some(SHA), Some(SHA), Some("r.json")).is_err());
+        assert!(evidence_admission(true, Some("java"), None, Some(SHA), Some("r.json")).is_err());
+        assert!(evidence_admission(true, Some("java"), Some(SHA), None, Some("r.json")).is_err());
+        assert!(evidence_admission(true, Some("java"), Some(SHA), Some(SHA), None).is_err());
+        assert!(evidence_admission(false, None, None, None, Some("r.json")).is_err());
+        assert!(evidence_admission(false, None, Some(SHA), Some(SHA), None).is_err());
+        assert!(evidence_admission(true, Some(""), Some(SHA), Some(SHA), Some("r.json")).is_err());
+        assert!(evidence_admission(true, Some("java"), Some(SHA), Some(SHA), Some("")).is_err());
+    }
+
+    #[test]
+    fn preserves_binary_stdout_evidence() {
+        assert_eq!(hex_encode(b"a\x00b"), "610062");
+        assert_eq!(hex_encode("é".as_bytes()), "c3a9");
+    }
+
+    #[test]
+    fn admits_only_pinned_strict_comparison() {
+        assert!(valid_git_revision(SHA));
+        assert!(!valid_git_revision("main"));
+        assert!(!valid_git_revision("g".repeat(40).as_str()));
+        assert!(evidence_admission(true, Some("java"), Some(SHA), Some(SHA), Some("r.json")).is_ok());
+        assert!(evidence_admission(false, None, None, None, None).is_ok());
+    }
+}
+
 // Negative admission is adversarial: a broken O_NONBLOCK/fstat guard must
 // fail the test quickly rather than consume an entire macOS/Linux CI job.
 // Redirect both streams to files/null to avoid pipe-buffer deadlocks.
@@ -99,6 +189,9 @@ fn main() {
     let (mut compiler, mut clang, mut runtime, mut java) = (None, None, None, None);
     let mut sanitize = false;
     let mut aot_driver = None;
+    let mut require_java = false;
+    let mut java_args = Vec::<String>::new();
+    let (mut java_revision, mut llvm_revision, mut receipt_path) = (None, None, None);
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -106,10 +199,24 @@ fn main() {
             "--clang" => clang = args.next(),
             "--runtime" => runtime = args.next(),
             "--java-command" => java = args.next(),
+            "--java-arg" => java_args.push(args.next().expect("--java-arg needs a value")),
+            "--require-java" => require_java = true,
+            "--java-revision" => java_revision = args.next(),
+            "--llvm-revision" => llvm_revision = args.next(),
+            "--report" => receipt_path = args.next(),
             "--aot-driver" => aot_driver = args.next(),
             "--sanitize" => sanitize = true,
             _ => panic!("unknown argument {arg}"),
         }
+    }
+    if let Err(error) = evidence_admission(
+        require_java,
+        java.as_deref(),
+        java_revision.as_deref(),
+        llvm_revision.as_deref(),
+        receipt_path.as_deref(),
+    ) {
+        panic!("{error}");
     }
     let (compiler, clang, runtime) = (
         compiler.expect("--compiler"),
@@ -128,12 +235,36 @@ fn main() {
     let exact = include_str!("fixtures/native-class-string/main.ores");
     let foo = include_str!("fixtures/native-class-string/main-1.ores");
     let positives = [
-        ("ordered-array-moves-through-owning-return", "define class Box as pub val Array<int> values;end fnc touch():void{return;}fnc build():Box{touch();val Array<int> values=new Array<int>();values.add(42);return new Box(values);}pub fnc main():int{val Box box=build();return box.values.get(0)==42?0:1;}", ""),
+        ("atto-nats-split-literal-empty-tokens",
+         r#"pub fnc main():int{
+            val String subject="orders..created.";
+            val parts=subject.split_literal(".");
+            val String empty="";
+            val empties=empty.split_literal(".");
+            val String nul="a\u0000b";
+            val binary=nul.split_literal("\u0000");
+            val String longsep="a::b::::";
+            val multi=longsep.split_literal("::");
+            return parts.size==4&&parts.get(0)=="orders"&&
+                parts.get(1)==""&&parts.get(2)=="created"&&
+                parts.get(3)==""&&empties.size==1&&empties.get(0)==""&&
+                binary.size==2&&binary.get(0)=="a"&&binary.get(1)=="b"&&
+                multi.size==4&&multi.get(0)=="a"&&multi.get(1)=="b"&&
+                multi.get(2)==""&&multi.get(3)==""?0:1;
+         }"#, ""),
+        // Distinguish source-order storage from constructor parameter naming:
+        // same and different names must both work, before and after an effect.
+        ("initial-array-same-name-owning-return", "define class ArrayOwnerFixture as pub val Array<int> values;end fnc build():ArrayOwnerFixture{val Array<int> values=new Array<int>();values.add(42);return new ArrayOwnerFixture(values);}pub fnc main():int{val ArrayOwnerFixture box=build();return box.values.get(0)==42?0:1;}", ""),
+        ("initial-array-distinct-name-owning-return", "define class ArrayOwnerFixture as pub val Array<int> values;end fnc build():ArrayOwnerFixture{val Array<int> numbers=new Array<int>();numbers.add(42);return new ArrayOwnerFixture(numbers);}pub fnc main():int{val ArrayOwnerFixture box=build();return box.values.get(0)==42?0:1;}", ""),
+        ("ordered-array-distinct-name-owning-return", "define class ArrayOwnerFixture as pub val Array<int> values;end fnc touch():void{return;}fnc build():ArrayOwnerFixture{touch();val Array<int> numbers=new Array<int>();numbers.add(42);return new ArrayOwnerFixture(numbers);}pub fnc main():int{val ArrayOwnerFixture box=build();return box.values.get(0)==42?0:1;}", ""),
+        ("ordered-array-moves-through-owning-return", "define class ArrayOwnerFixture as pub val Array<int> values;end fnc touch():void{return;}fnc build():ArrayOwnerFixture{touch();val Array<int> values=new Array<int>();values.add(42);return new ArrayOwnerFixture(values);}pub fnc main():int{val ArrayOwnerFixture box=build();return box.values.get(0)==42?0:1;}", ""),
         ("ordered-array-sibling-scopes", "fnc touch():void{return;}pub fnc main():int{touch();if true;then val Array<int> values=new Array<int>();values.add(1);fi if true;then val Array<String> values=new Array<String>();values.add(\"ok\");if values.get(0)!=\"ok\";then return 1;fi fi return 0;}", ""),
         ("ordered-record-array-loop", "define class EntryValue as pub val int value;end fnc touch():void{return;}pub fnc main():int{touch();let int total=0;for(let int i=0;i<100;i=i+1){val Array<EntryValue> values=new Array<EntryValue>();values.add(new EntryValue(i));val EntryValue entry=values.get(0);total=total+entry.value;}return total==4950?0:1;}", ""),
 
         ("ordered-array-scopes-loop-and-early-return", include_str!("fixtures/native-class-string/ordered-array-locals.ores"), ""),
+        ("checked-copy-option-guest", include_str!("fixtures/native-class-string/copy-option-v1.atto"), "7:42:true:true:true:true:9"),
         ("ordered-val-keeps-exclusive-referent-capability", "fnc touch():void{return;}fnc observe(borrow mut int value):int{return 42;}pub fnc main():int{touch();val int value=42;return observe(rt mut borrow value)==42?0:1;}", ""),
+        ("mutable-borrow-aliases-equivalent", "fnc observe(borrow mut int value):int{return value;}pub fnc main():int{val int owner=42;return observe(rt borrow mut owner)==42&&observe(rt mut borrow owner)==42&&observe(borrow! mut owner)==42?0:1;}", ""),
         ("ordered-initial-and-later-mutable-slots", "fnc touch():void{return;}pub fnc main():int{let int initial=1;touch();let int later=2;initial=initial+later;return initial==3?0:1;}", ""),
         ("ordered-routing-counters-and-skipped-initializers", include_str!("fixtures/native-class-string/ordered-routing-locals.ores"), "enter;enter;initialize;finish;done;"),
         ("ordered-root-scalar-lives-through-defer", r#"fnc touch():void{stdio.print("enter;");return;}fnc observe(int value):void{stdio.print(value==42?"final;":"early;");return;}
@@ -147,6 +278,10 @@ fn main() {
         ("ordered-local-scopes-do-not-leak", r#"fnc touch():void{return;}pub fnc main():int{touch();let int total=0;for(let int index=0;index<2;index=index+1){let int local=index;local=local+1;total=total+local;}if total==3;then let int local=39;total=total+local;fi return total==42?0:1;}"#, ""),
         ("contextual-pattern-function-and-parameter", "fnc pattern(int pattern):int{return pattern;}pub fnc main():int{return pattern(42)==42?0:1;}", ""),
         ("sum-mixed-guard-source-order", "fnc choose(bool first):Option<int>{if first;then return Some(1);fi if(true){return Some(2);}fi return None;}pub fnc main():int{return choose(true).unwrap()==1&&choose(false).unwrap()==2?0:1;}", ""),
+        ("adt-conditional-option-tagged-arms",
+            include_str!("fixtures/adt-conditional-v1/option-positive.atto"), ""),
+        ("adt-conditional-result-tagged-arms",
+            include_str!("fixtures/adt-conditional-v1/result-positive.atto"), ""),
         ("sum-result-schema-matrix", r#"pub routine main():int{val Result<int,int> ii=Ok(0);val Result<int,bool> ib=Err(false);val Result<bool,int> bi=Ok(false);val Result<String,bool> sb=Ok("");val Result<String,String> ss=Err("");return ii.is_ok()&&ii.unwrap()==0&&ib.is_err()&&bi.is_ok()&&!bi.unwrap()&&sb.is_ok()&&sb.unwrap()==""&&ss.is_err()?0:1;}"#, ""),
         ("imported-canonical-sum-identity", r#"import module sums from './sums.ores';pub routine main():int{val Option<String> item=sums.choose(true);val Result<bool,String> result=sums.checked(false);return item.unwrap()=="module"&&result.is_err()?0:1;}"#, ""),
         ("actual-routing-option-capture", include_str!("fixtures/native-class-string/routing-option-capture.ores"), ""),
@@ -184,9 +319,9 @@ fn main() {
         ("void-structured-return-runs-defer", r#"define class Counter as pub let int value=0;end
           fnc update(borrow mut Counter counter):void{defer counter.value=99;for(let int index=0;index<2;index=index+1){if index==1;then return;fi}return;}
           pub fnc main():int{let mut Counter counter=new Counter();update(rt mut borrow counter);return counter.value==99?0:1;}"#, ""),
-        ("foreach-return-releases-loan-before-defer", r#"define class Box as pub val Array<int> values;pub let int code=7;end
-          fnc pick(borrow mut Box owner):int{defer owner.code=99;for(const item of owner.values){return owner.code;}return -1;}
-          pub fnc main():int{val Array<int> values=new Array<int>();values.add(1);val Box owner=new Box(values);val selected:int=pick(rt mut borrow owner);return selected==7&&owner.code==99?0:1;}"#, ""),
+        ("foreach-return-releases-loan-before-defer", r#"define class ArrayOwnerFixture as pub val Array<int> values;pub let int code=7;end
+          fnc pick(borrow mut ArrayOwnerFixture owner):int{defer owner.code=99;for(const item of owner.values){return owner.code;}return -1;}
+          pub fnc main():int{val Array<int> values=new Array<int>();values.add(1);val ArrayOwnerFixture owner=new ArrayOwnerFixture(values);val selected:int=pick(rt mut borrow owner);return selected==7&&owner.code==99?0:1;}"#, ""),
         ("index-loop-branch-exits-and-string-result", r#"fnc choose_text(bool first):String{for(let int index=0;index<1;index=index+1){if(first){val String result="yes";return result;}else{val String result="no";return result;}fi}return "empty";}
           pub fnc main():int{return choose_text(true)=="yes"&&choose_text(false)=="no"?0:1;}"#, ""),
         ("index-loop-update-order-and-zero-iterations", r#"define class Counter as pub let int value=0;end
@@ -296,27 +431,27 @@ fn main() {
         ),
         (
             "nested-borrows-distinguish-array-regions",
-            r#"define class Box as pub val Array<int> values; end
-              fnc sum(borrow Box left,borrow Box right):int{return left.values.get(0)+right.values.get(0);}
-              fnc nested(borrow Box parent):int {
+            r#"define class ArrayOwnerFixture as pub val Array<int> values; end
+              fnc sum(borrow ArrayOwnerFixture left,borrow ArrayOwnerFixture right):int{return left.values.get(0)+right.values.get(0);}
+              fnc nested(borrow ArrayOwnerFixture parent):int {
                 val Array<int> numbers=new Array<int>(); numbers.add(29);
-                val Box child=new Box(numbers);
+                val ArrayOwnerFixture child=new ArrayOwnerFixture(numbers);
                 return sum(rt borrow parent,rt borrow child);
               }
               pub routine main():int {
                 val Array<int> numbers=new Array<int>(); numbers.add(13);
-                val Box owner=new Box(numbers);
+                val ArrayOwnerFixture owner=new ArrayOwnerFixture(numbers);
                 return nested(rt borrow owner)==42?0:1;
               }"#,
             "",
         ),
         (
             "exclusive-class-array-borrow",
-            r#"define class Box as pub val Array<int> values; end
-              fnc append(borrow mut Box owner):void {owner.values.add(29);return;}
+            r#"define class ArrayOwnerFixture as pub val Array<int> values; end
+              fnc append(borrow mut ArrayOwnerFixture owner):void {owner.values.add(29);return;}
               pub routine main():int {
                 val Array<int> numbers=new Array<int>(); numbers.add(13);
-                val Box owner=new Box(rt take numbers);
+                val ArrayOwnerFixture owner=new ArrayOwnerFixture(rt take numbers);
                 append(rt mut borrow owner);
                 return owner.values.size==2 && owner.values.get(1)==29?0:1;
               }"#,
@@ -389,6 +524,34 @@ fn main() {
             "",
         ),
         (
+            "nats-string-contains-literal-binary",
+            r#"fnc valid_subject_token(String token):bool {
+                  if token == "" then return false; fi
+                  if token.contains_literal(" ") || token.contains_literal("\t") ||
+                     token.contains_literal("\r") || token.contains_literal("\n") ||
+                     token.contains_literal("\u0000") then return false; fi
+                  return true;
+                }
+                pub routine main():int {
+                  val String subject="orders.created.eu";
+                  val String nul="a\u0000b";
+                  val String utf="é\u0000stop";
+                  return valid_subject_token("orders") &&
+                    !valid_subject_token("") &&
+                    !valid_subject_token("bad subject") &&
+                    !valid_subject_token(nul) &&
+                    subject.contains_literal("created") &&
+                    subject.contains_literal(".") &&
+                    subject.contains_literal("") &&
+                    !subject.contains_literal("payments") &&
+                    !subject.contains_literal("orders.created.eu.extra") &&
+                    nul.contains_literal("\u0000") &&
+                    utf.contains_literal("\u0000") &&
+                    !subject.contains_literal("\u0000") ? 0 : 1;
+                }"#,
+            "",
+        ),
+        (
             "string-content-equality",
             r#"fnc same(string a,string b):bool{return a == b;}
               pub routine main():int {
@@ -432,6 +595,14 @@ fn main() {
                 stdio.print('\"abc\"');stdio.print("|");
                 stdio.print(`'\"abc\"'`);return 0;}"#,
             "abc|'abc'|\"abc\"|'\"abc\"'",
+        ),
+        (
+            "quoted-prefix-and-lambda-tokens-are-data",
+            r#"pub fnc main():int{
+                stdio.print("|");stdio.print("||");stdio.print("trap");
+                stdio.print("!");stdio.print("new");stdio.print("match");
+                stdio.print(`|`);return 0;}"#,
+            "|||trap!newmatch|",
         ),
         (
             "template-two-parameter-interpolation",
@@ -505,6 +676,8 @@ fn main() {
           pub fnc main():int{val Array<int> values=new Array<int>();values.add(42);val Data child=new Data(values);val Outer outer=new Outer(child);return outer.child.read()==42&&outer.child.values.size==1?0:1;}"#, ""),
     ];
     let mut comparisons = 0;
+    let mut strict_comparisons = 0;
+    let mut case_evidence = Vec::<String>::new();
     let mut guest_address_checks = false;
     let panics = [
         ("sum-none-unwrap-controlled-abort", "pub routine main():int{val Option<int> item=None;return item.unwrap();}", ""),
@@ -512,7 +685,11 @@ fn main() {
     ];
     for (case_index, (name, source, expected)) in positives.iter().chain(native_only.iter()).chain(panics.iter()).enumerate() {
         let expects_panic = case_index >= positives.len() + native_only.len();
-        fs::write(scratch.0.join("main.ores"), source).unwrap();
+        // Canonical ADT regressions execute as actual .atto guest files.
+        let guest_name = if name.starts_with("adt-conditional-") {
+            "main.atto"
+        } else { "main.ores" };
+        fs::write(scratch.0.join(guest_name), source).unwrap();
         fs::write(scratch.0.join("main-1.ores"), foo).unwrap();
         fs::write(scratch.0.join("sums.ores"), "define module sums as pub fnc choose(bool yes):Option<string>{return yes?Some(\"module\"):None;}pub fnc checked(bool yes):Result<bool,string>{return yes?Ok(false):Err(\"missing\");}end").unwrap();
         fs::write(scratch.0.join("owned-box.ores"), "define pub class OwnedBox as pub val Array<int> values;pub copy():OwnedBox{val Array<int> copied=new Array<int>();copied.add(self.values.get(0));return new OwnedBox(copied);}end").unwrap();
@@ -522,7 +699,7 @@ fn main() {
         let module_fixture = include_str!("fixtures/native-class-string/routing-path-validation.ores")
             .replace("pub routine main(): int", "pub fnc verify_paths(): int");
         fs::write(scratch.0.join("paths.ores"), format!("define module paths as\n{module_fixture}\nend\n")).unwrap();
-        let path = scratch.0.join("main.ores");
+        let path = scratch.0.join(guest_name);
         let generated = run(Command::new(&compiler).arg(&path));
         assert!(
             generated.status.success() && !generated.stdout.is_empty(),
@@ -585,6 +762,7 @@ fn main() {
             .arg(PathBuf::from(&runtime).parent().unwrap().parent().unwrap().parent().unwrap())
             .arg(&runtime)
             .arg(PathBuf::from(&runtime).parent().unwrap().join("NativeIntArrayRegion.c"))
+            .arg(PathBuf::from(&runtime).parent().unwrap().join("NativeStringSplit.c"))
             .arg(PathBuf::from(&runtime).parent().unwrap().join("NativeRecordRegion.c"))
             .arg("-pthread")
             .arg("-o")
@@ -594,6 +772,8 @@ fn main() {
             "{name}: {}",
             String::from_utf8_lossy(&linked.stderr)
         );
+        let strict_case = require_java && case_index < positives.len() && JAVA_LLVM_STRICT_NINE.contains(name);
+        let mut native_stdout = Vec::<u8>::new();
         for _ in 0..5 {
             let native = run(&mut Command::new(&binary));
             if expects_panic {
@@ -610,27 +790,42 @@ fn main() {
                 String::from_utf8_lossy(&native.stderr)
             );
             assert_eq!(native.stdout, expected.as_bytes(), "{name}: native output");
+            if strict_case { native_stdout = native.stdout.clone(); }
             assert!(
                 native.stderr.is_empty(),
                 "{name}: sanitizer/runtime diagnostics: {}",
                 String::from_utf8_lossy(&native.stderr)
             );
         }
-        if let Some(launcher) = java.as_ref().filter(|_| case_index < positives.len() || expects_panic) {
-            let reference = run(Command::new(launcher).arg(&path));
+        let execute_java = java.is_some() && (if require_java { strict_case } else { case_index < positives.len() || expects_panic });
+        if execute_java {
+            let launcher = java.as_ref().expect("Java launcher required");
             if expects_panic {
+                let reference = run(Command::new(launcher).args(&java_args).arg(&path));
                 assert!(!reference.status.success(), "Java {name}: invalid unwrap succeeded");
                 comparisons += 1;
-                continue;
+            } else {
+                let java_runs = if require_java { 2 } else { 1 };
+                let mut java_stdout = Vec::<u8>::new();
+                for _ in 0..java_runs {
+                    let reference = run(Command::new(launcher).args(&java_args).arg(&path));
+                    assert_eq!(reference.status.code(), Some(0), "Java {name}: {}", String::from_utf8_lossy(&reference.stderr));
+                    assert_eq!(reference.stdout, expected.as_bytes(), "Java {name}: output");
+                    if require_java {
+                        assert!(reference.stderr.is_empty(), "Java {name}: unexpected diagnostics: {}", String::from_utf8_lossy(&reference.stderr));
+                    }
+                    java_stdout = reference.stdout;
+                }
+                if strict_case {
+                    assert_eq!(java_stdout, native_stdout, "Java/LLVM {name}: byte-differential output");
+                    case_evidence.push(format!(
+                        r#"{{"name":"{name}","native_stdout_hex":"{}","java_stdout_hex":"{}","native_exit":0,"java_exit":0,"native_runs":5,"java_runs":2}}"#,
+                        hex_encode(&native_stdout), hex_encode(&java_stdout)
+                    ));
+                    strict_comparisons += 1;
+                }
+                comparisons += 1;
             }
-            assert_eq!(
-                reference.status.code(),
-                Some(0),
-                "Java {name}: {}",
-                String::from_utf8_lossy(&reference.stderr)
-            );
-            assert_eq!(reference.stdout, expected.as_bytes(), "Java {name}: output");
-            comparisons += 1;
         }
     }
     check_sum_boundary(&compiler, &clang, &runtime, &scratch.0, sanitize);
@@ -661,21 +856,31 @@ fn main() {
             symlink(&fake_compiler, &symbolic).unwrap();
             let hard = scratch.0.join("clang-hardlink");
             fs::hard_link(&fake_clang, &hard).unwrap();
-            for destination in [&fake_compiler, &fake_clang, &symbolic, &hard] {
+            for (destination, expected_diagnostic) in [
+                (&fake_compiler, "must not alias"),
+                (&fake_clang, "must not alias"),
+                (&symbolic, "output must be absent or a regular non-symlink file"),
+                (&hard, "must not alias"),
+            ] {
                 let rejected = run(Command::new(driver).env("ORESLANG_LLVMC", &fake_compiler)
                     .env("CLANG", &fake_clang).arg(&source).arg(destination));
-                assert_eq!(rejected.status.code(), Some(64), "AOT alias guard: {}", String::from_utf8_lossy(&rejected.stderr));
-                assert!(String::from_utf8_lossy(&rejected.stderr).contains("must not alias"));
+                let stderr = String::from_utf8_lossy(&rejected.stderr);
+                assert_eq!(rejected.status.code(), Some(64), "AOT alias guard for {}: {stderr}", destination.display());
+                assert!(stderr.contains(expected_diagnostic), "AOT alias guard for {}: expected {expected_diagnostic:?}, got {stderr:?}", destination.display());
+                assert!(!stderr.contains("must not execute"), "protected input executed");
                 assert_eq!(fs::read(destination).unwrap(), sentinel);
+                assert_eq!(fs::read(&fake_compiler).unwrap(), sentinel);
+                assert_eq!(fs::read(&fake_clang).unwrap(), sentinel);
+                assert!(fs::symlink_metadata(&symbolic).unwrap().file_type().is_symlink());
             }
         }
         let scalar_record = r#"define class Number as pub val int code;end
           fnc create():Number{return new Number(42);}
           pub routine main():int{val Number value=create();return value.code==42?0:1;}"#;
-        let owning_int = r#"define class Box as pub val Array<int> values;end
-          fnc create():Box{val Array<int> a=new Array<int>();a.add(42);return new Box(a);}
-          pub routine main():int{val Box value=create();return value.values.get(0)==42?0:1;}"#;
-        for (source, expected) in [
+        let owning_int = r#"define class ArrayOwnerFixture as pub val Array<int> values;end
+          fnc create():ArrayOwnerFixture{val Array<int> a=new Array<int>();a.add(42);return new ArrayOwnerFixture(a);}
+          pub routine main():int{val ArrayOwnerFixture value=create();return value.values.get(0)==42?0:1;}"#;
+        for (case_index, (source, expected)) in [
             (include_str!("fixtures/native-class-string/ordered-routing-locals.ores"), "enter;enter;initialize;finish;done;"),
             (include_str!("fixtures/native-class-string/routing-option-capture.ores"), ""),
             (include_str!("fixtures/native-class-string/nested-owned-capture.ores"), "id\n"),
@@ -685,17 +890,26 @@ fn main() {
             (owning_int, ""),
             (include_str!("fixtures/native-class-string/record-return.ores"), "segment\nlocal\n"),
             (include_str!("fixtures/native-class-string/owned-aggregate-return.ores"), "/foo/:id\nid\n"),
-        ] {
-            let path = scratch.0.join("standalone.ores");
-            let binary = scratch.0.join("standalone");
+        ].into_iter().enumerate() {
+            let path = scratch.0.join(format!("standalone-{case_index}.ores"));
+            let binary = scratch.0.join(format!("standalone-{case_index}"));
+            assert!(!binary.exists(), "stale standalone case {case_index}");
             fs::write(&path, source).unwrap();
             let built = run(Command::new(driver)
                 .env("ORESLANG_LLVMC", fs::canonicalize(&compiler).unwrap())
                 .env("CLANG", &clang).arg(&path).arg(&binary));
-            assert!(built.status.success(), "AOT driver: {}", String::from_utf8_lossy(&built.stderr));
+            assert!(built.status.success(), "AOT driver case {case_index}: {}", String::from_utf8_lossy(&built.stderr));
+            let published = fs::symlink_metadata(&binary).unwrap_or_else(|error| panic!(
+                "AOT case {case_index}: driver succeeded without published executable at {binary:?}: {error}; stdout={:?}; stderr={:?}",
+                String::from_utf8_lossy(&built.stdout), String::from_utf8_lossy(&built.stderr)));
+            assert!(published.is_file() && published.len() > 0, "AOT case {case_index}: invalid published file");
+            let canonical_binary = fs::canonicalize(&binary).unwrap();
             fs::remove_file(&path).unwrap();
-            let executed = run(Command::new(&binary).env_clear().env("PATH", ""));
-            assert_eq!(executed.status.code(), Some(0), "source-free AOT: {}", String::from_utf8_lossy(&executed.stderr));
+            assert!(!path.exists(), "AOT source was not removed");
+            let executed = Command::new(&canonical_binary).env_clear().env("PATH", "").output()
+                .unwrap_or_else(|error| panic!("source-free AOT case {case_index}: launch failed at {canonical_binary:?}: {error}; published bytes={}; still present={}",
+                    published.len(), canonical_binary.exists()));
+            assert_eq!(executed.status.code(), Some(0), "source-free AOT case {case_index}: {}", String::from_utf8_lossy(&executed.stderr));
             assert_eq!(executed.stdout, expected.as_bytes());
             assert!(executed.stderr.is_empty());
             standalone_runs += 1;
@@ -707,9 +921,13 @@ fn main() {
         ("ordered-array-readonly-cannot-mutate", "fnc touch():void{return;}pub fnc main():int{touch();const Array<int> values=new Array<int>();values.add(1);return 0;}".to_owned(), foo.to_owned()),
         ("ordered-array-constructor-type-mismatch", "fnc touch():void{return;}pub fnc main():int{touch();val Array<int> values=new Array<String>();return 0;}".to_owned(), foo.to_owned()),
         ("ordered-array-element-type-mismatch", "fnc touch():void{return;}pub fnc main():int{touch();val Array<String> values=new Array<String>();values.add(1);return 0;}".to_owned(), foo.to_owned()),
+        ("checked-copy-option-reject-string", "pub routine main():int{val Array<String> values=new Array<String>();values.add(\"x\");val Option<int> forged=values.get_copy(0);return 0;}".to_owned(), foo.to_owned()),
+        ("checked-copy-option-reject-bool-index", "pub routine main():int{val Array<int> values=new Array<int>();values.add(42);val Option<int> forged=values.get_copy(true);return 0;}".to_owned(), foo.to_owned()),
+        ("checked-copy-option-reject-arity", "pub routine main():int{val Array<int> values=new Array<int>();val Option<int> forged=values.get_copy();return 0;}".to_owned(), foo.to_owned()),
         ("ordered-array-loop-cannot-retain-borrow", "fnc touch():void{return;}pub fnc main():int{touch();for(let int i=0;i<2;i=i+1){val Array<int> values=new Array<int>();values.add(i);}return values.get(0);}".to_owned(), foo.to_owned()),
 
-        ("legacy-mut-borrow-spelling-stays-rejected", "pub fnc main():int{val int owner=1;return rt borrow mut owner;}".to_owned(), foo.to_owned()),
+        ("legacy-mut-borrow-return-escape-rejected", "pub fnc main():int{val int owner=1;return rt borrow mut owner;}".to_owned(), foo.to_owned()),
+        ("canonical-mut-borrow-return-escape-rejected", "pub fnc main():int{val int owner=1;return borrow! mut owner;}".to_owned(), foo.to_owned()),
         ("ordered-const-cannot-lend-exclusively", "fnc touch():void{return;}fnc observe(borrow mut int value):int{return 42;}pub fnc main():int{touch();const int value=42;return observe(rt mut borrow value);}".to_owned(), foo.to_owned()),
         ("ordered-array-cannot-escape-branch", "fnc touch():void{return;}pub fnc main():int{touch();if true;then val Array<int> values=new Array<int>();values.add(1);fi return values.size;}".to_owned(), foo.to_owned()),
         ("ordered-async-frame-not-on-stack", "define actor Worker as {let total:int=0;pub fnc on_message(int n):int{return n;}}pub fnc main():int{const worker:ActorRef<Worker> =spawn Worker();await worker.get_ready();let int value=1;stop worker;return value;}".to_owned(), foo.to_owned()),
@@ -724,13 +942,22 @@ fn main() {
         ("ordered-sum-assignment-rejects-payload", "fnc touch():void{return;}pub fnc main():int{touch();let Option<int> value=None;value=Some(true);return 0;}".to_owned(), foo.to_owned()),
         ("ordered-sum-assignment-rejects-integer", "fnc touch():void{return;}pub fnc main():int{touch();let Option<int> value=None;value=1;return 0;}".to_owned(), foo.to_owned()),
         ("ordered-branch-local-cannot-escape", "fnc touch():void{return;}pub fnc main():int{touch();if true;then let int value=1;fi return value;}".to_owned(), foo.to_owned()),
-        ("ordered-owner-cannot-be-replaced", "define class Box as pub val Array<int> values;end pub fnc main():int{val Array<int> values=new Array<int>();val Box owner=new Box(values);owner=1;return 0;}".to_owned(), foo.to_owned()),
+        ("ordered-owner-cannot-be-replaced", "define class ArrayOwnerFixture as pub val Array<int> values;end pub fnc main():int{val Array<int> values=new Array<int>();val ArrayOwnerFixture owner=new ArrayOwnerFixture(values);owner=1;return 0;}".to_owned(), foo.to_owned()),
         ("ordered-loop-cannot-consume-outer-owner", "fnc touch():void{return;}fnc use(int value):void{return;}pub fnc main():int{touch();let int value=1;for(let int index=0;index<2;index=index+1){use(rt take value);}return 0;}".to_owned(), foo.to_owned()),
         ("ordered-local-shadows-owner", "fnc touch():void{return;}pub fnc main():int{let int value=1;touch();let int value=2;return value;}".to_owned(), foo.to_owned()),
         ("sum-contract-not-int-parameter", "pub define contract Api as fnc inspect(int value)=>int;end define module Server conforms Api as pub fnc inspect(Option<int> value):int{return 0;}pub fnc main():int{return 0;}end".to_owned(), foo.to_owned()),
         ("sum-contract-not-int-result", "pub define contract Api as fnc inspect(int value)=>int;end define module Server conforms Api as pub fnc inspect(int value):Option<int>{return Some(value);}pub fnc main():int{return 0;}end".to_owned(), foo.to_owned()),
         ("sum-cannot-reorder-legacy-return-guards", "fnc bad():Option<int>{if(true){return Some(1);}fi if true;then return Some(2);fi return None;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("sum-cannot-forge-from-int", "pub fnc main():int{val Option<int> item=1;return 0;}".to_owned(), foo.to_owned()),
+        ("adt-conditional-option-scalar-false",
+            include_str!("fixtures/adt-conditional-v1/option-scalar-false.atto").to_owned(),
+            foo.to_owned()),
+        ("adt-conditional-option-scalar-true",
+            include_str!("fixtures/adt-conditional-v1/option-scalar-true.atto").to_owned(),
+            foo.to_owned()),
+        ("adt-conditional-result-scalar-false",
+            include_str!("fixtures/adt-conditional-v1/result-scalar-false.atto").to_owned(),
+            foo.to_owned()),
         ("sum-cannot-return-as-int", "pub fnc main():int{val Option<int> item=Some(1);return item;}".to_owned(), foo.to_owned()),
         ("sum-cannot-use-as-bool", "pub fnc main():int{val Option<bool> item=Some(true);return item?0:1;}".to_owned(), foo.to_owned()),
         ("sum-cannot-cross-payload-types", "fnc read(Option<int> item):int{return item.unwrap();}pub fnc main():int{val Option<bool> item=Some(true);return read(item);}".to_owned(), foo.to_owned()),
@@ -744,10 +971,10 @@ fn main() {
         ("sum-wrong-constructor-arity", "pub fnc main():int{val Option<int> item=Some(1,2);return 0;}".to_owned(), foo.to_owned()),
         ("sum-no-inferred-none", "pub fnc main():int{val item=None;return 0;}".to_owned(), foo.to_owned()),
         ("sum-no-nominal-shadow", "define class Option as val int value;end pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
-        ("sum-owned-class-payload-boundary", "define class Box as val Array<int> values;end fnc bad():Option<Box>{return None;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("sum-owned-class-payload-boundary", "define class ArrayOwnerFixture as val Array<int> values;end fnc bad():Option<ArrayOwnerFixture>{return None;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("sum-nested-payload-boundary", "fnc bad():Option<Option<int>>{return None;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("sum-not-os-status", "pub fnc main():Option<int>{return Some(0);}".to_owned(), foo.to_owned()),
-        ("sum-constructor-cannot-reinterpret-scalar", "define class Box as val Option<int> item;constructor(int item){self.item=item;}end pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("sum-constructor-cannot-reinterpret-scalar", "define class ArrayOwnerFixture as val Option<int> item;constructor(int item){self.item=item;}end pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("nested-explicit-constructor-cannot-reinterpret-scalar", r#"define class Child as pub val int value;end define class Outer as val Child child;constructor(int child){self.child=child;}end pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
         ("nested-depth-forward-order", format!("{}pub fnc main():int{{return 0;}}", (0..10).map(|i| if i==9 { "define class Level9 as val int value;end".to_owned() } else { format!("define class Level{i} as val Level{} child;end",i+1) }).collect::<String>()), foo.to_owned()),
         ("nested-depth-reverse-order", format!("{}pub fnc main():int{{return 0;}}", (0..10).rev().map(|i| if i==9 { "define class Level9 as val int value;end".to_owned() } else { format!("define class Level{i} as val Level{} child;end",i+1) }).collect::<String>()), foo.to_owned()),
@@ -783,14 +1010,14 @@ fn main() {
         ("structured-return-wrong-type", r#"pub fnc main():int{for(let int index=0;index<1;index=index+1){return true;}return 0;}"#.to_owned(), foo.to_owned()),
         ("structured-return-ownership-transfer", r#"pub fnc main():int{val external_value:int=42;for(let int index=0;index<1;index=index+1){return rt take external_value;}return 0;}"#.to_owned(), foo.to_owned()),
         ("late-defer-after-conditional-return", r#"fnc cleanup():void{return;}pub fnc main():int{for(let int index=0;index<1;index=index+1){return 0;}defer cleanup();return 0;}"#.to_owned(), foo.to_owned()),
-        ("structured-owning-class-return", r#"define class Box as pub val Array<int> values;end fnc bad():Box{val Array<int> values=new Array<int>();val Box box=new Box(values);for(let int index=0;index<1;index=index+1){return box;}return box;}pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
+        ("structured-owning-class-return", r#"define class ArrayOwnerFixture as pub val Array<int> values;end fnc bad():ArrayOwnerFixture{val Array<int> values=new Array<int>();val ArrayOwnerFixture box=new ArrayOwnerFixture(values);for(let int index=0;index<1;index=index+1){return box;}return box;}pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
 
         ("iteration-backedge-consumes-scalar-owner", r#"fnc consume(int value):void{return;}pub fnc main():int{val Array<int> values=new Array<int>();values.add(1);val outer:int=42;for(const item of values){consume(rt take outer);}return 0;}"#.to_owned(), foo.to_owned()),
         ("iteration-record-alias-without-borrow", r#"define class Item as pub val int value;end pub fnc main():int{val Array<Item> a=new Array<Item>();for(const item of a){val Item other=item;}return 0;}"#.to_owned(), foo.to_owned()),
         ("iteration-mutates-source", r#"pub fnc main():int{val Array<int> a=new Array<int>();a.add(1);for(const n of a){a.add(n);}return 0;}"#.to_owned(), foo.to_owned()),
-        ("iteration-mutates-source-field", r#"define class Box as pub val Array<int> a;end pub fnc main():int{val Array<int> a=new Array<int>();a.add(1);val Box b=new Box(a);for(const n of b.a){b.a.set(0,n);}return 0;}"#.to_owned(), foo.to_owned()),
-        ("iteration-exclusive-owner-helper", r#"define class Box as pub val Array<int> a;end fnc edit(borrow mut Box b):void{b.a.add(1);return;}pub fnc main():int{val Array<int> a=new Array<int>();a.add(1);val Box b=new Box(a);for(const n of b.a){edit(rt mut borrow b);}return 0;}"#.to_owned(), foo.to_owned()),
-        ("iteration-consumes-outer-owner", r#"define class Box as pub val Array<int> a;end fnc consume(Box b):void{return;}pub fnc main():int{val Array<int> a=new Array<int>();a.add(1);val Array<int> b=new Array<int>();val Box other=new Box(b);for(const n of a){consume(rt take other);}return 0;}"#.to_owned(), foo.to_owned()),
+        ("iteration-mutates-source-field", r#"define class ArrayOwnerFixture as pub val Array<int> a;end pub fnc main():int{val Array<int> a=new Array<int>();a.add(1);val ArrayOwnerFixture b=new ArrayOwnerFixture(a);for(const n of b.a){b.a.set(0,n);}return 0;}"#.to_owned(), foo.to_owned()),
+        ("iteration-exclusive-owner-helper", r#"define class ArrayOwnerFixture as pub val Array<int> a;end fnc edit(borrow mut ArrayOwnerFixture b):void{b.a.add(1);return;}pub fnc main():int{val Array<int> a=new Array<int>();a.add(1);val ArrayOwnerFixture b=new ArrayOwnerFixture(a);for(const n of b.a){edit(rt mut borrow b);}return 0;}"#.to_owned(), foo.to_owned()),
+        ("iteration-consumes-outer-owner", r#"define class ArrayOwnerFixture as pub val Array<int> a;end fnc consume(ArrayOwnerFixture b):void{return;}pub fnc main():int{val Array<int> a=new Array<int>();a.add(1);val Array<int> b=new Array<int>();val ArrayOwnerFixture other=new ArrayOwnerFixture(b);for(const n of a){consume(rt take other);}return 0;}"#.to_owned(), foo.to_owned()),
         ("iteration-element-scope-escape", r#"pub fnc main():int{val Array<int> a=new Array<int>();for(const n of a){}return n;}"#.to_owned(), foo.to_owned()),
         ("iteration-local-scope-escape", r#"pub fnc main():int{val Array<int> a=new Array<int>();for(const n of a){val int x=n;}return x;}"#.to_owned(), foo.to_owned()),
         ("iteration-element-shadow", r#"pub fnc main():int{val Array<int> a=new Array<int>();val int n=0;for(const n of a){}return 0;}"#.to_owned(), foo.to_owned()),
@@ -802,26 +1029,26 @@ fn main() {
         ("iteration-non-array-source", r#"pub fnc main():int{val int a=1;for(const n of a){}return 0;}"#.to_owned(), foo.to_owned()),
 
         ("owning-return-duplicate-array", "define class Pair as val Array<int> a;val Array<int> b;end fnc bad():Pair{val Array<int> values=new Array<int>();return new Pair(values,values);}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
-        ("owning-return-borrowed-field", "define class Box as pub val Array<int> values;end fnc bad(borrow Box value):Box{return new Box(value.values);}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
-        ("owning-return-deferred-source-reuse", "define class Box as pub val Array<int> values;end fnc observe_owner(borrow Box value):void{return;}fnc bad():Box{val Array<int> a=new Array<int>();val Box value=new Box(a);defer observe_owner(rt borrow value);return value;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
-        ("owning-result-use-after-class-move", "define class Box as pub val Array<int> values;end fnc make():Box{val Array<int> a=new Array<int>();return new Box(a);}pub fnc main():int{val Box a=make();let mut Box b=rt take a;return a.values.size;}".to_owned(), foo.to_owned()),
-        ("owning-result-by-value-call", "define class Box as pub val Array<int> values;end fnc make():Box{val Array<int> a=new Array<int>();return new Box(a);}fnc observe_owner(Box value):int{return value.values.size;}pub fnc main():int{val Box b=make();return observe_owner(b);}".to_owned(), foo.to_owned()),
+        ("owning-return-borrowed-field", "define class ArrayOwnerFixture as pub val Array<int> values;end fnc bad(borrow ArrayOwnerFixture value):ArrayOwnerFixture{return new ArrayOwnerFixture(value.values);}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("owning-return-deferred-source-reuse", "define class ArrayOwnerFixture as pub val Array<int> values;end fnc observe_owner(borrow ArrayOwnerFixture value):void{return;}fnc bad():ArrayOwnerFixture{val Array<int> a=new Array<int>();val ArrayOwnerFixture value=new ArrayOwnerFixture(a);defer observe_owner(rt borrow value);return value;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("owning-result-use-after-class-move", "define class ArrayOwnerFixture as pub val Array<int> values;end fnc make():ArrayOwnerFixture{val Array<int> a=new Array<int>();return new ArrayOwnerFixture(a);}pub fnc main():int{val ArrayOwnerFixture a=make();let mut ArrayOwnerFixture b=rt take a;return a.values.size;}".to_owned(), foo.to_owned()),
+        ("owning-result-by-value-call", "define class ArrayOwnerFixture as pub val Array<int> values;end fnc make():ArrayOwnerFixture{val Array<int> a=new Array<int>();return new ArrayOwnerFixture(a);}fnc observe_owner(ArrayOwnerFixture value):int{return value.values.size;}pub fnc main():int{val ArrayOwnerFixture b=make();return observe_owner(b);}".to_owned(), foo.to_owned()),
         ("record-return-deferred-owner-reuse", "define class Item as pub val int code;end fnc observe(borrow Item value):void{return;}fnc bad(bool first):Item{val Item value=new Item(42);defer observe(rt borrow value);return first?value:value;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("record-return-integer-forgery", "define class Item as pub val int code;end fnc bad():Item{return 42;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("record-return-wrong-nominal", "define class A as pub val int code;end define class B as pub val int code;end fnc bad():A{return new B(1);}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("record-return-mutable-identity", "define class Item as pub let int code=42;end fnc bad():Item{return new Item();}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
-        ("record-return-borrowed-array-owner", "define class Box as val Array<int> values;end fnc bad(borrow Box value):Box{return value;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("record-return-borrowed-array-owner", "define class ArrayOwnerFixture as val Array<int> values;end fnc bad(borrow ArrayOwnerFixture value):ArrayOwnerFixture{return value;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("record-return-incoming-borrow", "define class Item as pub val int code;end fnc bad(borrow Item value):Item{return value;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("record-return-moved-local", "define class Item as pub val int code;end fnc bad():Item{let mut Item value=new Item(1);let mut Item moved=rt take value;return value;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("record-return-not-os-status", "define class Item as pub val int code;end pub fnc main():Item{return new Item(42);}".to_owned(), foo.to_owned()),
         ("record-return-handle-as-int", "define class Item as pub val int code;end fnc make():Item{return new Item(42);}pub fnc main():int{return make();}".to_owned(), foo.to_owned()),
         ("record-return-unknown-type", "fnc bad():Missing{return 0;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
-        ("constructor-array-use-after-move", "define class Box as val Array<int> values; end pub fnc main():int{val Array<int> a=new Array<int>();val Box b=new Box(a);return a.size;}".to_owned(), foo.to_owned()),
+        ("constructor-array-use-after-move", "define class ArrayOwnerFixture as val Array<int> values; end pub fnc main():int{val Array<int> a=new Array<int>();val ArrayOwnerFixture b=new ArrayOwnerFixture(a);return a.size;}".to_owned(), foo.to_owned()),
         ("constructor-array-duplicate-owner", "define class Pair as val Array<int> left;val Array<int> right;end pub fnc main():int{val Array<int> a=new Array<int>();val Pair p=new Pair(a,a);return 0;}".to_owned(), foo.to_owned()),
-        ("constructor-array-element-mismatch", "define class Box as val Array<String> values;end pub fnc main():int{val Array<int> a=new Array<int>();val Box b=new Box(a);return 0;}".to_owned(), foo.to_owned()),
-        ("shared-class-array-mutation", "define class Box as pub val Array<int> values;end fnc bad(borrow Box owner):void{owner.values.add(1);return;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
-        ("constructor-array-borrowed-field", "define class Box as pub val Array<int> values;end fnc bad(borrow Box owner):int{val Box other=new Box(owner.values);return 0;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
-        ("class-array-by-value-escape", "define class Box as pub val Array<int> values;end fnc bad(Box owner):int{return owner.values.size;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("constructor-array-element-mismatch", "define class ArrayOwnerFixture as val Array<String> values;end pub fnc main():int{val Array<int> a=new Array<int>();val ArrayOwnerFixture b=new ArrayOwnerFixture(a);return 0;}".to_owned(), foo.to_owned()),
+        ("shared-class-array-mutation", "define class ArrayOwnerFixture as pub val Array<int> values;end fnc bad(borrow ArrayOwnerFixture owner):void{owner.values.add(1);return;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("constructor-array-borrowed-field", "define class ArrayOwnerFixture as pub val Array<int> values;end fnc bad(borrow ArrayOwnerFixture owner):int{val ArrayOwnerFixture other=new ArrayOwnerFixture(owner.values);return 0;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("class-array-by-value-escape", "define class ArrayOwnerFixture as pub val Array<int> values;end fnc bad(ArrayOwnerFixture owner):int{return owner.values.size;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("mutable-record-array", "define class Item as pub let int value=1; end pub fnc main():int{val Array<Item> a=new Array<Item>();return 0;}".to_owned(), foo.to_owned()),
         ("record-array-integer-forgery", "define class Item as pub val int value; end pub fnc main():int{val Array<Item> a=new Array<Item>();a.add(1);return 0;}".to_owned(), foo.to_owned()),
         ("record-array-wrong-nominal-type", "define class A as pub val int value; end define class B as pub val int value; end pub fnc main():int{val Array<A> a=new Array<A>();a.add(new B(1));return 0;}".to_owned(), foo.to_owned()),
@@ -836,6 +1063,17 @@ fn main() {
         ("string-record-private-field", "define class Segment as val String value; end pub fnc main():int{val Segment s=new Segment(\"secret\");return s.value==\"secret\"?0:1;}".to_owned(), foo.to_owned()),
         ("string-record-final-field-write", "define class Segment as pub val String value; end pub fnc main():int{let mut Segment s=new Segment(\"first\");s.value=\"other\";return 0;}".to_owned(), foo.to_owned()),
         ("string-record-untyped-handle-return", "define class Segment as pub val String value; end pub fnc main():int{val Segment s=new Segment(\"first\");return s.value;}".to_owned(), foo.to_owned()),
+        ("atto-nats-split-int-receiver", "pub fnc main():int{val int subject=42;val parts=subject.split_literal(\".\");return 0;}".to_owned(), foo.to_owned()),
+        ("atto-nats-split-int-delimiter", "pub fnc main():int{val String subject=\"a.b\";val parts=subject.split_literal(42);return 0;}".to_owned(), foo.to_owned()),
+        ("atto-nats-split-wrong-arity", "pub fnc main():int{val String subject=\"a.b\";val parts=subject.split_literal(\".\",\"-\");return 0;}".to_owned(), foo.to_owned()),
+        ("atto-nats-split-named-delimiter", "pub fnc main():int{val String subject=\"a.b\";val parts=subject.split_literal(delimiter:\".\");return 0;}".to_owned(), foo.to_owned()),
+        ("atto-nats-split-owner-as-int", "pub fnc main():int{val String subject=\"a.b\";val parts=subject.split_literal(\".\");val int token=parts;return token;}".to_owned(), foo.to_owned()),
+        ("nats-native-string-abi-spoof", "pub fnc ores_string_split_literal():int{return 42;}pub fnc main():int{return ores_string_split_literal();}".to_owned(), foo.to_owned()),
+        ("nats-native-string-containment-abi-spoof", "pub fnc ores_string_contains_literal():int{return 42;}pub fnc main():int{return ores_string_contains_literal();}".to_owned(), foo.to_owned()),
+        ("nats-string-contains-int-receiver", "pub routine main():int{val n: int = 42;return n.contains_literal(\"4\")?0:1;}".to_owned(), foo.to_owned()),
+        ("nats-string-contains-int-needle", "pub routine main():int{val String s=\"abc\";return s.contains_literal(42)?0:1;}".to_owned(), foo.to_owned()),
+        ("nats-string-contains-wrong-arity", "pub routine main():int{val String s=\"abc\";return s.contains_literal(\"a\",\"b\")?0:1;}".to_owned(), foo.to_owned()),
+        ("nats-string-contains-named-needle-rejected", "pub routine main():int{val String s=\"abc\";return s.contains_literal(needle:\"a\")?0:1;}".to_owned(), foo.to_owned()),
         ("string-array-integer-add", "pub fnc main():int{val Array<String> a=new Array<String>();a.add(42);return 0;}".to_owned(), foo.to_owned()),
         ("integer-array-string-add", "pub fnc main():int{val Array<int> a=new Array<int>();a.add(\"bad\");return 0;}".to_owned(), foo.to_owned()),
         ("string-array-string-index", "pub fnc main():int{val Array<String> a=new Array<String>();return a.get(\"bad\")==\"x\"?0:1;}".to_owned(), foo.to_owned()),
@@ -843,7 +1081,7 @@ fn main() {
         ("string-array-handle-as-int", "pub fnc main():int{val Array<String> a=new Array<String>();return a.get(0);}".to_owned(), foo.to_owned()),
         ("string-array-wrong-constructor", "pub fnc main():int{val Array<String> a=new Array<int>();return 0;}".to_owned(), foo.to_owned()),
         ("string-array-copy-as-int", "pub fnc main():int{val Array<String> a=new Array<String>();val n:int=a;return n;}".to_owned(), foo.to_owned()),
-        ("string-array-take-into-int-field", "define class Box as pub mut Array<int> values=new Array<int>(); end pub fnc main():int{let mut Box b=new Box();val Array<String> a=new Array<String>();b.values=rt take a;return 0;}".to_owned(), foo.to_owned()),
+        ("string-array-take-into-int-field", "define class ArrayOwnerFixture as pub mut Array<int> values=new Array<int>(); end pub fnc main():int{let mut ArrayOwnerFixture b=new ArrayOwnerFixture();val Array<String> a=new Array<String>();b.values=rt take a;return 0;}".to_owned(), foo.to_owned()),
         ("unsupported-object-array", "pub fnc main():int{val Array<Foo> a=new Array<Foo>();return 0;}".to_owned(), foo.to_owned()),
         (
             "string-integer-equality",
@@ -950,9 +1188,12 @@ fn main() {
         ),
     ];
     for (name, source, dependency) in &negatives {
-        fs::write(scratch.0.join("main.ores"), source).unwrap();
+        let guest_name = if name.starts_with("adt-conditional-") {
+            "main.atto"
+        } else { "main.ores" };
+        fs::write(scratch.0.join(guest_name), source).unwrap();
         fs::write(scratch.0.join("main-1.ores"), dependency).unwrap();
-        let rejected = run(Command::new(&compiler).arg(scratch.0.join("main.ores")));
+        let rejected = run(Command::new(&compiler).arg(scratch.0.join(guest_name)));
         assert_eq!(
             rejected.status.code(),
             Some(1),
@@ -960,10 +1201,18 @@ fn main() {
         );
         assert!(rejected.stdout.is_empty(), "{name}: emitted partial IR");
         let expected_boundary = match *name {
-            "legacy-mut-borrow-spelling-stays-rejected" => Some("legacy 'rt borrow mut value' is not accepted"),
+            "legacy-mut-borrow-return-escape-rejected" |
+            "canonical-mut-borrow-return-escape-rejected" => Some("borrowed reference may only be passed to a borrowed parameter"),
+            "checked-copy-option-reject-string" |
+            "checked-copy-option-reject-bool-index" |
+            "checked-copy-option-reject-arity" => Some("native Array.get_copy requires Array<int> and a checked int index"),
             "ordered-owning-array-not-hoisted" => Some("ordered owning local requires scoped region/drop lowering"),
             "ordered-async-frame-not-on-stack" => Some("continuation-aware statement lowering"),
             "sum-contract-not-int-parameter" => Some("contract ownership mode mismatch"),
+            "adt-conditional-option-scalar-false" |
+            "adt-conditional-option-scalar-true" |
+            "adt-conditional-result-scalar-false" => Some(
+                "native conditional sum branches must resolve to the same declared sum type"),
             "sum-contract-not-int-result" => Some("contract requires int return"),
             "owning-return-duplicate-array" => Some("live unique array"),
             "owning-return-borrowed-field" => Some("named lexical array"),
@@ -1016,6 +1265,7 @@ fn main() {
     );
 
     for (name, source, diagnostic) in [
+        ("reserved-box-cannot-be-redefined", "define class Box as pub val int value;end pub fnc main():int{return 0;}".to_owned(), "NATIVE_OWNERSHIP_INTRINSIC_RESERVED"),
         ("template-interpolation-limit", interpolation_bomb, "interpolation count limit exceeded"),
         ("template-brace-limit", brace_bomb, "brace nesting limit exceeded"),
         ("template-nesting-limit", nesting_bomb, "nesting limit exceeded"),
@@ -1093,6 +1343,28 @@ fn main() {
         );
     }
     assert!(!sanitize || guest_address_checks, "missing guest ASan instrumentation proof");
+    if require_java {
+        assert_eq!(strict_comparisons, JAVA_LLVM_STRICT_NINE.len(), "exactly nine shared-source Java executions required");
+        assert_eq!(case_evidence.len(), JAVA_LLVM_STRICT_NINE.len(), "each shared-source fixture requires receipt evidence");
+        let mut receipt = fs::OpenOptions::new()
+            .write(true).create_new(true)
+            .open(receipt_path.expect("validated --report"))
+            .expect("parity receipt must be a new file");
+        let body = format!(
+            r#"{{"schema":"oreslang.java-llvm.source-parity.v1","status":"passed","llvm_revision":"{}","java_revision":"{}","positive_programs":{},"native_executions":{},"java_executions":{},"llvm_only_negative_rejections":{},"sanitized":{},"cases":[{}]}}"#,
+            llvm_revision.expect("validated --llvm-revision"),
+            java_revision.expect("validated --java-revision"),
+            strict_comparisons,
+            strict_comparisons * 5,
+            strict_comparisons * 2,
+            negatives.len() + 2,
+            sanitize,
+            case_evidence.join(",")
+        );
+        receipt.write_all(body.as_bytes()).expect("write parity receipt");
+        receipt.write_all(b"\n").expect("finish parity receipt");
+        receipt.sync_all().expect("sync parity receipt");
+    }
     if guest_address_checks { println!("PASS generated guest IR includes ASan memory checks"); }
     println!("PASS class/string parity: {} common-source positives, {} native-only positives, {} controlled-panic cases (five native executions each), {} no-IR rejections plus two target boundaries and two Unix filesystem boundary rejections, Java={comparisons}, standalone={standalone_runs}, sanitized={sanitize}", positives.len(), native_only.len(), panics.len(), negatives.len());
 }

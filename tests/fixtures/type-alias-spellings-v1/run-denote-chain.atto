@@ -1,0 +1,4 @@
+denote type Count = int;
+denote type Total = Count;
+fnc identity(Count n): Total { return n; }
+pub fnc main(): Total { val Count a = 42; return identity(a); }

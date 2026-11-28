@@ -1,0 +1,1 @@
+pub fnc main(): int { int shorthand = 10; const right as int = 20; val fixed as int = 7; const mut c : int = 2; const mut d as int = 3; let last as int = 0; return shorthand + right + fixed + c + d + last; }

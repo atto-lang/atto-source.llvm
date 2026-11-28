@@ -24,3 +24,10 @@
 /contracts/ @ORESoftware
 /tests/ @ORESoftware
 /.oreslang/ @ORESoftware
+
+# Native formal verification, language specs, tooling and proof evidence.
+/formal/ @ORESoftware
+/spec/ @ORESoftware
+/tools/ @ORESoftware
+/verification/ @ORESoftware
+/docs/security/ @ORESoftware

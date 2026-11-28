@@ -12,6 +12,7 @@
 static void check(int ok) { if (!ok) abort(); }
 typedef struct {
     atomic_int active[ACTORS], peak[ACTORS], next[ACTORS], total, errors;
+    atomic_int global_active, global_peak;
     atomic_uint_fast64_t last_execution[ACTORS];
     atomic_uint_fast64_t allocation_domain[ACTORS];
     atomic_uint_fast64_t allocation_generation[ACTORS];
@@ -66,6 +67,11 @@ static void run(void* raw, size_t actor, uint64_t msg) {
     int previous = atomic_load(&s->peak[actor]);
     while (current > previous &&
            !atomic_compare_exchange_weak(&s->peak[actor], &previous, current)) { }
+    int global_current = atomic_fetch_add(&s->global_active, 1) + 1;
+    int global_previous = atomic_load(&s->global_peak);
+    while (global_current > global_previous &&
+           !atomic_compare_exchange_weak(
+               &s->global_peak, &global_previous, global_current)) { }
     if (current != 1 || (int)msg != atomic_fetch_add(&s->next[actor], 1))
         atomic_fetch_add(&s->errors, 1);
     while (atomic_load(&s->hold)) {
@@ -73,9 +79,83 @@ static void run(void* raw, size_t actor, uint64_t msg) {
         nanosleep(&pause, NULL);
     }
     atomic_fetch_sub(&s->active[actor], 1);
+    atomic_fetch_sub(&s->global_active, 1);
     atomic_fetch_add(&s->total, 1);
 }
+/* A far-end runnable slot amid thousands of idle lanes must still dispatch. */
+static void run_far_slot(void* raw, size_t actor, uint64_t message) {
+    if (actor != 4096u || message != 7u) abort();
+    atomic_fetch_add_explicit((atomic_int*)raw, 1, memory_order_relaxed);
+}
+/* One carrier, 64 continuously backlogged actors: the actual native ready
+ * queue must bound warm-actor preference and preserve per-actor FIFO. This
+ * tests dispatch between completed turns, not preemption within a callback. */
+enum { FAIR_ACTORS = 64, FAIR_MESSAGES = 8 };
+typedef struct {
+    atomic_int entered, release;
+    size_t count;
+    size_t next[FAIR_ACTORS];
+    size_t first[FAIR_ACTORS];
+    size_t previous, consecutive, longest;
+} Fairness;
+
+static void fair_run(void* raw, size_t actor, uint64_t message) {
+    Fairness* f = raw;
+    check(actor < FAIR_ACTORS && message == f->next[actor]++);
+    if (f->count == 0) {
+        check(actor == 0 && message == 0);
+        atomic_store_explicit(&f->entered, 1, memory_order_release);
+        struct timespec pause = {0, 1000000};
+        for (unsigned attempt = 0; attempt < 5000 &&
+                !atomic_load_explicit(&f->release, memory_order_acquire); ++attempt)
+            nanosleep(&pause, NULL);
+        check(atomic_load_explicit(&f->release, memory_order_acquire));
+    }
+    if (message == 0) f->first[actor] = f->count;
+    f->consecutive = f->count && f->previous == actor ? f->consecutive + 1 : 1;
+    if (f->consecutive > f->longest) f->longest = f->consecutive;
+    f->previous = actor;
+    ++f->count;
+}
+
+static void test_single_carrier_fairness(void) {
+    Fairness f = {0};
+    OresNativeActorScheduler* s = ores_native_actor_scheduler_open(
+        FAIR_ACTORS, FAIR_MESSAGES, 1, fair_run, &f);
+    check(s != NULL);
+    check(ores_native_actor_scheduler_prestart_carriers(s));
+    OresNativeActorRef refs[FAIR_ACTORS];
+    for (size_t i = 0; i < FAIR_ACTORS; ++i) {
+        refs[i] = ores_native_actor_scheduler_spawn(s, i);
+        check(refs[i].scheduler_domain != 0);
+    }
+    check(ores_native_actor_scheduler_send(s, refs[0], 0));
+    struct timespec pause = {0, 1000000};
+    for (unsigned attempt = 0; attempt < 5000 &&
+            !atomic_load_explicit(&f.entered, memory_order_acquire); ++attempt)
+        nanosleep(&pause, NULL);
+    check(atomic_load_explicit(&f.entered, memory_order_acquire));
+    for (size_t i = 0; i < FAIR_ACTORS; ++i)
+        for (uint64_t msg = i == 0 ? 1 : 0; msg < FAIR_MESSAGES; ++msg)
+            check(ores_native_actor_scheduler_send(s, refs[i], msg));
+    atomic_store_explicit(&f.release, 1, memory_order_release);
+    check(ores_native_actor_scheduler_drain(s));
+    check(f.count == FAIR_ACTORS * FAIR_MESSAGES);
+    check(f.longest <= 2);
+    for (size_t i = 0; i < FAIR_ACTORS; ++i) {
+        check(f.next[i] == FAIR_MESSAGES);
+        check(f.first[i] < 2 * FAIR_ACTORS);
+        check(ores_native_actor_scheduler_stop(s, refs[i]));
+    }
+    check(ores_native_actor_scheduler_started_carriers(s) == 1);
+    ores_native_actor_scheduler_retire(s);
+    check(ores_native_actor_scheduler_try_destroy(s));
+    printf("NATIVE_SINGLE_CARRIER_FAIRNESS_PASS actors=%d turns=%zu max_consecutive=%zu\n",
+           FAIR_ACTORS, f.count, f.longest);
+}
+
 int main(void) {
+    test_single_carrier_fairness();
     State s = {0};
     s.submitter_thread = pthread_self();
     atomic_store(&s.require_worker_dispatch, 1);
@@ -146,6 +226,52 @@ int main(void) {
     check(!ores_native_actor_scheduler_submit(scheduler, 0, 999));
     check(ores_native_actor_scheduler_try_destroy(scheduler));
 
+    /*
+     * Physical carrier parallelism is cross-actor capacity only. Two distinct
+     * actor domains may execute simultaneously, while run() still asserts each
+     * individual actor has active==1. This must remain true until compiler-
+     * proven per-turn actor-state isolation enables same-actor parallelism.
+     */
+    State parallel = {0};
+    atomic_store(&parallel.hold, 1);
+    scheduler = ores_native_actor_scheduler_open(2, 1, 2, run, &parallel);
+    check(scheduler != NULL);
+    parallel.scheduler = scheduler;
+    check(ores_native_actor_scheduler_prestart_carriers(scheduler));
+    check(ores_native_actor_scheduler_started_carriers(scheduler) == 2);
+    OresNativeActorRef parallel_a =
+        ores_native_actor_scheduler_spawn(scheduler, 0);
+    OresNativeActorRef parallel_b =
+        ores_native_actor_scheduler_spawn(scheduler, 1);
+    check(parallel_a.scheduler_domain && parallel_b.scheduler_domain);
+    check(ores_native_actor_scheduler_send(scheduler, parallel_a, 0));
+    check(ores_native_actor_scheduler_send(scheduler, parallel_b, 0));
+
+    struct timespec overlap_pause = {0, 1000000};
+    int observed_overlap = 0;
+    for (int attempt = 0; attempt < 5000; ++attempt) {
+        if (atomic_load(&parallel.global_active) == 2) {
+            observed_overlap = 1;
+            break;
+        }
+        nanosleep(&overlap_pause, NULL);
+    }
+    check(observed_overlap);
+    check(atomic_load(&parallel.peak[0]) == 1);
+    check(atomic_load(&parallel.peak[1]) == 1);
+    check(atomic_load(&parallel.global_peak) == 2);
+
+    atomic_store(&parallel.hold, 0);
+    check(ores_native_actor_scheduler_drain(scheduler));
+    check(atomic_load(&parallel.total) == 2);
+    check(atomic_load(&parallel.errors) == 0);
+    check(ores_native_actor_scheduler_stop(scheduler, parallel_a));
+    check(ores_native_actor_scheduler_stop(scheduler, parallel_b));
+    check(ores_native_actor_scheduler_poll_done(scheduler, parallel_a));
+    check(ores_native_actor_scheduler_poll_done(scheduler, parallel_b));
+    ores_native_actor_scheduler_retire(scheduler);
+    check(ores_native_actor_scheduler_try_destroy(scheduler));
+
     State pressure = {0};
     atomic_store(&pressure.hold, 1);
     scheduler = ores_native_actor_scheduler_open(1, 1, 2, run, &pressure);
@@ -214,6 +340,24 @@ int main(void) {
     check(runtime_terminal.abandoned_user_messages == 0);
     check(runtime_terminal.abandoned_control_messages == 0);
     check(ores_native_actor_scheduler_try_destroy(scheduler));
-    puts("NATIVE_ACTOR_READY_QUEUE_PASS actors=5 messages=1000 fifo=1 max_active=1 rejected=3");
+    /* The prior bitmap branch raised the actor ceiling to 1M. Preserve that
+     * explicit capacity goal while keeping main's O(1) intrusive queues. */
+    atomic_int far_seen;
+    atomic_init(&far_seen, 0);
+    OresNativeActorScheduler* large =
+        ores_native_actor_scheduler_open(4097, 1, 1, run_far_slot, &far_seen);
+    check(large != NULL);
+    OresNativeActorRef far = ores_native_actor_scheduler_spawn(large, 4096);
+    check(far.scheduler_domain != 0);
+    check(ores_native_actor_scheduler_send(large, far, 7));
+    check(ores_native_actor_scheduler_drain(large));
+    check(atomic_load(&far_seen) == 1);
+    check(ores_native_actor_scheduler_stop(large, far));
+    ores_native_actor_scheduler_retire(large);
+    check(ores_native_actor_scheduler_try_destroy(large));
+    check(ores_native_actor_scheduler_open(
+        (size_t)ORES_NATIVE_SCHEDULER_MAX_ACTORS + 1u,
+        1, 1, run_far_slot, &far_seen) == NULL);
+    puts("NATIVE_ACTOR_READY_QUEUE_PASS actors=5 messages=1000 fifo=1 same_actor_max=1 distinct_actor_overlap=2 rejected=3 high_slot=4096");
     return 0;
 }

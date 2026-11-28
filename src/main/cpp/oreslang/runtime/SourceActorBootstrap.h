@@ -15,6 +15,8 @@ typedef void (*OresSourceActorInit)(OresActorI64Heap*, uint64_t, uint64_t);
 typedef int64_t (*OresSourceActorMessage)(
     OresActorI64Heap*, uint64_t, uint64_t, int64_t);
 typedef int64_t (*OresSourceActorContinuation)(void* actor);
+typedef uint64_t OresSourceActorId;
+typedef int64_t (*OresSourceActorIdContinuation)(OresSourceActorId actor);
 
 enum {
     ORES_SOURCE_ACTOR_STARTUP_PENDING = 0,
@@ -27,6 +29,32 @@ enum {
  * to a failed get_ready observer while get_done still completes normally. */
 int oreslang_source_actor_ready_status(void* actor);
 
+/* Runtime-only observation: distinguished physical callbacks from successful
+ * guest completions. A failed receiver must not be reported as a successful
+ * zero result. The scheduler's processed count still counts any DATA callback
+ * that physically returned (including a trapped failed receiver).
+ */
+#define ORES_SOURCE_ACTOR_FAILURE_FRAME UINT64_C(0xA7700001)
+typedef struct {
+    uint64_t processed_callbacks;
+    uint64_t successful_messages;
+    uint64_t failed_messages;
+    uint64_t failure_code;
+    int64_t last_success_result;
+    int stop_requested;
+} OresSourceActorMessageReceipt;
+
+/* Caller must keep the opaque SourceActor ref alive through this call.
+ * These are trusted runtime diagnostics, not a guest-writable capability.
+ */
+int oreslang_source_actor_message_receipt(
+    void* actor, OresSourceActorMessageReceipt* out);
+
+/* Non-aborting status variant for trusted lowering/tests. A successful send
+ * admits work, but does not guarantee processing before a competing STOP. */
+int oreslang_source_actor_try_send(void* actor, int64_t payload);
+
+
 #ifdef ORESLANG_SOURCE_ACTOR_TESTING
 /* Deterministic startup-race proof hooks. They pause only the reserved
  * initialization CONTROL callback before it decides whether construction may
@@ -35,11 +63,77 @@ void oreslang_source_actor_test_hold_initialization(int hold);
 int oreslang_source_actor_test_initialization_entered(void);
 void oreslang_source_actor_test_hold_readiness_publication(int hold);
 int oreslang_source_actor_test_readiness_publication_entered(void);
+/* Atomic count of priority supervisor terminal notices processed on the
+ * root actor CONTROL lane; useful for exact once-delivery test receipts. */
+uint64_t oreslang_source_actor_test_terminal_notices(void);
+uint64_t oreslang_source_actor_test_panic_notices(void);
+uint64_t oreslang_source_actor_test_stopped_notices(void);
+uint64_t oreslang_source_actor_test_last_panic_code(void);
 #endif
 
 void* oreslang_source_actor_spawn(OresSourceActorInit initializer,
                                   OresSourceActorMessage on_message,
                                   uint64_t fields);
+
+/*
+ * Checked source actor identity v1: the nonzero uint64 is an opaque
+ * compiler-owned actor-incarnation ID, never an address cast to an integer.
+ * IDs are process-monotonic and never reused, including across group reopen
+ * and scheduler slot/allocation address reuse. Exhaustion fails closed before
+ * wrapping. This is a trusted compiler/native ABI, NOT a cryptographic bearer
+ * capability or an FFI/untrusted actor interface.
+ *
+ * All checked operations resolve ID -> live SourceActor under group.mutex.
+ * Checked Future continuation callbacks MUST use
+ * OresSourceActorIdContinuation directly: never cast a void* callback to an
+ * integer-ID callback. The legacy pointer functions remain compatibility-only
+ * and are not protected from allocation-address ABA.
+ */
+OresSourceActorId oreslang_source_actor_spawn_id(
+    OresSourceActorInit initializer,
+    OresSourceActorMessage on_message,
+    uint64_t fields);
+int oreslang_source_actor_ready_status_id(OresSourceActorId actor);
+/* Returns 1 on admitted message, 0 for invalid/revoked/closed/full.
+ * The compiler can use the fail-stop variant until Result lowering exists. */
+int oreslang_source_actor_try_send_id(
+    OresSourceActorId actor, int64_t payload);
+void oreslang_source_actor_send_id(
+    OresSourceActorId actor, int64_t payload);
+/* Returns 1 on first stop admission, 0 for invalid/revoked/already-stopped. */
+int oreslang_source_actor_try_request_stop_id(OresSourceActorId actor);
+void oreslang_source_actor_request_stop_id(OresSourceActorId actor);
+/* Checked top-level physical join must never run on a native actor carrier.
+ * This consumes the ID's lifetime: all subsequent operations fail closed. */
+void oreslang_source_actor_join_done_id(OresSourceActorId actor);
+void oreslang_source_actor_stop_id(OresSourceActorId actor);
+/* Same root CONTROL Future/continuation lifecycle as the legacy await API,
+ * but the callback's argument is the original minted by-value actor ID.
+ * No C void* -> i64 conversion occurs anywhere in the checked ABI. */
+int oreslang_source_actor_await_ready_id_checked(
+    OresSourceActorId actor,
+    OresSourceActorIdContinuation continuation,
+    uint64_t source_token,
+    int64_t* result);
+int64_t oreslang_source_actor_await_ready_id(
+    OresSourceActorId actor,
+    OresSourceActorIdContinuation continuation,
+    uint64_t source_token);
+int64_t oreslang_source_actor_await_done_id(
+    OresSourceActorId actor,
+    OresSourceActorIdContinuation continuation,
+    uint64_t source_token);
+
+#ifdef ORESLANG_SOURCE_ACTOR_TESTING
+/* Deterministic ABA fixture only: hold one *retired* SourceActor allocation
+ * and hand that exact address to the next spawn. The production runtime must
+ * never retain a tombstone just to make stale handles appear safe. */
+void oreslang_source_actor_test_force_address_reuse(int enabled);
+uint64_t oreslang_source_actor_test_address_reuses(void);
+/* Only while the group has no live actors; never allows rewinding ID space. */
+void oreslang_source_actor_test_advance_next_actor_id(uint64_t candidate);
+#endif
+
 /* Nonblocking bounded one-way send. Overload currently fails closed with a
  * host error; a typed guest overload result still needs compiler lowering.
  */

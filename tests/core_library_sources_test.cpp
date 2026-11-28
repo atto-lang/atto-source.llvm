@@ -16,22 +16,64 @@ static std::uint32_t bit(CoreProviderRequirement requirement) {
 int main() {
     using namespace oreslang::frontend;
 
+    assert(is_reserved_core_import("atto.core"));
+    assert(is_reserved_core_import("atto.core/numeric"));
+    assert(is_reserved_core_import("atto.core/numeric.atto"));
     assert(is_reserved_core_import("ores.core"));
     assert(is_reserved_core_import("ores.core/numeric"));
     assert(!is_reserved_core_import("ores.std/numeric"));
     assert(!is_reserved_core_import("./ores.core/numeric"));
+    assert(is_reserved_std_import("atto.std"));
+    assert(is_reserved_std_import("atto.std/fs"));
     assert(is_reserved_std_import("ores.std"));
     assert(is_reserved_std_import("ores.std/testing"));
     assert(is_reserved_std_import("std"));
     assert(is_reserved_std_import("std/testing"));
     assert(!is_reserved_std_import("./std/testing"));
     assert(!is_reserved_std_import("ores.core/numeric"));
+    assert(is_reserved_alloc_import("atto.alloc"));
+    assert(is_reserved_alloc_import("atto.alloc/int_buffer"));
     assert(is_reserved_alloc_import("alloc"));
     assert(is_reserved_alloc_import("alloc/int_buffer"));
+    assert(is_reserved_compiler_library_import("atto.core/numeric"));
+    assert(is_reserved_compiler_library_import("atto.alloc/int_buffer"));
     assert(is_reserved_compiler_library_import("ores.core/numeric"));
     assert(is_reserved_compiler_library_import("alloc/int_buffer"));
     assert(!is_reserved_alloc_import("./alloc/int_buffer"));
-    assert(!is_reserved_compiler_library_import("ores.std/testing"));
+    assert(!is_reserved_alloc_import("./atto.alloc/int_buffer"));
+    // core/alloc/std are all reserved roots (core-alloc-std-libraries-v1).
+    assert(is_reserved_compiler_library_import("atto.std/fs"));
+    assert(is_reserved_compiler_library_import("ores.std/testing"));
+    assert(is_reserved_compiler_library_import("core/num"));
+    assert(is_reserved_compiler_library_import("std/path"));
+    assert(!is_reserved_compiler_library_import("./core/num"));
+    assert(!is_reserved_compiler_library_import("std.fs"));
+    assert(compiler_library_dependency_allowed(
+        CompilerLibraryTier::Std, CompilerLibraryTier::Alloc));
+    assert(!compiler_library_dependency_allowed(
+        CompilerLibraryTier::Alloc, CompilerLibraryTier::Std));
+    assert(!compiler_library_dependency_allowed(
+        CompilerLibraryTier::Core, CompilerLibraryTier::Std));
+    {
+        const auto* num = find_compiler_library_source("core/num");
+        assert(num != nullptr && num->tier == CompilerLibraryTier::Core);
+        assert(num == find_compiler_library_source("atto.core/num.atto"));
+        assert(num->canonical_import == "atto.core/num");
+        assert(find_compiler_library_source("ores.core/num") == nullptr);
+        assert(find_compiler_library_source("ores.std/io") == nullptr);
+        assert(find_compiler_library_source("core/../num") == nullptr);
+        assert(find_compiler_library_source("core/Num") == nullptr);
+        assert(find_compiler_library_source("core/x/num") == nullptr);
+        const auto* arena = find_compiler_library_source("alloc/arena");
+        assert(arena != nullptr && arena->tier == CompilerLibraryTier::Alloc);
+        assert(arena->admitted_provider_bits == bit(CoreProviderRequirement::Allocator));
+        const auto* posix = find_compiler_library_source("std/path", LibraryTargetOs::Posix);
+        const auto* windows = find_compiler_library_source("std/path", LibraryTargetOs::Windows);
+        assert(posix && windows && posix != windows);
+        assert(posix->tier == CompilerLibraryTier::Std && posix->module_name == "path");
+        assert(posix->source.find("return 47;") != std::string_view::npos);
+        assert(windows->source.find("return 92;") != std::string_view::npos);
+    }
     assert(compiler_library_dependency_allowed(
         CompilerLibraryTier::Core, CompilerLibraryTier::Core));
     assert(!compiler_library_dependency_allowed(
@@ -41,39 +83,151 @@ int main() {
     assert(compiler_library_dependency_allowed(
         CompilerLibraryTier::Alloc, CompilerLibraryTier::Alloc));
 
-    const auto* numeric = find_core_library_source("ores.core/numeric");
+    const auto* numeric = find_core_library_source("atto.core/numeric");
+    assert(numeric == find_core_library_source("atto.core/numeric.atto"));
+    assert(numeric == find_core_library_source("ores.core/numeric"));
     assert(numeric != nullptr);
     assert(numeric == find_core_library_source("ores.core/numeric.ores"));
     assert(numeric->tier == CompilerLibraryTier::Core);
     assert(numeric->module_name == "numeric");
-    assert(numeric->unit_id == "@ores.core/numeric.ores");
+    assert(numeric->unit_id == "@atto.core/numeric.atto");
+    assert(numeric->canonical_import == "atto.core/numeric");
     assert(numeric->admitted_provider_bits == 0u);
     assert(numeric->source.find("define module numeric as") != std::string_view::npos);
     assert(numeric->source.find("clamp_int") != std::string_view::npos);
 
-    const auto* buffer = find_alloc_library_source("alloc/int_buffer");
+    const auto* slice = find_core_library_source("atto.core/slice");
+    assert(slice != nullptr);
+    assert(slice == find_core_library_source("atto.core/slice.atto"));
+    assert(find_core_library_source("ores.core/slice") == nullptr);
+    assert(slice->module_name == "slice");
+    assert(slice->canonical_import == "atto.core/slice");
+    assert(slice->unit_id == "@atto.core/slice.atto");
+    assert(slice->admitted_provider_bits == 0u);
+    assert(slice->source.find("define module slice as") != std::string_view::npos);
+    assert(find_core_library_source("atto.core/slice.ores") == nullptr);
+
+    const auto* iter = find_core_library_source("atto.core/iter");
+    assert(iter != nullptr);
+    assert(iter == find_core_library_source("atto.core/iter.atto"));
+    assert(find_core_library_source("ores.core/iter") == nullptr);
+    assert(iter->module_name == "iter");
+    assert(iter->canonical_import == "atto.core/iter");
+    assert(iter->unit_id == "@atto.core/iter.atto");
+    assert(iter->admitted_provider_bits == 0u);
+    assert(iter->source.find("define module iter as") != std::string_view::npos);
+    assert(find_core_library_source("atto.core/iter.ores") == nullptr);
+
+    const auto* cmp = find_core_library_source("atto.core/cmp");
+    assert(cmp != nullptr);
+    assert(cmp == find_core_library_source("atto.core/cmp.atto"));
+    assert(find_core_library_source("ores.core/cmp") == nullptr);
+    assert(cmp->module_name == "cmp");
+    assert(cmp->canonical_import == "atto.core/cmp");
+    assert(cmp->unit_id == "@atto.core/cmp.atto");
+    assert(cmp->admitted_provider_bits == 0u);
+    assert(cmp->source.find("define module cmp as") != std::string_view::npos);
+    assert(find_core_library_source("atto.core/cmp.ores") == nullptr);
+    // The three new helpers are compiler-owned and cannot resolve from disk.
+    for (std::string_view path : {"atto.core/math", "atto.core/hash", "atto.core/cell"}) {
+        const auto* owned = find_core_library_source(path);
+        assert(owned != nullptr);
+        assert(owned->tier == CompilerLibraryTier::Core);
+        assert(owned->admitted_provider_bits == 0u);
+        assert(!owned->source.empty());
+    }
+    assert(find_core_library_source("ores.core/math") == nullptr);
+    assert(find_core_library_source("ores.core/hash") == nullptr);
+    assert(find_core_library_source("ores.core/cell") == nullptr);
+    assert(find_core_library_source("atto.core/hash.ores") == nullptr);
+    assert(find_core_library_source("atto.core/../hash") == nullptr);
+    assert(find_core_library_source("ores.core/cell/../math") == nullptr);
+    assert(find_core_library_source("atto.core/hash")->source.find("step_byte") != std::string_view::npos);
+    assert(find_core_library_source("atto.core/cell")->source.find("POLICY only") != std::string_view::npos);
+    // v1 loan count is saturated at 65535: read admission must match acquire.
+    const auto* cell_policy = find_core_library_source("atto.core/cell");
+    assert(cell_policy->source.find("readers < 65535") != std::string_view::npos);
+    assert(cell_policy->source.find("readers <= 65535") == std::string_view::npos);
+
+    const auto* buffer = find_alloc_library_source("atto.alloc/int_buffer");
+    assert(buffer == find_alloc_library_source("atto.alloc/int_buffer.atto"));
+    assert(buffer == find_alloc_library_source("alloc/int_buffer"));
     assert(buffer != nullptr);
     assert(buffer == find_alloc_library_source("alloc/int_buffer.ores"));
     assert(buffer->tier == CompilerLibraryTier::Alloc);
     assert(buffer->module_name == "int_buffer");
-    assert(buffer->unit_id == "@alloc/int_buffer.ores");
+    assert(buffer->unit_id == "@atto.alloc/int_buffer.atto");
+    assert(buffer->canonical_import == "atto.alloc/int_buffer");
     assert(buffer->admitted_provider_bits ==
         bit(CoreProviderRequirement::Allocator));
     assert(buffer->source.find("new Array<int>()") != std::string_view::npos);
 
     const auto* bundle =
-        find_alloc_library_source("alloc/int_buffer_bundle");
+        find_alloc_library_source("atto.alloc/int_buffer_bundle");
+    assert(bundle == find_alloc_library_source("atto.alloc/int_buffer_bundle.atto"));
+    assert(bundle == find_alloc_library_source("alloc/int_buffer_bundle"));
+    assert(bundle == find_alloc_library_source("alloc/int_buffer_bundle.ores"));
     assert(bundle != nullptr);
     assert(bundle->tier == CompilerLibraryTier::Alloc);
     assert(bundle->admitted_provider_bits ==
         bit(CoreProviderRequirement::Allocator));
     assert(bundle->source.find(
-        "import module int_buffer from \"alloc/int_buffer\"") !=
+        "import module int_buffer from \"atto.alloc/int_buffer\"") !=
         std::string_view::npos);
     assert(find_core_library_source("alloc/int_buffer") == nullptr);
 
+    const auto* aligned = find_alloc_library_source("atto.alloc/aligned");
+    assert(aligned != nullptr);
+    assert(aligned == find_alloc_library_source("atto.alloc/aligned.atto"));
+    assert(aligned == find_alloc_library_source("alloc/aligned"));
+    assert(aligned->canonical_import == "atto.alloc/aligned");
+    assert(aligned->unit_id == "@atto.alloc/aligned.atto");
+    assert(aligned->module_name == "aligned");
+    assert(aligned->tier == CompilerLibraryTier::Alloc);
+    assert(aligned->source.find("define module aligned as") != std::string_view::npos);
+    assert(aligned->admitted_provider_bits == 0u);
+    assert(find_core_library_source("atto.alloc/aligned") == nullptr);
+    assert(find_alloc_library_source("atto.alloc/aligned.ores") == nullptr);
+    const auto* stats = find_alloc_library_source("atto.alloc/stats");
+    assert(stats != nullptr);
+    assert(stats == find_alloc_library_source("atto.alloc/stats.atto"));
+    assert(stats == find_alloc_library_source("alloc/stats"));
+    assert(stats->canonical_import == "atto.alloc/stats");
+    assert(stats->unit_id == "@atto.alloc/stats.atto");
+    assert(stats->module_name == "stats");
+    assert(stats->tier == CompilerLibraryTier::Alloc);
+    assert(stats->source.find("define module stats as") != std::string_view::npos);
+    assert(stats->admitted_provider_bits == bit(CoreProviderRequirement::Allocator));
+    assert(find_core_library_source("atto.alloc/stats") == nullptr);
+    assert(find_alloc_library_source("atto.alloc/stats.ores") == nullptr);
+    const auto* secure = find_alloc_library_source("atto.alloc/secure");
+    assert(secure != nullptr);
+    assert(secure == find_alloc_library_source("atto.alloc/secure.atto"));
+    assert(secure == find_alloc_library_source("alloc/secure"));
+    assert(secure->canonical_import == "atto.alloc/secure");
+    assert(secure->unit_id == "@atto.alloc/secure.atto");
+    assert(secure->module_name == "secure");
+    assert(secure->tier == CompilerLibraryTier::Alloc);
+    assert(secure->source.find("define module secure as") != std::string_view::npos);
+    assert(secure->admitted_provider_bits == bit(CoreProviderRequirement::Allocator));
+    assert(find_core_library_source("atto.alloc/secure") == nullptr);
+    assert(find_alloc_library_source("atto.alloc/secure.ores") == nullptr);
+    assert(find_alloc_library_source("atto.alloc/../aligned") == nullptr);
+    assert(find_alloc_library_source("atto.alloc//secure") == nullptr);
+    assert(find_alloc_library_source("alloc/secure\\oops") == nullptr);
+    assert(find_core_library_source("atto.core") == nullptr);
+    assert(find_core_library_source("atto.core/numeric.ores") == nullptr);
+    assert(find_core_library_source("atto.core/missing") == nullptr);
+    assert(find_core_library_source("atto.core/../numeric") == nullptr);
+    assert(find_core_library_source("atto.core//numeric") == nullptr);
+    assert(find_alloc_library_source("atto.alloc/../int_buffer") == nullptr);
+    assert(find_alloc_library_source("atto.alloc/int_buffer.ores") == nullptr);
     assert(find_core_library_source("ores.core") == nullptr);
     assert(find_core_library_source("ores.core/unknown") == nullptr);
+    // Staged .atto source cannot silently become a linked LLVM library:
+    // higher-order generics, effects and ownership need typed lowering first.
+    assert(find_core_library_source("ores.core/collections") == nullptr);
+    assert(find_compiler_library_source("ores.core/collections.atto") == nullptr);
     assert(find_core_library_source("ores.core/../numeric") == nullptr);
     assert(find_core_library_source("ores.core//numeric") == nullptr);
     assert(find_core_library_source("ores.core\\numeric") == nullptr);
