@@ -97,7 +97,7 @@ entry:
   ret i32 %status
 }
 ORES_LTO_MAIN
-  if ! "$clang" -O2 "${lto_flags[@]}" -x ir "$work/lto-helper.ll" "$work/lto-main.ll" -o "$work/lto-probe" >"$work/lto-probe.log" 2>&1; then
+  if ! "$clang" -O2 ${lto_flags[@]+"${lto_flags[@]}"} -x ir "$work/lto-helper.ll" "$work/lto-main.ll" -o "$work/lto-probe" >"$work/lto-probe.log" 2>&1; then
     cat "$work/lto-probe.log" >&2
     echo "Requested $lto_mode LTO cannot link two LLVM IR units with this toolchain." >&2
     exit 69
@@ -151,7 +151,7 @@ if grep -Eq 'declare .*@oreslang_source_task_(start_i64|await_i64|runtime_shutdo
   runtime_sources+=("$rt/SourceTaskRuntime.c")
   scheduler_source="$rt/NativeActorScheduler.c"
   scheduler_linked=0
-  for runtime_source in "${runtime_sources[@]}"; do
+  for runtime_source in ${runtime_sources[@]+"${runtime_sources[@]}"}; do
     if [[ "$runtime_source" == "$scheduler_source" ]]; then
       scheduler_linked=1
       break
@@ -169,21 +169,25 @@ fi
 # actor cancellation/restart quiescence, an FFI symbol audit and guest receipts.
 # Reject after discovering runtime imports but BEFORE invoking Clang or
 # publishing an output. Never treat future native services as implicitly safe.
-if [[ "$aot_admission" != off ]] && (( ${#runtime_sources[@]} > 0 )); then
+# Bash 3.2 (system macOS) treats empty arrays as unset under nounset.
+# Use the portable conditional expansion, preserving argument boundaries.
+# All original positional inputs have already been resolved to named paths.
+set -- ${runtime_sources[@]+"${runtime_sources[@]}"}
+if [[ "$aot_admission" != off ]] && (( $# > 0 )); then
   echo 'sealed AOT refuses unchecked native runtime dependency; require a certified zero-GC link closure' >&2
   exit 65
 fi
-if [[ "$object_pipeline" == separate ]] && (( ${#runtime_sources[@]} > 0 )); then
+if [[ "$object_pipeline" == separate ]] && (( $# > 0 )); then
   echo 'E_OBJECT_PIPELINE_UNSUPPORTED: separate mode requires runtime-free scalar IR' >&2
   exit 65
 fi
 if [[ "$object_pipeline" == separate ]]; then
   bash "$root/scripts/link-scalar-object.sh" "$clang" "$opt_level" "$work/program.ll" "$work/program.o" "$work/program"
-elif (( ${#runtime_sources[@]} )); then
-  "$clang" "-O${opt_level}" "${lto_flags[@]}" -x ir "$work/program.ll" -x c -std=c11 \
-    -I "$root/src/main/cpp" "${runtime_sources[@]}" -pthread -o "$work/program"
+elif (( $# )); then
+  "$clang" "-O${opt_level}" ${lto_flags[@]+"${lto_flags[@]}"} -x ir "$work/program.ll" -x c -std=c11 \
+    -I "$root/src/main/cpp" "$@" -pthread -o "$work/program"
 else
-  "$clang" "-O${opt_level}" "${lto_flags[@]}" -x ir "$work/program.ll" -o "$work/program"
+  "$clang" "-O${opt_level}" ${lto_flags[@]+"${lto_flags[@]}"} -x ir "$work/program.ll" -o "$work/program"
 fi
 # This is a Linux ELF *known collector/linkage* screen, not a proof of
 # process-wide zero GC. It must run before publishing the executable so
