@@ -990,22 +990,36 @@ if(BUILD_TESTING)
         --ir "call i64 @ores_actor_i64_heap_field_read")
     oreslang_contract_test(native_sealed_state_using_write sealed-state-using-write-positive.ores
         --ir "call void @ores_actor_i64_heap_field_write")
-    oreslang_contract_test(native_sealed_state_schema_20 sealed-state-schema-20-positive.ores
-        --ir "call i64 @ores_actor_i64_heap_field_read")
-    oreslang_contract_test(native_sealed_state_schema_33_reject sealed-state-schema-33-reject.ores
-        --diagnostic "native actor state field limit exceeded (32)")
-    oreslang_contract_test(native_sealed_state_conditional sealed-state-conditional-positive.ores
-        --ir "state.if.then")
-    oreslang_contract_test(native_sealed_state_relational sealed-state-relational-positive.ores
-        --ir "icmp sle i64")
-    oreslang_contract_test(native_sealed_state_fenced_release sealed-state-release-positive.ores
-        --ir "sub i64")
-    oreslang_contract_test(native_sealed_state_conditional_readonly_reject
-        sealed-state-conditional-readonly-reject.ores
-        --diagnostic "read-only actor state loan cannot mutate state")
-    oreslang_contract_test(native_sealed_state_conditional_missing_read_reject
-        sealed-state-conditional-missing-read-reject.ores
-        --diagnostic "state callback reads state but with bound omits state.read")
+    # Conditional sealed-state regressions are implemented in Rust so this
+    # feature slice does not add new Python-dependent test coverage.
+    find_program(ORE_RUSTC NAMES rustc REQUIRED)
+    set(ORE_NATIVE_STATE_CONDITIONAL_TEST
+        "${CMAKE_CURRENT_BINARY_DIR}/native_sealed_state_conditional_contract")
+    add_custom_command(
+        OUTPUT "${ORE_NATIVE_STATE_CONDITIONAL_TEST}"
+        COMMAND "${ORE_RUSTC}" --edition=2021 -D warnings
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_sealed_state_conditional_contract.rs"
+            -o "${ORE_NATIVE_STATE_CONDITIONAL_TEST}"
+        DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_sealed_state_conditional_contract.rs"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/sealed-state-schema-20-positive.ores"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/sealed-state-schema-33-reject.ores"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/sealed-state-conditional-positive.ores"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/sealed-state-relational-positive.ores"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/sealed-state-release-positive.ores"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/sealed-state-conditional-readonly-reject.ores"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/sealed-state-conditional-missing-read-reject.ores"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/sealed-state-definite-write-both-arms-positive.ores"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/sealed-state-definite-write-one-arm-snapshot.ores"
+        VERBATIM)
+    add_custom_target(oreslang-native-state-conditional-rust ALL
+        DEPENDS "${ORE_NATIVE_STATE_CONDITIONAL_TEST}")
+    add_test(NAME native_sealed_state_conditional_contract_rust
+        COMMAND "${ORE_NATIVE_STATE_CONDITIONAL_TEST}"
+            "$<TARGET_FILE:oreslang-llvmc>"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+    set_tests_properties(native_sealed_state_conditional_contract_rust
+        PROPERTIES TIMEOUT 90)
     oreslang_contract_test(native_sealed_state_signature_using_reject sealed-state-signature-using-reject.ores
         --diagnostic "actor effect declarations use with; using is lexical state acquisition")
     oreslang_contract_test(native_sealed_state_read_upgrade_reject sealed-state-using-read-upgrade-reject.ores
@@ -1782,6 +1796,50 @@ if(BUILD_TESTING)
         oreslang_contract_test(native_exec_reborrow_mut_to_shared native-reborrow-mut-shared.ores --run 41 --clang "${ORE_CLANG}")
     else()
         message(WARNING "Clang unavailable: native executable tests are disabled")
+    endif()
+
+    # Compiler-owned hosted POSIX blocking file-descriptor capability.
+    # Guest code cannot declare/import the runtime ABI directly; source must use
+    # rt file_*_blocking / rt dir_sync_blocking with explicit io, block effects.
+    oreslang_contract_test(native_blocking_file_io_ir
+        native-blocking-file-io-positive.ores
+        --ir "oreslang_file_write_i64_blocking")
+    oreslang_contract_test(native_blocking_file_read_ir
+        native-blocking-file-io-positive.ores
+        --ir "oreslang_file_read_i64_blocking")
+    oreslang_contract_test(native_blocking_file_read_requires_mut_borrow
+        native-blocking-file-read-no-borrow.ores
+        --diagnostic "borrowed argument requires explicit rt borrow [mut]")
+    oreslang_contract_test(native_blocking_file_read_rejects_shared_borrow
+        native-blocking-file-read-shared-borrow.ores
+        --diagnostic "borrow mode does not match borrowed parameter")
+    oreslang_contract_test(native_blocking_file_io_missing_effects
+        native-blocking-file-io-missing-effects.ores
+        --diagnostic "native blocking file intrinsic requires using io, block")
+    oreslang_contract_test(native_blocking_file_io_missing_block
+        native-blocking-file-io-missing-block.ores
+        --diagnostic "native blocking file intrinsic requires using io, block")
+    oreslang_contract_test(native_blocking_file_io_bad_arity
+        native-blocking-file-io-bad-arity.ores
+        --diagnostic "wrong arity for native blocking file intrinsic")
+    oreslang_contract_test(native_blocking_file_io_reserved_abi
+        native-blocking-file-io-reserved-symbol.ores
+        --diagnostic "reserved native blocking file ABI symbol")
+    oreslang_contract_test(wasm32_blocking_file_io_failclosed
+        native-blocking-file-io-positive.ores
+        --target wasm32-unknown-unknown
+        --diagnostic "native blocking file intrinsics require a hosted POSIX LLVM target")
+
+    if(UNIX)
+        add_executable(oreslang-native-blocking-file-io-test
+            tests/native_blocking_file_io_test.c
+            src/main/cpp/oreslang/runtime/NativeBlockingFileIo.c)
+        target_include_directories(oreslang-native-blocking-file-io-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+        target_compile_options(oreslang-native-blocking-file-io-test PRIVATE
+            -Wall -Wextra -Wpedantic -Werror)
+        add_test(NAME native_blocking_file_io_runtime
+            COMMAND oreslang-native-blocking-file-io-test)
     endif()
 
     # Inert native POD allocator: deterministic ownership without tracing GC.

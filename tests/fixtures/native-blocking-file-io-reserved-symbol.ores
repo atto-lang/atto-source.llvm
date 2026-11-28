@@ -1,0 +1,3 @@
+pub fnc oreslang_file_sync_blocking(int fd): int {
+  return fd;
+}
