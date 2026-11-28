@@ -6,6 +6,7 @@ use std::process::{Command, Stdio};
 
 mod target_native;
 mod effect_check;
+mod native_readonly;
 
 use atto_compiler::ast::{BinOp, Type};
 use atto_compiler::check::{self, Import, TExpr, TFunc, TProgram, TStmt, TE};
@@ -733,6 +734,20 @@ fn compile_ir_with_effect_profile(
         admit_freestanding_tokens(&toks)?;
     }
     let (toks, linked_http) = link_registered_http_import(toks, profile)?;
+    // The explicit source profile selects a separate closed native proof.
+    // Never alter the legacy checker or freestanding/effect admission.
+    if source.lines().next() == Some("// atto-ownership: borrow-default-v1") {
+        if profile != LibraryProfile::Hosted || effect_profile.is_some() || linked_http.is_some() {
+            return Err("E_NATIVE_READONLY: incompatible library/effect profile".into());
+        }
+        // Parse the original tokens directly; target-link rewrites must not
+        // erase declarations before the closed profile's admission proof.
+        let program = atto_compiler::parser::Parser::new(toks).parse_program()
+            .map_err(|e|e.to_string())?;
+        native_readonly::admit_source(&program)?;
+        let candidate = check::check_native_readonly_candidate(&program).map_err(|e| e.to_string())?;
+        return native_readonly::emit(&program, &candidate);
+    }
     let mut program = if target_native::requires_target_link(&toks) {
         target_native::lower(&toks)?
     } else {
@@ -1308,5 +1323,37 @@ mod incoming_scalar_ssa_tests {
     fn fixed_parameter_assignment_still_rejected() {
         let source = "fnc bump(int n): int { n = n + 2; return n; } pub fnc main(): int { return bump(40); }";
         assert!(compile_ir(source).is_err());
+    }
+}
+
+#[cfg(test)]
+mod native_readonly_tests {
+    use super::*;
+    const SOURCE: &str = "// atto-ownership: borrow-default-v1\ndefine class Parcel as pub let int padding = 99; pub let int value = 21; end\nfnc get(Parcel p): int { return p.value; }\nfnc forward(Parcel p): int { return get(p); }\npub fnc main(): int { let p = new Parcel(); return forward(p) + get(p); }";
+
+    #[test]
+    fn native_readonly_pointer_is_incoming_ssa_and_root_object_is_allocated_once() {
+        let ir = compile_ir(SOURCE).expect("closed native readonly source");
+        assert!(ir.contains("define internal i64 @atto_ro_f0(ptr %arg0)"));
+        assert!(ir.contains("getelementptr i8, ptr %arg0, i64 8"));
+        assert!(ir.contains("call i64 @atto_ro_f0(ptr %arg0)"));
+        assert_eq!(ir.matches("alloca ").count(), 1);
+        assert!(!ir.contains("alloca ptr") && !ir.contains("store ptr") && !ir.contains("load ptr"));
+        assert!(!ir.contains("noalias"));
+        assert!(compile_ir(&SOURCE.replace("// atto-ownership: borrow-default-v1\n", "")).is_err());
+    }
+
+    #[test]
+    fn native_readonly_fails_closed_on_escaping_or_unproved_shapes() {
+        for s in [
+            SOURCE.replace("return get(p);", "return forward(p);"),
+            SOURCE.replace("return get(p);", "let q = p; return get(q);"),
+            SOURCE.replace("return get(p);", "return get(new Parcel());"),
+            SOURCE.replace("return p.value;", "p.value = 42; return p.value;"),
+            SOURCE.replace("return forward(p) + get(p);", "return forward(new Parcel());"),
+            SOURCE.replace("int padding = 99", "int padding = 98 + 1"),
+        ] {
+            assert!(compile_ir(&s).is_err(), "{s}");
+        }
     }
 }
