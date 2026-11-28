@@ -6761,6 +6761,12 @@ if(BUILD_TESTING)
             class-scalar-constructor-duplicate-reject.ores --diagnostic "duplicate native constructor parameter")
         oreslang_contract_test(reject_scalar_constructor_owned_array
             class-scalar-constructor-owned-reject.ores --diagnostic "native owned Array<int> constructor requires checked failure cleanup")
+        oreslang_contract_test(reject_explicit_array_constructor_order
+            class-explicit-array-constructor-order-reject.atto --diagnostic "E_CONSTRUCTOR_ARRAY_INIT")
+        oreslang_contract_test(reject_explicit_array_constructor_duplicate
+            class-explicit-array-constructor-duplicate-reject.atto --diagnostic "E_CONSTRUCTOR_ARRAY_INIT")
+        oreslang_contract_test(reject_explicit_array_constructor_missing
+            class-explicit-array-constructor-missing-reject.atto --diagnostic "declaration-only fields with explicit constructor")
         oreslang_contract_test(reject_scalar_constructor_effect_arg
             class-scalar-constructor-args-effect-reject.ores --diagnostic "native scalar constructor argument requires pure integer expression")
         oreslang_contract_test(reject_scalar_constructor_owned_int_arg
