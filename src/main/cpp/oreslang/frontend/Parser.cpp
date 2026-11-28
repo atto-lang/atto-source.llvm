@@ -3197,6 +3197,8 @@ private:
             fail("NATIVE_CLASS_INHERITANCE_UNSUPPORTED: native class inheritance/virtual slots unsupported: native class extends/implements needs verified parent layout and virtual/trait method dispatch; no LLVM IR may be emitted");
         require("as");
         std::unordered_set<std::string> seen;
+        std::unordered_set<std::string> checked_fresh_arrays;
+        std::size_t last_fresh_array = 0;
         while (token_.text != "end") {
             if (token_.kind == Kind::End) fail("expected 'end'");
             if (token_.text == "abstract" ||
@@ -3282,9 +3284,58 @@ private:
                     require(")");
                 }
                 require("{");
+                // A deliberately narrow initialization-only body: direct
+                // parameter-to-uninitialized-int-field assignments are pure
+                // and total, so they can use existing constructor initializer
+                // slots without a new effect/ownership or evaluation-order ABI.
+                // Never permit reinitialization, field reads, arithmetic,
+                // calls, branches, or array/nested-owner writes here.
+                while (accept("self")) {
+                    require(".");
+                    const auto target = identifier();
+                    require("=");
+                    const auto source_offset = token_.offset;
+                    auto field = std::find_if(result.fields.begin(), result.fields.end(),
+                        [&](const ClassField& item) { return item.name == target; });
+                    // Only a fresh empty int array, using the existing checked
+                    // class field allocation/shadow path. Allocation ordering
+                    // must agree with the declaration-order lowering.
+                    if (token_.text == "new") {
+                        if (field == result.fields.end() || !field->constructor_argument ||
+                                !field->int_array || !field->mutable_referent ||
+                                field->array_element_type != ScalarType::I64 ||
+                                !field->array_record_class.empty())
+                            fail("E_CONSTRUCTOR_ARRAY_INIT: requires deferred mutable Array<int> field");
+                        const auto index = static_cast<std::size_t>(field - result.fields.begin());
+                        if (!checked_fresh_arrays.empty() && index <= last_fresh_array)
+                            fail("E_CONSTRUCTOR_ARRAY_INIT: allocation order must match field declaration order");
+                        require("new"); require("Array"); require("<"); require("int"); require(">");
+                        require("("); require(")"); require(";");
+                        last_fresh_array = index;
+                        checked_fresh_arrays.insert(target);
+                        field->constructor_argument = false;
+                        continue;
+                    }
+                    const auto source = identifier();
+                    require(";");
+                    if (field == result.fields.end() || !field->constructor_argument ||
+                            field->initializer_expression || field->int_array ||
+                            !field->class_name.empty() || !field->sum_type.empty() ||
+                            field->scalar_type != ScalarType::I64)
+                        fail("E_CONSTRUCTOR_FIELD_INIT: requires an uninitialized scalar int field");
+                    if (!params.count(source))
+                        fail("E_CONSTRUCTOR_FIELD_INIT: source must be a declared int parameter");
+                    field->initializer_expression = std::make_unique<Expression>();
+                    field->initializer_expression->kind = Expression::Kind::Variable;
+                    field->initializer_expression->name = source;
+                    field->initializer_expression->offset = source_offset;
+                    // Explicit constructor parameters, not the implicit
+                    // positional field list, now determine the ABI.
+                    field->constructor_argument = false;
+                }
                 if (accept_return_marker()) require(";");
                 if (token_.text != "}")
-                    fail("native scalar constructor body must be empty or contain only 'return;'");
+                    fail("native scalar constructor body must be empty or contain only checked field initialization and 'return;'");
                 require("}");
                 continue;
             }
@@ -3409,7 +3460,8 @@ private:
             if (!field.sum_type.empty() && result.explicit_constructor) fail("native sum field constructor requires checked nominal parameters");
             if (!field.class_name.empty() && result.explicit_constructor)
                 fail("native nested owned class constructor requires checked parameter ownership");
-            if (field.int_array && result.explicit_constructor)
+            if (field.int_array && result.explicit_constructor &&
+                    !checked_fresh_arrays.count(field.name))
                 fail("native owned Array<int> constructor requires checked failure cleanup");
             if (!field.initializer_expression) continue;
             const bool literal_sum = !field.sum_type.empty() && field.initializer_expression->kind == Expression::Kind::SumConstruct &&
@@ -4398,7 +4450,14 @@ private:
             // the let-mut and scalar-alias checks below.
             const bool type_right_const = token_.text == "const" &&
                     sum_first.kind == Kind::Identifier &&
-                    [&] { Lexer right = sum_look; return right.next().text == ":"; }();
+                    [&] {
+                        Lexer right = sum_look;
+                        if (right.next().text != ":") return false;
+                        // Preserve the separately gated experimental owned-int
+                        // declaration path. The scalar const parser cannot
+                        // consume its ownership qualifier or validate its ABI.
+                        return right.next().text != "owned";
+                    }();
             if (token_.text == "let" && sum_first.text == "mut") sum_first = sum_look.next();
             // Java: `val Count c = 42;` with `type Count = int;` is the same
             // scalar local as `val c: Count = 42;`. Only a declared scalar alias
