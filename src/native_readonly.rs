@@ -12,7 +12,7 @@ pub fn admit_source(p: &Program) -> Result<(), String> {
     if p.classes.is_empty() || p.classes.len() > 32 || p.funcs.len() > 64
         || !p.actors.is_empty() || p.actor_interface.is_some() || !p.enums.is_empty()
         || p.funcs.iter().any(|f| f.is_generator || f.ret != Type::Int
-            || f.params.iter().any(|a| a.mutable))
+            || f.params.iter().any(|a| a.mutable || a.omittable))
         || p.classes.iter().any(|c| c.ctor.is_some() || !c.methods.is_empty()
             || c.fields.is_empty() || c.fields.len() > 32
             || c.fields.iter().any(|f| f.ty != Type::Int)) {
@@ -144,9 +144,10 @@ pub fn emit(source: &Program, p: &TProgram) -> Result<String, String> {
         writeln!(out, "declare {{ i64, i1 }} @llvm.{intrinsic}.with.overflow.i64(i64, i64)\ndefine internal i64 @atto_ro_{name}(i64 %a, i64 %b) {{\nentry:\n  %r = call {{ i64, i1 }} @llvm.{intrinsic}.with.overflow.i64(i64 %a, i64 %b)\n  %bad = extractvalue {{ i64, i1 }} %r, 1\n  br i1 %bad, label %trap, label %ok\ntrap:\n  call void @llvm.trap()\n  unreachable\nok:\n  %v = extractvalue {{ i64, i1 }} %r, 0\n  ret i64 %v\n}}").unwrap();
     }
     for (index, f) in p.funcs[..count].iter().enumerate() {
-        if f.ret != Type::Int || f.params.len() > 8 || (index != main && !f.locals.is_empty())
-            || (index == main && (!f.params.is_empty() || f.locals.len() > 16
-                || f.locals.iter().any(|t| !matches!(t, Type::Class(_))))) {
+        if f.ret != Type::Int || f.params.len() > 8 || f.locals.len() > 16
+            || (index != main && f.locals.iter().any(|t| *t != Type::Int))
+            || (index == main && (!f.params.is_empty()
+                || f.locals.iter().any(|t| !matches!(t, Type::Class(_) | Type::Int)))) {
             return Err(deny("function frame"));
         }
         let params = f.params.iter().enumerate().map(|(i,t)|
@@ -158,7 +159,24 @@ pub fn emit(source: &Program, p: &TProgram) -> Result<String, String> {
         e.values.resize(f.params.len()+f.locals.len(), None);
         let (last, prefix) = f.body.split_last().ok_or_else(|| deny("empty body"))?;
         for stmt in prefix {
-            if index != main { return Err(deny("helper must have only scalar return")); }
+            // A scalar local is single-definition SSA. Do not turn a formal
+            // write or a second definition into a silent rebinding. Initializer
+            // runs in source order, with all existing expression/loan gates.
+            if let TStmt::Set(slot, value) = stmt {
+                if value.ty == Type::Int {
+                    let slot = *slot as usize;
+                    let local = slot.checked_sub(f.params.len())
+                        .ok_or_else(|| deny("formal reassignment"))?;
+                    if f.locals.get(local) != Some(&Type::Int)
+                        || e.values.get(slot).and_then(|v| v.as_ref()).is_some() {
+                        return Err(deny("scalar SSA definition"));
+                    }
+                    let scalar = e.expr(value, 0)?;
+                    e.values[slot] = Some(scalar);
+                    continue;
+                }
+            }
+            if index != main { return Err(deny("helper may only define scalar SSA locals")); }
             let TStmt::Set(slot, TE { e: TExpr::Call(target,args), ty: Type::Class(class) }) = stmt
                 else { return Err(deny("only root-local allocation bindings")); };
             let slot = *slot as usize;
