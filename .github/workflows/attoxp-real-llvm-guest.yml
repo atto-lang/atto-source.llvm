@@ -50,6 +50,21 @@ jobs:
           cmake --build build --parallel 2 --target oreslang-llvmc
           test -x build/oreslang-llvmc
           sha256sum build/oreslang-llvmc
+      - name: Pin Node 22 for compiler-negative source conformance
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Reject eight invalid .atto programs using production LLVM frontend
+        shell: bash
+        env:
+          ATTO_EXPECTED_LLVM_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          ATTO_REQUIRE_NATIVE_LLVM_FRONTEND: '1'
+        run: |
+          set -euo pipefail
+          export ORESLANG_LLVMC="$PWD/build/oreslang-llvmc"
+          test -x "$ORESLANG_LLVMC"
+          export ATTO_EXPECTED_LLVM_COMPILER_SHA256="$(sha256sum "$ORESLANG_LLVMC" | cut -d' ' -f1)"
+          node --test tests/native_frontend_negative_evidence.test.mjs
       - name: Require every named compiler-backed AttoXP CTest in inventory
         shell: bash
         run: |

@@ -1,0 +1,46 @@
+name: Compiler-owned stable local scalar symbols
+on:
+  pull_request:
+    paths:
+      - 'scripts/compile-scalar-module-object.sh'
+      - 'tests/atto_compiler_local_stable_symbols.sh'
+      - 'tests/native_scalar_slot_fixture.cpp'
+      - 'src/main/cpp/oreslang/frontend/NativeOresiV1Admission.hpp'
+      - '.github/workflows/atto-compiler-local-stable-symbols.yml'
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  module-object:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact source tree
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -eu
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git rev-parse HEAD HEAD^{tree}
+          test -z "$(git status --porcelain)"
+      - name: Build actual compiler and auditor
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-19 llvm-19 llvm-19-dev cmake ninja-build
+          cmake -S . -B "$RUNNER_TEMP/build" -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DLLVM_DIR=/usr/lib/llvm-19/lib/cmake/llvm
+          cmake --build "$RUNNER_TEMP/build" --target oreslang-llvmc --parallel 2
+          rustc --edition=2021 -D warnings scripts/audit_no_gc_ir.rs -o "$RUNNER_TEMP/build/oreslang-no-gc-ir-audit"
+      - name: Execute real Atto consumer with independently compiled providers
+        run: |
+          set -euo pipefail
+          export ORESLANG_LLVMC="$RUNNER_TEMP/build/oreslang-llvmc" ORES_NO_GC_IR_AUDIT="$RUNNER_TEMP/build/oreslang-no-gc-ir-audit" CLANG=/usr/bin/clang-19 LLVM_EXTRACT=/usr/bin/llvm-extract-19
+          bash -n tests/atto_compiler_local_stable_symbols.sh
+          bash tests/atto_compiler_local_stable_symbols.sh | tee "$RUNNER_TEMP/consumer-receipts"
+          for level in 0 2; do
+            grep -Fx "ATTO_COMPILER_LOCAL_STABLE_SYMBOLS|O$level|native=42/43/42/43|unchanged=2|no_symbol_rewrite=YES|initial_source_graph=REQUIRED" "$RUNNER_TEMP/consumer-receipts"
+          done
+          grep -Fx 'ATTO_LOCAL_STABLE_SYMBOL_NEGATIVES|duplicate=REJECTED|foreign_target=REJECTED|reorder=STABLE' "$RUNNER_TEMP/consumer-receipts"

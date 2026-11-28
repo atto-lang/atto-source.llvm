@@ -1,11 +1,14 @@
 #include "oreslang/frontend/Parser.hpp"
 #include <cstdlib>
+#include <cstdio>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 
 using oreslang::parse_program;
-static void check(bool condition) { if (!condition) std::abort(); }
+#define check(condition) do { if (!(condition)) { \
+    std::fprintf(stderr, "actor admission failure line %d: %s\n", __LINE__, #condition); \
+    std::abort(); } } while (false)
 
 static constexpr std::string_view valid_actor = R"(
 define actor Worker as {
@@ -28,7 +31,9 @@ static void denied(std::string src, const char* diagnostic) {
     try { (void)parse_program(src); }
     catch (const std::exception& e) {
         rejected = std::string(e.what()).find(diagnostic) != std::string::npos;
+        if (!rejected) std::fprintf(stderr, "expected %s, observed %s\n", diagnostic, e.what());
     }
+    if (!rejected) std::fprintf(stderr, "unexpected admission/diagnostic: %s\n", src.c_str());
     check(rejected);
 }
 
@@ -36,6 +41,39 @@ int main() {
     auto plain = parse_program(valid_actor);
     check(plain.actors.size() == 1);
     check(plain.actors.front().max_actor_threads == oreslang::MaxActorThreads::LOW);
+    check(!plain.actors.front().declared_receives_i64);
+
+    // Native actor messages are permanently int-only in this stage-0 ABI.
+    // The explicit receives clause must survive in the parsed AST.
+    std::string typed_header(valid_actor);
+    const auto at = typed_header.find("Worker as");
+    check(at != std::string::npos);
+    typed_header.replace(at, std::string("Worker as").size(), "Worker receives int as");
+    const auto typed_actor = parse_program(typed_header);
+    check(typed_actor.actors.size() == 1);
+    check(typed_actor.actors.front().declared_receives_i64);
+
+    auto changed_header = [&](const std::string& replacement) {
+        std::string source(valid_actor);
+        const auto pos = source.find("Worker as");
+        check(pos != std::string::npos);
+        source.replace(pos, std::string("Worker as").size(), replacement);
+        return source;
+    };
+    denied(changed_header("Worker receives String as"),
+           "NATIVE_ACTOR_RECEIVES_TYPE_UNSUPPORTED");
+    denied(changed_header("Worker receives int | String as"),
+           "NATIVE_ACTOR_RECEIVES_UNION_UNSUPPORTED");
+    denied(changed_header("Worker receives int|int as"),
+           "NATIVE_ACTOR_RECEIVES_UNION_UNSUPPORTED");
+    denied(changed_header("Worker receives int /* separator */ | int as"),
+           "NATIVE_ACTOR_RECEIVES_UNION_UNSUPPORTED");
+    denied(changed_header("Worker receives int receives int as"),
+           "NATIVE_ACTOR_RECEIVES_DUPLICATE");
+    denied(changed_header("Worker sends int as"),
+           "NATIVE_ACTOR_SENDS_EFFECT_UNSUPPORTED");
+    denied(changed_header("Worker receives int sends int as"),
+           "NATIVE_ACTOR_SENDS_EFFECT_UNSUPPORTED");
 
     auto low = parse_program(std::string(canonical_enum)
             + "@ActorMaxThreads(MaxActorThreads.LOW)\n" + std::string(valid_actor));
@@ -94,5 +132,29 @@ int main() {
     denied("@ActorMaxThreads(MaxActorThreads.LOW)\n"
            "define class C as let int x = 1; end\n"
            + std::string(valid_actor), "expected 'actor'");
+    // Grouped or legacy spawn policies must not become plain ActorRef bindings.
+    for (const auto* suffix : {
+        "with { schedule { max_parallelism = 2; affinity = sticky; } }",
+        "with { resources { heap_size = 67108864; stack_size = 65536; mailbox_capacity = 1024; } }",
+        "with { init { name = \"worker-1\"; seed = 42; } }",
+        "with schedule(max_parallelism=2)"
+    }) {
+        denied(std::string(valid_actor) + "\n pub fnc main(): int { val w: ActorRef<Worker> = spawn Worker() " +
+               suffix + "; return 0; }", "E_SPAWN_OPTIONS_UNSUPPORTED");
+    }
+    for (const auto* suffix : {"with {}", "with { schedule {} resources {} init {} }",
+                               "/* comment */ with { init {} }"}) {
+        auto program = parse_program(std::string(valid_actor) +
+            "\n pub fnc main(): int { val w: ActorRef<Worker> = spawn Worker() " +
+            suffix + "; w.stop(); return 0; }");
+        check(program.actors.size() == 1);
+    }
+    denied(std::string(valid_actor) + "\n pub fnc main(): int { val w = spawn Worker() with { unknown {} }; return 0; }",
+           "E_SPAWN_OPTION_SECTION");
+    denied(std::string(valid_actor) + "\n pub fnc main(): int { val w = spawn Worker() with { init {} init {} }; return 0; }",
+           "E_SPAWN_OPTION_DUPLICATE");
+    auto legacy_spawn = parse_program(std::string(valid_actor) +
+        "\n pub fnc main(): int { val w: ActorRef<Worker> = spawn Worker(); w.stop(); return 0; }");
+    check(legacy_spawn.actors.size() == 1);
     return 0;
 }

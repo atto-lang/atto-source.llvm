@@ -38,6 +38,25 @@ def main():
           pub constructor(int start){return;}
           pub read()->int{return self.value;} end
           pub fnc main():int{let Box b=new Box(42);return b.read();}'''}),
+        # Contextual introducers must not steal methods that are literally
+        # named mtd()/method(); all are native-linked executable guests.
+        ('bare-mtd-name', {'main.ores':'''define class Box as let int value=40;
+          pub mtd():int{return self.value+2;}end
+          pub fnc main():int{let Box b=new Box();return b.mtd();}'''}),
+        ('bare-method-name', {'main.ores':'''define class Box as let int value=40;
+          pub method():int{return self.value+2;}end
+          pub fnc main():int{let Box b=new Box();return b.method();}'''}),
+        ('canonical-mtd-marker', {'main.ores':'''define class Box as let int value=40;
+          pub mtd add(int value):int{return self.value+value;}end
+          pub fnc main():int{let Box b=new Box();return b.add(2);}'''}),
+        ('legacy-fnc-marker', {'main.ores':'''define class Box as let int value=40;
+          pub fnc add(int value):int{return self.value+value;}end
+          pub fnc main():int{let Box b=new Box();return b.add(2);}'''}),
+        ('nested-contextual-names', {'main.ores':'''define class Box as let int value=40;
+          pub mtd method():int{return self.value+1;}
+          pub mtd mtd():int{return self.value+1;}end
+          pub fnc main():int{let Box b=new Box();return b.method()+b.mtd()-40;}'''}),
+
         ('shared-reborrow', {'main.ores':COUNTER+'''fnc read(borrow Counter c):int{return c.read()+2;}
           pub fnc main():int{let Counter c=new Counter();return read(rt borrow c);}'''}),
         ('exclusive-reborrow', {'main.ores':COUNTER+'''fnc bump(borrow mut Counter c):void{c.add(2);return;}
@@ -66,6 +85,27 @@ def main():
     positives.append(('ordinary-send-is-not-actor-send', {
         'main.ores':'define class Sender as let int value=40;pub send(int n):int{return self.value+n;}end pub fnc main():int{let Sender s=new Sender();return s.send(2);}',
     }))
+    # The receiver is declaration metadata, not a caller argument. These
+    # run as native LLVM guests (with the normal ASan/UBSan variant).
+    positives.extend([
+        ('inline-read-self', {'main.ores':'''define class Box as let int value=40;
+          pub read(self, int n):int{return self.value+n;}end
+          pub fnc main():int{let Box b=new Box();return b.read(2);}'''}),
+        ('zero-value-inline-read-self', {'main.ores':'''define class Box as let int value=40;
+          pub read(self):int{return self.value+2;}end
+          pub fnc main():int{let Box b=new Box();return b.read();}'''}),
+        ('inline-mut-self', {'main.ores':'''define class Box as let int value=40;
+          pub add(mut self, int n):void{self.value=self.value+n;return;}
+          pub read():int{return self.value;}end
+          pub fnc main():int{let mut Box b=new Box();b.add(2);return b.read();}'''}),
+        ('zero-value-split-mut-self', {'main.ores':'''define class Box as let int value=40;
+          pub read(mut self)():int{return self.value+2;}end
+          pub fnc main():int{let mut Box b=new Box();return b.read();}'''}),
+        ('distinct-names-same-arity', {'main.ores':'''define class Box as let int value=40;
+          pub x(int n):int{return n;}
+          pub y(mut self, int n):int{return self.value+n;}end
+          pub fnc main():int{let mut Box b=new Box();return b.x(1)+b.y(1);}'''}),
+    ])
     java_unsupported={'imported-public-class','imported-nominal-identities','imported-data-only-class'}
     negatives=[
         ('public-constructor-private-class', 'define class Box as let int value=42;pub constructor(){return;}end pub fnc main():int{return 0;}',{},'public constructor requires a public class'),
@@ -82,6 +122,43 @@ def main():
         ('duplicate-method-arity', '''define class Box as let int value=42;
           pub read(int n):int{return n;} pub read(borrow int n):int{return n;}end
           pub fnc main():int{return 0;}''',{},'duplicate native method'),
+        ('cross-marker-duplicate-arity', '''define class Box as let int value=40;
+          pub mtd read():int{return self.value;}
+          pub fnc read():int{return self.value;}end
+          pub fnc main():int{return 0;}''',{},'duplicate native method name/arity'),
+        ('obsolete-method-marker', '''define class Box as let int value=40;
+          pub method add(int value):int{return self.value+value;}end
+          pub fnc main():int{return 0;}''',{},'obsolete method introducer'),
+        ('double-method-introducer', '''define class Box as let int value=40;
+          pub mtd method read():int{return self.value;}end
+          pub fnc main():int{return 0;}''',{},'native duplicate instance method introducer'),
+        ('double-fnc-introducer', '''define class Box as let int value=40;
+          pub fnc mtd read():int{return self.value;}end
+          pub fnc main():int{return 0;}''',{},'native duplicate instance method introducer'),
+        ('double-legacy-introducer', '''define class Box as let int value=40;
+          pub method fnc read():int{return self.value;}end
+          pub fnc main():int{return 0;}''',{},'native duplicate instance method introducer'),
+
+        # Equal receiver-erased slots always conflict, regardless of mutability,
+        # declaration order, parameter type, or inline/split self spelling.
+        ('implicit-then-mut-zero', '''define class Foo as
+          x():void{return;} x(mut self)():void{return;}end
+          pub fnc main():int{return 0;}''',{},"duplicate native method name/arity 'x/0'"),
+        ('mut-then-implicit-zero', '''define class Foo as
+          x(mut self)():void{return;} x():void{return;}end
+          pub fnc main():int{return 0;}''',{},"duplicate native method name/arity 'x/0'"),
+        ('implicit-then-inline-mut-one', '''define class Foo as
+          x(int n):int{return n;} x(mut self, int n):int{return n;}end
+          pub fnc main():int{return 0;}''',{},"duplicate native method name/arity 'x/1'"),
+        ('inline-mut-then-implicit-one', '''define class Foo as
+          x(mut self, int n):int{return n;} x(int n):int{return n;}end
+          pub fnc main():int{return 0;}''',{},"duplicate native method name/arity 'x/1'"),
+        ('inline-read-then-split-mut-one', '''define class Foo as
+          x(self, int n):int{return n;} x(mut self)(int n):int{return n;}end
+          pub fnc main():int{return 0;}''',{},"duplicate native method name/arity 'x/1'"),
+        ('read-and-mut-zero', '''define class Foo as
+          x(self):int{return 1;} x(mut self):int{return 2;}end
+          pub fnc main():int{return 0;}''',{},"duplicate native method name/arity 'x/0'"),
         ('wrong-method-arity', COUNTER+'pub fnc main():int{let Counter c=new Counter();return c.read(1,2);}',{},'explicit call arity'),
         ('method-field-take', '''define class Box as let int value=42;
           pub take(mut self)():int{return rt take self.value;}end pub fnc main():int{return 0;}''',{},'borrow'),
@@ -106,6 +183,20 @@ def main():
           pub read(Box other):int{return 1;}end pub fnc main():int{return 0;}''',{},'by-value class parameter'),
         ('static-not-reinterpreted', '''define class Box as let int value=42;
           pub static fnc read():int{return 1;}end pub fnc main():int{return 0;}''',{},'expected'),
+        # Source-only ancestry is NOT native class lowering: these must reject
+        # before producing LLVM IR, regardless of whether main uses the class.
+        ('class-inheritance-vtable-unimplemented', '''define class Base as
+          pub value():int{return 1;}end
+          define class Child extends Base as
+          pub value():int{return 2;}end
+          pub fnc main():int{return 0;}''',{},'NATIVE_CLASS_INHERITANCE_UNSUPPORTED'),
+        ('class-interface-witness-unimplemented', '''define class Child implements Named as
+          pub name():int{return 42;}end
+          pub fnc main():int{return 0;}''',{},'NATIVE_CLASS_INHERITANCE_UNSUPPORTED'),
+        ('class-multiple-inheritance-unimplemented', '''define class Left as end
+          define class Right as end
+          define class Diamond extends Left, Right as end
+          pub fnc main():int{return 0;}''',{},'NATIVE_CLASS_INHERITANCE_UNSUPPORTED'),
         ('escaped-bound-method', COUNTER+'pub fnc main():int{let Counter c=new Counter();return c.read;}',{},'unknown class field'),
     ]
     passed=compared=0
@@ -134,7 +225,12 @@ def main():
             (directory/'main.ores').write_text(source)
             for path,text in dependencies.items():(directory/path).write_text(text)
             result=run([a.compiler,str(directory/'main.ores')])
-            if not result.returncode or result.stdout or diagnostic not in result.stderr:
+            # A parser crash, kill, timeout, or warning-only failure is not
+            # compiler-owned rejection evidence. Match the native frontend's
+            # documented diagnostic prefix and exact nonzero error exit.
+            if (result.returncode != 1 or result.stdout or
+                    not result.stderr.startswith('oreslang-llvmc: ') or
+                    diagnostic not in result.stderr):
                 raise AssertionError((name,diagnostic,result.returncode,result.stdout[:80],result.stderr))
             passed+=1
     print(f'PASS native class methods: {passed} cases, Java differential={compared}, sanitized={a.sanitize}; qualified imported construction is native-only (current Java runtime rejects it)')

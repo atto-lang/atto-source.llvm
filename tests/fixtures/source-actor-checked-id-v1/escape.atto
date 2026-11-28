@@ -1,0 +1,10 @@
+// The by-value checked actor identity remains compiler-owned, not int data.
+define actor Worker as {
+  const base: int = 40;
+  pub fnc on_message(int n): int { return base + n; }
+}
+pub fnc main(): int {
+  const worker = spawn Worker();
+  stop worker;
+  return worker;
+}

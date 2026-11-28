@@ -1,0 +1,4 @@
+namespace counter;
+define pub contract CounterContract for actor as
+  mtd echo(int n): int;
+end

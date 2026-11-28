@@ -1,0 +1,35 @@
+name: LLVM native per-mail M6-compatible receipt proof (host only)
+on:
+  pull_request:
+    paths: ['runtime/actor_runtime.c', 'runtime/actor_ticket_v1.h', 'tests/native_actor_ticket_v1.c', 'tests/native_actor_mailbox_stress.c', '.github/workflows/native-actor-ticket-host-v1.yml']
+  push:
+    paths: ['runtime/actor_runtime.c', 'runtime/actor_ticket_v1.h', 'tests/native_actor_ticket_v1.c', 'tests/native_actor_mailbox_stress.c', '.github/workflows/native-actor-ticket-host-v1.yml']
+permissions:
+  contents: read
+jobs:
+  gcc-clang:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        cc: [gcc, clang]
+        opt: ['-O1', '-O2']
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify checked-out source SHA
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED"
+      - name: Original mailbox regression and exact-mail tickets
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${{ matrix.cc }}" -std=c11 ${{ matrix.opt }} -Wall -Wextra -Werror -pedantic -pthread             runtime/actor_runtime.c tests/native_actor_mailbox_stress.c -o /tmp/atto-old-mailbox
+          timeout 90 /tmp/atto-old-mailbox
+          "${{ matrix.cc }}" -std=c11 ${{ matrix.opt }} -Wall -Wextra -Werror -pedantic -pthread             runtime/actor_runtime.c tests/native_actor_ticket_v1.c -o /tmp/atto-exact-mail-tickets
+          timeout 90 /tmp/atto-exact-mail-tickets | tee /tmp/atto-ticket.out
+          grep -Fx 'ATTO_LLVM_REAL_NATIVE_MAILBOX_PER_MAIL_TICKET=PASS' /tmp/atto-ticket.out
+      - run: echo 'HOST-ONLY C actor runtime. No compiled .atto proxy sender/receiver, recoverable panic/typed remote result, production transport, or TenantVM isolation proof.'

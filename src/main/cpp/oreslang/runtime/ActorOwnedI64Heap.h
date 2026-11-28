@@ -6,8 +6,13 @@ extern "C" {
 
 /* Native actor heap experimental ABI. Actor IDs and enter tokens MUST remain
  * private to the scheduler, not exposed as forgeable guest-language values.
- * One actor turn runs at a time. This does not require stable carrier threads
- * and it does not use a tracing garbage collector. */
+ * One actor turn runs at a time. Each admitted OresActorTurn is bound to its
+ * physical carrier for the duration of that turn, even when the domain/epoch
+ * fields of the token are known to another thread. An actor may migrate to a
+ * different carrier only after leave and a fresh enter. Cross-turn loans
+ * may be released without re-entering a turn, preserving async quiescence.
+ * This native scalar heap does not use a tracing garbage collector; neither
+ * the guest compiler nor transitive process closure is certified by that fact. */
 typedef struct OresActorI64Heap OresActorI64Heap;
 typedef struct { uint64_t domain, epoch; } OresActorTurn;
 typedef struct { uint64_t domain, index, generation; } OresActorSlot;
@@ -60,6 +65,10 @@ OresActorI64Heap* ores_actor_i64_heap_open(uint64_t actor_id,
 OresActorTurn ores_actor_i64_heap_enter(OresActorI64Heap* heap,
                                          uint64_t actor_id,
                                          uint64_t incarnation);
+/* Nonparking admission: zero when the actor is busy, one on success.
+ * No carrier is parked waiting for the heap mutex or another actor turn. */
+int ores_actor_i64_heap_try_enter(OresActorI64Heap* heap,
+    uint64_t actor_id, uint64_t incarnation, OresActorTurn* out);
 void ores_actor_i64_heap_leave(OresActorI64Heap* heap, OresActorTurn turn);
 OresActorSlot ores_actor_i64_heap_new(OresActorI64Heap* heap,
                                        OresActorTurn turn, int64_t value);

@@ -11,7 +11,7 @@
 #include <unistd.h>
 #endif
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "native actor arena failed:%d\n", __LINE__); return 1; } } while (0)
-enum Misuse { STALE_TURN, FOREIGN_OWNER, OVERLAP, SCRATCH_AFTER_LEAVE, WRITE_LOANED, DROP_LOANED, DOUBLE_RELEASE, OUT_OF_BOUNDS, SCRATCH_OVERFLOW, BAD_ALIGNMENT, OVERSIZED_ACTOR_BUDGET, FOREIGN_CARRIER_TURN, NESTED_ACTOR_TURN, FOREIGN_ARENA_READ, FOREIGN_ARENA_WRITE };
+enum Misuse { STALE_TURN, FOREIGN_OWNER, OVERLAP, SCRATCH_AFTER_LEAVE, WRITE_LOANED, DROP_LOANED, DOUBLE_RELEASE, OUT_OF_BOUNDS, SCRATCH_OVERFLOW, BAD_ALIGNMENT, OVERSIZED_ACTOR_BUDGET, FOREIGN_CARRIER_TURN, NESTED_ACTOR_TURN, FOREIGN_ARENA_READ, FOREIGN_ARENA_WRITE, PERSISTENT_QUOTA, ZERO_PERSISTENT, OVERSIZED_PERSISTENT };
 typedef struct { OresActorArena* arena; OresArenaTurn turn; OresArenaHandle handle; } WrongCarrier;
 static int different_carrier_with_stolen_turn(void* opaque) {
     WrongCarrier* x = (WrongCarrier*) opaque;
@@ -62,6 +62,13 @@ static void invalid(enum Misuse m) {
     } else if (m == NESTED_ACTOR_TURN) {
         OresActorArena* other = ores_actor_arena_open(33, 2, 1, 16, 16);
         (void) ores_actor_arena_enter(other, 33, 2);
+    } else if (m == PERSISTENT_QUOTA) {
+        (void) ores_actor_arena_alloc(a, t, 8);
+        (void) ores_actor_arena_alloc(a, t, 1);
+    } else if (m == ZERO_PERSISTENT) {
+        (void) ores_actor_arena_alloc(a, t, 0);
+    } else if (m == OVERSIZED_PERSISTENT) {
+        (void) ores_actor_arena_alloc(a, t, 65);
     } else if (m == FOREIGN_ARENA_READ || m == FOREIGN_ARENA_WRITE) {
         // A foreign actor's first slot has index zero too: its domain must
         // be checked even when slot index and generation happen to match.
@@ -189,6 +196,20 @@ int main(void) {
     ores_actor_arena_retire(right);
     CHECK(ores_actor_arena_try_destroy(right) == 1);
 
+    /* Reuse the full persistent capacity in a restarted incarnation;
+     * allocation failures are fail-stop, not recoverable host errors. */
+    OresActorArena* restarted = ores_actor_arena_open(40, 2, 1, 32, 64);
+    OresArenaTurn rt = ores_actor_arena_enter(restarted, 40, 2);
+    OresArenaHandle fresh = ores_actor_arena_alloc(restarted, rt, 32);
+    CHECK(fresh.domain != left_handle.domain);
+    unsigned char clean[32];
+    memset(clean, 0xA5, sizeof(clean));
+    ores_actor_arena_read(restarted, rt, fresh, 0, clean, sizeof(clean));
+    for (unsigned char byte : clean) CHECK(byte == 0);
+    ores_actor_arena_leave(restarted, rt);
+    ores_actor_arena_retire(restarted);
+    CHECK(ores_actor_arena_try_destroy(restarted) == 1);
+
     /* Supervisor cancellation may retire a heap during an active turn. */
     a = ores_actor_arena_open(23, 3, 1, 32, 64);
     OresArenaTurn unwinding = ores_actor_arena_enter(a, 23, 3);
@@ -197,7 +218,7 @@ int main(void) {
     ores_actor_arena_leave(a, unwinding);
     CHECK(ores_actor_arena_try_destroy(a) == 1);
 #if defined(__unix__) || defined(__APPLE__)
-    for (int n = STALE_TURN; n <= FOREIGN_ARENA_WRITE; ++n) CHECK(rejects((enum Misuse) n));
+    for (int n = STALE_TURN; n <= OVERSIZED_PERSISTENT; ++n) CHECK(rejects((enum Misuse) n));
 #endif
     return 0;
 }

@@ -1,16 +1,5 @@
-# Logical word operators: native parity gate (2026-10-17)
+# Native scalar logical and integer XOR parity (2026-11-25)
 
-Java/GraalVM defines reserved, case-sensitive infix `and`, `or`, and `xor` as aliases for `&&`, `||`, and `^^`. All three require `bool`; only `and`/`or` short-circuit, while `xor` eagerly evaluates both operands. Each has the same precedence as its symbolic counterpart. Core Boolean intrinsics support `And(bool, bool, ...)`, `Or(bool, bool, ...)` with two or more scalar arguments; `Xor(bool, bool)` requires exactly two scalar arguments. The existing one-argument `Xor(Array<bool>)` parity reducer remains an explicitly distinct compatibility overload.
+Current Java-led contract: `&&` and `||` are typed Boolean short-circuit operators. `Xor(a,b)` is eager Boolean XOR. Contiguous `^^` is signed-i64 bitwise XOR, evaluated once per operand left-to-right, with no arithmetic overflow check for XOR itself. Equality binds tighter than integer XOR; integer XOR binds tighter than logical AND/OR. Parenthesize XOR before comparing its result. Lowercase operator words remain identifiers in this native profile.
 
-The LLVM signed-i64 source frontend does **not** have typed bool lowering, full Boolean expressions, or BooleanOps intrinsics. Reserve `and`, `or`, and `xor` now to prevent them from being admitted as ordinary identifiers on native while Java treats them as operators. Do not accept source expressions containing these operators until LLVM supports Boolean IR, short-circuit CFG edges, effect/ownership sequencing, and scalar/intrinsic call dispatch.
-
-Parity exit criteria:
-1. Typed native Boolean constants and expressions are representable end to end.
-2. Mixed word/symbol spelling produces the same result and short-circuit behavior.
-3. `Xor` exactly-two-scalar-argument checks agree between compile-time and runtime; existing list reductions have the established identities and parity behavior.
-4. Native diagnostics reject invalid operands, extra args, and abandoned right-hand effects without falling back to signed-i64 semantics.
-5. Run the same exact-tree conformance fixtures for Java/Graal JIT, native-image/AOT and LLVM. Zero-step Actions failures are not test results.
-
-Cross-reference: `ores-truffle-oreslang/oreslang-source.java/docs/BOOLEAN_LOGICAL_CONTRACT.md`.
-
-This change is a **fail-closed parser hardening step**, not a claim that LLVM already executes this Boolean syntax.
+The parser reuses the existing BitXor AST, scalar type admission and LLVM xor i64 emission. Named Xor remains separate. This change does not add general Boolean ABI, new shifts or return syntax; infix single caret remains rejected. The older Boolean-only XOR decision is superseded. `tests/native_logical_punctuation_operators.sh` exercises the current compiler, Clang O0/O2, integer edge cases, named Boolean truth tables, runtime short-circuit and eager effect order, and compile-negative/no-IR controls. The previous shared fixture bytes are historical rather than current normative behavior. Exact-head guest execution is required before merge; no full AOT or zero-GC certification is implied.

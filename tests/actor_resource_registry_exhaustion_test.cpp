@@ -78,9 +78,12 @@ int main() {
         // even after all subsequent constructions are permanently denied.
         for (auto& batch : issued) for (auto& registry : batch) {
             const auto ticket = registry->acquire_callback();
+            const auto handoff = registry->acquire_handoff();
             registry->retire();
             require(registry->try_reclaim().status == Registry::Reclaim::busy, "lost terminal registry pin");
             registry->release_callback(ticket);
+            require(registry->try_reclaim().status == Registry::Reclaim::busy, "lost terminal handoff pin");
+            registry->release_handoff(handoff);
             require(registry->try_reclaim().status == Registry::Reclaim::complete, "terminal registry failed to drain");
         }
         for (unsigned i = 0; i < 1024; ++i) {

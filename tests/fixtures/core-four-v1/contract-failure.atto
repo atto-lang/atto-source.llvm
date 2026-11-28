@@ -1,0 +1,7 @@
+// LLVM-owned Atto source; independent of other compiler repository implementations.
+// NEGATIVE execution fixture: real guest must fail/trap; exit 42 is forbidden.
+import module contracts from "core/contracts";
+pub fnc main(): int {
+  contracts.requires(false, "core-four-v1: precondition failed");
+  return 42;
+}

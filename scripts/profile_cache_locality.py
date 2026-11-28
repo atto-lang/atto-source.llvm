@@ -4,10 +4,12 @@
 Host CPU counters only; not a GPU profiler or proof of actor/Task affinity.
 """
 import argparse
+import hashlib
 import json
 import math
 import os
 from pathlib import Path
+import stat
 import re
 import shutil
 import statistics
@@ -98,26 +100,91 @@ def current_tree():
     return proc.stdout.strip()
 
 
+def verify_exact_source_tree(expected):
+    """Require a fixed tracked tree and no uncommitted/nonignored source files.
+
+    Ignored build outputs are allowed: they are not part of the source tree
+    and the independently hashed benchmark executable binds their bytes.
+    """
+    if not re.fullmatch(r"[0-9a-f]{40}", expected):
+        raise ValueError("tree identity must be a 40-character lowercase Git SHA-1")
+    if current_tree() != expected:
+        raise RuntimeError("worktree HEAD tree does not match --tree")
+    status = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"],
+                            capture_output=True, text=True, check=True)
+    if status.stdout.strip():
+        raise RuntimeError("worktree has uncommitted or untracked source; no exact-tree cache evidence")
+
+
+def hash_executable(path):
+    """Hash one executable through a no-follow descriptor, not a racy pathname."""
+    if not path.is_absolute():
+        raise ValueError("benchmark executable path must be absolute")
+    if not hasattr(os, "O_NOFOLLOW"):
+        raise RuntimeError("platform cannot safely bind benchmark executable identity")
+    flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError("benchmark executable path must be a regular file, not a symlink") from exc
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                or info.st_size <= 0 or info.st_size > 512 * 1024 * 1024):
+            raise ValueError("benchmark executable must be a single-link regular file of 1..512 MiB")
+        if info.st_mode & 0o111 == 0:
+            raise ValueError("benchmark binary must be executable")
+        digest = hashlib.sha256()
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+        again = os.fstat(stream.fileno())
+        if (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns) != (
+                again.st_dev, again.st_ino, again.st_size, again.st_mtime_ns, again.st_ctime_ns):
+            raise RuntimeError("benchmark executable changed while being hashed")
+    return digest.hexdigest(), info.st_size
+
+
+def publish_exclusive(temp_path, destination):
+    """Atomically publish only if the destination has no directory entry.
+
+    os.replace would overwrite a report or symlink created after the
+    preflight exists() check. The temporary and final paths share a directory.
+    """
+    try:
+        os.link(temp_path, destination, follow_symlinks=False)
+    except FileExistsError as exc:
+        raise RuntimeError("output appeared during profiling; refusing overwrite") from exc
+
+
+def require_stable_cpu_mask(expected):
+    """Reject drift in the parent's effective CPU mask at run boundaries.
+
+    This does not prove child-thread pinning or detect a mask changed and
+    restored between checks; actual residency still needs OS-level evidence.
+    """
+    observed = sorted(os.sched_getaffinity(0))
+    if not observed or observed != expected:
+        raise RuntimeError("effective CPU mask changed during cache profiling")
+
+
 def profile(args):
     if sys.platform != "linux":
         raise RuntimeError("Linux perf is required; no simulated cache numbers")
     if args.repeats < 1 or args.repeats > 30 or args.warmups < 0 or args.warmups > 20:
         raise ValueError("repeats must be 1..30 and warmups 0..20")
+    allowed_cpus = sorted(os.sched_getaffinity(0))
+    if not allowed_cpus:
+        raise RuntimeError("empty effective CPU mask; refusing cache profiling")
     if args.tree:
-        if not re.fullmatch(r"[0-9a-f]{40}", args.tree):
-            raise ValueError("tree identity must be a 40-character lowercase Git SHA-1")
-        if current_tree() != args.tree:
-            raise RuntimeError("worktree HEAD tree does not match --tree")
-        status = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all", "--ignored"],
-                                capture_output=True, text=True, check=True)
-        if status.stdout.strip():
-            raise RuntimeError("worktree is dirty; no exact-tree cache evidence")
+        verify_exact_source_tree(args.tree)
     if not args.command:
         raise ValueError("missing benchmark command after --")
     if args.command[0] == "--":
         args.command = args.command[1:]
     if not args.command:
         raise ValueError("missing benchmark executable")
+    binary = Path(args.command[0])
+    binary_sha256, binary_size = hash_executable(binary)
     perf = shutil.which(args.perf)
     if not perf:
         raise RuntimeError("perf executable unavailable")
@@ -133,27 +200,39 @@ def profile(args):
     if output.exists():
         raise RuntimeError("output file exists; refusing to overwrite previous evidence")
     for _ in range(args.warmups):
+        require_stable_cpu_mask(allowed_cpus)
         subprocess.run(args.command, check=True, stdout=subprocess.DEVNULL)
+        require_stable_cpu_mask(allowed_cpus)
     samples = []
     for _ in range(args.repeats):
+        require_stable_cpu_mask(allowed_cpus)
         with tempfile.TemporaryDirectory(prefix="ores-cache-") as dirname:
             stat_file = Path(dirname) / "stat.txt"
             cmd = [perf, "stat", "-x", ";", "-e", ",".join(events), "-o",
                    str(stat_file), "--", *args.command]
             subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)
+            require_stable_cpu_mask(allowed_cpus)
             counters = parse_perf_stat(stat_file.read_text(encoding="utf-8"), events)
             samples.append({"counters": counters, "rates": rates(counters, extra or None)})
+    # Refuse to publish measurements after CPU-mask drift or binary rewrite.
+    require_stable_cpu_mask(allowed_cpus)
+    if hash_executable(binary) != (binary_sha256, binary_size):
+        raise RuntimeError("benchmark executable changed during profiling")
+    if args.tree:
+        verify_exact_source_tree(args.tree)
     keys = samples[0]["rates"]
     report = {
         "format": "oreslang-cpu-cache-v1",
         "source_tree": current_tree() if args.tree else None,
+        "binary_sha256": binary_sha256,
+        "binary_size_bytes": binary_size,
         "command": args.command,
         "events": list(events),
         "hardware_l2_events": list(extra),
         "repeats": args.repeats,
         "warmups": args.warmups,
         "host": {"machine": os.uname().machine, "kernel": os.uname().release,
-                 "allowed_cpus": sorted(os.sched_getaffinity(0))},
+                 "allowed_cpus": allowed_cpus},
         "median_rates": {key: statistics.median(row["rates"][key] for row in samples)
                          for key in keys},
         "samples": samples,
@@ -165,7 +244,7 @@ def profile(args):
         json.dump(report, fp, indent=2, sort_keys=True)
         fp.write("\n")
     try:
-        os.replace(tmpname, output)
+        publish_exclusive(tmpname, output)
     finally:
         if os.path.exists(tmpname):
             os.unlink(tmpname)

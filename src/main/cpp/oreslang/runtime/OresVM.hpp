@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -11,6 +12,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -36,6 +38,9 @@ public:
         IsolateHandle() = default;
     };
 
+    // Canonical name: opaque per-tenant-generation host capability.
+    using TenantVMHandle = IsolateHandle;
+
     class Allocation final {
         friend class OresVM;
         std::weak_ptr<IsolateVM> state_;
@@ -50,6 +55,45 @@ public:
         Allocation() = default;
         std::uint32_t offset() const noexcept { return offset_; }
         std::uint32_t size() const noexcept { return size_; }
+    };
+
+    // Opaque host-issued object ticket: slot and generation are never guest
+    // pointers. A stale ticket cannot authorize a reused physical slot.
+    class ObjectHandle final {
+        friend class OresVM;
+        std::weak_ptr<IsolateVM> state_;
+        std::uint64_t tenant_generation_ = 0;
+        std::size_t slot_ = 0;
+        std::uint64_t object_generation_ = 0;
+        ObjectHandle(const std::shared_ptr<IsolateVM>& state,
+                     std::size_t slot, std::uint64_t generation)
+            : state_(state), tenant_generation_(state->generation),
+              slot_(slot), object_generation_(generation) {}
+    public:
+        ObjectHandle() = default;
+    };
+
+    class ActorTurnTicket final {
+        friend class OresVM;
+        std::weak_ptr<IsolateVM> state_;
+        std::uint64_t tenant_generation_ = 0;
+        std::uint64_t actor_id_ = 0;
+        std::uint64_t actor_generation_ = 0;
+        std::uint64_t turn_serial_ = 0;
+        std::thread::id carrier_{};
+        std::uint64_t carrier_incarnation_ = 0;
+        bool cleanup_only_ = false;
+        ActorTurnTicket(const std::shared_ptr<IsolateVM>& state,
+                        std::uint64_t actor_id, std::uint64_t actor_generation,
+                        std::uint64_t serial, std::thread::id carrier,
+                        std::uint64_t carrier_incarnation, bool cleanup_only)
+            : state_(state), tenant_generation_(state->generation),
+              actor_id_(actor_id), actor_generation_(actor_generation),
+              turn_serial_(serial), carrier_(carrier),
+              carrier_incarnation_(carrier_incarnation),
+              cleanup_only_(cleanup_only) {}
+    public:
+        ActorTurnTicket() = default;
     };
 
     class ActorTicket final {
@@ -85,6 +129,12 @@ public:
     OresVM(const OresVM&) = delete;
     OresVM& operator=(const OresVM&) = delete;
 
+    // Compatibility-only spelling: this still admits TRUSTED in-process
+    // tenant state only. Untrusted code remains denied by create_isolate.
+    TenantVMHandle create_tenant_vm(TenantVMConfig config) {
+        return create_isolate(std::move(config));
+    }
+
     IsolateHandle create_isolate(IsolateConfig config) {
         // Tenant identifiers are host-owned but can originate from customer
         // metadata. Bound their uncharged allocation and reject control bytes
@@ -105,7 +155,8 @@ public:
                 });
         if (unsafe_tenant_id || config.heap_limit_bytes == 0 ||
             config.max_actors == 0 || config.max_inflight_guest_calls == 0 ||
-            config.max_resource_pins == 0)
+            config.max_resource_pins == 0 || config.max_object_slots == 0 ||
+            config.max_object_slots > 65536)
             throw std::invalid_argument("isolate requires a bounded ID and positive quotas");
         if (config.mode != IsolateMode::TrustedInProcess)
             throw std::logic_error("sandboxed-process isolation is not implemented");
@@ -179,6 +230,169 @@ public:
         return state->heap[static_cast<std::size_t>(ref.offset_) + index];
     }
 
+    // Host-only bounded memory access. This does NOT expose a raw heap base
+    // or install compiler-enforced checks into native guest machine code.
+    // The broker must authenticate actors and bind compiler-generated object
+    // operations to the current actor turn before exposing a guest ABI.
+    ObjectHandle allocate_object(const IsolateHandle& handle,
+                                 std::uint32_t bytes, std::uint32_t alignment = 8) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto state = checked(handle);
+        if (state->phase != IsolatePhase::Running)
+            throw std::logic_error("tenant object admission closed");
+        return allocate_object_locked(state, bytes, alignment, 0, 0);
+    }
+
+    std::uint8_t read_object_byte(const IsolateHandle& handle,
+                                  const ObjectHandle& object,
+                                  std::uint32_t index) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto state = checked(handle);
+        if (state->phase != IsolatePhase::Running &&
+            state->phase != IsolatePhase::Quiescing)
+            throw std::logic_error("tenant object access closed");
+        const auto& slot = checked_object(state, object);
+        if (index >= slot.size)
+            throw std::out_of_range("object read exceeds allocated object");
+        return state->heap[static_cast<std::size_t>(slot.offset) + index];
+    }
+
+    void write_object_byte(const IsolateHandle& handle,
+                           const ObjectHandle& object,
+                           std::uint32_t index, std::uint8_t value) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto state = checked(handle);
+        if (state->phase != IsolatePhase::Running &&
+            state->phase != IsolatePhase::Quiescing)
+            throw std::logic_error("tenant object access closed");
+        const auto& slot = checked_object(state, object);
+        if (index >= slot.size)
+            throw std::out_of_range("object write exceeds allocated object");
+        state->heap[static_cast<std::size_t>(slot.offset) + index] = value;
+    }
+
+    // Retirement and physical slot reuse are serialized with all accesses by
+    // the host lock. Retired bytes must be zero before a new token is issued.
+    void retire_object(const IsolateHandle& handle, const ObjectHandle& object) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto state = checked(handle);
+        if (state->phase != IsolatePhase::Running &&
+            state->phase != IsolatePhase::Quiescing)
+            throw std::logic_error("tenant object retirement closed");
+        auto& slot = checked_object(state, object);
+        scrub_object(state, slot);
+        // A UINT64_MAX descriptor remains retired forever; no ABA wrap.
+    }
+
+    // These are authenticated trusted-host *turn* tickets, not native
+    // machine-code sandbox or user-creatable ActorRef values. A ticket is
+    // admitted on one carrier pthread and cannot be used from another.
+    ActorTurnTicket enter_actor_turn(const IsolateHandle& handle,
+                                     const ActorTicket& actor) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto state = checked(handle);
+        if (state->phase != IsolatePhase::Running)
+            throw std::logic_error("actor physical turn admission closed");
+        return admit_actor_turn_locked(state, actor, false);
+    }
+
+    // Quiescing seals new work but the supervisor must still be able to
+    // reclaim actor-owned bytes. This dedicated host-only path admits ONLY
+    // retirement/cleanup, not allocations or newly scheduled guest work.
+    ActorTurnTicket enter_actor_cleanup_turn(const IsolateHandle& handle,
+                                             const ActorTicket& actor) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto state = checked(handle);
+        if (state->phase != IsolatePhase::Quiescing)
+            throw std::logic_error("cleanup-only turn requires quiescing");
+        return admit_actor_turn_locked(state, actor, true);
+    }
+
+    void leave_actor_turn(const IsolateHandle& handle, const ActorTicket& actor,
+                          const ActorTurnTicket& turn) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto state = checked(handle);
+        require_live_turn(state, actor, turn);
+        state->actor_turns.erase(actor.id_);
+        // Release physical-carrier admission only after the registered turn
+        // has been revoked. All other tenant/root-VM turns on this pthread
+        // remain denied until that happens.
+        active_carrier_tenant_ = nullptr;
+        active_carrier_turn_serial_ = 0;
+    }
+
+    // All actor-owned object operations use the exact live actor and current
+    // physical turn. Host-only legacy object APIs deliberately cannot read
+    // or retire actor-owned objects. No guest gets a native heap address.
+    ObjectHandle allocate_actor_object(const IsolateHandle& handle,
+                                      const ActorTicket& actor,
+                                      const ActorTurnTicket& turn,
+                                      std::uint32_t bytes,
+                                      std::uint32_t alignment = 8) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto state = checked(handle);
+        if (state->phase != IsolatePhase::Running)
+            throw std::logic_error("actor object allocation admission closed");
+        require_live_turn(state, actor, turn);
+        return allocate_object_locked(state, bytes, alignment,
+                                      actor.id_, actor.actor_generation_);
+    }
+
+    std::uint8_t read_actor_object_byte(const IsolateHandle& handle,
+                                       const ActorTicket& actor,
+                                       const ActorTurnTicket& turn,
+                                       const ObjectHandle& object,
+                                       std::uint32_t index) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto state = checked(handle);
+        if (state->phase != IsolatePhase::Running &&
+            state->phase != IsolatePhase::Quiescing)
+            throw std::logic_error("actor object access closed");
+        require_live_turn(state, actor, turn);
+        if (turn.cleanup_only_)
+            throw std::logic_error("cleanup-only turn cannot read actor objects");
+        const auto& slot = checked_object(
+            state, object, actor.id_, actor.actor_generation_);
+        if (index >= slot.size)
+            throw std::out_of_range("actor object read out of bounds");
+        return state->heap[static_cast<std::size_t>(slot.offset) + index];
+    }
+
+    void write_actor_object_byte(const IsolateHandle& handle,
+                                 const ActorTicket& actor,
+                                 const ActorTurnTicket& turn,
+                                 const ObjectHandle& object,
+                                 std::uint32_t index, std::uint8_t value) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto state = checked(handle);
+        if (state->phase != IsolatePhase::Running &&
+            state->phase != IsolatePhase::Quiescing)
+            throw std::logic_error("actor object access closed");
+        require_live_turn(state, actor, turn);
+        if (turn.cleanup_only_)
+            throw std::logic_error("cleanup-only turn cannot write actor objects");
+        const auto& slot = checked_object(
+            state, object, actor.id_, actor.actor_generation_);
+        if (index >= slot.size)
+            throw std::out_of_range("actor object write out of bounds");
+        state->heap[static_cast<std::size_t>(slot.offset) + index] = value;
+    }
+
+    void retire_actor_object(const IsolateHandle& handle,
+                             const ActorTicket& actor,
+                             const ActorTurnTicket& turn,
+                             const ObjectHandle& object) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto state = checked(handle);
+        if (state->phase != IsolatePhase::Running &&
+            state->phase != IsolatePhase::Quiescing)
+            throw std::logic_error("actor object retirement closed");
+        require_live_turn(state, actor, turn);
+        auto& slot = checked_object(
+            state, object, actor.id_, actor.actor_generation_);
+        scrub_object(state, slot);
+    }
+
     ActorTicket register_actor(const IsolateHandle& handle, std::uint64_t actor_id) {
         std::lock_guard<std::mutex> lock(mutex_);
         auto state = checked(handle);
@@ -210,6 +424,12 @@ public:
             if (pin.second.actor_id == actor.id_ &&
                 pin.second.actor_generation == actor.actor_generation_)
                 throw std::logic_error("actor has outstanding native resource pins");
+        if (state->actor_turns.count(actor.id_))
+            throw std::logic_error("actor has an outstanding physical turn");
+        for (const auto& object : state->object_slots)
+            if (object.live && object.owner_actor_id == actor.id_ &&
+                object.owner_actor_generation == actor.actor_generation_)
+                throw std::logic_error("actor has live owned object allocations");
         state->actors.erase(it);
     }
 
@@ -266,6 +486,15 @@ public:
     GuestOutcome invoke_guest_result(const IsolateHandle& handle, OresGuestEntry guest,
                                     std::int64_t input) {
         if (!guest) throw std::invalid_argument("guest entry is null");
+        // A plain tenant-scoped guest ABI is NOT an actor-turn-bound ABI.
+        // Until the compiler passes a verified actor and turn credential to
+        // the native guest entry, prevent nested guest calls on a carrier
+        // that still owns any actor's live capabilities (even in another VM).
+        // A cross-tenant re-entry would otherwise bypass our physical-turn
+        // admission check by entering the generic guest path directly.
+        if (active_carrier_tenant_ != nullptr)
+            throw std::logic_error(
+                "actor carrier cannot enter unscoped tenant guest ABI");
         std::shared_ptr<IsolateVM> state;
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -302,11 +531,22 @@ public:
         guest_active = true;
         struct GuestThreadGuard {
             bool& active;
-            ~GuestThreadGuard() noexcept { active = false; }
+            ~GuestThreadGuard() noexcept {
+                // Revoke on every exit, including exceptions and error returns.
+                OresVM::active_guest_call_ = nullptr;
+                OresVM::active_guest_cookie_ = 0;
+                active = false;
+            }
         } thread_guard{guest_active};
         GuestCall call{this, state, state->generation};
+        // The guest receives a single-use opaque cookie, not a stack address.
+        // Only callbacks on this thread with this ticket may resolve the call.
+        const auto cookie = issue_guest_cookie();
+        active_guest_call_ = &call;
+        active_guest_cookie_ = cookie;
         OresIsolateContext ctx{ORES_ISOLATE_ABI_VERSION, ORES_ISOLATE_I64_SLOTS,
-                              state->generation, &call, &guest_load_i64, &guest_store_i64};
+                              state->generation, reinterpret_cast<void*>(cookie),
+                              &guest_load_i64, &guest_store_i64};
         std::int64_t value = 0;
         std::int32_t status = ORES_GUEST_FAILED;
         try {
@@ -352,7 +592,10 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         auto state = checked(handle);
         if (state->phase != IsolatePhase::Quiescing || !state->actors.empty() ||
-            state->active_guest_calls != 0 || !state->resource_pins.empty())
+            state->active_guest_calls != 0 || !state->resource_pins.empty() ||
+            !state->actor_turns.empty() ||
+            std::any_of(state->object_slots.begin(), state->object_slots.end(),
+                        [](const IsolateObjectSlot& slot) { return slot.live; }))
             throw std::logic_error("actor or guest invocation still active");
         state->phase = IsolatePhase::Stopped;
     }
@@ -375,7 +618,10 @@ public:
         return {state->config.tenant_id, state->generation, state->phase,
                 static_cast<std::uint32_t>(state->heap.size()),
                 state->actors.size(), state->active_guest_calls,
-                state->resource_pins.size()};
+                state->resource_pins.size(),
+                static_cast<std::size_t>(std::count_if(
+                    state->object_slots.begin(), state->object_slots.end(),
+                    [](const IsolateObjectSlot& slot) { return slot.live; }))};
     }
 
 private:
@@ -385,9 +631,33 @@ private:
         std::uint64_t generation;
     };
 
+    // Host-only callback fencing, not a sandbox for arbitrary native code.
+    // The integer/void* cookie representation is native-host-specific and
+    // must NEVER be dereferenced, treated as an address, or serialized.
+    // Exhaustion fails closed rather than allowing any cookie to be reused.
+    inline static std::atomic<std::uintptr_t> next_guest_cookie_{1};
+    inline static thread_local GuestCall* active_guest_call_ = nullptr;
+    inline static thread_local std::uintptr_t active_guest_cookie_ = 0;
+
+    static std::uintptr_t issue_guest_cookie() {
+        auto next = next_guest_cookie_.load(std::memory_order_relaxed);
+        for (;;) {
+            if (next == std::numeric_limits<std::uintptr_t>::max())
+                throw std::overflow_error("guest invocation cookies exhausted");
+            if (next_guest_cookie_.compare_exchange_weak(
+                    next, next + 1, std::memory_order_relaxed,
+                    std::memory_order_relaxed))
+                return next;
+        }
+    }
+
     static int guest_load_i64(void* raw, std::uint32_t slot, std::int64_t* out) noexcept {
         if (!raw || !out || slot >= ORES_ISOLATE_I64_SLOTS) return 0;
-        auto* call = static_cast<GuestCall*>(raw);
+        // Check before any dereference: a stale token cannot alias a new
+        // invocation that happens to reuse the former stack address.
+        if (!active_guest_call_ ||
+            raw != reinterpret_cast<void*>(active_guest_cookie_)) return 0;
+        auto* call = active_guest_call_;
         std::lock_guard<std::mutex> lock(call->vm->mutex_);
         const auto& state = call->state;
         if (call->generation != state->generation ||
@@ -400,7 +670,11 @@ private:
 
     static int guest_store_i64(void* raw, std::uint32_t slot, std::int64_t value) noexcept {
         if (!raw || slot >= ORES_ISOLATE_I64_SLOTS) return 0;
-        auto* call = static_cast<GuestCall*>(raw);
+        // Check before any dereference: a stale token cannot alias a new
+        // invocation that happens to reuse the former stack address.
+        if (!active_guest_call_ ||
+            raw != reinterpret_cast<void*>(active_guest_cookie_)) return 0;
+        auto* call = active_guest_call_;
         std::lock_guard<std::mutex> lock(call->vm->mutex_);
         const auto& state = call->state;
         if (call->generation != state->generation ||
@@ -419,6 +693,182 @@ private:
         if (it == isolates_.end() || it->second != state)
             throw std::logic_error("foreign or destroyed isolate handle");
         return state;
+    }
+
+    // All helper functions require mutex_ to be held by their caller.
+    // Unlike std::thread::id or pthread_t, this lifetime value never
+    // repeats when the OS recycles a carrier-thread identity.
+    inline static std::atomic<std::uint64_t> next_carrier_incarnation_{1};
+    // Process-wide (across all OresVM objects) thread-local physical turn
+    // admission, not per-TenantVM bookkeeping alone. Without this fence a
+    // callback on one pthread could enter a second tenant while retaining
+    // its first actor's active capabilities. The pool label is not an
+    // isolation boundary; fail closed on nested cross-tenant turns.
+    inline static thread_local const IsolateVM* active_carrier_tenant_ = nullptr;
+    inline static thread_local std::uint64_t active_carrier_turn_serial_ = 0;
+    static std::uint64_t issue_carrier_incarnation() {
+        auto next = next_carrier_incarnation_.load(std::memory_order_relaxed);
+        for (;;) {
+            if (next == std::numeric_limits<std::uint64_t>::max())
+                throw std::overflow_error("carrier lifetime serial exhausted");
+            if (next_carrier_incarnation_.compare_exchange_weak(
+                    next, next + 1, std::memory_order_relaxed,
+                    std::memory_order_relaxed))
+                return next;
+        }
+    }
+    static std::uint64_t current_carrier_incarnation() {
+        static thread_local const std::uint64_t incarnation =
+            issue_carrier_incarnation();
+        return incarnation;
+    }
+
+    static ActorTurnTicket admit_actor_turn_locked(
+        const std::shared_ptr<IsolateVM>& state, const ActorTicket& actor,
+        bool cleanup_only) {
+        require_live_actor(state, actor);
+        // Symmetric fence: the generic scalar guest ABI cannot acquire an
+        // actor turn from its callback either. Its runtime entry carries no
+        // actor authority, and checking only the other direction would
+        // permit nested guest -> actor -> guest capability confusion.
+        if (active_guest_call_ != nullptr)
+            throw std::logic_error(
+                "unscoped tenant guest cannot enter actor physical turn");
+        if (active_carrier_tenant_ != nullptr || active_carrier_turn_serial_ != 0)
+            throw std::logic_error("carrier already owns an actor turn");
+        if (state->actor_turns.count(actor.id_))
+            throw std::logic_error("actor already owns a physical turn");
+        const auto carrier = std::this_thread::get_id();
+        const auto carrier_incarnation = current_carrier_incarnation();
+        for (const auto& active : state->actor_turns)
+            if (active.second.carrier == carrier)
+                throw std::logic_error("reentrant actor carrier turn denied");
+        if (state->next_actor_turn_serial ==
+            std::numeric_limits<std::uint64_t>::max())
+            throw std::overflow_error("actor turn serial exhausted");
+        const auto serial = state->next_actor_turn_serial++;
+        // Construct the ticket first; then publish it into the tenant's
+        // turn ledger. The host mutex protects every ledger mutation, while
+        // this thread-local fence disallows entering any other tenant turn.
+        ActorTurnTicket ticket(state, actor.id_, actor.actor_generation_,
+                               serial, carrier, carrier_incarnation, cleanup_only);
+        state->actor_turns.emplace(actor.id_, IsolateActorTurnRecord{
+            actor.actor_generation_, serial, carrier, carrier_incarnation});
+        active_carrier_tenant_ = state.get();
+        active_carrier_turn_serial_ = serial;
+        return ticket;
+    }
+
+    // No actor ID/name is accepted as authority without a host-issued
+    // incarnation ticket AND a physical carrier-bound turn ticket.
+    static void require_live_actor(const std::shared_ptr<IsolateVM>& state,
+                                   const ActorTicket& actor) {
+        const auto it = state->actors.find(actor.id_);
+        if (actor.id_ == 0 || actor.state_.lock() != state ||
+            actor.generation_ != state->generation ||
+            it == state->actors.end() ||
+            it->second != actor.actor_generation_)
+            throw std::logic_error("foreign or retired actor incarnation");
+    }
+
+    static void require_live_turn(const std::shared_ptr<IsolateVM>& state,
+                                  const ActorTicket& actor,
+                                  const ActorTurnTicket& turn) {
+        require_live_actor(state, actor);
+        if (turn.state_.lock() != state ||
+            turn.tenant_generation_ != state->generation ||
+            turn.actor_id_ != actor.id_ ||
+            turn.actor_generation_ != actor.actor_generation_ ||
+            turn.turn_serial_ == 0 ||
+            turn.carrier_ != std::this_thread::get_id() ||
+            turn.carrier_incarnation_ != current_carrier_incarnation() ||
+            active_carrier_tenant_ != state.get() ||
+            active_carrier_turn_serial_ != turn.turn_serial_)
+            throw std::logic_error("foreign, stale or migrated actor turn");
+        const auto it = state->actor_turns.find(actor.id_);
+        if (it == state->actor_turns.end() ||
+            it->second.incarnation != actor.actor_generation_ ||
+            it->second.serial != turn.turn_serial_ ||
+            it->second.carrier != turn.carrier_ ||
+            it->second.carrier_incarnation != turn.carrier_incarnation_)
+            throw std::logic_error("actor physical turn no longer active");
+    }
+
+    static ObjectHandle allocate_object_locked(
+        const std::shared_ptr<IsolateVM>& state,
+        std::uint32_t bytes, std::uint32_t alignment,
+        std::uint64_t owner_id, std::uint64_t owner_generation) {
+        if (bytes == 0 || alignment == 0 ||
+            (alignment & (alignment - 1)) != 0 ||
+            alignment > state->config.heap_limit_bytes)
+            throw std::invalid_argument("object bytes and alignment invalid");
+        // A retired descriptor is scrubbed before its generation is ever
+        // incremented. Reuse is checked for size/alignment compatibility.
+        for (std::size_t i = 0; i < state->object_slots.size(); ++i) {
+            auto& slot = state->object_slots[i];
+            if (slot.live ||
+                slot.generation == std::numeric_limits<std::uint64_t>::max() ||
+                slot.capacity < bytes || slot.offset % alignment != 0)
+                continue;
+            slot.size = bytes;
+            slot.owner_actor_id = owner_id;
+            slot.owner_actor_generation = owner_generation;
+            slot.live = true;
+            return ObjectHandle(state, i, slot.generation);
+        }
+        if (state->object_slots.size() >= state->config.max_object_slots)
+            throw std::bad_alloc();
+        const auto limit = static_cast<std::size_t>(state->config.heap_limit_bytes);
+        const auto used = state->heap.size();
+        const auto padding = (alignment - (used % alignment)) % alignment;
+        if (used > limit || padding > limit - used ||
+            bytes > limit - used - padding)
+            throw std::bad_alloc();
+        const auto offset = used + padding;
+        state->object_slots.push_back(IsolateObjectSlot{
+            static_cast<std::uint32_t>(offset), bytes, bytes, 1, true,
+            owner_id, owner_generation});
+        try {
+            state->heap.resize(offset + bytes, 0);
+        } catch (...) {
+            state->object_slots.pop_back();
+            throw;
+        }
+        return ObjectHandle(state, state->object_slots.size() - 1, 1);
+    }
+
+    static void scrub_object(const std::shared_ptr<IsolateVM>& state,
+                             IsolateObjectSlot& slot) {
+        // The host lock serializes every read/write/retire/reuse. The pointer
+        // is never exposed; stale handles cannot alias a new object.
+        std::fill(state->heap.begin() + slot.offset,
+                  state->heap.begin() + static_cast<std::size_t>(slot.offset) +
+                      slot.capacity, std::uint8_t{0});
+        slot.live = false;
+        slot.size = 0;
+        slot.owner_actor_id = 0;
+        slot.owner_actor_generation = 0;
+        if (slot.generation != std::numeric_limits<std::uint64_t>::max())
+            ++slot.generation;
+    }
+
+    static IsolateObjectSlot& checked_object(
+        const std::shared_ptr<IsolateVM>& state, const ObjectHandle& object,
+        std::uint64_t owner_id = 0,
+        std::uint64_t owner_generation = 0) {
+        if (object.state_.lock() != state ||
+            object.tenant_generation_ != state->generation ||
+            object.slot_ >= state->object_slots.size())
+            throw std::logic_error("foreign or stale tenant object ticket");
+        auto& slot = state->object_slots[object.slot_];
+        if (!slot.live || slot.generation != object.object_generation_ ||
+            slot.owner_actor_id != owner_id ||
+            slot.owner_actor_generation != owner_generation ||
+            slot.size == 0 || slot.size > slot.capacity ||
+            static_cast<std::uint64_t>(slot.offset) + slot.capacity >
+                state->heap.size())
+            throw std::logic_error("retired or invalid tenant object");
+        return slot;
     }
 
     static void check_ref(const std::shared_ptr<IsolateVM>& state, const Allocation& ref) {

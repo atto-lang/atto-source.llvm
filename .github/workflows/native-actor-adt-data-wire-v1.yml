@@ -1,0 +1,50 @@
+name: LLVM C++ actor ADT DATA wire v1 (host-only)
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/NativeActorAdtDataWireV1.hpp'
+      - 'tests/native_actor_adt_data_wire_v1_test.cpp'
+      - '.github/workflows/native-actor-adt-data-wire-v1.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-exact-head:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        cxx: [g++, clang++]
+        flags: [optimized, sanitized]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Pin exact source head/tree
+        env:
+          SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
+          git rev-parse HEAD^{tree}
+      - name: Build and execute native ADT DATA validation
+        shell: bash
+        env:
+          CXX: ${{ matrix.cxx }}
+          MODE: ${{ matrix.flags }}
+        run: |
+          set -euo pipefail
+          flags="-O2"
+          if [[ "$MODE" == sanitized ]]; then
+            flags="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer"
+          fi
+          "$CXX" -std=c++17 $flags -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -I src/main/cpp tests/native_actor_adt_data_wire_v1_test.cpp \
+            -o "$RUNNER_TEMP/atto-adt-native"
+          ASAN_OPTIONS=detect_leaks=1 "$RUNNER_TEMP/atto-adt-native" \
+            | tee "$RUNNER_TEMP/adt-native.log"
+          grep -Fx 'LLVM_ADT_DATA_WIRE_V1_PASS|profiles=6|control_authority=none|guest_execution=no' \
+            "$RUNNER_TEMP/adt-native.log"
+      - name: Confirm source not modified
+        run: test -z "$(git status --porcelain)"

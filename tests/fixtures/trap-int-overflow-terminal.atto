@@ -1,0 +1,5 @@
+// Untrapped checked arithmetic remains terminal in the current native ABI.
+// Real native LLVM guest must trap before returning at O0 and O2.
+pub fnc main(): int {
+  return (9223372036854775807 + 1);
+}

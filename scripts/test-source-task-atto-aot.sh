@@ -38,20 +38,25 @@ done
 unset ORESLANG_LLVM_AOT_OPT_LEVEL
 # Compiler-semantic source rejections from the existing native source Task E2E corpus.
 # Each must fail before a guest artifact is published. Never launch these.
-for name in missing-await double-await producer-call second-task; do
-  path="$root/tests/fixtures/task-v1-negative/$name.atto"
+for name in missing-await double-await producer-call second-task actor-task-no-pool actor-task-nonsuspends; do
+  relative="tests/fixtures/task-v1-negative/$name.atto"
+  if [[ "$name" == actor-task-no-pool ]]; then relative=tests/fixtures/source-actor-task-await-staged.atto; fi
+  if [[ "$name" == actor-task-nonsuspends ]]; then relative=tests/fixtures/source-actor-task-await-nonsuspends-reject.atto; fi
+  path="$root/$relative"
   [[ -f "$path" && ! -L "$path" ]] || { echo "Missing negative fixture: $name" >&2; exit 78; }
-  [[ "$(git -C "$root" rev-parse "HEAD:tests/fixtures/task-v1-negative/$name.atto")" == "$(git hash-object --no-filters "$path")" ]] || { echo "Negative fixture differs from HEAD: $name" >&2; exit 78; }
+  [[ "$(git -C "$root" rev-parse "HEAD:$relative")" == "$(git hash-object --no-filters "$path")" ]] || { echo "Negative fixture differs from HEAD: $name" >&2; exit 78; }
   case "$name" in
     missing-await) expected="must be awaited exactly once" ;;
     double-await) expected="requires await to immediately consume" ;;
     producer-call) expected="producer must be capture-free and scalar" ;;
     second-task) expected="supports exactly one source Task" ;;
+    actor-task-no-pool) expected="ATTO_TASK_E_ACTOR_LOWERING_PENDING" ;;
+    actor-task-nonsuspends) expected="ATTO_TASK_E_SUSPENDS_REQUIRED" ;;
   esac
   artifact="$tmp/rejected-$name"
   code=0
   timeout 30s "$root/scripts/compile-aot.sh" "$path" "$artifact" > "$tmp/negative-$name.out" 2> "$tmp/negative-$name.err" || code=$?
-  [[ "$code" != 0 && "$code" != 124 ]] || { echo "Unsafe Task admission succeeded or timed out: $name" >&2; exit 1; }
+  [[ "$code" -gt 0 && "$code" -lt 124 ]] || { echo "Unsafe Task admission succeeded or timed out: $name" >&2; exit 1; }
   grep -Fq "$expected" "$tmp/negative-$name.err" || { echo "Wrong compiler diagnostic for $name" >&2; cat "$tmp/negative-$name.err" >&2; exit 1; }
   [[ ! -e "$artifact" ]] || { echo "Invalid Task source published native guest: $name" >&2; exit 1; }
   printf 'TASK_I64_ATTO_NEGATIVE_PASS|head=%s|case=%s|no_artifact=yes\n' "$EXPECTED_HEAD" "$name"

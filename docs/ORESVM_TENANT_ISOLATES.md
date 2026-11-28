@@ -1,5 +1,8 @@
 # OresVM tenant-isolate substrate (native host prototype)
 
+**Canonical naming (2026-11-11): TenantVM** is the OresVM-owned per-tenant execution domain; the existing `IsolateVM` C++ class is its legacy source symbol. See [TenantVM naming](TENANT_VM_NAMING_V1.md). This remains a prototype and does not yet certify hostile actor hosting.
+
+
 **Architecture and terminology:** [OresVM vs IsolateVM (including V8 isolate lessons)](ORESVM_VS_ISOLATEVM.md) explains the root-host vs tenant VM vs actor responsibilities and separates V8 Isolates, V8 Contexts and OS sandboxing. IsolateVM is now a concrete noncopyable C++ tenant-state type, privately constructed and managed by OresVM. It is not yet an autonomous scheduler or OS sandbox.
 
 **Status:** C++17 native host prototype with one experimental scalar source-to-LLVM guest entry. It is not a complete guest VM, process sandbox, production actor scheduler or verified Java/GraalVM parity.
@@ -68,6 +71,37 @@ Covered: tenant state separation; invalid/misaligned/over-quota allocations;
 out-of-bounds access; foreign handles; duplicate IDs; actor quota; replayed
 actor tickets; shutdown/drain fencing; stale tickets after recreate; concurrent
 host API operations; explicit refusal of nonexistent sandbox mode.
+
+## Bounded guest callback identity (host hardening, not sandboxing)
+
+The synchronous **v2** `OresIsolateContext` ABI keeps its original field layout and
+`load_i64` / `store_i64` signatures. However, `call_data` is now an opaque
+single-use invocation cookie, **not** a pointer to the stack-owned `GuestCall`.
+The host assigns a process-unique monotonically increasing cookie (until
+exhaustion, when admission fails closed). Callbacks compare it with the current
+thread's active invocation **before dereferencing any host state**. The active
+invocation is cleared on success, returned guest error, and native exception.
+
+This prevents accidental reuse of saved callback data when another invocation
+reuses the same C++ stack address, prevents a callback on a different pthread
+from accessing the active invocation, and denies expired cookies after the
+entry returns. It also avoids accepting a stale cookie merely because a tenant
+name or a per-isolate generation is reused.
+
+This is **not** hostile-native sandboxing: arbitrary machine code can still
+read/write process memory or call host functions outside this narrow ABI.
+The integer-to-opaque-pointer cookie representation is an implementation-defined
+native-host ABI technique and must never be dereferenced, serialized or exported
+as a machine address. On targets where such representations are not supported,
+the host must use a separately verified invocation ABI, not silently weaken
+the lifetime check. `TrustedInProcess` remains trusted-only and
+`SandboxedProcess` remains fail-closed.
+
+**Regression gate:** `native_oresvm_guest_call` exercises capture and replay
+within the same tenant and across tenants, a callback invoked outside any turn,
+a live callback invoked from another pthread, and revocation after exception.
+These are host-only executable cases; this is not compiler-backed Atto guest
+memory isolation or proof of actual Wasm/MPK/process protection.
 
 ## Required follow-up before multi-tenant guest execution
 

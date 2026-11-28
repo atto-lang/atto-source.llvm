@@ -1,0 +1,31 @@
+// atto.core-only guest for the bare-metal Cortex-M3 gate.
+// No atto.std, no allocator, no actor runtime, no OS.
+// Covers the scalar subset the Cortex-M core path admits today: int/bool
+// values, checked arithmetic, negation, comparisons, && / ||, if, direct
+// calls and a compiler-owned atto.core import. startup.c checks it against
+// a table of expected results, so every branch is exercised.
+
+import module numeric from "atto.core/numeric";
+
+pub fnc ores_core_entry(int x): int {
+    return numeric.clamp_int(scale(x), 0, 1000) + numeric.max_int(x, 2) + window_penalty(x);
+}
+
+pub fnc ores_core_overflow_probe(int x): int {
+    return x * x;
+}
+
+fnc scale(int x): int {
+    return x * 7 + 5;
+}
+
+fnc window_penalty(int x): int {
+    if x > 1 && x < 9 || x == 0; do
+        return negate(numeric.min_int(x, 3));
+    fi
+    return 100;
+}
+
+fnc negate(int x): int {
+    return -x;
+}

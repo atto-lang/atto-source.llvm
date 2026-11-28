@@ -177,6 +177,9 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
         case Expression::Kind::Add:
             if (expr->resolved_type == ScalarType::String) add_effect(facts, FunctionEffect::Alloc);
             break;
+        case Expression::Kind::BitXor:
+            break;
+        case Expression::Kind::Modulo:
         case Expression::Kind::Remainder: {
             // Qualify only a proven literal divisor. Keep the analyzer's
             // -1 proof conservative until it shares the code generator's
@@ -207,6 +210,7 @@ inline void scan_expression(const Expression* expr, DirectFacts& facts) {
             // Their operands and lazy conditional arms are scanned above.
             break;
         case Expression::Kind::Copy:
+        case Expression::Kind::DeepCopy:
         case Expression::Kind::Share:
             // Until the typed MIR proves a register-only copy or a bounded
             // zero-allocation share, these operations cannot enter strict RT

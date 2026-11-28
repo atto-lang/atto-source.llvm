@@ -1,5 +1,11 @@
 import unittest
-from profile_cache_locality import EVENTS, parse_perf_stat, rates, validate_event
+import hashlib
+import subprocess
+from types import SimpleNamespace
+from unittest.mock import patch
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from profile_cache_locality import EVENTS, parse_perf_stat, rates, validate_event, hash_executable, publish_exclusive, verify_exact_source_tree, require_stable_cpu_mask, profile
 
 
 class PerfParserTests(unittest.TestCase):
@@ -63,6 +69,140 @@ class PerfParserTests(unittest.TestCase):
         self.assertEqual(result["l2_miss_pct"], 30)
         self.assertEqual(result["l2_mpki"], 1.2)
         self.assertRaisesRegex(ValueError, "L2", rates, dict(counters, **{misses: 101}), (requests, misses))
+
+    def test_native_binary_identity_and_mutation_detection(self):
+        with TemporaryDirectory() as tmp:
+            binary = Path(tmp) / "native_actor_shard_layout_bench"
+            binary.write_bytes(b"native-benchmark-v1")
+            binary.chmod(0o700)
+            expected = hashlib.sha256(b"native-benchmark-v1").hexdigest()
+            self.assertEqual(hash_executable(binary), (expected, len(b"native-benchmark-v1")))
+            binary.write_bytes(b"native-benchmark-v2")
+            changed, size = hash_executable(binary)
+            self.assertNotEqual(changed, expected)
+            self.assertEqual(size, len(b"native-benchmark-v2"))
+            with self.assertRaisesRegex(ValueError, "absolute"):
+                hash_executable(Path("relative-binary"))
+            binary.chmod(0o600)
+            with self.assertRaisesRegex(ValueError, "executable"):
+                hash_executable(binary)
+
+    def test_binary_identity_rejects_symlink_and_hardlink_aliases(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            binary = root / "native_actor_shard_layout_bench"
+            binary.write_bytes(b"native-benchmark")
+            binary.chmod(0o700)
+            symlink = root / "benchmark-symlink"
+            symlink.symlink_to(binary)
+            with self.assertRaisesRegex(ValueError, "not a symlink"):
+                hash_executable(symlink)
+            hardlink = root / "benchmark-hardlink"
+            hardlink.hardlink_to(binary)
+            with self.assertRaisesRegex(ValueError, "single-link"):
+                hash_executable(binary)
+            hardlink.unlink()
+            self.assertEqual(hash_executable(binary)[1], len(b"native-benchmark"))
+
+    def test_evidence_publication_never_overwrites_existing_target(self):
+        with TemporaryDirectory() as tmp:
+            temp = Path(tmp) / ".cache-new.json"
+            output = Path(tmp) / "cache.json"
+            temp.write_text('{"ok": true}', encoding="utf-8")
+            publish_exclusive(temp, output)
+            self.assertEqual(output.read_text(), temp.read_text())
+            self.assertTrue(temp.exists())
+            # Attempting to publish the same evidence twice must fail.
+            with self.assertRaisesRegex(RuntimeError, "refusing overwrite"):
+                publish_exclusive(temp, output)
+            self.assertEqual(output.read_text(), '{"ok": true}')
+            output.unlink()
+            output.write_text('existing record', encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "refusing overwrite"):
+                publish_exclusive(temp, output)
+            self.assertEqual(output.read_text(), 'existing record')
+            output.unlink()
+            # exists() would report False on a dangling symlink. An atomic
+            # create-if-absent must not replace the symlink directory entry.
+            output.symlink_to(Path(tmp) / "absent-target")
+            with self.assertRaisesRegex(RuntimeError, "refusing overwrite"):
+                publish_exclusive(temp, output)
+            self.assertTrue(output.is_symlink())
+
+    def test_exact_tree_preflight_ignores_build_artifacts_not_untracked_source(self):
+        sha = "a" * 40
+        clean = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        changed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="?? src/extra.atto\n", stderr="")
+        with patch("profile_cache_locality.current_tree", return_value=sha), \
+             patch("profile_cache_locality.subprocess.run", return_value=clean) as run:
+            verify_exact_source_tree(sha)
+            run.assert_called_once_with(
+                ["git", "status", "--porcelain", "--untracked-files=all"],
+                capture_output=True, text=True, check=True)
+        with patch("profile_cache_locality.current_tree", return_value=sha), \
+             patch("profile_cache_locality.subprocess.run", return_value=changed):
+            with self.assertRaisesRegex(RuntimeError, "untracked source"):
+                verify_exact_source_tree(sha)
+        with patch("profile_cache_locality.current_tree", return_value="b" * 40):
+            with self.assertRaisesRegex(RuntimeError, "tree"):
+                verify_exact_source_tree(sha)
+        with self.assertRaisesRegex(ValueError, "40-character"):
+            verify_exact_source_tree("not-a-git-tree")
+
+    def test_reject_cpu_mask_drift_during_cache_profile(self):
+        # A drifted mask must reject the evidence even if counters look valid.
+        with patch("profile_cache_locality.os.sched_getaffinity", return_value={3, 2}):
+            require_stable_cpu_mask([2, 3])
+        for changed in ({2}, {2, 3, 4}, set()):
+            with self.subTest(changed=changed):
+                with patch("profile_cache_locality.os.sched_getaffinity", return_value=changed):
+                    with self.assertRaisesRegex(RuntimeError, "CPU mask changed"):
+                        require_stable_cpu_mask([2, 3])
+
+    def test_cpuset_drift_aborts_full_profile_before_warmup_or_report(self):
+        # Exercise profile() integration, not only the isolated mask helper.
+        # No real perf invocation or source binary is required for the negative.
+        with TemporaryDirectory() as tmp:
+            output = Path(tmp) / "must-not-exist.json"
+            args = SimpleNamespace(repeats=1, warmups=1, tree=None,
+                                   command=["/fake/native_actor_shard_layout_bench",
+                                            "--layout", "soa", "--rows", "17",
+                                            "--iterations", "1"],
+                                   output=str(output), perf="perf",
+                                   l2_requests=None, l2_misses=None)
+            with patch("profile_cache_locality.os.sched_getaffinity",
+                       side_effect=({2, 3}, {2})), \
+                 patch("profile_cache_locality.hash_executable",
+                       return_value=("a" * 64, 123)), \
+                 patch("profile_cache_locality.shutil.which", return_value="/usr/bin/perf"), \
+                 patch("profile_cache_locality.subprocess.run") as run:
+                with self.assertRaisesRegex(RuntimeError, "CPU mask changed"):
+                    profile(args)
+                run.assert_not_called()
+            self.assertFalse(output.exists())
+
+    def test_cpuset_drift_after_perf_sample_never_publishes(self):
+        # A CPU-mask revocation during perf must reject the whole sample
+        # before counters are parsed or a JSON evidence record is created.
+        with TemporaryDirectory() as tmp:
+            output = Path(tmp) / "must-not-exist.json"
+            args = SimpleNamespace(repeats=1, warmups=0, tree=None,
+                                   command=["/fake/native_actor_shard_layout_bench",
+                                            "--layout", "aos", "--rows", "17",
+                                            "--iterations", "1"],
+                                   output=str(output), perf="perf",
+                                   l2_requests=None, l2_misses=None)
+            with (patch("profile_cache_locality.os.sched_getaffinity",
+                        side_effect=({2, 3}, {2, 3}, {2})),
+                  patch("profile_cache_locality.hash_executable",
+                        return_value=("a" * 64, 123)),
+                  patch("profile_cache_locality.shutil.which", return_value="/usr/bin/perf"),
+                  patch("profile_cache_locality.subprocess.run") as run):
+                with self.assertRaisesRegex(RuntimeError, "CPU mask changed"):
+                    profile(args)
+                run.assert_called_once()
+            self.assertFalse(output.exists())
 
     def test_event_name_admission(self):
         self.assertEqual(validate_event("l2_rqsts.demand_data_rd_miss"),

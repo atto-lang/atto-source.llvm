@@ -1,0 +1,3 @@
+pub fnc main(): int {
+  return ((0 ^^ Integer.rem(1, 0)) == 0) ? 42 : 7;
+}

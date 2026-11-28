@@ -180,6 +180,14 @@ public:
         return subscribe(WaitKind::Read, std::forward<Callback>(callback));
     }
 
+    // Trusted owner-pumped select registrations retain terminal readiness
+    // until the owner commits or revokes the exact subscription. Producer
+    // callbacks are advisory; this is not the legacy one-shot observer API.
+    template <class Callback>
+    Subscription subscribe_readable_advisory(Callback&& callback) {
+        return subscribe(WaitKind::Read, std::forward<Callback>(callback), true);
+    }
+
     template <class Callback>
     Subscription subscribe_writable(Callback&& callback) {
         return subscribe(WaitKind::Write, std::forward<Callback>(callback));
@@ -340,7 +348,7 @@ public:
 
 private:
     template <class Callback>
-    Subscription subscribe(WaitKind kind, Callback&& callback) {
+    Subscription subscribe(WaitKind kind, Callback&& callback, bool retain_terminal = false) {
         std::function<void(const Subscription&)> consumer(
             std::forward<Callback>(callback));
         if (!consumer)
@@ -371,7 +379,7 @@ private:
             token = Subscription(state_, kind, index, id);
             std::function<void()> wrapped(
                 [consumer = std::move(consumer), token,
-                 state = state_]() mutable {
+                 state = state_, retain_terminal]() mutable {
                     try {
                         consumer(token);
 
@@ -387,7 +395,7 @@ private:
                             std::lock_guard<std::mutex> guard(state->mutex);
                             terminal = state->closed;
                         }
-                        if (terminal) (void)token.close();
+                        if (terminal && !retain_terminal) (void)token.close();
                     } catch (...) {
                         // A readiness notification is advisory, but a callback
                         // failure must not strand an inert waiter forever.

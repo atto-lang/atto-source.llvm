@@ -2,11 +2,13 @@
 #include "oreslang/runtime/AsyncIoEpollOperation.hpp"
 
 #include <array>
-#include <cassert>
+#include <cstdlib>
 #include <cstdint>
 #include <sys/socket.h>
 
 using namespace oreslang::runtime;
+
+static void check(bool condition) { if (!condition) std::abort(); }
 
 struct Stores {
     OresNativeExecutionContextStore* executions =
@@ -14,12 +16,12 @@ struct Stores {
     OresNativeContinuationStore* continuations =
         ores_native_continuation_store_open(16, executions);
 
-    Stores() { assert(executions && continuations); }
+    Stores() { check(executions && continuations); }
     ~Stores() {
-        assert(ores_native_continuation_store_live(continuations) == 0);
-        assert(ores_native_execution_context_store_live(executions) == 0);
-        assert(ores_native_continuation_store_close(continuations));
-        assert(ores_native_execution_context_store_close(executions));
+        check(ores_native_continuation_store_live(continuations) == 0);
+        check(ores_native_execution_context_store_live(executions) == 0);
+        check(ores_native_continuation_store_close(continuations));
+        check(ores_native_execution_context_store_close(executions));
     }
 
     OresNativeSuspensionLink suspend(
@@ -34,35 +36,35 @@ struct Stores {
         context.allocation.generation = ticket.generation;
 
         OresNativeExecutionHandle origin{};
-        assert(ores_native_execution_context_store_insert(
+        check(ores_native_execution_context_store_insert(
             executions, &context, &origin));
 
         OresNativeSuspensionLink link{};
-        assert(ores_native_await_trace_suspend(
+        check(ores_native_await_trace_suspend(
             executions, continuations, origin,
             OresNativeContinuationHandle{},
             ORES_CONTINUATION_BOUNDARY_AWAIT,
             23, ticket.operation_id, &link));
-        assert(ores_native_execution_context_store_release(executions, origin));
+        check(ores_native_execution_context_store_release(executions, origin));
         return link;
     }
 
     OresNativeContinuationState state(OresNativeSuspensionLink link) {
         OresNativeContinuationRecord record{};
-        assert(ores_native_continuation_store_get(
+        check(ores_native_continuation_store_get(
             continuations, link.continuation, &record));
         return record.state;
     }
 
     void release(OresNativeSuspensionLink link) {
-        assert(ores_native_continuation_store_release(
+        check(ores_native_continuation_store_release(
             continuations, link.continuation));
     }
 };
 
 static void real_epoll_completion_resumes_only_after_retirement() {
     int pair[2] = {-1, -1};
-    assert(::socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0, pair) == 0);
+    check(::socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0, pair) == 0);
     OwnedSocketFd reader(pair[0]);
     OwnedSocketFd writer(pair[1]);
 
@@ -79,38 +81,65 @@ static void real_epoll_completion_resumes_only_after_retirement() {
 
     epoll.arm();
     const char byte = 'q';
-    assert(try_write(writer.get(), &byte, 1).disposition == IoDisposition::transferred);
+    check(try_write(writer.get(), &byte, 1).disposition == IoDisposition::transferred);
 
     std::array<EpollReadiness::Ready, EpollReadiness::max_batch> ready{};
-    assert(readiness.wait(ready, 1000) == 1);
-    assert(epoll.claim_ready(ready[0]));
+    check(readiness.wait(ready, 1000) == 1);
+    check(epoll.claim_ready(ready[0]));
 
     char received = 0;
-    assert(try_read(reader.get(), &received, 1).disposition == IoDisposition::transferred);
-    assert(received == byte);
-    assert(epoll.finish_callback(AsyncIoTerminal::success));
+    check(try_read(reader.get(), &received, 1).disposition == IoDisposition::transferred);
+    check(received == byte);
+    check(epoll.finish_callback(AsyncIoTerminal::success));
 
     // Completion is not scheduler-visible while epoll still owns registration.
-    assert(!continuation.notify_ready_after_retirement());
-    assert(stores.state(link) == ORES_CONTINUATION_PENDING);
+    check(!continuation.notify_ready_after_retirement());
+    OresNativeExecutionHandle premature{};
+    check(!continuation.try_resume({91, 7002}, &premature));
+    check(!ores_native_store_handle_valid(premature));
+    check(stores.state(link) == ORES_CONTINUATION_PENDING);
+    check(ores_native_execution_context_store_live(stores.executions) == 1);
 
     epoll.disarm();
-    assert(epoll.retire());
-    assert(lifecycle.ready_to_reclaim());
-    assert(continuation.notify_ready_after_retirement());
-    assert(stores.state(link) == ORES_CONTINUATION_READY);
+    check(epoll.retire());
+    check(lifecycle.ready_to_reclaim());
+    check(continuation.notify_ready_after_retirement());
+    check(stores.state(link) == ORES_CONTINUATION_READY);
+
+    // Readiness does not authorize a foreign runtime domain.
+    OresNativeExecutionHandle foreign{};
+    check(!continuation.try_resume({92, 7002}, &foreign));
+    check(!ores_native_store_handle_valid(foreign));
+    check(stores.state(link) == ORES_CONTINUATION_READY);
+    check(ores_native_execution_context_store_live(stores.executions) == 1);
 
     OresNativeExecutionHandle resumed{};
-    assert(continuation.try_resume({91, 7002}, &resumed));
-    assert(stores.state(link) == ORES_CONTINUATION_CLAIMED);
-    assert(continuation.finish_resume());
-    assert(ores_native_execution_context_store_release(stores.executions, resumed));
+    OresNativeExecutionContext context{};
+    check(continuation.try_resume({91, 7002}, &resumed, &context));
+    check(stores.state(link) == ORES_CONTINUATION_CLAIMED);
+    check(context.id.runtime_domain == 91 && context.id.execution == 7002);
+    check(context.allocation.kind == ORES_ALLOCATION_DOMAIN_ACTOR);
+    check(context.allocation.domain == 91);
+    check(context.allocation.owner == ticket.actor_id);
+    check(context.allocation.generation == ticket.generation);
+    check(context.parent_execution.slot == link.parent.slot);
+    check(context.parent_execution.generation == link.parent.generation);
+    check(!ores_native_store_handle_valid(context.continuation));
+    check(ores_native_execution_context_store_live(stores.executions) == 2);
+
+    // A duplicate wake/resume must not create a second logical execution.
+    OresNativeExecutionHandle duplicate{};
+    check(!continuation.try_resume({91, 7003}, &duplicate));
+    check(!ores_native_store_handle_valid(duplicate));
+    check(ores_native_execution_context_store_live(stores.executions) == 2);
+    check(continuation.finish_resume());
+    check(ores_native_execution_context_store_release(stores.executions, resumed));
     stores.release(link);
 }
 
 static void cancellation_after_ready_before_resume_wins_without_reentry() {
     int pair[2] = {-1, -1};
-    assert(::socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0, pair) == 0);
+    check(::socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0, pair) == 0);
     OwnedSocketFd reader(pair[0]);
     OwnedSocketFd writer(pair[1]);
 
@@ -127,26 +156,26 @@ static void cancellation_after_ready_before_resume_wins_without_reentry() {
 
     epoll.arm();
     const char byte = 'z';
-    assert(try_write(writer.get(), &byte, 1).disposition == IoDisposition::transferred);
+    check(try_write(writer.get(), &byte, 1).disposition == IoDisposition::transferred);
     std::array<EpollReadiness::Ready, EpollReadiness::max_batch> ready{};
-    assert(readiness.wait(ready, 1000) == 1);
-    assert(epoll.claim_ready(ready[0]));
+    check(readiness.wait(ready, 1000) == 1);
+    check(epoll.claim_ready(ready[0]));
 
     char received = 0;
-    assert(try_read(reader.get(), &received, 1).disposition == IoDisposition::transferred);
-    assert(epoll.finish_callback(AsyncIoTerminal::success));
+    check(try_read(reader.get(), &received, 1).disposition == IoDisposition::transferred);
+    check(epoll.finish_callback(AsyncIoTerminal::success));
     epoll.disarm();
-    assert(epoll.retire());
-    assert(continuation.notify_ready_after_retirement());
-    assert(stores.state(link) == ORES_CONTINUATION_READY);
+    check(epoll.retire());
+    check(continuation.notify_ready_after_retirement());
+    check(stores.state(link) == ORES_CONTINUATION_READY);
 
     // Continuation cancellation is allowed to revoke READY before the scheduler
     // claims it. The physically retired I/O operation must not re-enter guest.
-    assert(continuation.cancel());
-    assert(stores.state(link) == ORES_CONTINUATION_CANCELLED);
+    check(continuation.cancel());
+    check(stores.state(link) == ORES_CONTINUATION_CANCELLED);
 
     OresNativeExecutionHandle resumed{};
-    assert(!continuation.try_resume({91, 7102}, &resumed));
+    check(!continuation.try_resume({91, 7102}, &resumed));
     stores.release(link);
 }
 
