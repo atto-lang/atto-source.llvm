@@ -25,3 +25,4 @@ std    sync         stdlib/std/sync.atto             any
 std    telemetry    stdlib/std/telemetry.atto        any
 alloc  heap         stdlib/alloc/heap.atto           any  none
 alloc  region       stdlib/alloc/region.atto         any  none
+alloc  map          stdlib/alloc/map.atto            any  allocator
