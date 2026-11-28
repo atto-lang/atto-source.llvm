@@ -307,6 +307,7 @@ struct MethodInfo {
     name: String,
     public: bool,
     is_static: bool,
+    mutable_receiver: bool,
     idx: u32,
     params: Vec<Type>,
     ret: Type,
@@ -392,6 +393,7 @@ struct FnCx<'a> {
     // reassigned bindings. Conservative across all control-flow branches.
     fresh_copy_roots: BTreeSet<u32>,
     nested_linear: bool,
+    mutable_method_receiver: bool,
     nested_groups: BTreeMap<(u32, u32), u64>,
     next_nested_group: u64,
     imports: &'a mut Vec<Import>,
@@ -807,6 +809,7 @@ pub fn check(p: &Program) -> R<TProgram> {
                 name: m.name.clone(),
                 public: m.public,
                 is_static: m.is_static,
+                mutable_receiver: m.mutable_receiver,
                 idx: 0,
                 params: m.params.iter().map(|q| res(q.ty)).collect::<R<Vec<_>>>()?,
                 ret: res(m.ret)?,
@@ -817,8 +820,36 @@ pub fn check(p: &Program) -> R<TProgram> {
     // Only fixed scalar storage with no constructor/methods is a closed
     // immutable leaf. A nominal reference or a fixed outer slot alone is
     // never proof of transitive immutability.
+    // A method-bearing leaf is eligible only for an explicit, nonescaping
+    // scalar setter profile. No calls, allocation, self escape, arbitrary RHS
+    // effects, nested writes, or overriding generated copy hooks are admitted.
+    let bounded_setters = |c: &ClassDecl| {
+        c.methods.iter().all(|m| {
+            m.mutable_receiver && !m.is_static && m.ret == Type::Void
+                && m.name != "copy" && m.name != "copy_deep"
+                && m.params.iter().all(|q| !q.mutable && !q.exclusive && q.name != "self"
+                    && res(q.ty).is_ok_and(|t| matches!(t,
+                        Type::Int | Type::Bool | Type::Float | Type::Str | Type::Enum(_))))
+                && !m.body.is_empty()
+                && m.body.iter().all(|stmt| matches!(stmt,
+                    Stmt::FieldAssign { target, value, .. } if matches!(&target.kind, ExprKind::SelfRef)
+                        && (matches!(&value.kind, ExprKind::Int(_) | ExprKind::Bool(_) | ExprKind::Float(_) | ExprKind::Str(_))
+                            || matches!(&value.kind, ExprKind::Var(n) if m.params.iter().any(|q| &q.name == n)))))
+        })
+    };
+    for c in &p.classes {
+        if c.methods.iter().any(|m| m.mutable_receiver)
+            && (c.ctor.is_some() || !bounded_setters(c)
+                || !c.fields.iter().all(|f| !f.referent_mutable
+                    && const_init(&f.init)
+                    && res(f.ty).is_ok_and(|t| matches!(t,
+                        Type::Int | Type::Bool | Type::Float | Type::Str | Type::Enum(_))))) {
+            return Err(Diagnostic::new(c.pos, "E_COPY_UNPROVEN",
+                "mutable method requires a closed scalar leaf with nonescaping explicit setters"));
+        }
+    }
     let mut closed_copy_trees: Vec<bool> = p.classes.iter().map(|c| {
-        c.ctor.is_none() && c.methods.is_empty() && c.fields.iter().all(|f|
+        c.ctor.is_none() && bounded_setters(c) && c.fields.iter().all(|f|
             !f.referent_mutable && const_init(&f.init)
                 && res(f.ty).is_ok_and(|t| matches!(t,
                     Type::Int | Type::Bool | Type::Float | Type::Str | Type::Enum(_))))
@@ -1276,7 +1307,7 @@ pub fn check(p: &Program) -> R<TProgram> {
             };
             let mut named = Vec::new();
             if !m.is_static {
-                named.push(("self", me, false));
+                named.push(("self", me, mi.mutable_receiver));
             }
             named.extend(m.params.iter().zip(&mi.params).map(|(q, t)| (q.name.as_str(), *t, q.mutable)));
             let label = format!("{}.{}", c.name, m.name);
@@ -1508,6 +1539,8 @@ fn body_check(
     data: &mut Vec<u8>,
 ) -> R<(Vec<TStmt>, Vec<Type>)> {
     let mut cx = FnCx::new(g, owner, ret, imports, data);
+    cx.mutable_method_receiver = matches!(owner, Owner::Class { ctor: false, is_static: false, .. })
+        && named.first().is_some_and(|(name, _, mutable)| *name == "self" && *mutable);
     cx.nparams = named.len() as u32;
     if let Some((mail_name, payload)) = mail {
         cx.scopes[0].push(Local {
@@ -1644,6 +1677,7 @@ impl<'a> FnCx<'a> {
             moved: BTreeSet::new(),
             fresh_copy_roots: BTreeSet::new(),
             nested_linear: true,
+            mutable_method_receiver: false,
             nested_groups: BTreeMap::new(),
             next_nested_group: 0,
             imports,
@@ -2470,7 +2504,7 @@ impl<'a> FnCx<'a> {
                         ),
                     ));
                 }
-                if !ctor {
+                if !ctor && !self.mutable_method_receiver {
                     return Err(Diagnostic::new(
                         pos,
                         "E_OWNERSHIP",
@@ -2689,6 +2723,9 @@ impl<'a> FnCx<'a> {
                     self.expr(base)?
                 } else { self.value(base)? };
                 self.member_on(obj, name, e.pos)
+            }
+            ExprKind::MethodCall(base, name, args) if matches!(base.kind, ExprKind::Member(..)) => {
+                self.method_call(base, name, args, e.pos)
             }
             ExprKind::MethodCall(base, name, args) if !matches!(base.kind, ExprKind::Var(_) | ExprKind::SelfRef) => {
                 let recv = self.value(base)?;
@@ -3439,6 +3476,48 @@ impl<'a> FnCx<'a> {
                 _ => return Err(Diagnostic::new(base.pos, "E_UNBOUND", "unknown name 'self'")),
             }
         }
+        // Explicit mutable setters use the same checked projection gate as
+        // exclusive call arguments. Only a named root or immediate child
+        // is admitted; all other receiver paths must fail closed below.
+        let mutable_target = match &base.kind {
+            ExprKind::Var(n) => self.lookup(n).and_then(|l| match l.ty {
+                Type::Class(c) => Some(c), _ => None,
+            }),
+            ExprKind::Member(parent, field) => {
+                if let ExprKind::Var(n) = &parent.kind {
+                    self.lookup(n).and_then(|l| match l.ty {
+                        Type::Class(c) => self.g.classes[c as usize].fields.iter()
+                            .find(|f| &f.name == field).and_then(|f| match f.ty {
+                                Type::Class(child) => Some(child), _ => None,
+                            }),
+                        _ => None,
+                    })
+                } else { None }
+            }
+            _ => None,
+        };
+        if let Some(c) = mutable_target {
+            if let Some(m) = self.g.classes[c as usize].methods.iter()
+                .find(|m| m.name == name && m.mutable_receiver).cloned() {
+                if !m.public && self.inside_class() != Some(c) {
+                    return Err(Diagnostic::new(pos, "E_PRIVATE", "private mutable method"));
+                }
+                self.arity(name, m.params.len(), args.len(), pos)?;
+                if args.iter().any(|a| !matches!(&a.kind,
+                    ExprKind::Int(_) | ExprKind::Bool(_) | ExprKind::Float(_) | ExprKind::Str(_) | ExprKind::Var(_))) {
+                    return Err(Diagnostic::new(pos, "E_COPY_UNPROVEN",
+                        "mutable setter arguments must be effect-free scalar literals or bindings"));
+                }
+                let projected = Expr {
+                    kind: ExprKind::Call("$mut_arg".to_string(), vec![base.clone()]),
+                    pos,
+                };
+                let receiver = self.exclusive_nested_arg(&projected, Type::Class(c))?;
+                let mut targs = vec![receiver];
+                targs.extend(self.args(name, args, &m.params)?);
+                return Ok(TE { e: TExpr::Call(m.idx, targs), ty: m.ret });
+            }
+        }
         let recv = self.value(base)?;
         self.method_on(recv, name, args, pos)
     }
@@ -3510,6 +3589,10 @@ impl<'a> FnCx<'a> {
             }
         };
         let cname = class.name.clone();
+        if m.mutable_receiver {
+            return Err(Diagnostic::new(pos, "E_COPY_READONLY",
+                "mutable method requires a proven exclusive named receiver"));
+        }
         if m.is_static {
             return Err(type_err(
                 pos,

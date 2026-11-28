@@ -11,7 +11,13 @@ const mutableNested='define class Scores as pub let int n = 20; end\ndefine clas
 const fixedNested=mutableNested.replace('pub let mut Scores','pub val Scores');
 const deepTree='define class Scores as pub let int n = 20; end\ndefine class Profile as pub let mut Scores scores = new Scores(); end\ndefine class Person as pub let mut Profile profile = new Profile(); pub let int age = 1; end\n';
 const main=s=>'pub fnc main(): int { '+s+' }';
+const setterNested=mutableNested.replace('pub let int n = 20; end','pub let int n = 20; pub mut mtd adjust(int value): void { self.n = value; } end');
+const setterSetup='let mut Person a = new Person(); let mut Person b = copy! a; let mut Person c = copy! b; b.scores = new Scores(); ';
 const cases=[
+ ['mutable-method-detached',setterNested+main(setterSetup+'b.scores.adjust(22); return a.scores.n+b.scores.n+c.scores.n;'),62],
+ ['mutable-method-shared-a',setterNested+main(setterSetup+'a.scores.adjust(22); return b.scores.n;'),'E_COPY_READONLY'],
+ ['mutable-method-shared-c',setterNested+main(setterSetup+'c.scores.adjust(22); return b.scores.n;'),'E_COPY_READONLY'],
+ ['mutable-method-effect',setterNested.replace('self.n = value;','self.n = value; stdio.println(value);')+main('return 42;'),'E_COPY_UNPROVEN'],
  ['exclusive-call-detach',mutableNested+'fnc adjust(mut Scores s): void { s.n = 22; }\n'+main('let mut Person a = new Person(); let mut Person b = copy! a; b.scores = new Scores(); adjust(mut b.scores); return a.scores.n+b.scores.n;'),42],
  ['exclusive-call-release',mutableNested+'fnc adjust(mut Scores s): void { s.n = 22; }\n'+main('let mut Person a = new Person(); let int n = 0; block { let mut Person b = copy! a; n = b.scores.n; } adjust(mut a.scores); return n+a.scores.n;'),42],
  ['exclusive-call-shared-source',mutableNested+'fnc adjust(mut Scores s): void { s.n = 22; }\n'+main('let mut Person a = new Person(); let mut Person b = copy! a; adjust(mut a.scores); return b.scores.n;'),'E_COPY_READONLY'],
