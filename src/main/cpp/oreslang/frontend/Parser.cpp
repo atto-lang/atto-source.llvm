@@ -3581,7 +3581,6 @@ private:
         require(brace ? "{" : "(");
         if (row.wrapper == "struct" && token_.text == close)
             fail("E_EMPTY_AGGREGATE: empty Struct not admitted");
-        bool comma = false;
         while (token_.text != close) {
             if (row.fields.size() >= 64) fail("aggregate field budget exceeded");
             const auto key = row.wrapper == "Tuple" ? std::to_string(row.fields.size())
@@ -3600,11 +3599,8 @@ private:
                 n = signed_integer_literal();
             }
             row.fields.push_back({key, is_bool, n});
-            comma = accept(",");
-            if (!comma) break;
+            if (!accept(",")) break;
         }
-        if (row.wrapper == "Tuple" && row.fields.size() == 1 && !comma)
-            fail("E_TUPLE_ARITY: singleton Tuple requires trailing comma");
         require(close);
         require(";");
         if (expected) {
