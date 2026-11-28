@@ -10647,6 +10647,33 @@ void reject_unlowered_mutex_constructor(std::string_view source,
     }
 }
 
+// Narrow current-main forward port of the alias-only Ensemble admission
+// case from #575. Do not reserve ordinary user methods named try_publish.
+void reject_unlowered_ensemble_publication(std::string_view source,
+                                           bool experimental_pointer_int_aot) {
+    Lexer scan(source, 0, experimental_pointer_int_aot);
+    Token window[5] = {};
+    std::size_t count = 0;
+    for (auto token = scan.next(); token.kind != Kind::End; token = scan.next()) {
+        if (count < 5) {
+            window[count++] = token;
+        } else {
+            for (std::size_t i = 0; i < 4; ++i) window[i] = window[i + 1];
+            window[4] = token;
+        }
+        if (count == 5 &&
+            window[0].kind == Kind::Symbol && window[0].text == "." &&
+            window[1].kind == Kind::Identifier && window[1].text == "try_publish" &&
+            window[2].kind == Kind::Symbol && window[2].text == "(" &&
+            window[3].kind == Kind::Identifier && window[3].text == "share" &&
+            window[4].kind == Kind::Symbol && window[4].text == "!") {
+            throw std::runtime_error(
+                "E_ACTOR_PUBSUB_UNSUPPORTED: typed Ensemble Topic.try_publish(share! ...) "
+                "requires verified guest lowering at byte " + std::to_string(window[1].offset));
+        }
+    }
+}
+
 } // namespace
 
 NamedRecursiveScalarPlan parse_named_recursive_scalar(std::string_view source) {
@@ -10661,6 +10688,7 @@ Program parse_verified_namespace_source_unresolved(
     // Precondition: independently pinned physical source snapshot. Preserve
     // unresolved imports for the verified namespace graph to authorize.
     // Never run resolve_and_validate_program or emit IR here.
+    reject_unlowered_ensemble_publication(authenticated_source, false);
     return Parser(authenticated_source, false, false, true).parse();
 }
 
@@ -10668,6 +10696,7 @@ Program parse_unresolved_program(std::string_view source, bool experimental_owne
                       bool experimental_rt_scalar_loop, bool experimental_pointer_int_aot,
                       int language_version, bool relative_import_unit) {
     reject_unlowered_mutex_constructor(source, experimental_pointer_int_aot);
+    reject_unlowered_ensemble_publication(source, experimental_pointer_int_aot);
     Program program = Parser(source, experimental_owned_int,
                              experimental_rt_scalar_loop, false, 0,
                              experimental_pointer_int_aot, language_version,
