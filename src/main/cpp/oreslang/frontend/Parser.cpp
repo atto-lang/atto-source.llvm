@@ -3801,6 +3801,154 @@ private:
         return value;
     }
 
+    // Restricted immutable literal aggregate slice. All stored fields have
+    // static scalar types; only projections enter the existing checked AST.
+    // No object layout, runtime type identity, escape or aggregate ABI.
+    struct NamedAggregateField {
+        std::string name;
+        bool is_bool;
+        std::int64_t value;
+    };
+    struct NamedAggregate {
+        std::string wrapper;
+        std::vector<NamedAggregateField> fields;
+    };
+    using NamedAggregateMap = std::unordered_map<std::string, NamedAggregate>;
+    NamedAggregateMap named_aggregate_locals_;
+    static bool named_aggregate_wrapper(std::string_view word) {
+        return word == "Record" || word == "Tuple" || word == "struct";
+    }
+    bool named_aggregate_ahead() {
+        if (token_.text != "const") return false;
+        Lexer look = lexer_;
+        const auto first = look.next();
+        const bool explicit_wrapper = named_aggregate_wrapper(first.text);
+        if (explicit_wrapper) {
+            const auto next = look.next();
+            return next.text == "<" ||
+                (next.kind == Kind::Identifier && look.next().text == "=");
+        }
+        // Only a complete untyped empty literal, never grouped scalar syntax.
+        return first.kind == Kind::Identifier && !reserved(first.text) &&
+            look.next().text == "=" && look.next().text == "(" &&
+            look.next().text == ")" && look.next().text == ";";
+    }
+    std::string named_aggregate_identifier() {
+        if (token_.kind != Kind::Identifier || token_.text.size() > 128 ||
+                reserved(token_.text) || token_.text == "infer" ||
+                named_aggregate_wrapper(token_.text))
+            fail("E_TYPE_NAME: invalid aggregate identifier");
+        for (const auto& type : types::kCoreTypeRegistry)
+            if (type.name == token_.text)
+                fail("E_TYPE_NAME: reserved aggregate identifier");
+        return identifier();
+    }
+    static const NamedAggregateField* named_aggregate_field(
+            const NamedAggregate& row, std::string_view key) {
+        for (const auto& field : row.fields)
+            if (field.name == key) return &field;
+        return nullptr;
+    }
+    void parse_named_aggregate(NamedAggregateMap& aliases) {
+        require("const");
+        const bool explicit_wrapper = named_aggregate_wrapper(token_.text);
+        NamedAggregate row{explicit_wrapper ? std::string(token_.text) : "Tuple", {}};
+        if (explicit_wrapper) {
+            const auto name = row.wrapper;
+            if (defined_type_aliases_.count(name) || scalar_alias_targets_.count(name) ||
+                    forwards_.count(name) || type_only_nominals_.count(name))
+                fail("E_AGGREGATE_KIND: shadowed aggregate wrapper");
+            advance();
+        }
+        bool introduce = false;
+        std::string alias;
+        const NamedAggregate* expected = nullptr;
+        if (accept("<")) {
+            introduce = accept("infer");
+            alias = named_aggregate_identifier();
+            require(">");
+            auto found = aliases.find(alias);
+            if (introduce) {
+                if (found != aliases.end() || defined_type_aliases_.count(alias) ||
+                        scalar_alias_targets_.count(alias) || forwards_.count(alias) ||
+                        type_only_nominals_.count(alias))
+                    fail("E_DUPLICATE_TYPE: inferred aggregate name already declared");
+            } else {
+                if (found == aliases.end())
+                    fail("E_UNKNOWN_TYPE: unknown named aggregate alias");
+                expected = &found->second;
+                if (expected->wrapper != row.wrapper)
+                    fail("E_AGGREGATE_KIND: mismatched aggregate wrapper");
+            }
+        }
+        const auto local = named_aggregate_identifier();
+        if (named_aggregate_locals_.count(local) || named_aggregate_locals_.size() >= 64)
+            fail("duplicate aggregate local or aggregate budget exceeded");
+        require("=");
+        const bool brace = row.wrapper == "struct" ||
+            (row.wrapper == "Record" && token_.text == "{");
+        const std::string_view close = brace ? "}" : ")";
+        require(brace ? "{" : "(");
+        if (row.wrapper == "struct" && token_.text == close)
+            fail("E_EMPTY_AGGREGATE: empty Struct not admitted");
+        while (token_.text != close) {
+            if (row.fields.size() >= 64) fail("aggregate field budget exceeded");
+            const auto key = row.wrapper == "Tuple" ? std::to_string(row.fields.size())
+                                                    : named_aggregate_identifier();
+            if (named_aggregate_field(row, key))
+                fail("E_DUPLICATE_FIELD: duplicate aggregate field");
+            if (row.wrapper == "Record") {
+                if (!accept(":")) require("=");
+            } else if (row.wrapper == "struct") require(":");
+            const bool is_bool = token_.text == "true" || token_.text == "false";
+            std::int64_t n;
+            if (is_bool) { n = token_.text == "true" ? 1 : 0; advance(); }
+            else {
+                if (token_.kind != Kind::Integer && token_.text != "-")
+                    fail("E_TYPE_INFER_AMBIGUOUS: expected literal int or bool");
+                n = signed_integer_literal();
+            }
+            row.fields.push_back({key, is_bool, n});
+            if (!accept(",")) break;
+        }
+        require(close);
+        require(";");
+        if (expected) {
+            if (expected->fields.size() != row.fields.size())
+                fail("E_TYPE_MISMATCH: aggregate field count");
+            for (const auto& field : row.fields) {
+                const auto* match = named_aggregate_field(*expected, field.name);
+                if (!match || match->is_bool != field.is_bool)
+                    fail("E_TYPE_MISMATCH: aggregate field type or name");
+            }
+        }
+        if (introduce) aliases.emplace(alias, row);
+        named_aggregate_locals_.emplace(local, std::move(row));
+    }
+    std::unique_ptr<Expression> named_aggregate_projection() {
+        const auto offset = token_.offset;
+        const auto& row = named_aggregate_locals_.at(std::string(token_.text));
+        advance();
+        std::string key;
+        if (row.wrapper == "Tuple") {
+            require("[");
+            if (token_.kind != Kind::Integer) fail("tuple index must be a nonnegative literal");
+            const auto slot = integer_literal();
+            key = std::to_string(slot);
+            require("]");
+        } else {
+            require(".");
+            key = named_aggregate_identifier();
+        }
+        const auto* field = named_aggregate_field(row, key);
+        if (!field) fail("E_NO_FIELD: unknown aggregate field or tuple index");
+        auto result = make_expression(field->is_bool ? Expression::Kind::Boolean :
+                                                      Expression::Kind::Integer, offset);
+        if (field->is_bool) result->boolean = field->value != 0;
+        else result->integer = field->value;
+        return result;
+    }
+
     Function function(std::string owner = {}, bool visible = false) {
         struct Restore { std::string& target; std::string prior; ~Restore() { target = std::move(prior); } } restore{method_scope_, method_scope_};
         method_scope_ = owner;
@@ -4274,6 +4422,27 @@ private:
         if (owner.empty() && arrow_return_type && token_.text == "return")
             fail("native compact end-delimited callable requires '::' before same-line body");
         require("{");
+        if (named_aggregate_ahead()) {
+            if (!owner.empty() || value.name != "main" || value.async_source_i64 ||
+                    value.returns_void || value.return_type != ScalarType::I64 ||
+                    !value.parameters.empty() || !value.generic_parameters.empty() ||
+                    !value.return_class.empty() || !value.return_sum.empty() ||
+                    !value.pending_return_type_alias.empty() || value.has_declared_effects ||
+                    alias_extension)
+                fail("E_NAMED_AGGREGATE_PROFILE: restricted synchronous zero-argument int main");
+            // Scope rollback is unconditional, including failed parses.
+            struct RestoreNamedAggregates {
+                NamedAggregateMap& target;
+                ~RestoreNamedAggregates() { target.clear(); }
+            } restore_named{named_aggregate_locals_};
+            NamedAggregateMap aliases;
+            while (named_aggregate_ahead()) parse_named_aggregate(aliases);
+            require_return_marker();
+            value.result = expression();
+            require(";");
+            require("}");
+            return value;
+        }
         auto array_effect_ahead = [&] {
             return peek_next().text == "." && std::any_of(value.locals.begin(), value.locals.end(),
                 [&](const LocalBinding& local) { return local.int_array && local.name == token_.text; });
@@ -7466,6 +7635,9 @@ private:
 
     std::unique_ptr<Expression> primary() {
         const auto offset = token_.offset;
+        if (token_.kind == Kind::Identifier &&
+                named_aggregate_locals_.count(std::string(token_.text)))
+            return named_aggregate_projection();
         // Distinguish the contextual function name loop(...) from loop(val ...).
         if (token_.text == "loop") {
             Lexer look = lexer_;
