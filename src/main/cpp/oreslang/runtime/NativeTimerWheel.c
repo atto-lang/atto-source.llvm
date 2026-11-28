@@ -53,11 +53,16 @@ static int32_t take(OresTimerWheel* w, int32_t list) {
 static void release(OresTimerWheel* w, int32_t i) {
     w->payload[i] = 0;
     w->where[i] = FREE;
-    uint32_t g = w->generation[i] + 1;
-    w->generation[i] = g == 0 ? 1 : g;
+    w->size--;
+    /* Never recycle a generation: retire this slot rather than wrap to 1. */
+    if (w->generation[i] == UINT32_MAX) {
+        w->generation[i] = 0;
+        w->next[i] = NIL;
+        return;
+    }
+    ++w->generation[i];
     w->next[i] = w->free_head;
     w->free_head = i;
-    w->size--;
 }
 
 static void place(OresTimerWheel* w, int32_t i) {
@@ -168,7 +173,7 @@ void ores_timer_wheel_destroy(OresTimerWheel* w) {
 }
 
 uint64_t ores_timer_wheel_arm(OresTimerWheel* w, uint64_t deadline_ns, uint64_t payload) {
-    if (w->free_head == NIL) return 0;
+    if (deadline_ns == ORES_TIMER_NO_DEADLINE || w->free_head == NIL) return 0;
     int32_t i = w->free_head;
     w->free_head = w->next[i];
     w->deadline[i] = deadline_ns;
