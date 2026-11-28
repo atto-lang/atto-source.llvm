@@ -45,6 +45,13 @@ typedef struct OresTimerDriver {
 /* Monotonic nanoseconds from the host clock. */
 uint64_t ores_timer_monotonic_ns(void);
 
+/* Owner-serialized lifecycle: start only on fresh or fully stopped storage.
+ * Publish the driver only after successful start. Quiesce external arm/cancel/
+ * outstanding callers before stop; the fire callback must not call stop.
+ * Handles are scoped to one successful start/stop lifetime. Failed start and
+ * completed stop leave the driver inactive; operations on inactive or
+ * zero-initialized storage return failure/zero without touching pthread state.
+ * This contract does not authorize concurrent destruction or restart. */
 bool ores_timer_driver_start(OresTimerDriver* d, uint32_t capacity, uint64_t tick_ns,
                              OresTimerFire fire, void* ctx);
 /* Stops and joins the thread; pending timers are discarded, not fired. */

@@ -223,6 +223,29 @@ static void test_driver(void) {
     CHECK(atomic_load(&r.fired_mask) == 2); /* cancelled timer never fires */
     CHECK(ores_timer_driver_outstanding(&d) == 1 && ores_timer_driver_cancel(&d, far));
     ores_timer_driver_stop(&d);
+    CHECK(ores_timer_driver_arm_after(&d, MS, 3) == 0);
+    CHECK(!ores_timer_driver_cancel(&d, far));
+    CHECK(ores_timer_driver_outstanding(&d) == 0);
+    ores_timer_driver_stop(&d);
+}
+
+static void test_driver_inactive(void) {
+    OresTimerDriver d = {0};
+    CHECK(!ores_timer_driver_start(&d, 8, MS, NULL, NULL));
+    CHECK(ores_timer_driver_arm_after(&d, MS, 0) == 0);
+    CHECK(!ores_timer_driver_cancel(&d, 1));
+    CHECK(ores_timer_driver_outstanding(&d) == 0);
+    ores_timer_driver_stop(&d);
+    CHECK(ores_timer_driver_arm_after(NULL, MS, 0) == 0);
+    CHECK(!ores_timer_driver_cancel(NULL, 1));
+    CHECK(ores_timer_driver_outstanding(NULL) == 0);
+    ores_timer_driver_stop(NULL);
+    Rec r = {0};
+    r.origin = ores_timer_monotonic_ns();
+    CHECK(ores_timer_driver_start(&d, 8, MS, on_fire, &r));
+    CHECK(ores_timer_driver_arm_after(&d, 3600ull * 1000 * MS, 0) != 0);
+    ores_timer_driver_stop(&d);
+    CHECK(atomic_load(&r.fired_mask) == 0);
 }
 
 int main(void) {
@@ -235,6 +258,7 @@ int main(void) {
     test_one_million();
     test_conformance_vector();
     test_driver();
+    test_driver_inactive();
     puts("native timer wheel: all tests passed");
     return 0;
 }
