@@ -302,3 +302,142 @@ host-only tests. These tests and the five native/sanitizer workflow jobs are
 **authored, not executed**. Actual scheduler-owned request-registry hookup,
 guaranteed CONTROL sweeps, panic/restart/hot-reload lifecycle proof, and
 compiled `.atto` receipts remain unverified blockers.
+
+## P0 bounded automatic RequestLocal termination registry (stacked draft)
+
+**Status:** native host code authored; source GitHub Actions and compiled
+`.atto` execution are **NOT VERIFIED**. This is not a guest-accessible API.
+
+New `RequestLocalActorTerminationRegistryV1.hpp` builds on the bootstrap
+scheduler termination observer introduced in LLVM #1525. The registry MUST
+be installed before the first actor spawn, with the scheduler's exact
+actor-slot count (currently bounded to 256). It owns preallocated slots,
+at most 32 strong RequestLocal registrations per actor slot, and one
+non-resettable atomic lifetime token per slot. The native scheduler
+currently disallows reincarnation in one slot; registry reuse/revival is
+explicitly prohibited. The registry attaches this lifetime token to an
+individual request *before* its scheduler-gated admission and uses the
+same `ores_native_actor_scheduler_commit_if_live_v1` lifecycle mutex to
+linearize successful registration against STOP and runtime retirement.
+
+The observer on **ordinary STOP**, **sealed STOP**, or **whole-runtime
+retirement** only writes preallocated atomics: it does not lock a RequestLocal
+scope or registry, allocate, close request values, reenter the scheduler,
+run user callbacks, or block. The token immediately fences future
+`RequestContextLocalV1::active`, original-mail binding, `begin_operation`,
+`set`, `get_copy`, and `erase` admission for registered requests,
+including the post-copy read recheck. A preexisting operation that wins
+before STOP remains accounted until its in-flight lease finishes.
+
+A dedicated external C++ CONTROL worker periodically observes invalid
+tokens and moves registered strong references out under a short registry
+mutex. It closes every revoked scope first and then polls each actor's lease
+quiescence and DONE independently **outside** scheduler/carrier/registry
+locks. A pinned operation on actor A cannot prevent processing actor B. The
+worker polls at a provisional 1 ms cadence and is **not a real-time
+latency guarantee**. Production runtime ownership must keep the registry
+alive until `shutdown_after_retire()` joins the worker, then drain and
+destroy the scheduler, and only then destroy the registry.
+
+The new `native_request_actor_termination_registry_v1_test.cpp` authors
+57 fixed checks plus 60 two-thread registration/STOP and
+cancellation/sealed-STOP trials and a final count assertion (118 expected
+named checks); it also checks sibling survival, generation ABA denial,
+per-actor 32-context registration quota, double STOP, direct STOP,
+retirement without explicit group reconciliation, cancellation first,
+post-stop zero quota, and carrier wait refusal. Three additional negative tests ensure that registry-bound host
+mutations cannot bypass the scheduler lifecycle gate by omitting the
+scheduler parameter: raw set, erase, and first-mail binding all reject.
+The RequestLocal workflow
+now pins the new request header, registry and test blobs and compiles the
+test on GCC/Clang optimized, ASan/UBSan, and GCC TSan. These are
+**source-authored**, not executed receipts.
+
+**Remaining release blockers:** runtime HTTP ingress and supervisor
+ownership must instantiate and use this registry exclusively; callers
+may still create *raw host-only, unregistered* RequestLocal objects that
+are deliberately not promised automatic cleanup. Tenant/isolate issuer
+authentication, compiler-owned AOT descriptors, borrow/transitive memory
+bounds, task/actor ABA across actual slot reuse, panic/restart/hot-reload
+paths, bounded shutdown time, host native sanitizer and compiler-backed
+`.atto` execution all remain open. Never equate the regression's
+simulated host values with guest-visible or five-backend parity.
+
+### Nonblocking sibling-cleanup hardening
+
+The first CONTROL worker design synchronously waited for each actor's pinned
+request operations and DONE before visiting the next actor. This allowed a
+single stalled reader to starve cleanup for an unrelated actor. The worker
+now first closes every observed revoked request, then uses nonblocking
+`closed_quiescent_now()` and `ores_native_actor_scheduler_poll_done()`
+per actor; it never calls `wait_closed_quiescent()` or `wait_done()` in
+the sweeping loop. A new eight-check regression deliberately parks actor
+A's request-value copy while STOP also terminates actor B, verifies B's
+context closes and reaps before A's pinned lease releases, then releases A
+and verifies its late copy cannot escape. Combined suite: 118 authored
+named host checks (57 fixed, 60 coordinated races, final count check).
+
+**Remaining limitation:** C++ host value destructors in `close()` run
+outside locks but could themselves block; neither this single worker nor
+the shallow host value policy proves bounded cleanup latency under an
+arbitrarily blocking destructor. The compiler-facing value/ownership
+descriptor, bounded cleanup policy, and integration through the real
+supervisor/HTTP lifecycle are still mandatory.
+
+
+## P0 trusted ingress / supervisor STOP entrypoint — stacked follow-up
+
+**Status:** host source authored and CI workflow expanded. No admitted native
+runner, sanitizer pass, or compiled `.atto` proof. Do not merge as guest parity.
+
+The request registry's `create` bootstrap checks its advertised slot count
+against the scheduler's immutable capacity, obtained via the new C host
+`ores_native_actor_scheduler_actor_capacity_v1` readback. An undersized
+observer array no longer silently permits a real actor to escape the fence.
+
+`admit_from_trusted_ingress` constructs a provisional RequestLocal context
+and returns it only if scheduler-serialized registration succeeds. On rejection,
+the provisional context closes immediately; no unregistered scope is published
+by this entrypoint. The trusted transport must issue tenant/isolate/request
+identity from an authenticated runtime source: accepting a host C++ struct is
+not itself a proof of issuer authenticity, so the API remains HOST-ONLY.
+
+`signal_supervisor_termination` accepts explicit normal STOP, cancellation,
+panic, supervisor shutdown, restart, and hot-reload **signals**. Normal STOP
+uses the ordinary scheduler STOP; the other causes use sealed STOP so queued
+DATA is abandoned. Every path triggers the existing scheduler-owned atomic
+RequestLocal lifetime notification. This does **not** implement source
+supervisor restart, dynamic actor slot reuse, successful hot-upgrade state
+migration, or actor resurrection; those remain independent release gates.
+
+The new `native_request_ingress_supervisor_v1_test.cpp` authors **207**
+named assertions (38 fixed admission/bootstrap cases, 48 checks across
+the six stop causes, 120 two-thread race checks spanning 60 schedules,
+and one final count assertion). It covers wrong tenant/isolate/request and
+actor generations, cross-domain/wrong-slot actor IDs, null/cancelled task
+authorities, no raw registered mutation, duplicate/late STOP, sibling survival,
+disallowed reuse, and concurrent ingress versus each STOP cause.
+
+The source-local RequestLocal workflow adds GCC/Clang optimized, ASan/UBSan,
+and TSan builds for the ingress test and **four executable negative
+mutations**: remove capacity equivalence, skip registry admission, suppress
+supervisor STOP delivery, or remove the registry-bound raw-write gate.
+Each mutated binary must **compile successfully**, then fail the exact
+expected named assertion; any unexpected failure or a surviving mutation
+fails the CI job. Both affected workflow scheduler blob pins were updated.
+
+### Outstanding proof obligations
+- Find and update the actual native transport/HTTP ingress call sites and
+  actor supervisor dispatchers to exclusively use this trusted entrypoint;
+  raw `RequestContextLocalV1::open` remains host-only and must never lower
+  directly into guest code.
+- Bind tenant/isolate/request identity to scheduler-issued issuer evidence
+  and compiler-owned AOT descriptors, not guest-provided integers.
+- Prove task cancellation propagation, true actor reincarnation/hot-upgrade
+  generation fencing, callback quarantine, ownership/borrow safety and
+  supervisor restart, rather than treating a sealed STOP signal as parity.
+- Bound or quarantine blocking C++ finalizers: the current CONTROL worker
+  avoids blocking on leases/DONE but a host value destructor may itself block.
+  Zero-step CI is an admission failure, not evidence for or against semantics.
+- Require independently reviewed, stepful exact-head GCC/Clang/sanitizer and
+  compiled `.atto` guest receipts before ready/merge or five-backend parity.

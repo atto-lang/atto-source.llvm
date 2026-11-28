@@ -122,11 +122,27 @@ public:
                actor.generation == identity_.actor.generation;
     }
 
+    // Trusted CONTROL/ingress only. Attach one scheduler-owned lifetime fence
+    // before admission; it is never reset, replaced or exposed to .atto.
+    // All observers of the shared pointer use mutex_, while the observer
+    // revokes only the preallocated atomic<bool> (no store mutex on STOP).
+    bool attach_actor_lifetime_fence_once(
+        const std::shared_ptr<std::atomic<bool>>& live) {
+        if (!live) return false;
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!open_ || actor_lifetime_fence_ ||
+            !live->load(std::memory_order_acquire)) return false;
+        actor_lifetime_fence_ = live;
+        return true;
+    }
+
     bool active() const {
         std::lock_guard<std::mutex> lock(mutex_);
-        // Read cancellation under the same lock as slot admission; cancellation
-        // marks TaskCancellation before delivering the revocation callback.
-        return cancellation_->with_active_authority([&] { return open_; });
+        // Read cancellation and actor-termination fencing under the same
+        // admission lock; revocation itself needs no request-store lock.
+        return cancellation_->with_active_authority([&] {
+            return actor_lifetime_live_locked();
+        });
     }
 
     // Trusted-ingress one-shot binding to scheduler-minted original DATA mail.
@@ -140,7 +156,7 @@ public:
         // by the cancellation graph's authority mutex. No user callbacks.
         return cancellation_->with_active_authority([&] {
             auto commit = [&]() -> bool {
-                if (!open_) return false;
+                if (!write_authorized_locked(scheduler)) return false;
                 if (!original_mail_sequence_) original_mail_sequence_ = admitted_mail;
                 return original_mail_sequence_ == admitted_mail;
             };
@@ -161,7 +177,7 @@ public:
         if (!current_mail) return false;
         std::lock_guard<std::mutex> lock(mutex_);
         return cancellation_->with_active_authority([&] {
-            return open_ && original_mail_sequence_ == current_mail;
+            return actor_lifetime_live_locked() && original_mail_sequence_ == current_mail;
         });
     }
 
@@ -181,7 +197,7 @@ public:
         if (bytes > max_value_bytes) return false;
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (!open_ || cancellation_->is_cancelled()) return false;
+            if (!write_authorized_locked(scheduler) || cancellation_->is_cancelled()) return false;
             auto found = slots_.find(key.id_);
             const std::size_t old = found == slots_.end() ? 0 : found->second->bytes;
             if ((found == slots_.end() && slots_.size() >= max_slots) ||
@@ -204,7 +220,7 @@ public:
             // No guest copy/move/dtor or user callback runs under graph lock.
             committed = cancellation_->with_active_authority([&] {
                 auto commit = [&]() -> bool {
-                    if (!open_) return false;
+                    if (!write_authorized_locked(scheduler)) return false;
                     auto found = slots_.find(key.id_);
                     const std::size_t old =
                         found == slots_.end() ? 0 : found->second->bytes;
@@ -242,7 +258,7 @@ public:
         std::shared_ptr<const Cell<T>> pinned;
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (!open_ || cancellation_->is_cancelled())
+            if (!actor_lifetime_live_locked() || cancellation_->is_cancelled())
                 return std::nullopt;
             const auto found = slots_.find(key.id_);
             if (found == slots_.end())
@@ -260,7 +276,7 @@ public:
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (!cancellation_->with_active_authority(
-                    [&] { return open_; }))
+                    [&] { return actor_lifetime_live_locked(); }))
                 return std::nullopt;
         }
         return snapshot;
@@ -284,7 +300,7 @@ public:
             // cancellation and retirement state, without running T::~T.
             committed = cancellation_->with_active_authority([&] {
                 auto commit = [&]() -> bool {
-                    if (!open_) return false;
+                    if (!write_authorized_locked(scheduler)) return false;
                     const auto found = slots_.find(key.id_);
                     if (found == slots_.end()) return false;
                     retired = std::move(found->second);
@@ -327,6 +343,19 @@ private:
     // request's cancellation (never the reverse) and needs read access.
     friend class RequestContextHandoffTableV1;
     friend class RequestLocalStopGroupV1;
+    friend class RequestLocalActorTerminationRegistryV1;
+
+    bool actor_lifetime_live_locked() const noexcept {
+        return open_ && (!actor_lifetime_fence_ ||
+            actor_lifetime_fence_->load(std::memory_order_acquire));
+    }
+    // An actor-registered scope must never commit via the legacy raw host
+    // bypass: registered mutation must use the exact scheduler lifecycle
+    // mutex, not only a best-effort atomic precheck.
+    bool write_authorized_locked(OresNativeActorScheduler* scheduler) const noexcept {
+        return actor_lifetime_live_locked() &&
+            (!actor_lifetime_fence_ || scheduler != nullptr);
+    }
 
     // Host-owned operation leases are exact-scope and cannot be copied.
     // They pin the logical operation during allocation/value copying outside
@@ -350,7 +379,7 @@ private:
     std::optional<OperationLease> begin_operation() const {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!cancellation_->with_active_authority([&] {
-                if (!open_ ||
+                if (!actor_lifetime_live_locked() ||
                     in_flight_ == std::numeric_limits<std::size_t>::max())
                     return false;
                 ++in_flight_;
@@ -363,6 +392,14 @@ private:
         std::lock_guard<std::mutex> lock(mutex_);
         if (in_flight_ == 0) std::terminate();
         if (--in_flight_ == 0) quiescent_.notify_all();
+    }
+
+    // CONTROL sweeper only: observes a closed, drained request without
+    // waiting for a pinned guest/host operation. Prevents one slow actor's
+    // lease from starving teardown of unrelated actor incarnations.
+    bool closed_quiescent_now() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return !open_ && in_flight_ == 0;
     }
 
     // CONTROL-plane only, after close(): waiting here on a carrier would
@@ -387,6 +424,8 @@ private:
     const TaskCancellation::Ptr cancellation_;
     mutable std::mutex mutex_;
     bool open_ = true;
+    // Attached at most once by trusted registry admission. Never reset.
+    std::shared_ptr<std::atomic<bool>> actor_lifetime_fence_;
     mutable std::size_t in_flight_ = 0;
     mutable std::condition_variable quiescent_;
     std::uint64_t original_mail_sequence_ = 0;

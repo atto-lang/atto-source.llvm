@@ -112,6 +112,11 @@ int ores_native_actor_scheduler_send(
 typedef void (*OresNativeActorTerminationObserverV1)(
     void* context, OresNativeActorRef actor,
     OresNativeActorTerminationKind kind);
+/* Immutable scheduler actor-slot capacity. Exact registry bootstrap must
+ * match this bound so no spawned actor can escape the observer's fence table.
+ * Trusted host introspection only; returns 0 on invalid scheduler. */
+size_t ores_native_actor_scheduler_actor_capacity_v1(
+    OresNativeActorScheduler* scheduler);
 int ores_native_actor_scheduler_configure_termination_observer_v1(
     OresNativeActorScheduler* scheduler,
     OresNativeActorTerminationObserverV1 observer, void* context);
