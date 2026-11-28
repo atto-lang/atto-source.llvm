@@ -4456,7 +4456,11 @@ private:
                         // Preserve the separately gated experimental owned-int
                         // declaration path. The scalar const parser cannot
                         // consume its ownership qualifier or validate its ABI.
-                        return right.next().text != "owned";
+                        // Preserve the existing typed spawn capability route
+                        // (forward-port the ActorRef distinction from #953).
+                        // A typed ActorRef is not a scalar constant.
+                        const auto type = right.next().text;
+                        return type != "owned" && type != "ActorRef";
                     }();
             if (token_.text == "let" && sum_first.text == "mut") sum_first = sum_look.next();
             // Java: `val Count c = 42;` with `type Count = int;` is the same
