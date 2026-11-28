@@ -69,11 +69,24 @@ bool ores_timer_driver_start(OresTimerDriver* d, uint32_t capacity, uint64_t tic
     d->ctx = ctx;
     d->origin_ns = ores_timer_monotonic_ns();
     pthread_condattr_t attr;
-    pthread_condattr_init(&attr);
+    if (pthread_condattr_init(&attr) != 0) {
+        ores_timer_wheel_destroy(&d->wheel);
+        return false;
+    }
 #if !defined(__APPLE__)
-    pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
+    if (pthread_condattr_setclock(&attr, CLOCK_MONOTONIC) != 0) {
+        pthread_condattr_destroy(&attr);
+        ores_timer_wheel_destroy(&d->wheel);
+        return false;
+    }
 #endif
-    if (pthread_mutex_init(&d->lock, NULL) != 0 || pthread_cond_init(&d->wake, &attr) != 0) {
+    if (pthread_mutex_init(&d->lock, NULL) != 0) {
+        pthread_condattr_destroy(&attr);
+        ores_timer_wheel_destroy(&d->wheel);
+        return false;
+    }
+    if (pthread_cond_init(&d->wake, &attr) != 0) {
+        pthread_mutex_destroy(&d->lock);
         pthread_condattr_destroy(&attr);
         ores_timer_wheel_destroy(&d->wheel);
         return false;
