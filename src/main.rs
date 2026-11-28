@@ -5,6 +5,7 @@ use std::io::{Read as IoRead, Write as IoWrite};
 use std::process::{Command, Stdio};
 
 mod target_native;
+mod owned_unwind;
 mod effect_check;
 mod native_readonly;
 
@@ -996,6 +997,18 @@ fn validate_native_artifact(path: &std::path::Path) -> Result<(), String> {
 
 fn cli() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // Isolated library ABI: explicit IR only, never an executable main.
+    if let [src, flag, out, mode] = args.as_slice() {
+        if flag == "-o" && mode == "--owned-unwind-v1" {
+            if !src.ends_with(".atto") { return Err("E_SOURCE: input must have the .atto extension".into()); }
+            let content = std::fs::read_to_string(src).map_err(|e|format!("E_INPUT: {e}"))?;
+            let ir = owned_unwind::compile(&content)?;
+            let (staged, mut file) = OutputStage::create(std::path::Path::new(src),std::path::Path::new(out))?;
+            file.write_all(ir.as_bytes()).map_err(|e|format!("E_OUTPUT: {e}"))?;
+            file.flush().map_err(|e|format!("E_OUTPUT: {e}"))?;
+            drop(file);return staged.publish();
+        }
+    }
     let (src, out, options) = match args.as_slice() {
         [src, flag, out, options @ ..] if flag == "-o" =>
             (src, out, options),
@@ -1354,6 +1367,35 @@ mod native_readonly_tests {
             SOURCE.replace("int padding = 99", "int padding = 98 + 1"),
         ] {
             assert!(compile_ir(&s).is_err(), "{s}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod native_mixed_scalar_ssa_tests {
+    use super::*;
+    const MIXED: &str = "// atto-ownership: borrow-default-v1\ndefine class Parcel as pub let int padding = 99; pub let int value = 20; end\nfnc sum(Parcel a, int n, Parcel b): int { val int left = a.value + n; val int right = b.value; return left + right; }\nfnc forward(Parcel p, int n): int { val int result = sum(p, n, p); return result; }\npub fnc main(): int { let p = new Parcel(); val int n = 2; return forward(p, n); }";
+
+    #[test]
+    fn readonly_mixed_parameters_and_locals_are_direct_ssa() {
+        let ir = compile_ir(MIXED).expect("mixed reference scalar profile");
+        assert!(ir.contains("define internal i64 @atto_ro_f0(ptr %arg0, i64 %arg1, ptr %arg2)"));
+        assert!(ir.contains("call i64 @atto_ro_f0(ptr %arg0, i64 %arg1, ptr %arg0)"));
+        assert_eq!(ir.matches("alloca ").count(), 1);
+        assert!(!ir.contains("alloca ptr") && !ir.contains("store ptr") && !ir.contains("load ptr"));
+        assert!(!ir.contains("noalias"));
+    }
+
+    #[test]
+    fn readonly_mixed_parameters_deny_rebinding_and_unproved_shapes() {
+        for bad in [
+            MIXED.replace("val int left", "let int left").replace("val int right", "left = 1; val int right"),
+            MIXED.replace("val int result = sum(p, n, p);", "let q = p; val int result = sum(q, n, p);"),
+            MIXED.replace("sum(p, n, p)", "sum(p, n, new Parcel())"),
+            MIXED.replace("Parcel a, int n", "Parcel a, int mut n"),
+            MIXED.replace("val int left = a.value + n;", "stdio.print(1); val int left = a.value + n;"),
+        ] {
+            assert!(compile_ir(&bad).is_err(), "{bad}");
         }
     }
 }
