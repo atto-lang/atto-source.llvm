@@ -4423,6 +4423,10 @@ private:
                 token_.text == "string" || token_.text == "String" ||
                 token_.text == "mut" || token_.text == "stdio" ||
                 (token_.text == "process" && peek_next().text == ".") || array_effect_ahead()) {
+            if (at_literal_transfer_binding()) {
+                value.locals.push_back(literal_transfer_binding());
+                continue;
+            }
             if (native_box_local()) continue;
             // Typed Future<void> is admitted ONLY as a linear lexical alias
             // for one already-spawned ActorRef.get_ready() lifecycle promise.
@@ -4925,6 +4929,10 @@ private:
         auto scoped_local = [&]() {
             Statement statement; statement.kind = Statement::Kind::ScopedLocal;
             statement.offset = token_.offset;
+            if (at_literal_transfer_binding()) {
+                statement.branch_local = std::make_unique<LocalBinding>(literal_transfer_binding());
+                return statement;
+            }
             const bool default_readonly =
                 token_.text == "int" || token_.text == "bool" ||
                 token_.text == "string" || token_.text == "String";
@@ -5276,6 +5284,10 @@ private:
                         token_.text == "int" || token_.text == "bool" ||
                         token_.text == "string" || token_.text == "String") {
                     actions.push_back(scoped_local());
+                    continue;
+                }
+                if (at_literal_transfer_set()) {
+                    actions.push_back(literal_transfer_set());
                     continue;
                 }
                 auto target = primary();
@@ -6075,6 +6087,10 @@ private:
                 value.actor_stops.push_back(reference);
                 value.actor_actions.push_back({ActorAction::Kind::Stop,
                                                value.actor_stops.size() - 1});
+                continue;
+            }
+            if (at_literal_transfer_set()) {
+                value.statements.push_back(literal_transfer_set());
                 continue;
             }
             auto action = primary();
@@ -8038,6 +8054,70 @@ private:
         if (token_.text != "private") return false;
         Lexer lookahead = lexer_;
         return lookahead.next().text == "abstract";
+    }
+
+    // Contiguous arrow recognition is limited to declaration/statement
+    // boundaries. Comparisons and callable punctuation keep their grammar.
+    static bool binding_arrow_pair(const Token& first, const Token& second) {
+        return first.text == "<" && second.text == "-" && first.offset + 1 == second.offset;
+    }
+    bool at_literal_transfer_binding() const {
+        if (token_.text != "let") return false;
+        Lexer probe = lexer_;
+        auto name = probe.next();
+        if (name.text == "int" || name.text == "bool") name = probe.next();
+        if (name.kind != Kind::Identifier) return false;
+        const auto first = probe.next();
+        const auto second = probe.next();
+        return binding_arrow_pair(first, second);
+    }
+    bool at_literal_transfer_set() const {
+        if (token_.text != "set") return false;
+        Lexer probe = lexer_;
+        if (probe.next().kind != Kind::Identifier) return false;
+        const auto first = probe.next();
+        const auto second = probe.next();
+        return binding_arrow_pair(first, second);
+    }
+    void require_binding_arrow() {
+        if (!binding_arrow_pair(token_, peek_next()))
+            fail("E_OWNERSHIP: expected contiguous binding transfer arrow");
+        require("<"); require("-");
+    }
+    std::unique_ptr<Expression> literal_transfer_rhs() {
+        auto rhs = expression();
+        if (!rhs || (rhs->kind != Expression::Kind::Integer &&
+                     rhs->kind != Expression::Kind::Boolean))
+            fail("E_OWNERSHIP: native arrow pilot requires intrinsic int or bool literal");
+        return rhs;
+    }
+    LocalBinding literal_transfer_binding() {
+        LocalBinding binding;
+        binding.offset = token_.offset;
+        require("let");
+        binding.assignable = true;
+        binding.owner_mutable = true;
+        if (accept("int")) binding.scalar_type = ScalarType::I64;
+        else if (accept("bool")) binding.scalar_type = ScalarType::Bool;
+        else binding.inferred_scalar = true;
+        binding.name = identifier();
+        require_binding_arrow();
+        binding.initializer = literal_transfer_rhs();
+        require(";");
+        // All ordinary local declaration checks remain authoritative.
+        class_literal_locals_.erase(binding.name);
+        return binding;
+    }
+    Statement literal_transfer_set() {
+        Statement statement;
+        statement.offset = token_.offset;
+        statement.kind = Statement::Kind::ScalarWrite;
+        require("set");
+        statement.receiver = identifier();
+        require_binding_arrow();
+        statement.expression = literal_transfer_rhs();
+        require(";");
+        return statement;
     }
 
     bool accept(std::string_view text) {
