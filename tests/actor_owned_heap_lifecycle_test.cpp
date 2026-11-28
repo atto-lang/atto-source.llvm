@@ -206,12 +206,14 @@ int main(void) {
     OresActorTurn denied = {0, 0};
     CHECK(ores_actor_i64_heap_try_enter(heap, 29, 7, &denied) == 0);
     CHECK(denied.domain == 0 && denied.epoch == 0);
+    bool competitor_denied = false;
     std::thread competitor([&] {
         OresActorTurn busy = {91, 92};
-        CHECK(ores_actor_i64_heap_try_enter(heap, 29, 7, &busy) == 0);
-        CHECK(busy.domain == 91 && busy.epoch == 92);
+        competitor_denied = ores_actor_i64_heap_try_enter(heap, 29, 7, &busy) == 0
+            && busy.domain == 91 && busy.epoch == 92;
     });
     competitor.join();
+    CHECK(competitor_denied);
     ores_actor_i64_heap_leave(heap, first); /* simulates await/suspension */
     OresActorTurn next = {0, 0};
     CHECK(ores_actor_i64_heap_try_enter(heap, 29, 7, &next) == 1);
