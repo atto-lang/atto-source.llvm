@@ -1,0 +1,16 @@
+// Typed source actor continuation boundary. The parser validates this shape,
+// but LLVM codegen MUST fail closed until real actor-owned frame lowering exists.
+define actor Worker as {
+  let total: int = 0;
+  pub suspends fnc on_message(int incoming): int {
+    let Task<int> child = task { return dangerous(incoming); };
+    let int answer = await child;
+    return answer;
+  }
+}
+pub fnc main(): int {
+  const worker = spawn Worker();
+  worker.send(2);
+  stop worker;
+  return 43;
+}

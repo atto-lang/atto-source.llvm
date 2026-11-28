@@ -195,6 +195,7 @@ static void tree_shake_functions(oreslang::Program& program, const std::vector<s
 int main(int argc, char** argv) {
     bool experimental_owned_int = false;
     bool experimental_rt_scalar_loop = false;
+    bool actor_task_producer_ir_only = false;
     bool wasm32_target = false;
     bool cortex_m_target = false;
     bool target_seen = false;
@@ -286,6 +287,12 @@ int main(int argc, char** argv) {
                 std::cerr << "duplicate rt scalar loop option\n"; return 2;
             }
             experimental_rt_scalar_loop = true;
+        } else if (arg == "--emit-actor-task-producer-ir-only") {
+            if (actor_task_producer_ir_only) {
+                std::cerr << "duplicate actor task producer IR-only option\n";
+                return 2;
+            }
+            actor_task_producer_ir_only = true;
         } else if (arg == "--experimental-owned-int") {
             if (experimental_owned_int) { std::cerr << "duplicate owned-int option\n"; return 2; }
             experimental_owned_int = true;
@@ -390,13 +397,22 @@ int main(int argc, char** argv) {
         std::cerr << "invalid core log level (off|error|warn|info|debug|trace)\n";
         return 2;
     }
+    if (actor_task_producer_ir_only &&
+            (wasm32_target || cortex_m_target || tree_shake ||
+             native_hard_rt_profile || rt_check_only || rt_report_seen ||
+             constraint_descriptors_only || isolate_entry_seen ||
+             bounded_allocator_provider || experimental_rt_scalar_loop ||
+             experimental_owned_int)) {
+        std::cerr << "actor Task producer IR-only requires standalone host target without competing profiles or modes\n";
+        return 2;
+    }
     // Default/off does not allocate or initialize 8192 recorder slots.
     // Optional diagnostics must not make ordinary compilation fail on OOM.
     std::unique_ptr<oreslang::CoreLog> coreLog;
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--emit-actor-task-producer-ir-only] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -437,6 +453,15 @@ int main(int argc, char** argv) {
         source_module = ast.module;
         source_namespace = ast.namespace_name;
 
+        if (actor_task_producer_ir_only) {
+            /* A narrow codegen probe: emits ONLY a checked pure-i64 producer
+             * ABI, not an actor constructor, scheduler callback, Task
+             * registration or an executable await. Full source compilation
+             * still fails closed in emit_verified_llvm_ir(). */
+            std::cout << oreslang::emit_native_actor_task_i64_producer_ir(ast);
+            std::cout.flush();
+            return 0;
+        }
         if (constraint_descriptors_only) {
             for (const auto& descriptor : ast.type_constraint_descriptors) {
                 std::cout << "descriptor\t"

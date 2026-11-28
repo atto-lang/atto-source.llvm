@@ -5,6 +5,26 @@
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
+#ifdef ATTO_ACTOR_TASK_PRODUCER_PROBE
+/* Linked from real oreslang-llvmc --emit-actor-task-producer-ir-only IR.
+ * The actual guest *producer* runs inside the native actor's authenticated
+ * child WAKE. Await state-machine lowering remains a separate milestone. */
+extern int32_t atto_actor_task_i64_producer_probe(
+    int64_t copied_incoming, int64_t* result_out);
+extern int32_t atto_actor_task_i64_resume_probe(
+    int64_t awaited_result, int64_t* resumed_result_out);
+extern int32_t atto_actor_task_i64_frame_init_probe(
+    int64_t words[6], uint64_t actor_generation,
+    uint64_t task_generation, int64_t copied_incoming);
+extern int32_t atto_actor_task_i64_frame_step_probe(
+    int64_t words[6], uint64_t actor_generation, uint64_t task_generation);
+extern int32_t atto_actor_task_i64_frame_resume_probe(
+    int64_t words[6], uint64_t actor_generation,
+    uint64_t task_generation, int64_t* result_out);
+#ifndef ATTO_ACTOR_TASK_PRODUCER_EXPECTED
+#error "compiled producer integration requires an exact expected value"
+#endif
+#endif
 #define CHECK(c) do { if (!(c)) { \
     fprintf(stderr, "ACTOR_TASK_WAKE_FAIL %s:%d: %s\\n", __FILE__, __LINE__, #c); \
     abort(); \
@@ -21,9 +41,17 @@ typedef struct {
     pthread_cond_t cv;
     int mode; /* 1=nested complete, 2=STOP, 3=parent DONE before child */
     int suspended, suspension_physically_returned, allow_suspend_guest_exit;
-    int child_done, child_suspended, parent_done, parent_physically_returned;
+    int child_done, child_suspended, child_physically_returned;
+    int parent_done, parent_physically_returned;
     int allow_parent_wake_exit;
     atomic_int parent_turns, child_turns, control_turns, errors;
+#ifdef ATTO_ACTOR_TASK_PRODUCER_PROBE
+    atomic_int_fast64_t copied_incoming; /* authentic DATA payload */
+    atomic_int_fast64_t compiled_task_value; /* child WAKE result */
+    /* Staged compiler-generated frame in persistent fixture storage.
+     * Production must allocate it in the owning actor heap/arena. */
+    int64_t compiled_task_frame[6];
+#endif
 } Fixture;
 
 static void signal_host(Fixture* f, int* field) {
@@ -40,12 +68,29 @@ static void wait_host(Fixture* f, int* field) {
 }
 static void on_data(void* opaque, size_t actor, uint64_t message) {
     Fixture* f = (Fixture*)opaque;
-    if (actor != 0 || message != 1
+    const uint64_t expected_message =
+#ifdef ATTO_ACTOR_TASK_PRODUCER_PROBE
+        f->mode == 1 ? UINT64_C(41) : UINT64_C(1);
+#else
+        UINT64_C(1);
+#endif
+    if (actor != 0 || message != expected_message
             || !ores_native_actor_scheduler_is_current_actor(f->scheduler, f->actor)
             || !ores_native_actor_scheduler_can_start_task(f->scheduler, f->actor)
             || !ores_native_actor_task_registry_start(
                 &f->registry, &f->parent, NULL))
         atomic_fetch_add(&f->errors, 1);
+#ifdef ATTO_ACTOR_TASK_PRODUCER_PROBE
+    /* The source Task's only permitted capture is a COPIED DATA i64,
+     * not a borrowed pointer into this callback's native stack. */
+    atomic_store_explicit(
+        &f->copied_incoming, (int64_t)message, memory_order_release);
+    if (f->mode == 1 &&
+            atto_actor_task_i64_frame_init_probe(
+                f->compiled_task_frame, (uint64_t)f->actor.generation,
+                f->child.task_generation, (int64_t)message) != 0)
+        atomic_fetch_add(&f->errors, 1);
+#endif
 }
 static void on_control(void* opaque, size_t actor, uint64_t message) {
     Fixture* f = (Fixture*)opaque;
@@ -91,6 +136,24 @@ static void on_wake(void* opaque, size_t actor,
                 CHECK(pthread_cond_wait(&f->cv, &f->mutex) == 0);
             CHECK(pthread_mutex_unlock(&f->mutex) == 0);
         } else if (turn == 1) {
+#ifdef ATTO_ACTOR_TASK_PRODUCER_PROBE
+            if (f->mode == 1) {
+                int64_t resumed_value = INT64_C(-1);
+                const int64_t awaited_value = atomic_load_explicit(
+                    &f->compiled_task_value, memory_order_acquire);
+                if (f->compiled_task_frame[4] != 2 ||
+                        f->compiled_task_frame[3] != awaited_value ||
+                        atto_actor_task_i64_frame_resume_probe(
+                            f->compiled_task_frame,
+                            (uint64_t)f->actor.generation,
+                            f->child.task_generation,
+                            &resumed_value) != 0 ||
+                        resumed_value !=
+                            (int64_t)ATTO_ACTOR_TASK_PRODUCER_EXPECTED ||
+                        f->compiled_task_frame[4] != 3)
+                    atomic_fetch_add(&f->errors, 1);
+            }
+#endif
             if (!ores_native_actor_task_finish(&f->parent))
                 atomic_fetch_add(&f->errors, 1);
             CHECK(pthread_mutex_lock(&f->mutex) == 0);
@@ -112,6 +175,28 @@ static void on_wake(void* opaque, size_t actor,
         }
         if (!ores_native_actor_scheduler_is_current_actor(f->scheduler, f->actor))
             atomic_fetch_add(&f->errors, 1);
+#ifdef ATTO_ACTOR_TASK_PRODUCER_PROBE
+        if (f->mode == 1) {
+            int64_t compiled_result = INT64_C(-1);
+            if (f->compiled_task_frame[2] !=
+                    atomic_load_explicit(
+                        &f->copied_incoming, memory_order_acquire) ||
+                    atto_actor_task_i64_frame_step_probe(
+                        f->compiled_task_frame,
+                        (uint64_t)f->actor.generation,
+                        f->child.task_generation) != 0 ||
+                    f->compiled_task_frame[4] != 2 ||
+                    f->compiled_task_frame[3] !=
+                        (int64_t)ATTO_ACTOR_TASK_PRODUCER_EXPECTED) {
+                atomic_fetch_add(&f->errors, 1);
+            } else {
+                compiled_result = f->compiled_task_frame[3];
+                atomic_store_explicit(
+                    &f->compiled_task_value, compiled_result,
+                    memory_order_release);
+            }
+        }
+#endif
         if (f->mode == 3) {
             if (!ores_native_actor_task_suspend(&f->child))
                 atomic_fetch_add(&f->errors, 1);
@@ -142,8 +227,11 @@ static void after_wake(void* opaque, size_t actor,
         } else {
             signal_host(f, &f->parent_physically_returned);
         }
-    } else if (wake.continuation_slot == 2 && f->mode == 3) {
-        signal_host(f, &f->child_suspended);
+    } else if (wake.continuation_slot == 2) {
+        if (f->mode == 3)
+            signal_host(f, &f->child_suspended);
+        else
+            signal_host(f, &f->child_physically_returned);
     }
 }
 static void open_fixture(Fixture* f, int mode) {
@@ -211,21 +299,40 @@ static void close_fixture(Fixture* f) {
 int main(void) {
     Fixture f = {0};
     open_fixture(&f, 1);
+#ifdef ATTO_ACTOR_TASK_PRODUCER_PROBE
+    CHECK(ores_native_actor_scheduler_send(f.scheduler, f.actor, 41));
+#else
     CHECK(ores_native_actor_scheduler_send(f.scheduler, f.actor, 1));
+#endif
     wait_host(&f, &f.suspended);
     CHECK(!ores_native_actor_scheduler_is_current_carrier(f.scheduler));
     CHECK(!ores_native_actor_task_physically_done(&f.parent));
     CHECK(!ores_native_actor_task_publish(&f.parent, 9999, ORES_NATIVE_WAKE_READY));
-    /* A fast Future completion is accepted exactly once into escrow, but
-     * MUST NOT dispatch guest while the suspending callback is still on-stack.
-     * The trusted post-WAKE callback flushes it after the physical claim
-     * unwinds. A second producer loses the one-winner race. */
+    /* The default native fixture exercises a Future that completes while
+     * its parent's guest callback remains on-stack. In compiler-producer
+     * mode the parent Future is completed only AFTER the child computed
+     * its source result on a real TASK WAKE, never from an invented scalar. */
+#ifndef ATTO_ACTOR_TASK_PRODUCER_PROBE
     CHECK(ores_native_actor_task_publish(&f.parent, 1001, ORES_NATIVE_WAKE_READY));
     CHECK(!ores_native_actor_task_publish(&f.parent, 1001, ORES_NATIVE_WAKE_READY));
+#endif
     CHECK(atomic_load(&f.parent_turns) == 1);
     CHECK(!ores_native_actor_task_physically_done(&f.parent));
     signal_host(&f, &f.allow_suspend_guest_exit);
     wait_host(&f, &f.suspension_physically_returned);
+#ifdef ATTO_ACTOR_TASK_PRODUCER_PROBE
+    wait_host(&f, &f.child_done);
+    /* A child finish() inside its WAKE is not yet physical retirement.
+     * Only the authenticated scheduler after-WAKE callback may settle the
+     * child resource loan. Do not publish the parent's READY Future earlier. */
+    wait_host(&f, &f.child_physically_returned);
+    CHECK(ores_native_actor_task_physically_done(&f.child));
+    CHECK(f.compiled_task_frame[4] == 2);
+    CHECK(f.compiled_task_frame[3] ==
+          (int64_t)ATTO_ACTOR_TASK_PRODUCER_EXPECTED);
+    CHECK(ores_native_actor_task_publish(&f.parent, 1001, ORES_NATIVE_WAKE_READY));
+    CHECK(!ores_native_actor_task_publish(&f.parent, 1001, ORES_NATIVE_WAKE_READY));
+#endif
     CHECK(!ores_native_actor_scheduler_is_current_carrier(f.scheduler));
     /* Completion was already escrowed: replay after physical exit is
      * forbidden, and the child/parent resume must drain exactly once. */
@@ -257,6 +364,14 @@ int main(void) {
     CHECK(ores_native_actor_task_registry_count(&f.registry) == 2);
     CHECK(atomic_load(&f.parent_turns) == 2);
     CHECK(atomic_load(&f.child_turns) == 1);
+#ifdef ATTO_ACTOR_TASK_PRODUCER_PROBE
+    CHECK(f.compiled_task_frame[4] == 3);
+    int64_t ignored = INT64_C(-91);
+    CHECK(atto_actor_task_i64_frame_resume_probe(
+        f.compiled_task_frame, (uint64_t)f.actor.generation,
+        f.child.task_generation, &ignored) == 4);
+    CHECK(ignored == -91); /* stale parent WAKE cannot execute twice */
+#endif
     CHECK(ores_native_actor_scheduler_publish_control(f.scheduler, f.actor, 99));
     CHECK(ores_native_actor_scheduler_drain(f.scheduler));
     CHECK(atomic_load(&f.control_turns) == 1);

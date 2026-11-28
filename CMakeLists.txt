@@ -1935,6 +1935,91 @@ if(BUILD_TESTING)
     oreslang_contract_test(native_actor_await_requires_suspends_continuation
         source-actor-await-without-suspends-reject.ores
         --diagnostic "native actor await requires suspends fnc/mtd and compiler-owned continuation lowering")
+    # Typed, copied-i64-capture-only source AST: these cases exercise the
+    # real frontend/semantic validator, while successful shapes MUST be denied
+    # by LLVM codegen pending actor-owned continuation/WAKE frame lowering.
+    # These are negative compiler tests, NOT executable guest parity.
+    oreslang_contract_test(native_actor_suspends_i64_typed_ast_codegen_gate
+        native-actor-task-i64-typed-gate.atto
+        --diagnostic "native actor Task<int> requires compiler-owned continuation frame and actor TASK/WAKE ABI lowering")
+    oreslang_contract_test(native_actor_suspends_mtd_typed_ast_codegen_gate
+        native-actor-task-i64-mtd-gate.atto
+        --diagnostic "native actor Task<int> requires compiler-owned continuation frame and actor TASK/WAKE ABI lowering")
+    # Actual LLVM-generated producer arithmetic, compiled and run at O0/O2.
+    # This opt-in probe never initializes a source actor or compiles await;
+    # positive TASK/WAKE guest conformance remains a separate release gate.
+    # CTest uses an out-of-process CMake driver to invoke Clang. It does NOT
+    # inherit CMAKE_C_FLAGS implicitly: propagate the deliberate ASan/UBSan
+    # setting or a sanitizer-configured build would secretly run bare probes.
+    set(ORE_TASK_PROBE_SANITIZE OFF)
+    if(CMAKE_C_FLAGS MATCHES "(^|[ ;])-fsanitize=address,undefined([ ;]|$)")
+        set(ORE_TASK_PROBE_SANITIZE ON)
+    endif()
+    foreach(actor_task_probe IN ITEMS fnc mtd)
+        if(actor_task_probe STREQUAL "fnc")
+            set(actor_task_probe_fixture native-actor-task-i64-typed-gate.atto)
+            set(actor_task_probe_expected 42)
+        else()
+            set(actor_task_probe_fixture native-actor-task-i64-mtd-gate.atto)
+            set(actor_task_probe_expected 83)
+        endif()
+        if(ORE_CLANG)
+            add_test(NAME native_actor_task_${actor_task_probe}_compiled_producer_ir_o0_o2
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DSOURCE_COMPILER=$<TARGET_FILE:oreslang-llvmc>"
+                    "-DCLANG=${ORE_CLANG}"
+                    "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/${actor_task_probe_fixture}"
+                    "-DHARNESS=${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_task_i64_producer_probe_harness.c"
+                    "-DEXPECTED=${actor_task_probe_expected}"
+                    "-DSANITIZE=${ORE_TASK_PROBE_SANITIZE}"
+                    "-DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/actor-task-producer-${actor_task_probe}"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_task_i64_producer_e2e.cmake")
+        else()
+            add_test(NAME native_actor_task_${actor_task_probe}_compiled_producer_ir_o0_o2
+                COMMAND "${CMAKE_COMMAND}" -E false)
+        endif()
+        set_tests_properties(
+            native_actor_task_${actor_task_probe}_compiled_producer_ir_o0_o2
+            PROPERTIES TIMEOUT 120)
+        # Hybrid integration: LLVM-generated Atto task *producer* is executed
+        # inside an authenticated native actor child WAKE. The parent await
+        # remains a C host fixture, NOT compiler-generated suspension.
+        if(ORE_CLANG)
+            add_test(NAME native_actor_task_${actor_task_probe}_compiled_producer_actor_wake_o0_o2
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DSOURCE_COMPILER=$<TARGET_FILE:oreslang-llvmc>"
+                    "-DCLANG=${ORE_CLANG}"
+                    "-DFIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/${actor_task_probe_fixture}"
+                    "-DHARNESS=${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_task_i64_producer_probe_harness.c"
+                    "-DEXPECTED=${actor_task_probe_expected}"
+                    "-DSANITIZE=${ORE_TASK_PROBE_SANITIZE}"
+                    "-DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/actor-task-producer-native-wake-${actor_task_probe}"
+                    "-DSOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+                    "-DTEST_BRIDGE=1"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/actor_task_i64_producer_e2e.cmake")
+        else()
+            add_test(NAME native_actor_task_${actor_task_probe}_compiled_producer_actor_wake_o0_o2
+                COMMAND "${CMAKE_COMMAND}" -E false)
+        endif()
+        set_tests_properties(
+            native_actor_task_${actor_task_probe}_compiled_producer_actor_wake_o0_o2
+            PROPERTIES TIMEOUT 180)
+    endforeach()
+    oreslang_contract_test(native_actor_suspends_field_capture_denied
+        native-actor-task-field-capture-reject.atto
+        --diagnostic "native actor Task<int> capture must be a copied incoming int only")
+    oreslang_contract_test(native_actor_suspends_ffi_capture_denied
+        native-actor-task-ffi-capture-reject.atto
+        --diagnostic "native actor Task<int> capture must be a copied incoming int only")
+    oreslang_contract_test(native_actor_suspends_wrong_await_owner_denied
+        native-actor-task-wrong-await-reject.atto
+        --diagnostic "native actor await must consume its exact Task<int> owner")
+    oreslang_contract_test(native_actor_suspends_wrong_return_denied
+        native-actor-task-wrong-return-reject.atto
+        --diagnostic "native actor suspended return must use its awaited int result")
+    oreslang_contract_test(native_actor_suspends_mixed_critical_denied
+        native-actor-task-mixed-effect-reject.atto
+        --diagnostic "native actor cannot combine suspends with another effect modifier")
     oreslang_contract_test(native_actor_final_group_field_gate source-actor-final-group-field-reject.ores
         --diagnostic "native final actor fields require typed field initialization and ownership lowering")
     # Host-only ActorGroup substrate: source actor spawn/await fail closed.

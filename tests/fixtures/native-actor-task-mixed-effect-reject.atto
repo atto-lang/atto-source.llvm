@@ -1,0 +1,11 @@
+// Native actor methods must not mix critical and suspends without a real
+// ownership and scheduling effect proof.
+define actor Worker as {
+  let total: int = 0;
+  pub suspends critical fnc on_message(int incoming): int {
+    let Task<int> child = task { return incoming + 1; };
+    let int answer = await child;
+    return answer;
+  }
+}
+pub fnc main(): int { return 43; }
