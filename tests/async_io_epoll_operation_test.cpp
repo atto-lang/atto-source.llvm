@@ -175,7 +175,57 @@ static void foreign_lifecycle_ticket_rejected_before_registration() {
     check(rejected && !lifecycle.registered());
 }
 
+// Fault injection deliberately violates the ordinary retained-fd precondition.
+// A duplicate keeps the original open-file description alive while DEL on
+// the closed numeric fd returns EBADF. Restore exactly the same identity
+// before retry; never use this sequence as a production recovery protocol.
+static void failed_kernel_delete_does_not_refund_registration_credit() {
+    int pair[2] = {-1, -1};
+    check(::socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0, pair) == 0);
+    OwnedSocketFd reader(pair[0]), writer(pair[1]);
+    const int original = reader.get();
+    OwnedSocketFd duplicate(::dup(original));
+    check(duplicate.valid());
+    EpollReadiness readiness;
+    const AsyncIoTicket ticket{27, 9, 1};
+    AsyncIoOperationLifecycle lifecycle(ticket);
+    AsyncIoEpollOperation operation(readiness, lifecycle, ticket, original, EPOLLIN, 47);
+    operation.arm();
+    reader.reset();
+    check(operation.cancel());
+    check(operation.armed() && lifecycle.registered());
+    check(!operation.retire() && !lifecycle.ready_to_reclaim());
+    const char byte = 'q';
+    check(try_write(writer.get(), &byte, 1).disposition == IoDisposition::transferred);
+    std::array<EpollReadiness::Ready, EpollReadiness::max_batch> ready{};
+    check(readiness.wait(ready, 1000) == 1 && ready[0].token == 47);
+    check(!operation.claim_ready(ready[0]));
+    check(::dup3(duplicate.get(), original, O_CLOEXEC) == original);
+    reader = OwnedSocketFd(original);
+    operation.disarm();
+    check(!operation.armed() && !lifecycle.registered());
+    check(operation.retire() && lifecycle.ready_to_reclaim());
+    check(!operation.claim_ready(ready[0]));
+}
+
+static void already_removed_retained_descriptor_can_retire() {
+    int pair[2] = {-1, -1};
+    check(::socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0, pair) == 0);
+    OwnedSocketFd reader(pair[0]), writer(pair[1]);
+    EpollReadiness readiness;
+    const AsyncIoTicket ticket{28, 9, 1};
+    AsyncIoOperationLifecycle lifecycle(ticket);
+    AsyncIoEpollOperation operation(readiness, lifecycle, ticket, reader.get(), EPOLLIN, 48);
+    operation.arm();
+    check(readiness.remove_confirmed(reader.get()));
+    check(operation.cancel());
+    check(!operation.armed() && operation.retire());
+    check(lifecycle.ready_to_reclaim());
+}
+
 int main() {
+    failed_kernel_delete_does_not_refund_registration_credit();
+    already_removed_retained_descriptor_can_retire();
     cancelled_would_block_releases_callback_credit();
     cancellation_racing_rearm_never_strands_credit();
     foreign_lifecycle_ticket_rejected_before_registration();

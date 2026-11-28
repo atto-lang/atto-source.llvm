@@ -175,8 +175,22 @@ public:
         if (::epoll_ctl(epoll_, EPOLL_CTL_MOD, fd, &event) != 0)
             throw std::system_error(errno, std::generic_category(), "epoll rearm");
     }
+    // Caller must retain the same descriptor/open-file identity throughout.
+    // ENOENT confirms absence for that retained descriptor; EBADF and other
+    // failures do not prove absence (a duplicate can keep registration alive).
+    bool remove_confirmed(int fd) noexcept {
+        if (fd < 0) return false;
+        for (;;) {
+            if (::epoll_ctl(epoll_, EPOLL_CTL_DEL, fd, nullptr) == 0)
+                return true;
+            const int error = errno;
+            if (error == EINTR) continue;
+            return error == ENOENT;
+        }
+    }
+
     void remove(int fd) noexcept {
-        if (fd >= 0) ::epoll_ctl(epoll_, EPOLL_CTL_DEL, fd, nullptr);
+        (void)remove_confirmed(fd);
     }
 
     // Cross-thread wakeup is a nonblocking eventfd write; the reactor consumes

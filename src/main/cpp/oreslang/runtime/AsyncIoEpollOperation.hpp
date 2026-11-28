@@ -43,6 +43,8 @@ public:
             throw std::invalid_argument("invalid async I/O ticket");
     }
 
+    // The owner is responsible for keeping this object and its lifecycle alive
+    // when disarm cannot confirm removal. Destruction is not a retirement ACK.
     ~AsyncIoEpollOperation() noexcept { disarm(); }
 
     AsyncIoEpollOperation(const AsyncIoEpollOperation&) = delete;
@@ -139,7 +141,13 @@ public:
 private:
     void disarm_locked() noexcept {
         if (!armed_) return;
-        readiness_.remove(fd_);
+        // Do not refund physical registration credit on ambiguous kernel
+        // failure. The owner must quarantine the operation and retain its
+        // frame until removal is confirmed under the same fd identity.
+        if (!readiness_.remove_confirmed(fd_)) {
+            (void) lifecycle_.finish(ticket_, AsyncIoTerminal::failure);
+            return;
+        }
         (void) lifecycle_.mark_unregistered(ticket_);
         armed_ = false;
     }
