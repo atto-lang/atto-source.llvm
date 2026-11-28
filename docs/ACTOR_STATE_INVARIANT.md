@@ -17,9 +17,15 @@ define actor Worker as
 end
 ```
 
-The canonical API is `self.handle_state`: no modifier means a
-read-only state loan; `critical` grants exclusive mutable access. The
-restricted LLVM tagged-message compiler supports both synchronous forms:
+The canonical sealed intrinsic is `self.handle_state`: no modifier means a
+read-only state loan; `critical` grants exclusive mutable access. The equally
+canonical scoped forms `using state.read(callback)` and
+`using state.write(critical callback)` lower to that intrinsic.
+The enclosing function must declare the applicable `with state.read` and/or
+`with state.write` effect upper bound. See
+[WITH_USING_STATE_CONTRACT.md](WITH_USING_STATE_CONTRACT.md). The
+restricted LLVM compiler supports these forms inside synchronous scalar
+ordinary methods and exhaustive tagged/boolean receive arms:
 
 ```ores
 const current = self.handle_state(|state| -> {
@@ -53,12 +59,18 @@ runtime is built. A parsed declaration is not runnable.
 
 ## Unresolved release gates
 
-The restricted native profile only supports fixed `int` keys and
-synchronous state loans in tagged receive arms; general actor methods,
-dynamic state maps, `critical read`/`critical write`, async suspension,
-zero/many pipeline emissions, multiple concurrent flows, full source-tree
-regressions, JVM/GraalVM guest execution, cross-backend parity and Native
-Image are not yet verified.
+The restricted native profile supports fixed `int` state keys and one
+synchronous scoped callback per ordinary method or exhaustive tagged/boolean
+receive arm; it does **not** implement arbitrary actor method bodies,
+general reference-valued state, asynchronous loans, nested callbacks,
+zero/many pipeline emissions, or multiple concurrent flows. Full repository
+CTest, JVM/GraalVM guest parity and Native Image are not yet verified.
 
 Older fixtures/PRs that declare actor instance data directly need migration
 to the new syntax before either draft PR may merge.
+
+Focused native guest evidence: [41/41 passing CTests with ASan/UBSan](https://github.com/flags-2-env-test/java-app/actions/runs/38343367152), including ordinary-method state execution, multi-key actor persistence and a compiled three-actor typed directional round trip. These results do not certify full-tree or cross-backend parity.
+
+Updated evidence: [46/46 focused native CTests on exact pinned inputs](https://github.com/flags-2-env-test/java-app/actions/runs/38343656495). Includes boolean-loan effect validation and rejection of bool-to-integer use inside callbacks. Full LLVM repository tests and Java/GraalVM parity have not passed as part of this gate.
+
+Updated effect audit: [68/68 focused native CTests](https://github.com/flags-2-env-test/java-app/actions/runs/38348172398). Every restricted LLVM state callback now needs explicit `with` effects; blind tagged writes emit no native field-read call. Typed `int` state initializers and copied scalar results reject boolean literal coercion. Native and sanitized 15-actor tests passed on pinned source inputs. Full CTest and Java parity remain unverified.

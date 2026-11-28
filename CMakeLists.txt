@@ -91,36 +91,66 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_forward_owned_local owned-use-before-declaration.ores --diagnostic "unknown parameter")
     oreslang_contract_test(reject_unsupported_owned_heap owned-unsupported-heap.ores --diagnostic "expected int expression")
 
-    # Strict i64 fields: immutable const/val, mutable let, synchronous method writes.
+    # Historical actor regressions: state-only storage and fail-closed semantics.
+    # Method-only actors are legal; unsupported old instance fields must not
+    # masquerade as coverage for invalid state types or ABI collisions.
     oreslang_contract_test(actor_source_field_layout actor-owned-fields.ores --ir "oreslang_actor_Counter_read")
     oreslang_contract_test(actor_source_mutable_field actor-owned-fields.ores --ir "ores_actor_i64_heap_field_write")
-    oreslang_contract_test(reject_actor_immutable_write actor-immutable-write.ores --diagnostic "cannot assign immutable or unknown actor field")
-    oreslang_contract_test(reject_actor_unknown_write actor-unknown-write.ores --diagnostic "cannot assign immutable or unknown actor field")
-    oreslang_contract_test(reject_actor unsupported-actor.ores --diagnostic "actor requires at least one scalar field")
-    oreslang_contract_test(reject_actor_duplicate_field actor-duplicate-field.ores --diagnostic "duplicate actor field")
-    oreslang_contract_test(reject_actor_bad_field_type actor-unsupported-field.ores --diagnostic "expected 'int'")
-    oreslang_contract_test(reject_actor_unknown_field actor-unknown-field.ores --diagnostic "unknown parameter")
-    oreslang_contract_test(reject_actor_shadow actor-field-shadow.ores --diagnostic "actor parameter shadows field")
-    oreslang_contract_test(reject_actor_user_symbol_collision actor-abi-func-collision.ores --diagnostic "conflicting generated actor symbol")
-    oreslang_contract_test(reject_actor_actor_symbol_collision actor-abi-actor-collision.ores --diagnostic "conflicting generated actor symbol")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_exec_actor_owned_fields_migrated actor-owned-fields.ores
+            --run 43 --clang "${ORE_CLANG}" --runs 3
+            --native-harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_actor_owned_state_harness.c"
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c")
+        oreslang_contract_test(native_asan_actor_owned_fields_migrated actor-owned-fields.ores
+            --run 43 --clang "${ORE_CLANG}" --runs 3 --sanitize
+            --native-harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_actor_owned_state_harness.c"
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c")
+    endif()
+    oreslang_contract_test(reject_actor_immutable_write actor-immutable-write.ores --diagnostic "read-only actor state loan cannot mutate state")
+    oreslang_contract_test(reject_actor_unknown_write actor-unknown-write.ores --diagnostic "state callback writes unknown or immutable key")
+    oreslang_contract_test(actor_legacy_method_only_admission unsupported-actor.ores
+        --ir "oreslang_actor_Worker_run" --ir-not "call .*@ores_actor_i64_heap_field_write")
+    oreslang_contract_test(reject_actor_duplicate_field actor-duplicate-field.ores
+        --diagnostic "duplicate actor state key"
+        --diagnostic-not "actor instance data must be declared in one state map")
+    oreslang_contract_test(reject_actor_bad_field_type actor-unsupported-field.ores
+        --diagnostic "expected 'int'"
+        --diagnostic-not "actor instance data must be declared in one state map")
+    oreslang_contract_test(reject_actor_unknown_field actor-unknown-field.ores
+        --diagnostic "unknown parameter"
+        --diagnostic-not "actor instance data must be declared in one state map")
+    oreslang_contract_test(actor_lexical_state_shadow actor-field-shadow.ores --ir "oreslang_actor_Counter_read")
+    oreslang_contract_test(reject_actor_user_symbol_collision actor-abi-func-collision.ores
+        --diagnostic "conflicting generated actor symbol"
+        --diagnostic-not "actor instance data must be declared in one state map")
+    oreslang_contract_test(reject_actor_actor_symbol_collision actor-abi-actor-collision.ores
+        --diagnostic "conflicting generated actor symbol"
+        --diagnostic-not "actor instance data must be declared in one state map")
     # Restricted compiler-generated ActorRef lifecycle: trusted top-level
     # main may spawn one or more typed actors and must stop each exactly once.
     # Source await, actor methods, and cross-boundary ref escape remain rejected.
     # Closed actor inbox declarations: module-local and top-level contracts.
     oreslang_contract_test(actor_receive_exhaustive_bool_ir message-receive-bool-match.ores
         --ir "match.true")
+    oreslang_contract_test(actor_receive_bool_state_phi_ir message-receive-bool-match.ores
+        --ir "bool.state.loan.copy")
     oreslang_contract_test(actor_receive_bool_conditional_ir message-receive-bool-match.ores
         --ir "match.false")
     oreslang_contract_test(reject_receive_bool_nonexhaustive message-receive-bool-nonexhaustive.ores
-        --diagnostic "nonexhaustive receive boolean match")
+        --diagnostic "nonexhaustive receive boolean match"
+        --diagnostic-not "actor instance data must be declared in one state map")
     oreslang_contract_test(reject_receive_bool_duplicate_arm message-receive-bool-duplicate.ores
-        --diagnostic "duplicate receive boolean match arm")
+        --diagnostic "duplicate receive boolean match arm"
+        --diagnostic-not "actor instance data must be declared in one state map")
     oreslang_contract_test(reject_receive_bool_wrong_subject message-receive-bool-wrong-subject.ores
-        --diagnostic "receive match must inspect Message parameter")
+        --diagnostic "receive match must inspect Message parameter"
+        --diagnostic-not "actor instance data must be declared in one state map")
     oreslang_contract_test(reject_receive_bool_wrong_contract message-receive-int-bool-match.ores
-        --diagnostic "receive match true/false requires bool-only contract")
+        --diagnostic "receive match true/false requires bool-only contract"
+        --diagnostic-not "actor instance data must be declared in one state map")
     oreslang_contract_test(reject_unnarrowed_message_payload message-receive-bool-unnarrowed-payload.ores
-        --diagnostic "match arm Message payload binding is not narrowed")
+        --diagnostic "match arm Message payload binding is not narrowed"
+        --diagnostic-not "actor instance data must be declared in one state map")
     oreslang_contract_test(actor_message_shape_declaration message-pattern-shapes.ores
         --ir "oreslang_actor_Foo_receive")
     oreslang_contract_test(actor_module_typed_receive_symbols message-pattern-module.ores
@@ -295,6 +325,48 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_transform_endpoint_last
         transform-pipe-sink-role-reject.ores
         --diagnostic "transform pipe actor must be an interior pipeline stage")
+
+    # Ordinary method-state callbacks are compiled to actor-affine native
+    # entrypoints, not user-callable actor methods or forged public refs.
+    oreslang_contract_test(native_ir_actor_method_state_read
+        actor-method-state-read.ores
+        --ir "oreslang_actor_Counter_current"
+        --ir-not "call .*@ores_actor_i64_heap_field_write")
+    oreslang_contract_test(native_ir_actor_method_state_write
+        actor-method-state-write.ores
+        --ir "call void @ores_actor_i64_heap_field_write")
+    oreslang_contract_test(native_ir_actor_method_write_only_no_read
+        actor-method-state-write-only.ores
+        --ir "oreslang_actor_Counter_reset"
+        --ir-not "call .*@ores_actor_i64_heap_field_read")
+    oreslang_contract_test(reject_actor_method_state_no_effects
+        actor-method-state-no-effects-reject.ores
+        --diagnostic "actor state method requires explicit with effects")
+    oreslang_contract_test(reject_actor_method_read_mutation
+        actor-method-state-read-mutation-reject.ores
+        --diagnostic "read-only actor state loan cannot mutate state")
+    oreslang_contract_test(reject_actor_method_underdeclared_read
+        actor-method-state-underdeclared-reject.ores
+        --diagnostic "state.read operation not permitted by with effects")
+    oreslang_contract_test(reject_actor_method_state_suspend
+        actor-method-state-suspend-reject.ores
+        --diagnostic "state read/write loan cannot suspend or nest")
+    oreslang_contract_test(reject_actor_method_state_escape
+        actor-method-state-escape-reject.ores
+        --diagnostic "actor state reference cannot escape handle_state callback")
+    if(ORE_CLANG)
+        oreslang_contract_test(native_exec_actor_method_state_heap
+            actor-method-state-runtime.ores
+            --run 43 --clang "${ORE_CLANG}" --runs 3
+            --native-harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_actor_method_state_harness.c"
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c")
+        oreslang_contract_test(native_asan_actor_method_state_heap
+            actor-method-state-runtime.ores
+            --run 43 --clang "${ORE_CLANG}" --runs 3 --sanitize
+            --native-harness "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_actor_method_state_harness.c"
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c")
+    endif()
+
     # Canonical fixed-key state is the only actor-owned data declaration.
     oreslang_contract_test(reject_actor_direct_method_write
         actor-direct-method-write-reject.ores
@@ -456,6 +528,82 @@ if(BUILD_TESTING)
     oreslang_contract_test(reject_handle_read_call
         actor-handle-read-call-reject.ores
         --diagnostic "state read/write loan cannot invoke arbitrary functions")
+    oreslang_contract_test(reject_actor_method_state_bool_write_reject
+        actor-method-state-bool-write-reject.ores
+        --diagnostic "actor state callback requires int expressions")
+    oreslang_contract_test(reject_actor_method_state_bool_result_reject
+        actor-method-state-bool-result-reject.ores
+        --diagnostic "actor state callback requires int expressions")
+    oreslang_contract_test(reject_actor_tagged_state_bool_write_reject
+        actor-tagged-state-bool-write-reject.ores
+        --diagnostic "actor state callback requires int expressions")
+    oreslang_contract_test(reject_actor_boolean_state_bool_result_reject
+        actor-boolean-state-bool-result-reject.ores
+        --diagnostic "actor state callback requires int expressions")
+    oreslang_contract_test(reject_actor_state_boolean_initializer
+        actor-state-bool-init-reject.ores
+        --diagnostic "actor state initializer requires int expression")
+    # All tagged/boolean/ordinary state callbacks need explicit with rows.
+    oreslang_contract_test(reject_tagged_missing_effect_bound
+        actor-tagged-missing-effect-bound-reject.ores
+        --diagnostic "actor state method requires explicit with effects")
+    oreslang_contract_test(tagged_write_only_no_native_reads
+        source-tagged-write-only.ores
+        --ir "call void @ores_actor_i64_heap_field_write"
+        --ir-not "call .*@ores_actor_i64_heap_field_read")
+    oreslang_contract_test(reject_tagged_write_only_illegal_read
+        actor-tagged-write-only-read-effect-reject.ores
+        --diagnostic "state.read operation not permitted by with effects")
+    # Native guest verification of exact tagged write-only effect discipline.
+    if(ORE_CLANG)
+        oreslang_contract_test(native_exec_tagged_write_only_effects
+            source-tagged-write-only.ores --run 43 --clang "${ORE_CLANG}"
+            --runs 3
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "processed=2 last=7")
+        oreslang_contract_test(native_asan_tagged_write_only_effects
+            source-tagged-write-only.ores --run 43 --clang "${ORE_CLANG}"
+            --runs 3 --sanitize
+            --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+            --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+            --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c"
+            --stderr "processed=2 last=7")
+    endif()
+    # Function-level 'with' effect upper bound is distinct from scoped
+    # 'using' acquisition and sealed handle_state authority.
+    foreach(mode read write)
+        oreslang_contract_test(native_ir_with_${mode}
+            actor-with-${mode}-positive.ores
+            --ir "oreslang_actor_Probe_receive")
+        if(ORE_CLANG)
+            oreslang_contract_test(native_exec_with_${mode}_fifteen
+                source-actor-pipeline-fifteen-with-${mode}.ores
+                --run 43 --clang "${ORE_CLANG}"
+                --actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c"
+                --scheduler-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/NativeActorScheduler.c"
+                --source-actor-runtime "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/oreslang/runtime/SourceActorBootstrap.c")
+        endif()
+    endforeach()
+    oreslang_contract_test(native_ir_with_write_only
+        actor-with-write-only-positive.ores
+        --ir "oreslang_actor_Probe_receive")
+    oreslang_contract_test(reject_with_write_undeclared
+        actor-with-underdeclared-write-reject.ores
+        --diagnostic "state.write loan not permitted by with effects")
+    oreslang_contract_test(reject_with_read_undeclared
+        actor-with-underdeclared-read-reject.ores
+        --diagnostic "state.read operation not permitted by with effects")
+    oreslang_contract_test(reject_with_read_capability_undeclared
+        actor-with-read-loan-underdeclared-reject.ores
+        --diagnostic "state.read loan not permitted by with effects")
+    oreslang_contract_test(reject_with_duplicate
+        actor-with-duplicate-effect-reject.ores
+        --diagnostic "duplicate with state effect")
+    oreslang_contract_test(reject_using_signature
+        actor-with-using-signature-reject.ores
+        --diagnostic "using acquires scoped capabilities; use with for function effects")
     foreach(bad_receive_type domain-mismatch message-placeholder)
         oreslang_contract_test(reject_receive_${bad_receive_type}
             source-actor-receive-${bad_receive_type}-reject.ores

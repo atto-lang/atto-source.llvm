@@ -1,7 +1,11 @@
+// Read-only state grants cannot mutate any fixed-key actor value.
 define actor Counter as {
-  const immutable: int = 40;
-  pub fnc bad(): int {
-    immutable = 41;
-    return immutable;
-  }
+ state { immutable: int = 40; }
+ pub fnc bad(): int with state.read {
+  const result = using state.read(|state| -> {
+   state.immutable = 41;
+   return state.immutable;
+  });
+  return result;
+ }
 }

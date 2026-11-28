@@ -60,12 +60,6 @@ struct FieldAssignment {
     std::size_t offset = 0;
 };
 
-struct ReceiveBooleanArm {
-    bool match_value = false;
-    std::vector<FieldAssignment> assignments;
-    std::size_t offset = 0;
-};
-
 // Static admission representation for source `match m over { on Enum.Case
 // as (...) { } }`. Bodies remain unavailable to native codegen; matching
 // contracts are checked before the explicit fail-closed lowering gate.
@@ -77,6 +71,13 @@ struct StateLoan {
     std::string result_binding;
     std::vector<FieldAssignment> assignments;
     std::unique_ptr<Expression> result;
+};
+
+struct ReceiveBooleanArm {
+    bool match_value = false;
+    std::vector<FieldAssignment> assignments; // legacy direct writes rejected
+    std::unique_ptr<StateLoan> state_loan;
+    std::size_t offset = 0;
 };
 
 struct TaggedReceiveArm {
@@ -97,6 +98,8 @@ struct TaggedReceiveArm {
 struct Function {
     std::string name;
     std::vector<std::string> parameters;
+    bool effects_declared = false;
+    std::vector<std::string> declared_effects; // restricted state.read / state.write row
     std::vector<LocalBinding> locals;
     std::vector<ActorSpawnBinding> actor_spawns;
     std::vector<ActorSend> actor_sends;
@@ -112,6 +115,9 @@ struct Function {
     std::string match_subject;
     std::vector<ReceiveBooleanArm> boolean_arms;
     std::vector<TaggedReceiveArm> tagged_arms;
+    // One synchronous, copied-scalar state callback in an ordinary actor method.
+    // No guest-visible loan can survive this lexical region.
+    std::unique_ptr<StateLoan> method_state_loan;
     std::unique_ptr<Expression> result;
     std::size_t offset = 0;
     bool exported = false;

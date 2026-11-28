@@ -41,6 +41,18 @@ struct GuestNominalCase {
     std::vector<std::uint8_t> wire;
     bool i64_payload = false;
 };
+// This is a syntactic variable-use test over the restricted i64 AST, not
+// an ownership proof. The parser has already forbidden callback escape and
+// arbitrary guest calls; it permits omitting unused native heap reads.
+bool uses_scalar_name(const Expression& expr, std::string_view name) {
+    if (expr.kind == Expression::Kind::Variable && expr.name == name)
+        return true;
+    if (expr.left && uses_scalar_name(*expr.left, name)) return true;
+    if (expr.right && uses_scalar_name(*expr.right, name)) return true;
+    for (const auto& argument : expr.arguments)
+        if (uses_scalar_name(*argument, name)) return true;
+    return false;
+}
 std::array<std::uint8_t, 32> sha(std::string_view text) {
     return llvm::SHA256::hash(llvm::ArrayRef<std::uint8_t>(
         reinterpret_cast<const std::uint8_t*>(text.data()), text.size()));
@@ -762,15 +774,31 @@ std::string emit_verified_llvm_ir(const Program& source) {
                         // region. The result is copied into the outer arm,
                         // never an address or mutable reference.
                         auto loanLocals = locals;
+                        // A declared write-only effect must not generate
+                        // implicit native reads of unrelated or blind-written
+                        // fields. Preload only actual state references; keep
+                        // write-only slots for the callback-local updated value.
                         for (std::size_t i = 0; i < actor.fields.size(); ++i) {
+                            const auto& field = actor.fields[i];
+                            const std::string borrowed = "@state." + field.name;
+                            bool needsRead = uses_scalar_name(
+                                *arm.state_loan->result, borrowed);
+                            bool willWrite = false;
+                            for (const auto& assignment : arm.state_loan->assignments) {
+                                if (assignment.field == field.name) willWrite = true;
+                                needsRead |= uses_scalar_name(*assignment.value, borrowed);
+                            }
+                            if (!needsRead && !willWrite) continue;
                             auto* key = builder.CreateAlloca(
-                                i64, nullptr, "state." + actor.fields[i].name);
-                            auto* snapshot = builder.CreateCall(fieldRead,
-                                {heap, currentDomain, currentEpoch,
-                                 llvm::ConstantInt::get(i64, i)},
-                                "state.snapshot." + actor.fields[i].name);
-                            builder.CreateStore(snapshot, key);
-                            loanLocals.emplace("@state." + actor.fields[i].name, key);
+                                i64, nullptr, "state." + field.name);
+                            if (needsRead) {
+                                auto* snapshot = builder.CreateCall(fieldRead,
+                                    {heap, currentDomain, currentEpoch,
+                                     llvm::ConstantInt::get(i64, i)},
+                                    "state.snapshot." + field.name);
+                                builder.CreateStore(snapshot, key);
+                            }
+                            loanLocals.emplace(borrowed, key);
                         }
                         for (const auto& assignment : arm.state_loan->assignments) {
                             const auto it = std::find_if(actor.fields.begin(), actor.fields.end(),
@@ -830,6 +858,52 @@ std::string emit_verified_llvm_ir(const Program& source) {
                     parameters.emplace(name, merged);
                 }
             }
+            if (method.method_state_loan) {
+                // Native actor-state operations are admitted by the scheduler
+                // turn token and compile only inside the sealed callback.
+                // Copy out an i64; neither heap addresses nor state grants
+                // enter the surrounding method namespace.
+                const auto& loan = *method.method_state_loan;
+                auto loanLocals = locals;
+                for (std::size_t i = 0; i < actor.fields.size(); ++i) {
+                    const auto& field = actor.fields[i];
+                    const auto borrowedName = "@state." + field.name;
+                    bool needsRead = uses_scalar_name(*loan.result, borrowedName);
+                    bool willWrite = false;
+                    for (const auto& assignment : loan.assignments) {
+                        if (assignment.field == field.name) willWrite = true;
+                        needsRead |= uses_scalar_name(*assignment.value, borrowedName);
+                    }
+                    if (!needsRead && !willWrite) continue;
+                    auto* key = builder.CreateAlloca(i64, nullptr,
+                        "state." + field.name);
+                    if (needsRead) {
+                        auto* snapshot = builder.CreateCall(fieldRead,
+                            {heap, currentDomain, currentEpoch,
+                             llvm::ConstantInt::get(i64, i)},
+                            "state.snapshot." + field.name);
+                        builder.CreateStore(snapshot, key);
+                    }
+                    loanLocals.emplace(borrowedName, key);
+                }
+                for (const auto& assignment : loan.assignments) {
+                    const auto it = std::find_if(actor.fields.begin(), actor.fields.end(),
+                        [&](const LocalBinding& f) { return f.name == assignment.field; });
+                    if (it == actor.fields.end() || !it->field_mutable)
+                        throw std::runtime_error("invalid method state loan field");
+                    auto* updated = lower(*assignment.value, builder, i64,
+                        parameters, loanLocals, declarations);
+                    const auto index = std::distance(actor.fields.begin(), it);
+                    builder.CreateCall(fieldWrite,
+                        {heap, currentDomain, currentEpoch,
+                         llvm::ConstantInt::get(i64, index), updated});
+                    builder.CreateStore(updated, loanLocals.at("@state." + assignment.field));
+                }
+                auto* copied = lower(*loan.result, builder, i64,
+                    parameters, loanLocals, declarations);
+                if (!parameters.emplace(loan.result_binding, copied).second)
+                    throw std::runtime_error("state result conflicts with method parameter");
+            }
             if (!method.boolean_arms.empty()) {
                 auto* subject = parameters.at(method.match_subject);
                 auto* condition = builder.CreateICmpNE(
@@ -838,26 +912,67 @@ std::string emit_verified_llvm_ir(const Program& source) {
                 auto* whenFalse = llvm::BasicBlock::Create(context, "match.false", fn);
                 auto* joined = llvm::BasicBlock::Create(context, "match.join", fn);
                 builder.CreateCondBr(condition, whenTrue, whenFalse);
-                // The parser proves exactly two exhaustive, nonoverlapping
-                // bool arms; no implicit fallthrough or untyped default.
+                std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>> copiedResults;
+                // Each bool arm has exclusive admission for the duration of
+                // its synchronous sealed callback. No loan pointer escapes.
                 for (const auto& arm : method.boolean_arms) {
                     builder.SetInsertPoint(arm.match_value ? whenTrue : whenFalse);
-                    for (const auto& assignment : arm.assignments) {
-                        const auto field = std::find_if(actor.fields.begin(), actor.fields.end(),
-                            [&](const LocalBinding& f) { return f.name == assignment.field; });
-                        if (field == actor.fields.end() || !field->field_mutable)
-                            throw std::runtime_error("invalid receive match field mutation");
-                        auto* updated = lower(*assignment.value, builder, i64,
-                                              parameters, locals, declarations);
-                        builder.CreateCall(fieldWrite,
-                            {heap, currentDomain, currentEpoch,
-                             llvm::ConstantInt::get(i64,
-                                std::distance(actor.fields.begin(), field)), updated});
-                        builder.CreateStore(updated, locals.at(assignment.field));
+                    if (!arm.assignments.empty())
+                        throw std::runtime_error("direct actor boolean field mutation forbidden");
+                    if (arm.state_loan) {
+                        const auto& loan = *arm.state_loan;
+                        auto loanLocals = locals;
+                        for (std::size_t i = 0; i < actor.fields.size(); ++i) {
+                            const auto& field = actor.fields[i];
+                            const auto borrowed = "@state." + field.name;
+                            bool needsRead = uses_scalar_name(*loan.result, borrowed);
+                            bool willWrite = false;
+                            for (const auto& assignment : loan.assignments) {
+                                if (assignment.field == field.name) willWrite = true;
+                                needsRead |= uses_scalar_name(*assignment.value, borrowed);
+                            }
+                            if (!needsRead && !willWrite) continue;
+                            auto* key = builder.CreateAlloca(i64, nullptr,
+                                "state." + field.name);
+                            if (needsRead) {
+                                auto* snapshot = builder.CreateCall(fieldRead,
+                                    {heap, currentDomain, currentEpoch,
+                                     llvm::ConstantInt::get(i64, i)},
+                                    "state.snapshot." + field.name);
+                                builder.CreateStore(snapshot, key);
+                            }
+                            loanLocals.emplace(borrowed, key);
+                        }
+                        for (const auto& assignment : loan.assignments) {
+                            const auto it = std::find_if(actor.fields.begin(), actor.fields.end(),
+                                [&](const LocalBinding& f) { return f.name == assignment.field; });
+                            if (it == actor.fields.end() || !it->field_mutable)
+                                throw std::runtime_error("invalid boolean state loan field");
+                            auto* updated = lower(*assignment.value, builder, i64,
+                                parameters, loanLocals, declarations);
+                            const auto index = std::distance(actor.fields.begin(), it);
+                            builder.CreateCall(fieldWrite,
+                                {heap, currentDomain, currentEpoch,
+                                 llvm::ConstantInt::get(i64, index), updated});
+                            builder.CreateStore(updated, loanLocals.at("@state." + assignment.field));
+                        }
+                        auto* copied = lower(*loan.result, builder, i64,
+                            parameters, loanLocals, declarations);
+                        copiedResults.emplace_back(copied, builder.GetInsertBlock());
                     }
                     builder.CreateBr(joined);
                 }
                 builder.SetInsertPoint(joined);
+                if (!copiedResults.empty()) {
+                    if (copiedResults.size() != method.boolean_arms.size())
+                        throw std::runtime_error("boolean state result missing on some arms");
+                    const auto& name = method.boolean_arms.front().state_loan->result_binding;
+                    auto* merged = builder.CreatePHI(i64,
+                        static_cast<unsigned>(copiedResults.size()), "bool.state.loan.copy");
+                    for (const auto& [copy, block] : copiedResults)
+                        merged->addIncoming(copy, block);
+                    parameters.emplace(name, merged);
+                }
             }
             for (const auto& assignment : method.assignments) {
                 const auto match = std::find_if(actor.fields.begin(), actor.fields.end(),
