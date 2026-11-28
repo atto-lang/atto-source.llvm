@@ -1,0 +1,12 @@
+fnc main(): int using io, block {
+  let int fd = rt file_open_replace_blocking("ores-native-guest.tmp");
+  let int wrote = rt file_write_u63_blocking(fd, 42);
+  let int synced = rt file_sync_blocking(fd);
+  let int closed = rt file_close_blocking(fd);
+  let int renamed = rt file_rename_blocking("ores-native-guest.tmp", "ores-native-guest.wal");
+  let int dirsynced = rt dir_sync_cwd_blocking();
+  let int readfd = rt file_open_read_blocking("ores-native-guest.wal");
+  let int value = rt file_read_u63_blocking(readfd);
+  let int readclosed = rt file_close_blocking(readfd);
+  return value;
+}

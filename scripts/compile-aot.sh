@@ -18,6 +18,10 @@ command -v "$clang" >/dev/null || { echo 'Install Clang or set CLANG.' >&2; exit
 work="$(mktemp -d "$output_dir/.ores-aot.XXXXXX")"
 trap 'rm -rf -- "$work"' EXIT
 "$compiler" --target=host "$source_file" > "$work/program.ll"
-"$clang" -O2 -x ir "$work/program.ll" -o "$work/program"
+"$clang" -O2 -Werror -Wno-override-module -x ir -c "$work/program.ll" -o "$work/program.o"
+"$clang" -O2 -std=c11 -Wall -Wextra -Wpedantic -Werror \
+  -I"$root/src/main/cpp" -c "$root/src/main/cpp/oreslang/runtime/NativeBlockingFile.c" \
+  -o "$work/native-blocking-file.o"
+"$clang" -O2 "$work/program.o" "$work/native-blocking-file.o" -o "$work/program"
 mv -f -- "$work/program" "$output_file"
 printf 'Native executable: %s\n' "$output_file"
