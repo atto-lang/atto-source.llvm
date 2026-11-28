@@ -734,22 +734,26 @@ fn compile_ir_with_effect_profile(
         admit_freestanding_tokens(&toks)?;
     }
     let (toks, linked_http) = link_registered_http_import(toks, profile)?;
-    let mut program = if target_native::requires_target_link(&toks) {
-        target_native::lower(&toks)?
-    } else {
-        atto_compiler::parser::Parser::new(toks).parse_program()
-            .map_err(|e|e.to_string())?
-    };
     // The explicit source profile selects a separate closed native proof.
     // Never alter the legacy checker or freestanding/effect admission.
     if source.lines().next() == Some("// atto-ownership: borrow-default-v1") {
         if profile != LibraryProfile::Hosted || effect_profile.is_some() || linked_http.is_some() {
             return Err("E_NATIVE_READONLY: incompatible library/effect profile".into());
         }
+        // Check original parsed declarations; target-link rewrites must not
+        // remove unsupported declarations before whole-profile admission.
+        let program = atto_compiler::parser::Parser::new(toks).parse_program()
+            .map_err(|e| e.to_string())?;
         native_readonly::admit_source(&program)?;
         let candidate = check::check_native_readonly_candidate(&program).map_err(|e| e.to_string())?;
         return native_readonly::emit(&program, &candidate);
     }
+    let mut program = if target_native::requires_target_link(&toks) {
+        target_native::lower(&toks)?
+    } else {
+        atto_compiler::parser::Parser::new(toks).parse_program()
+            .map_err(|e|e.to_string())?
+    };
     if let Some(library) = linked_http {
         // Merge independently checked source units at the AST boundary, not
         // by text concatenation. The normal typed checker enforces all call
