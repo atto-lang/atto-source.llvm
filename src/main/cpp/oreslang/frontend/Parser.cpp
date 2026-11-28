@@ -5526,6 +5526,13 @@ private:
         return factor;
     }
 
+    QuantityUnit read_declared_dimension() {
+        const auto name = identifier();
+        const auto found = quantity_dimensions_.find(name);
+        if (found == quantity_dimensions_.end()) fail("E_UNIT_NAME: unknown or forward dimension");
+        return found->second;
+    }
+
     void quantity_declaration() {
         require("define");
         const bool dimension = accept("dimension");
@@ -5536,8 +5543,23 @@ private:
         if (quantity_dimensions_.count(name) || quantity_units_.count(name))
             fail("E_UNIT_DUPLICATE: quantity name '" + name + "' is already declared");
         if (dimension) {
+            auto vector = QuantityUnit::base(name);
+            if (accept("=")) {
+                if (strict_i64_) fail("E_VERIFY_UNSUPPORTED: compound dimension pilot is not strict-profile admitted");
+                vector = read_declared_dimension();
+                unsigned factors = 1;
+                while (token_.text == "*" || token_.text == "/") {
+                    const bool divide = accept("/");
+                    if (!divide) require("*");
+                    if (++factors > 128) fail("E_UNIT_LIMIT: compound dimension factor budget exceeded");
+                    vector = vector.combine(read_declared_dimension(), divide);
+                }
+                if (vector.powers().empty()) fail("E_UNIT_DIMENSION: empty vector requires explicit nominal kind admission");
+                for (const auto& entry : quantity_dimensions_)
+                    if (entry.second.same_dimension(vector)) fail("E_UNIT_DIMENSION: equal vectors require explicit nominal kind admission");
+            }
             require(";");
-            quantity_dimensions_.emplace(name, QuantityUnit::base(name));
+            quantity_dimensions_.emplace(name, std::move(vector));
             return;
         }
         require(":");
@@ -10821,9 +10843,34 @@ Program parse_unresolved_program(std::string_view source, bool experimental_owne
         expanded=std::string(measure_source)+"\n"+std::string(source);
         source=expanded;
     }
-    Program program = Parser(source, experimental_owned_int,
-                             experimental_rt_scalar_loop, false, 0,
-                             experimental_pointer_int_aot, language_version).parse();
+    Program program;
+    try {
+        program = Parser(source, experimental_owned_int,
+                         experimental_rt_scalar_loop, false, 0,
+                         experimental_pointer_int_aot, language_version).parse();
+    } catch (const std::runtime_error& failure) {
+        if (expanded.empty()) throw;
+        // Internal offsets remain in expanded coordinates for lexer gap and
+        // adjacency checks. Map only the parser's terminal byte diagnostic.
+        std::string message(failure.what());
+        const auto marker=message.rfind(" at byte ");
+        if(marker==std::string::npos)throw;
+        const auto begin=marker+9;
+        auto end=begin;
+        std::size_t offset=0;
+        while(end<message.size() && digit(message[end])){
+            const auto d=static_cast<std::size_t>(message[end]-'0');
+            if(offset>source.size()/10 || offset*10>source.size()-d)throw;
+            offset=offset*10+d;
+            ++end;
+        }
+        if(end==begin || (end!=message.size() && !(end+1==message.size() && message[end]==')')) ||
+            offset>source.size())throw;
+        const auto prefix=measure_source.size()+1;
+        if(offset<prefix)throw std::runtime_error("E_UNIT_PRELUDE: internal catalog admission failed");
+        message.replace(begin,end-begin,std::to_string(offset-prefix));
+        throw std::runtime_error(message);
+    }
     if (experimental_rt_scalar_loop &&
             (program.functions.size() != 1 || !program.functions.front().scalar_while ||
              !program.classes.empty() || !program.actors.empty() ||
