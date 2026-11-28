@@ -62,6 +62,31 @@ static void test_cascade_and_overflow(void) {
     ores_timer_wheel_destroy(&w);
 }
 
+static void test_late_poll_cascade_order(void) {
+    for (int k = 0; k < 2; k++) {
+        uint64_t base = k ? UINT64_C(1) << 36 : 0;
+        OresTimerWheel w;
+        CHECK(ores_timer_wheel_init(&w, 8, 1, 0));
+        CHECK(ores_timer_wheel_arm(&w, base + 127, 127));
+        CHECK(ores_timer_wheel_arm(&w, base + 64, 64));
+        CHECK(ores_timer_wheel_arm(&w, base + 65, 65));
+        uint64_t cancelled = ores_timer_wheel_arm(&w, base + 65, 66);
+        CHECK(cancelled);
+        CHECK(poll1(&w, base + 63, 8) == 0);
+        CHECK(poll1(&w, base + 127, 1) == 1 && out[0].payload == 64);
+        CHECK(ores_timer_wheel_cancel(&w, cancelled));
+        CHECK(poll1(&w, base + 127, 8) == 2 && out[0].payload == 65 && out[1].payload == 127);
+        CHECK(w.size == 0);
+        ores_timer_wheel_destroy(&w);
+    }
+    OresTimerWheel w;
+    CHECK(ores_timer_wheel_init(&w, 8, 10, 0));
+    CHECK(ores_timer_wheel_arm(&w, 649, 2));
+    CHECK(ores_timer_wheel_arm(&w, 641, 1));
+    CHECK(poll1(&w, 649, 8) == 2 && out[0].payload == 2 && out[1].payload == 1);
+    ores_timer_wheel_destroy(&w);
+}
+
 static void test_stale_handles(void) {
     OresTimerWheel w;
     CHECK(ores_timer_wheel_init(&w, 1, MS, 0));
@@ -124,7 +149,7 @@ static void test_one_million(void) {
 /* Identical algorithm to OresTimerWheelTest.TimerConformanceVector. */
 static void test_conformance_vector(void) {
     static const char expected[] =
-        "fired=11085 cancelled=793 full=0 polls=4074 checksum=bcb6942ca7275487";
+        "fired=11085 cancelled=793 full=0 polls=4074 checksum=cdc3f321e0578fc5";
     enum { STEPS = 20000 };
     static uint64_t handles[STEPS], deadlines[STEPS];
     OresTimerExpired o[64];
@@ -229,6 +254,7 @@ int main(void) {
     test_fires_at_deadline();
     test_sub_tick();
     test_cascade_and_overflow();
+    test_late_poll_cascade_order();
     test_stale_handles();
     test_bounded_fifo();
     test_clock_regression();
