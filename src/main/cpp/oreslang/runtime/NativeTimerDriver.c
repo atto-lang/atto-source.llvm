@@ -62,18 +62,32 @@ static void* driver_main(void* raw) {
 
 bool ores_timer_driver_start(OresTimerDriver* d, uint32_t capacity, uint64_t tick_ns,
                              OresTimerFire fire, void* ctx) {
-    if (!d || !fire) return false;
+    if (!d) return false;
     memset(d, 0, sizeof(*d));
+    if (!fire) return false;
     if (!ores_timer_wheel_init(&d->wheel, capacity, tick_ns, 0)) return false;
     d->fire = fire;
     d->ctx = ctx;
     d->origin_ns = ores_timer_monotonic_ns();
     pthread_condattr_t attr;
-    pthread_condattr_init(&attr);
+    if (pthread_condattr_init(&attr) != 0) {
+        ores_timer_wheel_destroy(&d->wheel);
+        return false;
+    }
 #if !defined(__APPLE__)
-    pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
+    if (pthread_condattr_setclock(&attr, CLOCK_MONOTONIC) != 0) {
+        pthread_condattr_destroy(&attr);
+        ores_timer_wheel_destroy(&d->wheel);
+        return false;
+    }
 #endif
-    if (pthread_mutex_init(&d->lock, NULL) != 0 || pthread_cond_init(&d->wake, &attr) != 0) {
+    if (pthread_mutex_init(&d->lock, NULL) != 0) {
+        pthread_condattr_destroy(&attr);
+        ores_timer_wheel_destroy(&d->wheel);
+        return false;
+    }
+    if (pthread_cond_init(&d->wake, &attr) != 0) {
+        pthread_mutex_destroy(&d->lock);
         pthread_condattr_destroy(&attr);
         ores_timer_wheel_destroy(&d->wheel);
         return false;
@@ -103,6 +117,7 @@ void ores_timer_driver_stop(OresTimerDriver* d) {
 }
 
 uint64_t ores_timer_driver_arm_after(OresTimerDriver* d, uint64_t delay_ns, uint64_t payload) {
+    if (!d || !d->started) return 0;
     pthread_mutex_lock(&d->lock);
     uint64_t handle = 0;
     if (!d->stopping) {
@@ -119,6 +134,7 @@ uint64_t ores_timer_driver_arm_after(OresTimerDriver* d, uint64_t delay_ns, uint
 }
 
 bool ores_timer_driver_cancel(OresTimerDriver* d, uint64_t handle) {
+    if (!d || !d->started) return false;
     pthread_mutex_lock(&d->lock);
     bool ok = !d->stopping && ores_timer_wheel_cancel(&d->wheel, handle);
     pthread_mutex_unlock(&d->lock);
@@ -126,6 +142,7 @@ bool ores_timer_driver_cancel(OresTimerDriver* d, uint64_t handle) {
 }
 
 uint32_t ores_timer_driver_outstanding(OresTimerDriver* d) {
+    if (!d || !d->started) return 0;
     pthread_mutex_lock(&d->lock);
     uint32_t n = d->wheel.size;
     pthread_mutex_unlock(&d->lock);
