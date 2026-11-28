@@ -4428,7 +4428,14 @@ private:
             // the let-mut and scalar-alias checks below.
             const bool type_right_const = token_.text == "const" &&
                     sum_first.kind == Kind::Identifier &&
-                    [&] { Lexer right = sum_look; return right.next().text == ":"; }();
+                    [&] {
+                        Lexer right = sum_look;
+                        if (right.next().text != ":") return false;
+                        // Preserve the separately gated experimental owned-int
+                        // declaration path. The scalar const parser cannot
+                        // consume its ownership qualifier or validate its ABI.
+                        return right.next().text != "owned";
+                    }();
             if (token_.text == "let" && sum_first.text == "mut") sum_first = sum_look.next();
             // Java: `val Count c = 42;` with `type Count = int;` is the same
             // scalar local as `val c: Count = 42;`. Only a declared scalar alias
