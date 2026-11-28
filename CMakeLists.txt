@@ -4788,6 +4788,27 @@ if(BUILD_TESTING)
                 --clang "${ORE_CLANG}"
                 --root "${CMAKE_CURRENT_SOURCE_DIR}" --sanitize)
         set_tests_properties(source_actor_compiled_native_asan_ubsan PROPERTIES TIMEOUT 180)
+
+        # Intermediate genuine guest execution bridge: compile .atto scalar
+        # segments to LLVM IR, link the real native retained DATA/WAKE
+        # scheduler, assert A-before-B and separate actor-owned state. This
+        # does NOT claim compiler-generated suspends actor method lowering.
+        add_test(NAME source_actor_compiled_native_retained_guest_bridge
+            COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" retained-guest
+                "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}"
+                "${CMAKE_CURRENT_SOURCE_DIR}"
+                "${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit"
+                release)
+        set_tests_properties(source_actor_compiled_native_retained_guest_bridge
+            PROPERTIES TIMEOUT 180)
+        add_test(NAME source_actor_compiled_native_retained_guest_bridge_sanitized
+            COMMAND "${ORES_RUST_TEST_HARNESS_BIN}" retained-guest
+                "$<TARGET_FILE:oreslang-llvmc>" "${ORE_CLANG}"
+                "${CMAKE_CURRENT_SOURCE_DIR}"
+                "${CMAKE_CURRENT_BINARY_DIR}/oreslang-no-gc-ir-audit"
+                sanitize)
+        set_tests_properties(source_actor_compiled_native_retained_guest_bridge_sanitized
+            PROPERTIES TIMEOUT 180)
         # Actual LLVM compiler-emitted Counter handler, linked with the
         # native actor heap and executed for four stateful turns (total=10).
         # A separate negative prevents declared state source from being
@@ -4891,6 +4912,164 @@ if(BUILD_TESTING)
     target_link_libraries(oreslang-native-actor-membership-test PRIVATE Threads::Threads)
     add_test(NAME native_actor_multi_group_membership COMMAND oreslang-native-actor-membership-test)
     set_tests_properties(native_actor_multi_group_membership PROPERTIES TIMEOUT 20)
+    # Actor-local continuation accounting, under the scheduler actor lease.
+    # Host-only state-machine test: no claim of guest or hard-RT integration.
+    add_executable(oreslang-actor-execution-ledger-test
+        tests/native_actor_execution_ledger_test.cpp)
+    target_include_directories(oreslang-actor-execution-ledger-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-actor-execution-ledger-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-actor-execution-ledger-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_actor_execution_ledger_serialization
+        COMMAND oreslang-actor-execution-ledger-test)
+    set_tests_properties(native_actor_execution_ledger_serialization
+        PROPERTIES TIMEOUT 20)
+
+    # Bounded, actor-owned logical stacks keyed by live ledger event tokens.
+    # This exercises a native host reference bridge, NOT source-compiled
+    # suspending receive lowering or hardware-isolated native stacks.
+    add_executable(oreslang-actor-invocation-frames-test
+        tests/native_actor_invocation_frames_test.cpp)
+    target_include_directories(oreslang-actor-invocation-frames-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-actor-invocation-frames-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-actor-invocation-frames-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_actor_invocation_frame_ownership_host_only
+        COMMAND oreslang-actor-invocation-frames-test)
+    set_tests_properties(native_actor_invocation_frame_ownership_host_only
+        PROPERTIES TIMEOUT 30)
+
+    # Lease-authenticated native scheduler DATA/WAKE callbacks interacting
+    # with an actor-private ledger. Deliberately host-only: the legacy
+    # scheduler's native "processed" receipt still precedes ledgered guest B.
+    add_executable(oreslang-actor-ledger-scheduler-bridge-test
+        tests/native_actor_ledger_scheduler_bridge_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-actor-ledger-scheduler-bridge-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-actor-ledger-scheduler-bridge-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-actor-ledger-scheduler-bridge-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-actor-ledger-scheduler-bridge-test PRIVATE
+        Threads::Threads)
+    add_test(NAME native_actor_ledger_authenticated_scheduler_bridge
+        COMMAND oreslang-actor-ledger-scheduler-bridge-test)
+    set_tests_properties(native_actor_ledger_authenticated_scheduler_bridge
+        PROPERTIES TIMEOUT 25)
+    # Actor-local logical frames coupled to the native scheduler's actual
+    # DATA/WAKE authority: still a HOST runtime proof, not compiled .atto
+    # suspends/on_message lowering or separate OS stacks.
+    add_executable(oreslang-actor-invocation-frame-bridge-test
+        tests/native_actor_invocation_frame_bridge_test.cpp
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-actor-invocation-frame-bridge-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_features(oreslang-actor-invocation-frame-bridge-test PRIVATE cxx_std_17)
+    target_compile_options(oreslang-actor-invocation-frame-bridge-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-actor-invocation-frame-bridge-test PRIVATE
+        Threads::Threads)
+    add_test(NAME native_actor_invocation_frame_lease_bridge_host_only
+        COMMAND oreslang-actor-invocation-frame-bridge-test)
+    set_tests_properties(native_actor_invocation_frame_lease_bridge_host_only
+        PROPERTIES TIMEOUT 30)
+
+
+    # A retained unfinished logical DATA turn must prevent later DATA
+    # overtaking, while separately admitted WAKE and other actor lanes run.
+    add_executable(oreslang-native-retained-data-order-test
+        tests/native_actor_retained_data_ordering_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-retained-data-order-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-retained-data-order-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-retained-data-order-test PRIVATE
+        Threads::Threads)
+    add_test(NAME native_actor_retained_data_blocks_later_mail
+        COMMAND oreslang-native-retained-data-order-test)
+    set_tests_properties(native_actor_retained_data_blocks_later_mail
+        PROPERTIES TIMEOUT 25)
+
+    # A Future that resumes normally must release a previously reserved
+    # STOP cleanup credit without counting an unexecuted cleanup callback.
+    add_executable(oreslang-native-retained-unused-cleanup-test
+        tests/native_actor_retained_cleanup_unused_reservation_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-retained-unused-cleanup-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-retained-unused-cleanup-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-retained-unused-cleanup-test PRIVATE
+        Threads::Threads)
+    add_test(NAME native_actor_retained_cleanup_unused_credit_return
+        COMMAND oreslang-native-retained-unused-cleanup-test)
+    set_tests_properties(native_actor_retained_cleanup_unused_credit_return
+        PROPERTIES TIMEOUT 25)
+
+    # STOP and completion publication compete on distinct producer threads:
+    # exactly one authenticated actor turn must physically retire the frame.
+    add_executable(oreslang-native-retained-stop-wake-race-test
+        tests/native_actor_retained_stop_wake_race_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-retained-stop-wake-race-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-retained-stop-wake-race-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-retained-stop-wake-race-test PRIVATE
+        Threads::Threads)
+    add_test(NAME native_actor_retained_stop_vs_wake_exactly_once
+        COMMAND oreslang-native-retained-stop-wake-race-test)
+    set_tests_properties(native_actor_retained_stop_vs_wake_exactly_once
+        PROPERTIES TIMEOUT 90)
+
+    # STOP may pre-activate a reserved actor-owner cleanup credit without
+    # any previously queued supervisor CONTROL or Future WAKE turn.
+    # The test also verifies fail-closed physical cleanup quarantine.
+    add_executable(oreslang-native-retained-autocleanup-test
+        tests/native_actor_retained_cleanup_autoadmit_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-retained-autocleanup-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-retained-autocleanup-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-retained-autocleanup-test PRIVATE
+        Threads::Threads)
+    add_test(NAME native_actor_prepaid_stop_cleanup_and_failure_quarantine
+        COMMAND oreslang-native-retained-autocleanup-test)
+    set_tests_properties(native_actor_prepaid_stop_cleanup_and_failure_quarantine
+        PROPERTIES TIMEOUT 25)
+
+    # Retained DATA receipt survives native callback exit, stays charged to
+    # mailbox capacity and prevents false STOP/terminal accounting.
+    add_executable(oreslang-native-retained-data-stop-test
+        tests/native_actor_retained_data_stop_test.c
+        src/main/cpp/oreslang/runtime/NativeActorScheduler.c)
+    target_include_directories(oreslang-native-retained-data-stop-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_compile_options(oreslang-native-retained-data-stop-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    target_link_libraries(oreslang-native-retained-data-stop-test PRIVATE
+        Threads::Threads)
+    add_test(NAME native_actor_retained_data_stop_and_terminal
+        COMMAND oreslang-native-retained-data-stop-test)
+    set_tests_properties(native_actor_retained_data_stop_and_terminal
+        PROPERTIES TIMEOUT 25)
+
+    # Validate reconciled ready queues in continuation/cleanup tests only.
+    foreach(frame_target IN ITEMS
+            oreslang-actor-invocation-frame-bridge-test
+            oreslang-actor-ledger-scheduler-bridge-test
+            oreslang-native-retained-data-order-test
+            oreslang-native-retained-unused-cleanup-test
+            oreslang-native-retained-stop-wake-race-test
+            oreslang-native-retained-autocleanup-test
+            oreslang-native-retained-data-stop-test)
+        target_compile_definitions(${frame_target} PRIVATE ORESLANG_NATIVE_SCHED_VALIDATE=1)
+    endforeach()
+
     # Host-only ETS scalar set and pg-style membership snapshots; neither
     # proves source lowering, distributed pg or VM/IsolateVM admission.
     add_executable(oreslang-native-ets-scalar-set-test

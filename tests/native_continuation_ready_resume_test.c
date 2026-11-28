@@ -123,6 +123,28 @@ static void race_pair(RaceArgs* first, RaceArgs* second) {
     check(pthread_join(two, NULL) == 0);
 }
 
+typedef struct {
+    OresNativeContinuationStore* store;
+    OresNativeContinuationHandle handle;
+    atomic_int* go;
+    uint64_t generation;
+    int rotate;
+    int won;
+} ImageRaceArgs;
+
+static void* image_race_contender(void* raw) {
+    ImageRaceArgs* args = (ImageRaceArgs*)raw;
+    while (!atomic_load_explicit(args->go, memory_order_acquire)) {
+        /* Bounded native test only; production workers do not spin. */
+    }
+    args->won = args->rotate
+        ? ores_native_continuation_store_rotate_code_generation(
+            args->store, args->generation + 1)
+        : ores_native_continuation_store_try_claim_ready_current_code(
+            args->store, args->handle, args->generation, NULL);
+    return NULL;
+}
+
 static OresNativeContinuationHandle publish(
         OresNativeContinuationStore* continuations,
         OresNativeExecutionHandle execution) {
@@ -492,9 +514,34 @@ int main(void) {
     check(record.state == ORES_CONTINUATION_PENDING);
     check(ores_native_continuation_store_notify_ready(
         continuations, link.continuation));
-    check(ores_native_await_trace_ready_resume_begin(
+    /* The scheduler's trusted code generation, not the Future's producer,
+     * determines whether a READY frame may enter a new actor turn. Invalid
+     * generations cannot consume the one-shot claim or allocate a child. */
+    check(!ores_native_await_trace_ready_resume_begin_current_code(
         executions, continuations, (OresNativeExecutionId){88, 9},
-        link, &resumed, &resumed_context));
+        link, 0, &resumed, &resumed_context));
+    check(!ores_native_await_trace_ready_resume_begin_current_code(
+        executions, continuations, (OresNativeExecutionId){88, 9},
+        link, 78, &resumed, &resumed_context));
+    check(ores_native_continuation_store_get(
+        continuations, link.continuation, &record));
+    check(record.state == ORES_CONTINUATION_READY);
+    check(!ores_native_store_handle_valid(resumed));
+    /* A matching numeric code generation alone is not authority. The
+     * trusted runtime must first register the image in this store. */
+    check(ores_native_continuation_store_current_code_generation(continuations) == 0);
+    check(!ores_native_await_trace_ready_resume_begin_current_code(
+        executions, continuations, (OresNativeExecutionId){88, 9},
+        link, 77, &resumed, &resumed_context));
+    check(!ores_native_store_handle_valid(resumed));
+    check(ores_native_continuation_store_get(
+        continuations, link.continuation, &record));
+    check(record.state == ORES_CONTINUATION_READY);
+    check(ores_native_continuation_store_rotate_code_generation(
+        continuations, 77));
+    check(ores_native_await_trace_ready_resume_begin_current_code(
+        executions, continuations, (OresNativeExecutionId){88, 9},
+        link, 77, &resumed, &resumed_context));
     check(resumed_context.id.execution == 9);
     check(resumed_context.allocation.owner == context.allocation.owner);
     check(ores_native_continuation_store_get(
@@ -553,6 +600,123 @@ int main(void) {
     check(ores_native_continuation_store_release(
         continuations, cancelled_link.continuation));
 
+
+    /*
+     * Runtime-owned image generation is the admission authority. A code
+     * upgrade atomically fences both the guarded and legacy READY claim
+     * paths, even if a producer published READY just before rotation.
+     */
+    check(ores_native_continuation_store_current_code_generation(
+        continuations) == 77);
+    check(!ores_native_continuation_store_rotate_code_generation(
+        continuations, 77));
+    check(!ores_native_continuation_store_rotate_code_generation(
+        continuations, 0));
+    trace_origin_context.id.execution = 13;
+    check(ores_native_execution_context_store_insert(
+        executions, &trace_origin_context, &trace_origin));
+    OresNativeSuspensionLink old_image_link = {0};
+    check(ores_native_await_trace_suspend(
+        executions, continuations, trace_origin,
+        (OresNativeContinuationHandle){0, 0},
+        ORES_CONTINUATION_BOUNDARY_AWAIT, 77, 1400, &old_image_link));
+    check(ores_native_execution_context_store_release(executions, trace_origin));
+    check(ores_native_continuation_store_notify_ready(
+        continuations, old_image_link.continuation));
+    check(ores_native_continuation_store_rotate_code_generation(
+        continuations, 78));
+    check(ores_native_continuation_store_current_code_generation(
+        continuations) == 78);
+    resumed = (OresNativeExecutionHandle){0, 0};
+    check(!ores_native_await_trace_ready_resume_begin_current_code(
+        executions, continuations, (OresNativeExecutionId){88, 14},
+        old_image_link, 77, &resumed, NULL));
+    check(!ores_native_await_trace_ready_resume_begin_current_code(
+        executions, continuations, (OresNativeExecutionId){88, 14},
+        old_image_link, 78, &resumed, NULL));
+    check(!ores_native_await_trace_ready_resume_begin(
+        executions, continuations, (OresNativeExecutionId){88, 14},
+        old_image_link, &resumed, NULL));
+    check(!ores_native_store_handle_valid(resumed));
+    check(ores_native_continuation_store_get(
+        continuations, old_image_link.continuation, &record));
+    check(record.state == ORES_CONTINUATION_READY);
+    check(ores_native_continuation_store_cancel(
+        continuations, old_image_link.continuation));
+    check(ores_native_continuation_store_release(
+        continuations, old_image_link.continuation));
+
+    OresNativeContinuationHandle current_image = {0, 0};
+    check(ores_native_continuation_store_publish(
+        continuations, execution, (OresNativeContinuationHandle){0, 0},
+        ORES_CONTINUATION_BOUNDARY_AWAIT, 78, 1401, &current_image));
+    check(ores_native_continuation_store_notify_ready(
+        continuations, current_image));
+    check(ores_native_continuation_store_try_claim_ready_current_code(
+        continuations, current_image, 78, NULL));
+    check(!ores_native_continuation_store_rotate_code_generation(
+        continuations, 79)); /* active physical claim pins the old image */
+    check(ores_native_continuation_store_current_code_generation(
+        continuations) == 78);
+    check(ores_native_continuation_store_finish_resume(
+        continuations, current_image));
+    check(ores_native_continuation_store_release(
+        continuations, current_image));
+    check(ores_native_continuation_store_rotate_code_generation(
+        continuations, 79));
+    OresNativeContinuationHandle rejected_image = {0, 0};
+    check(!ores_native_continuation_store_publish(
+        continuations, execution, (OresNativeContinuationHandle){0, 0},
+        ORES_CONTINUATION_BOUNDARY_AWAIT, 78, 1402, &rejected_image));
+    check(ores_native_continuation_store_live(continuations) == 0);
+    /*
+     * Race upgrade against READY consumption: rotation and claim must
+     * linearize under the SAME store mutex. The losing side cannot steal
+     * an old code image or report a second physical resume.
+     */
+    for (uint64_t generation = 79; generation < 143; ++generation) {
+        OresNativeContinuationHandle handle = {0, 0};
+        check(ores_native_continuation_store_publish(
+            continuations, execution,
+            (OresNativeContinuationHandle){0, 0},
+            ORES_CONTINUATION_BOUNDARY_AWAIT,
+            generation, 1500 + generation, &handle));
+        check(ores_native_continuation_store_notify_ready(
+            continuations, handle));
+        atomic_int go = ATOMIC_VAR_INIT(0);
+        ImageRaceArgs claim = {
+            continuations, handle, &go, generation, 0, 0
+        };
+        ImageRaceArgs rotation = {
+            continuations, handle, &go, generation, 1, 0
+        };
+        pthread_t claiming, upgrading;
+        check(pthread_create(&claiming, NULL, image_race_contender,
+            &claim) == 0);
+        check(pthread_create(&upgrading, NULL, image_race_contender,
+            &rotation) == 0);
+        atomic_store_explicit(&go, 1, memory_order_release);
+        check(pthread_join(claiming, NULL) == 0);
+        check(pthread_join(upgrading, NULL) == 0);
+        check(claim.won + rotation.won == 1);
+        if (claim.won) {
+            check(ores_native_continuation_store_finish_resume(
+                continuations, handle));
+        } else {
+            check(ores_native_continuation_store_cancel(
+                continuations, handle));
+        }
+        check(ores_native_continuation_store_release(
+            continuations, handle));
+        if (claim.won) {
+            check(ores_native_continuation_store_rotate_code_generation(
+                continuations, generation + 1));
+        }
+        check(ores_native_continuation_store_current_code_generation(
+            continuations) == generation + 1);
+        check(!ores_native_continuation_store_try_claim_ready_current_code(
+            continuations, handle, generation, NULL));
+    }
     check(ores_native_continuation_store_live(continuations) == 0);
     check(ores_native_continuation_store_close(continuations));
     check(ores_native_execution_context_store_release(executions, execution));

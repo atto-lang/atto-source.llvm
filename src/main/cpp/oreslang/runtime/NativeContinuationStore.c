@@ -39,6 +39,7 @@ struct OresNativeContinuationStore {
     uint32_t block_count;
     uint32_t live_count;
     uint32_t cursor;
+    uint64_t authorized_code_generation;
 };
 
 /*
@@ -157,6 +158,36 @@ int ores_native_continuation_store_close(OresNativeContinuationStore* store) {
     return 1;
 }
 
+int ores_native_continuation_store_rotate_code_generation(
+        OresNativeContinuationStore* store, uint64_t next_generation) {
+    if (!store || next_generation == 0 || !lock_store(store)) return 0;
+    int ok = next_generation > store->authorized_code_generation;
+    if (ok) {
+        /* Rotation cannot evict a guest frame with a live physical claim.
+         * Cancellation/STOP must drain that frame before changing images. */
+        for (uint32_t index = 0; index < store->capacity; ++index) {
+            uint32_t lane = 0;
+            ContinuationBlock* block = block_for(store, index, &lane);
+            if (block->live[lane]
+                    && block->state[lane] == ORES_CONTINUATION_CLAIMED) {
+                ok = 0;
+                break;
+            }
+        }
+    }
+    if (ok) store->authorized_code_generation = next_generation;
+    unlock_store(store);
+    return ok;
+}
+
+uint64_t ores_native_continuation_store_current_code_generation(
+        OresNativeContinuationStore* store) {
+    if (!store || !lock_store(store)) return 0;
+    uint64_t generation = store->authorized_code_generation;
+    unlock_store(store);
+    return generation;
+}
+
 int ores_native_continuation_store_publish(
         OresNativeContinuationStore* store,
         OresNativeExecutionHandle execution,
@@ -178,6 +209,15 @@ int ores_native_continuation_store_publish(
         return 0;
 
     if (!lock_store(store)) {
+        (void)ores_native_execution_context_store_release(
+            store->executions, execution);
+        return 0;
+    }
+
+    /* A configured image registry rejects creation of stale code frames. */
+    if (store->authorized_code_generation != 0
+            && code_generation != store->authorized_code_generation) {
+        unlock_store(store);
         (void)ores_native_execution_context_store_release(
             store->executions, execution);
         return 0;
@@ -380,6 +420,26 @@ int ores_native_continuation_store_notify_ready(
     return ok;
 }
 
+int ores_native_continuation_store_try_claim_ready_current_code(
+        OresNativeContinuationStore* store,
+        OresNativeContinuationHandle handle,
+        uint64_t expected_generation,
+        OresNativeContinuationRecord* out) {
+    if (!store || !expected_generation || !lock_store(store)) return 0;
+    uint32_t lane = 0, index = 0;
+    ContinuationBlock* block = NULL;
+    int ok = store->authorized_code_generation == expected_generation
+        && resolve_locked(store, handle, &block, &lane, &index)
+        && block->state[lane] == ORES_CONTINUATION_READY
+        && block->code_generation[lane] == expected_generation;
+    if (ok) {
+        block->state[lane] = (unsigned char)ORES_CONTINUATION_CLAIMED;
+        if (out) *out = load_record(block, lane);
+    }
+    unlock_store(store);
+    return ok;
+}
+
 int ores_native_continuation_store_try_claim_ready_resume(
         OresNativeContinuationStore* store,
         OresNativeContinuationHandle handle,
@@ -388,7 +448,9 @@ int ores_native_continuation_store_try_claim_ready_resume(
     uint32_t lane = 0, index = 0;
     ContinuationBlock* block = NULL;
     int ok = resolve_locked(store, handle, &block, &lane, &index)
-        && block->state[lane] == ORES_CONTINUATION_READY;
+        && block->state[lane] == ORES_CONTINUATION_READY
+        && (store->authorized_code_generation == 0
+            || block->code_generation[lane] == store->authorized_code_generation);
     if (ok) {
         block->state[lane] = (unsigned char)ORES_CONTINUATION_CLAIMED;
         if (out) *out = load_record(block, lane);
@@ -405,7 +467,9 @@ int ores_native_continuation_store_try_claim_resume(
     uint32_t lane = 0, index = 0;
     ContinuationBlock* block = NULL;
     int ok = resolve_locked(store, handle, &block, &lane, &index)
-        && block->state[lane] == ORES_CONTINUATION_PENDING;
+        && block->state[lane] == ORES_CONTINUATION_PENDING
+        && (store->authorized_code_generation == 0
+            || block->code_generation[lane] == store->authorized_code_generation);
     if (ok) {
         block->state[lane] = (unsigned char)ORES_CONTINUATION_CLAIMED;
         if (out) *out = load_record(block, lane);
