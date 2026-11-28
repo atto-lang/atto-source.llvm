@@ -337,6 +337,7 @@ struct Globals<'a> {
     enums: &'a [EnumDecl],
     actors: Vec<ActorInfo>,
     type_names: &'a [(String, Pos)],
+    native_readonly_candidate: bool,
 }
 
 /// Where the code being checked lives.
@@ -645,6 +646,17 @@ fn generator_arg(f: &Func, target: &Func, args: &[Expr]) -> Option<TGenArg> {
 }
 
 pub fn check(p: &Program) -> R<TProgram> {
+    check_impl(p, false)
+}
+
+/// Candidate typed tree only. The native backend must subsequently prove
+/// the closed readonly stack-object profile before emitting any artifact.
+/// Never select this candidate checker for ordinary browser or native code.
+pub fn check_native_readonly_candidate(p: &Program) -> R<TProgram> {
+    check_impl(p, true)
+}
+
+fn check_impl(p: &Program, native_readonly_candidate: bool) -> R<TProgram> {
     // Validate the bounded CFG and integer-only suspension/lifetime profile
     // before registering signatures. Reject unsupported generator effects
     // before emission; never substitute eager iterator materialization.
@@ -936,6 +948,7 @@ pub fn check(p: &Program) -> R<TProgram> {
         enums: &p.enums,
         actors,
         type_names: tn,
+        native_readonly_candidate,
     };
 
     let main = match g.sigs.get(&("main".to_string(), 0)) {
@@ -2913,7 +2926,14 @@ impl<'a> FnCx<'a> {
     fn args(&mut self, callee: &str, args: &[Expr], params: &[Type]) -> R<Vec<TE>> {
         let mut out = Vec::new();
         for (i, (a, want)) in args.iter().zip(params).enumerate() {
-            let v = self.consume_expected(a, *want)?;
+            let v = if self.g.native_readonly_candidate && matches!(*want, Type::Class(_)) {
+                if !matches!(&a.kind, ExprKind::Var(_)) {
+                    return Err(Diagnostic::new(a.pos, "E_BORROW", "native readonly candidate needs a named local class argument"));
+                }
+                self.value(a)?
+            } else {
+                self.consume_expected(a, *want)?
+            };
             if v.ty != *want {
                 return Err(type_err(
                     a.pos,
