@@ -5153,6 +5153,25 @@ if(BUILD_TESTING)
     set_tests_properties(native_monotonic_timer_admission_and_cancel_race
         PROPERTIES TIMEOUT 20)
 
+    # Allocation-free hierarchical timer wheel + single monotonic driver
+    # (contracts/v1/TIMER_ENGINE_V1.md). Includes the cross-backend
+    # conformance vector shared with the Java backend's OresTimerWheelTest.
+    add_executable(oreslang-native-timer-wheel-test
+        tests/native_timer_wheel_test.c
+        src/main/cpp/oreslang/runtime/NativeTimerWheel.c
+        src/main/cpp/oreslang/runtime/NativeTimerDriver.c)
+    set_target_properties(oreslang-native-timer-wheel-test PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON)
+    target_include_directories(oreslang-native-timer-wheel-test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp")
+    target_link_libraries(oreslang-native-timer-wheel-test PRIVATE Threads::Threads)
+    target_compile_options(oreslang-native-timer-wheel-test PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME native_timer_wheel_engine_and_conformance_vector
+        COMMAND oreslang-native-timer-wheel-test)
+    set_tests_properties(native_timer_wheel_engine_and_conformance_vector
+        PROPERTIES TIMEOUT 60)
+
     # Pinned native Future<void> lifecycle frame: host callbacks only record
     # completion; resumption is admitted on a parent actor's CONTROL lane.
     # Guest-source await remains compiler-rejected pending typed MIR lowering.
