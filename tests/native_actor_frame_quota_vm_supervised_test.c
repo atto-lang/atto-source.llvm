@@ -10,6 +10,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <sched.h>
+#include <string.h>
 
 #define CHECK(c) do { if (!(c)) { \
   fprintf(stderr, "VM_SUPERVISED_QUOTA_FAIL line=%d expr=%s\n", __LINE__, #c); \
@@ -115,7 +117,120 @@ static void await_one(const atomic_int* flag) {
     }
     CHECK(0);
 }
-int main(void) {
+typedef struct {
+    atomic_uint_fast64_t child_calls, sibling_calls, notices;
+    atomic_int notice_entered, release_notice;
+} ReuseState;
+static void reuse_data(void* raw, size_t slot, uint64_t payload) {
+    ReuseState* s = raw;
+    CHECK((slot == 1 && payload == 7) || (slot == 2 && payload == 42));
+    atomic_fetch_add(slot == 1 ? &s->child_calls : &s->sibling_calls, 1);
+}
+static void reuse_notice(void* raw, size_t parent, OresNativeActorTerminalFailure f) {
+    ReuseState* s = raw;
+    CHECK(parent == 0 && (f.child.actor_slot == 1 || f.child.actor_slot == 2));
+    CHECK(f.kind == ORES_NATIVE_CONTROL_STOPPED && f.failure_code == 0);
+    if (f.child.actor_slot == 1 && f.child.generation == 1) {
+        atomic_store(&s->notice_entered, 1);
+        while (!atomic_load(&s->release_notice)) sched_yield();
+    }
+    atomic_fetch_add(&s->notices, 1);
+}
+static void reclaim_after_ack(OresNativeVM* vm, OresNativeActorRef a) {
+    struct timespec begin, now;
+    CHECK(clock_gettime(CLOCK_MONOTONIC, &begin) == 0);
+    while (!ores_native_vm_reclaim_supervised_leaf_v1(vm, ORES_NATIVE_VM_MAIN, a)) {
+        sched_yield();
+        CHECK(clock_gettime(CLOCK_MONOTONIC, &now) == 0);
+        CHECK(now.tv_sec - begin.tv_sec < 15);
+    }
+}
+static int million_reuse(void) {
+    ReuseState s = {0};
+    OresNativeVMConfig cfg = {0};
+    for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i) {
+        cfg.domains[i].actor_slots = i == ORES_NATIVE_VM_MAIN ? 3 : 1;
+        cfg.domains[i].mailbox_capacity = 4;
+        cfg.domains[i].carrier_workers = i == ORES_NATIVE_VM_MAIN ? 2 : 1;
+        cfg.domains[i].on_message = reuse_data;
+        cfg.domains[i].on_failure = reuse_notice;
+        cfg.domains[i].context = &s;
+    }
+    OresNativeVM* vm = ores_native_vm_open(&cfg);
+    CHECK(vm);
+    const OresNativeActorRef root = ores_native_vm_spawn(vm, ORES_NATIVE_VM_MAIN, 0);
+    const OresNativeActorRef sibling = ores_native_vm_spawn_supervised(vm, ORES_NATIVE_VM_MAIN, 2, root);
+    CHECK(root.scheduler_domain && sibling.scheduler_domain);
+    OresNativeActorRef stale = {0};
+    for (uint64_t i = 0; i < UINT64_C(1000000); ++i) {
+        OresNativeActorRef a = ores_native_vm_spawn_supervised(vm, ORES_NATIVE_VM_MAIN, 1, root);
+        CHECK(a.scheduler_domain == root.scheduler_domain && a.actor_slot == 1 && a.generation == i + 1);
+        CHECK(!ores_native_vm_reclaim_supervised_leaf_v1(vm, ORES_NATIVE_VM_MAIN, a));
+        if (i) {
+            CHECK(ores_native_vm_try_send(vm, ORES_NATIVE_VM_MAIN, stale, 7) == ORES_NATIVE_SEND_INVALID_REF);
+            CHECK(!ores_native_vm_actor_resource_retain(vm, ORES_NATIVE_VM_MAIN, stale));
+            CHECK(!ores_native_vm_actor_resource_release(vm, ORES_NATIVE_VM_MAIN, stale));
+            CHECK(!ores_native_vm_confirm_supervised_finalized(vm, ORES_NATIVE_VM_MAIN, stale));
+            CHECK(!ores_native_vm_reclaim_supervised_leaf_v1(vm, ORES_NATIVE_VM_MAIN, stale));
+            CHECK(!ores_native_vm_stop(vm, ORES_NATIVE_VM_MAIN, stale));
+        }
+        CHECK(ores_native_vm_actor_resource_retain(vm, ORES_NATIVE_VM_MAIN, a));
+        CHECK(ores_native_vm_try_send(vm, ORES_NATIVE_VM_MAIN, a, 7) == ORES_NATIVE_SEND_ACCEPTED);
+        CHECK(ores_native_vm_stop(vm, ORES_NATIVE_VM_MAIN, a));
+        CHECK(!ores_native_vm_poll_done(vm, ORES_NATIVE_VM_MAIN, a));
+        CHECK(!ores_native_vm_confirm_supervised_finalized(vm, ORES_NATIVE_VM_MAIN, a));
+        CHECK(!ores_native_vm_reclaim_supervised_leaf_v1(vm, ORES_NATIVE_VM_MAIN, a));
+        CHECK(ores_native_vm_actor_resource_release(vm, ORES_NATIVE_VM_MAIN, a));
+        CHECK(ores_native_vm_wait_done(vm, ORES_NATIVE_VM_MAIN, a));
+        CHECK(atomic_load(&s.child_calls) == i + 1);
+        CHECK(!ores_native_vm_reclaim_supervised_leaf_v1(vm, ORES_NATIVE_VM_MAIN, a));
+        CHECK(ores_native_vm_confirm_supervised_finalized(vm, ORES_NATIVE_VM_MAIN, a));
+        CHECK(!ores_native_vm_reclaim_supervised_leaf_v1(vm, ORES_NATIVE_VM_MAIN, a));
+        OresNativeActorTerminalFailure notice = {
+            .kind = ORES_NATIVE_CONTROL_STOPPED, .child = a, .correlation = i + 1
+        };
+        CHECK(ores_native_vm_publish_supervised_failure(vm, ORES_NATIVE_VM_MAIN, notice));
+        if (!i) {
+            await_one(&s.notice_entered);
+            CHECK(!ores_native_vm_reclaim_supervised_leaf_v1(vm, ORES_NATIVE_VM_MAIN, a));
+            CHECK(!ores_native_vm_spawn_supervised(vm, ORES_NATIVE_VM_MAIN, 1, root).scheduler_domain);
+            atomic_store(&s.release_notice, 1);
+        }
+        reclaim_after_ack(vm, a);
+        CHECK(atomic_load(&s.notices) == i + 1);
+        CHECK(!ores_native_vm_publish_supervised_failure(vm, ORES_NATIVE_VM_MAIN, notice));
+        CHECK(!ores_native_vm_poll_done(vm, ORES_NATIVE_VM_MAIN, a));
+        CHECK(!ores_native_vm_supervisor_of(vm, ORES_NATIVE_VM_MAIN, a).scheduler_domain);
+        CHECK(ores_native_vm_try_send(vm, ORES_NATIVE_VM_MAIN, a, 7) == ORES_NATIVE_SEND_INVALID_REF);
+        /* Keep one live sibling throughout all slot incarnations. Probe its
+         * real mailbox every cycle; permit bounded backpressure, not loss. */
+        OresNativeSendStatus admitted;
+        do {
+            admitted = ores_native_vm_try_send(vm, ORES_NATIVE_VM_MAIN, sibling, 42);
+            if (admitted == ORES_NATIVE_SEND_MAILBOX_FULL) sched_yield();
+        } while (admitted == ORES_NATIVE_SEND_MAILBOX_FULL);
+        CHECK(admitted == ORES_NATIVE_SEND_ACCEPTED);
+        stale = a;
+    }
+    CHECK(ores_native_vm_stop(vm, ORES_NATIVE_VM_MAIN, sibling));
+    CHECK(ores_native_vm_wait_done(vm, ORES_NATIVE_VM_MAIN, sibling));
+    CHECK(atomic_load(&s.sibling_calls) == UINT64_C(1000000));
+    CHECK(ores_native_vm_confirm_supervised_finalized(vm, ORES_NATIVE_VM_MAIN, sibling));
+    OresNativeActorTerminalFailure last = {
+        .kind = ORES_NATIVE_CONTROL_STOPPED, .child = sibling, .correlation = 1
+    };
+    CHECK(ores_native_vm_publish_supervised_failure(vm, ORES_NATIVE_VM_MAIN, last));
+    reclaim_after_ack(vm, sibling);
+    CHECK(atomic_load(&s.notices) == UINT64_C(1000001));
+    CHECK(ores_native_vm_stop(vm, ORES_NATIVE_VM_MAIN, root));
+    CHECK(ores_native_vm_wait_done(vm, ORES_NATIVE_VM_MAIN, root));
+    CHECK(ores_native_vm_close(vm));
+    puts("NATIVE_VM_LEAF_REUSE_PASS cycles=1000000 slots=3 sibling=1000000 stale=0 notices=1000001");
+    return 0;
+}
+int main(int argc, char** argv) {
+    if (argc == 2 && strcmp(argv[1], "--reuse") == 0) return million_reuse();
+    CHECK(argc == 1);
     State s = {0};
     atomic_init(&s.failed_a, 0);
     atomic_init(&s.b_42, 0);

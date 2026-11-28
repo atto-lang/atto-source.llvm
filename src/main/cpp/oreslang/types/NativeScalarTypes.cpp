@@ -91,6 +91,12 @@ void validate_native_scalar_types(const Program& program) {
         const auto evaluate = [&]() -> Type {
         using E = Expression::Kind;
         switch (e.kind) {
+            case E::ClosedRecur:
+                if (!program.actors.empty() || !program.classes.empty() ||
+                    !program.cooperative_loops.empty() || !program.generators.empty() ||
+                    !valid_closed_recur(e))
+                    fail(e.offset, "E_VALUE_LOOP_PROFILE: closed recur requires standalone scalar code");
+                return scalar(false);
             case E::SumConstruct: {
                 const auto& type = native_sum(program, e.sum_type);
                 const bool option = type.kind == NativeSumType::Kind::Option;

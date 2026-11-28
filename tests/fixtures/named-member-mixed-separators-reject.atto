@@ -1,0 +1,4 @@
+pub fnc main(): int {
+  val Array<int> values = new Array<int>();
+  return values.get(index=0, index:1);
+}

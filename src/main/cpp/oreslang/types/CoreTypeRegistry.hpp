@@ -46,6 +46,7 @@ inline constexpr CoreTypeInfo kCoreTypeRegistry[] = {
     {"Int","core/primitive/i64",CoreTypeScope::Core,CoreTypeKind::Type,0,0,CoreOwnership::Copy,CoreAllocation::None,CoreDropPolicy::None,CoreSendPolicy::Always,CoreLoweringStatus::ContractOnly},
     {"i64","core/primitive/i64",CoreTypeScope::Core,CoreTypeKind::Type,0,0,CoreOwnership::Copy,CoreAllocation::None,CoreDropPolicy::None,CoreSendPolicy::Always,CoreLoweringStatus::NativeScalar},
     {"bool","core/primitive/bool",CoreTypeScope::Core,CoreTypeKind::Type,0,0,CoreOwnership::Copy,CoreAllocation::None,CoreDropPolicy::None,CoreSendPolicy::Always,CoreLoweringStatus::NativeScalar},
+    {"boolean","core/primitive/bool",CoreTypeScope::Core,CoreTypeKind::Type,0,0,CoreOwnership::Copy,CoreAllocation::None,CoreDropPolicy::None,CoreSendPolicy::Always,CoreLoweringStatus::NativeScalar},
     {"Bool","core/primitive/bool",CoreTypeScope::Core,CoreTypeKind::Type,0,0,CoreOwnership::Copy,CoreAllocation::None,CoreDropPolicy::None,CoreSendPolicy::Always,CoreLoweringStatus::ContractOnly},
     {"string","core/primitive/string-view",CoreTypeScope::Core,CoreTypeKind::Type,0,0,CoreOwnership::BorrowedView,CoreAllocation::BorrowedView,CoreDropPolicy::None,CoreSendPolicy::NeverBorrowed,CoreLoweringStatus::LegacyStringView},
     {"Option","core/option/Option",CoreTypeScope::Core,CoreTypeKind::Type,1,1,CoreOwnership::PayloadDependent,CoreAllocation::None,CoreDropPolicy::ActivePayloadOnce,CoreSendPolicy::PayloadDependent,CoreLoweringStatus::NativeScalarSumSubset},
@@ -103,6 +104,8 @@ inline bool core_sum_carrier(std::string_view name, std::size_t arity) noexcept 
 // other catalogued names (Box, Error, Pair, Iterator, ...) may be declared by
 // user code and shadow the prelude, as in Rust.
 inline bool protected_core_identity(std::string_view name) noexcept {
+    // The compatibility spelling is contextual; existing value names remain valid.
+    if (name == "boolean") return false;
     const auto* entry = core_type_info(name);
     if (entry && entry->kind == CoreTypeKind::Constructor) return true;
     if (entry && entry->canonical.rfind("core/primitive/", 0) == 0) return true;

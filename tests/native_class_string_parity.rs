@@ -252,6 +252,11 @@ fn main() {
                 multi.size==4&&multi.get(0)=="a"&&multi.get(1)=="b"&&
                 multi.get(2)==""&&multi.get(3)==""?0:1;
          }"#, ""),
+        // Distinguish source-order storage from constructor parameter naming:
+        // same and different names must both work, before and after an effect.
+        ("initial-array-same-name-owning-return", "define class ArrayOwnerFixture as pub val Array<int> values;end fnc build():ArrayOwnerFixture{val Array<int> values=new Array<int>();values.add(42);return new ArrayOwnerFixture(values);}pub fnc main():int{val ArrayOwnerFixture box=build();return box.values.get(0)==42?0:1;}", ""),
+        ("initial-array-distinct-name-owning-return", "define class ArrayOwnerFixture as pub val Array<int> values;end fnc build():ArrayOwnerFixture{val Array<int> numbers=new Array<int>();numbers.add(42);return new ArrayOwnerFixture(numbers);}pub fnc main():int{val ArrayOwnerFixture box=build();return box.values.get(0)==42?0:1;}", ""),
+        ("ordered-array-distinct-name-owning-return", "define class ArrayOwnerFixture as pub val Array<int> values;end fnc touch():void{return;}fnc build():ArrayOwnerFixture{touch();val Array<int> numbers=new Array<int>();numbers.add(42);return new ArrayOwnerFixture(numbers);}pub fnc main():int{val ArrayOwnerFixture box=build();return box.values.get(0)==42?0:1;}", ""),
         ("ordered-array-moves-through-owning-return", "define class ArrayOwnerFixture as pub val Array<int> values;end fnc touch():void{return;}fnc build():ArrayOwnerFixture{touch();val Array<int> values=new Array<int>();values.add(42);return new ArrayOwnerFixture(values);}pub fnc main():int{val ArrayOwnerFixture box=build();return box.values.get(0)==42?0:1;}", ""),
         ("ordered-array-sibling-scopes", "fnc touch():void{return;}pub fnc main():int{touch();if true;then val Array<int> values=new Array<int>();values.add(1);fi if true;then val Array<String> values=new Array<String>();values.add(\"ok\");if values.get(0)!=\"ok\";then return 1;fi fi return 0;}", ""),
         ("ordered-record-array-loop", "define class EntryValue as pub val int value;end fnc touch():void{return;}pub fnc main():int{touch();let int total=0;for(let int i=0;i<100;i=i+1){val Array<EntryValue> values=new Array<EntryValue>();values.add(new EntryValue(i));val EntryValue entry=values.get(0);total=total+entry.value;}return total==4950?0:1;}", ""),
@@ -842,12 +847,22 @@ fn main() {
             symlink(&fake_compiler, &symbolic).unwrap();
             let hard = scratch.0.join("clang-hardlink");
             fs::hard_link(&fake_clang, &hard).unwrap();
-            for destination in [&fake_compiler, &fake_clang, &symbolic, &hard] {
+            for (destination, expected_diagnostic) in [
+                (&fake_compiler, "must not alias"),
+                (&fake_clang, "must not alias"),
+                (&symbolic, "output must be absent or a regular non-symlink file"),
+                (&hard, "must not alias"),
+            ] {
                 let rejected = run(Command::new(driver).env("ORESLANG_LLVMC", &fake_compiler)
                     .env("CLANG", &fake_clang).arg(&source).arg(destination));
-                assert_eq!(rejected.status.code(), Some(64), "AOT alias guard: {}", String::from_utf8_lossy(&rejected.stderr));
-                assert!(String::from_utf8_lossy(&rejected.stderr).contains("must not alias"));
+                let stderr = String::from_utf8_lossy(&rejected.stderr);
+                assert_eq!(rejected.status.code(), Some(64), "AOT alias guard for {}: {stderr}", destination.display());
+                assert!(stderr.contains(expected_diagnostic), "AOT alias guard for {}: expected {expected_diagnostic:?}, got {stderr:?}", destination.display());
+                assert!(!stderr.contains("must not execute"), "protected input executed");
                 assert_eq!(fs::read(destination).unwrap(), sentinel);
+                assert_eq!(fs::read(&fake_compiler).unwrap(), sentinel);
+                assert_eq!(fs::read(&fake_clang).unwrap(), sentinel);
+                assert!(fs::symlink_metadata(&symbolic).unwrap().file_type().is_symlink());
             }
         }
         let scalar_record = r#"define class Number as pub val int code;end
@@ -856,7 +871,7 @@ fn main() {
         let owning_int = r#"define class ArrayOwnerFixture as pub val Array<int> values;end
           fnc create():ArrayOwnerFixture{val Array<int> a=new Array<int>();a.add(42);return new ArrayOwnerFixture(a);}
           pub routine main():int{val ArrayOwnerFixture value=create();return value.values.get(0)==42?0:1;}"#;
-        for (source, expected) in [
+        for (case_index, (source, expected)) in [
             (include_str!("fixtures/native-class-string/ordered-routing-locals.ores"), "enter;enter;initialize;finish;done;"),
             (include_str!("fixtures/native-class-string/routing-option-capture.ores"), ""),
             (include_str!("fixtures/native-class-string/nested-owned-capture.ores"), "id\n"),
@@ -866,17 +881,26 @@ fn main() {
             (owning_int, ""),
             (include_str!("fixtures/native-class-string/record-return.ores"), "segment\nlocal\n"),
             (include_str!("fixtures/native-class-string/owned-aggregate-return.ores"), "/foo/:id\nid\n"),
-        ] {
-            let path = scratch.0.join("standalone.ores");
-            let binary = scratch.0.join("standalone");
+        ].into_iter().enumerate() {
+            let path = scratch.0.join(format!("standalone-{case_index}.ores"));
+            let binary = scratch.0.join(format!("standalone-{case_index}"));
+            assert!(!binary.exists(), "stale standalone case {case_index}");
             fs::write(&path, source).unwrap();
             let built = run(Command::new(driver)
                 .env("ORESLANG_LLVMC", fs::canonicalize(&compiler).unwrap())
                 .env("CLANG", &clang).arg(&path).arg(&binary));
-            assert!(built.status.success(), "AOT driver: {}", String::from_utf8_lossy(&built.stderr));
+            assert!(built.status.success(), "AOT driver case {case_index}: {}", String::from_utf8_lossy(&built.stderr));
+            let published = fs::symlink_metadata(&binary).unwrap_or_else(|error| panic!(
+                "AOT case {case_index}: driver succeeded without published executable at {binary:?}: {error}; stdout={:?}; stderr={:?}",
+                String::from_utf8_lossy(&built.stdout), String::from_utf8_lossy(&built.stderr)));
+            assert!(published.is_file() && published.len() > 0, "AOT case {case_index}: invalid published file");
+            let canonical_binary = fs::canonicalize(&binary).unwrap();
             fs::remove_file(&path).unwrap();
-            let executed = run(Command::new(&binary).env_clear().env("PATH", ""));
-            assert_eq!(executed.status.code(), Some(0), "source-free AOT: {}", String::from_utf8_lossy(&executed.stderr));
+            assert!(!path.exists(), "AOT source was not removed");
+            let executed = Command::new(&canonical_binary).env_clear().env("PATH", "").output()
+                .unwrap_or_else(|error| panic!("source-free AOT case {case_index}: launch failed at {canonical_binary:?}: {error}; published bytes={}; still present={}",
+                    published.len(), canonical_binary.exists()));
+            assert_eq!(executed.status.code(), Some(0), "source-free AOT case {case_index}: {}", String::from_utf8_lossy(&executed.stderr));
             assert_eq!(executed.stdout, expected.as_bytes());
             assert!(executed.stderr.is_empty());
             standalone_runs += 1;

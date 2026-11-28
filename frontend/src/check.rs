@@ -115,6 +115,8 @@ pub enum TExpr {
     /// operand type is the type of `l`
     Bin(BinOp, Box<TE>, Box<TE>),
     Ternary(Box<TE>, Box<TE>, Box<TE>),
+    /// Explicit typed IR boundary for caller-inline task execution. Never spawn.
+    InlineTask { body: Vec<TStmt>, value: Option<Box<TE>> },
     Call(u32, Vec<TE>),
     Builtin(Builtin, Box<TE>, Box<TE>),
     /// `stdio.print` / `stdio.println` of an int or bool value
@@ -1422,6 +1424,8 @@ fn any_in(e: &TE, f: &dyn Fn(&TE) -> bool) -> bool {
         TExpr::Neg(a) | TExpr::Not(a) | TExpr::FNeg(a) | TExpr::IntToFloat(a) => any_in(a, f),
         TExpr::Bin(_, a, b) | TExpr::Builtin(_, a, b) => any_in(a, f) || any_in(b, f),
         TExpr::Ternary(c, a, b) => any_in(c, f) || any_in(a, f) || any_in(b, f),
+        TExpr::InlineTask { body, value } => any_in_stmts(body, f)
+            || value.as_ref().is_some_and(|v| any_in(v, f)),
         TExpr::Str(_, a, b) => any_in(a, f) || b.as_ref().is_some_and(|b| any_in(b, f)),
         TExpr::Call(_, args) => args.iter().any(|a| any_in(a, f)),
         TExpr::AdtNew { payload, .. } => payload.as_ref().is_some_and(|p| any_in(p, f)),
@@ -1541,6 +1545,43 @@ impl<'a> FnCx<'a> {
         let slot = self.nparams + self.locals.len() as u32;
         self.locals.push(ty);
         Ok(slot)
+    }
+
+    // No actor reference, object owner or non-scalar temporary may enter the
+    // first pure-inline profile, including through a parent lexical capture.
+    // The existing checker proves types and loans before this admission gate.
+    // Independently inspect typed operands: a scalar result alone does not
+    // prove that evaluation is free of ownership, allocation or host effects.
+    fn pure_inline_scalar_value(value: &TE) -> bool {
+        if !matches!(value.ty, Type::Int | Type::Bool | Type::Void) {
+            return false;
+        }
+        match &value.e {
+            TExpr::I64(_) | TExpr::Bool(_) | TExpr::Local(_) => true,
+            TExpr::Neg(v) | TExpr::Not(v) => Self::pure_inline_scalar_value(v),
+            TExpr::Bin(_, a, b) =>
+                Self::pure_inline_scalar_value(a) && Self::pure_inline_scalar_value(b),
+            TExpr::Ternary(c, a, b) => c.ty == Type::Bool
+                && Self::pure_inline_scalar_value(c)
+                && Self::pure_inline_scalar_value(a)
+                && Self::pure_inline_scalar_value(b),
+            TExpr::InlineTask { body, value } => Self::pure_inline_scalar_body(body)
+                && value.as_ref().is_none_or(|v| Self::pure_inline_scalar_value(v)),
+            _ => false,
+        }
+    }
+
+    fn pure_inline_scalar_body(body: &[TStmt]) -> bool {
+        body.iter().all(|s| match s {
+            TStmt::Set(_, value) | TStmt::Expr(value) =>
+                Self::pure_inline_scalar_value(value),
+            TStmt::Block(nested) => Self::pure_inline_scalar_body(nested),
+            TStmt::If(arms, otherwise) => arms.iter().all(|(cond, branch)|
+                cond.ty == Type::Bool && Self::pure_inline_scalar_value(cond)
+                    && Self::pure_inline_scalar_body(branch))
+                && otherwise.as_ref().is_none_or(|x| Self::pure_inline_scalar_body(x)),
+            _ => false,
+        })
     }
 
     fn scoped(&mut self, body: &[Stmt]) -> R<Vec<TStmt>> {
@@ -1825,7 +1866,7 @@ impl<'a> FnCx<'a> {
                 ));
             }
             // (pattern test, literal key for reachability, binding name)
-            let (test, key, bind): (Option<TE>, Option<i64>, Option<&str>) = match &arm.pattern {
+            let (test, keys, bind): (Option<TE>, Option<Vec<i64>>, Option<&str>) = match &arm.pattern {
                 Pattern::Wild => (None, None, None),
                 Pattern::Bind(n) => (None, None, Some(n.as_str())),
                 Pattern::Int(v) => {
@@ -1841,9 +1882,63 @@ impl<'a> FnCx<'a> {
                             e: TExpr::Bin(BinOp::Eq, Box::new(get()), Box::new(lit)),
                             ty: Type::Bool,
                         }),
-                        Some(*v),
+                        Some(vec![*v]),
                         None,
                     )
+                }
+                Pattern::ConstSet { ints, bools, types } => {
+                    if types.contains(&sty) {
+                        (None, None, None)
+                    } else {
+                        let literals: Vec<TE> = match sty {
+                            Type::Int => ints.iter().map(|v| TE { e: TExpr::I64(*v), ty: sty }).collect(),
+                            Type::Bool => bools.iter().map(|v| TE { e: TExpr::Bool(*v), ty: sty }).collect(),
+                            _ => Vec::new(),
+                        };
+                        if literals.is_empty() {
+                            return Err(Diagnostic::new(arm.pos, "E_MATCH", "stored pattern set has no alternative for subject"));
+                        }
+                        let keys = if sty == Type::Int { ints.clone() } else { bools.iter().map(|b| i64::from(*b)).collect() };
+                        let mut test = TE { e: TExpr::Bool(false), ty: Type::Bool };
+                        for lit in literals.into_iter().rev() {
+                            let eq = TE { e: TExpr::Bin(BinOp::Eq, Box::new(get()), Box::new(lit)), ty: Type::Bool };
+                            test = TE { e: TExpr::Ternary(Box::new(eq),
+                                Box::new(TE { e: TExpr::Bool(true), ty: Type::Bool }), Box::new(test)), ty: Type::Bool };
+                        }
+                        (Some(test), Some(keys), None)
+                    }
+                }
+                Pattern::StaticTypes(types) => {
+                    if !types.contains(&sty) {
+                        return Err(Diagnostic::new(arm.pos, "E_MATCH",
+                            "unreachable type arm: subject has no listed static scalar type"));
+                    }
+                    (None, None, None)
+                }
+                Pattern::InInts(values) => {
+                    if sty != Type::Int {
+                        return Err(type_err(arm.pos, "int membership requires an int subject"));
+                    }
+                    if values.is_empty() || values.len() > 64 {
+                        return Err(Diagnostic::new(arm.pos, "E_MATCH", "invalid membership list size"));
+                    }
+                    // Reuse the once-evaluated scrutinee and existing lazy
+                    // conditional IR; emit one body, no temporary guest array.
+                    let mut test = TE { e: TExpr::Bool(false), ty: Type::Bool };
+                    for v in values.iter().rev() {
+                        let eq = TE {
+                            e: TExpr::Bin(BinOp::Eq, Box::new(get()),
+                                Box::new(TE { e: TExpr::I64(*v), ty: Type::Int })),
+                            ty: Type::Bool,
+                        };
+                        test = TE {
+                            e: TExpr::Ternary(Box::new(eq),
+                                Box::new(TE { e: TExpr::Bool(true), ty: Type::Bool }),
+                                Box::new(test)),
+                            ty: Type::Bool,
+                        };
+                    }
+                    (Some(test), Some(values.clone()), None)
                 }
                 Pattern::Bool(b) => {
                     if sty != Type::Bool {
@@ -1858,7 +1953,7 @@ impl<'a> FnCx<'a> {
                             e: TExpr::Bin(BinOp::Eq, Box::new(get()), Box::new(lit)),
                             ty: Type::Bool,
                         }),
-                        Some(*b as i64),
+                        Some(vec![*b as i64]),
                         None,
                     )
                 }
@@ -1885,13 +1980,13 @@ impl<'a> FnCx<'a> {
                             e: TExpr::Bin(BinOp::Eq, Box::new(get()), Box::new(ev)),
                             ty: Type::Bool,
                         }),
-                        Some(ord),
+                        Some(vec![ord]),
                         None,
                     )
                 }
             };
-            if let Some(k) = key {
-                if seen.contains(&k) {
+            if let Some(keys) = &keys {
+                if keys.iter().all(|k| seen.contains(k)) {
                     return Err(Diagnostic::new(
                         arm.pos,
                         "E_MATCH",
@@ -1945,9 +2040,9 @@ impl<'a> FnCx<'a> {
             self.scopes.pop();
             let (cond, body) = r?;
             if arm.guard.is_none() {
-                match key {
-                    Some(k) => {
-                        seen.insert(k);
+                match keys {
+                    Some(keys) => {
+                        seen.extend(keys);
                         if seen.len() == variants {
                             covered = true;
                         }
@@ -2674,6 +2769,40 @@ impl<'a> FnCx<'a> {
             | ExprKind::Propagate(..) => unreachable!("handled by expr"),
             ExprKind::Call(name, _) if matches!(name.as_str(), "Ok" | "Err" | "Some" | "None") =>
                 return Err(type_err(pos, format!("'{name}' requires a contextual Result/Option type"))),
+            ExprKind::InlineTask { declared, prelude, result } => {
+                // A lexical scope within the caller; no child TaskId/Future is made.
+                // The parser has already restricted this v1 admission to pure
+                // scalar statements without suspensions, cleanup or early exits.
+                self.scopes.push(Vec::new());
+                let checked = (|| -> R<TE> {
+                    let body = self.stmts(prelude)?;
+                    if !Self::pure_inline_scalar_body(&body) {
+                        return Err(Diagnostic::new(pos, "E_UNSUPPORTED",
+                            "inline task body cannot capture or move non-scalar owners"));
+                    }
+                    let value = match result {
+                        Some(expr) => Some(Box::new(self.value(expr)?)),
+                        None => None,
+                    };
+                    let actual = value.as_ref().map_or(Type::Void, |v| v.ty);
+                    if !matches!(actual, Type::Int | Type::Bool | Type::Void)
+                        || value.as_ref().is_some_and(|v| !Self::pure_inline_scalar_value(v)) {
+                        return Err(Diagnostic::new(pos, "E_UNSUPPORTED",
+                            "inline task currently admits only int, bool or void results"));
+                    }
+                    if let Some(ty) = declared {
+                        let expected = self.resolve(*ty, pos)?;
+                        if actual != expected {
+                            return Err(Diagnostic::new(pos, "E_TASK_RETURN_TYPE",
+                                format!("sync task declared {} but returns {}",
+                                    self.tn(expected), self.tn(actual))));
+                        }
+                    }
+                    Ok(TE { e: TExpr::InlineTask { body, value }, ty: actual })
+                })();
+                self.scopes.pop();
+                checked?
+            },
             ExprKind::Call(name, args) => self.call(name, args, pos)?,
             ExprKind::SelfRef => {
                 return Err(match self.owner {

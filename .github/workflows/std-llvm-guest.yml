@@ -1,0 +1,42 @@
+name: Native Atto std protocol LLVM compiled guest
+on:
+  pull_request:
+    paths:
+      - 'stdlib/std/**'
+      - 'tests/stdlib/**'
+      - '.github/workflows/std-llvm-guest.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-linked-native-guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact compiler PR head
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          echo "ATTO_STD_LLVM_SOURCE=$EXPECTED"
+          git rev-parse 'HEAD^{tree}'
+      - name: Verify static source contract and mutation-negative audits
+        run: node --test tests/stdlib/source_contract.test.mjs
+      - name: Install native build toolchain
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang llvm-dev
+      - name: Build real LLVM Atto compiler
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build build --parallel 2 --target oreslang-llvmc
+          test -x build/oreslang-llvmc
+      - name: Compile three Atto libraries and execute 146 guest cases O0/O2/ASan/UBSan
+        run: bash tests/stdlib/native_guest_llvm.sh build/oreslang-llvmc clang

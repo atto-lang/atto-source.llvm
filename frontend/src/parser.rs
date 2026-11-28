@@ -46,6 +46,7 @@ const RESERVED: &[&str] = &[
     "fnc",
     "routine",
     "async",
+    "sync",
     "suspends",
     "generator",
     "yield",
@@ -139,6 +140,7 @@ const UNSUPPORTED_STMT: &[&str] = &[
     "define",
     "import",
     "async",
+    "sync",
     "yield",
     "guard",
     "nb",
@@ -209,6 +211,11 @@ pub struct Parser {
     in_generator: bool,
     struct_target: bool,
     struct_value_bindings: Option<Vec<Pos>>,
+    pattern_constants: std::collections::BTreeMap<String, (bool, Pattern)>,
+    pattern_name_uses: std::collections::BTreeSet<usize>,
+    pattern_type_spellings: std::collections::BTreeMap<String, Pos>,
+    pattern_type_aliases: std::collections::BTreeMap<String, Vec<Type>>,
+    pattern_alias_uses: std::collections::BTreeSet<usize>,
 }
 
 struct TypeFirstField {
@@ -308,6 +315,11 @@ impl Parser {
             in_generator: false,
             struct_target: false,
             struct_value_bindings: None,
+            pattern_constants: Default::default(),
+            pattern_name_uses: Default::default(),
+            pattern_type_spellings: Default::default(),
+            pattern_type_aliases: Default::default(),
+            pattern_alias_uses: Default::default(),
         }
     }
 
@@ -504,10 +516,20 @@ impl Parser {
             // A class or enum name; the checker resolves it.
             n => Type::Named(self.type_name(n.to_string(), pos)),
         };
+        // Type-position '?' is Option sugar, never formal omission or
+        // expression propagation. Reuse the existing executable ADT ABI only.
+        let ty = if self.eat(&Tok::Question) {
+            match ty {
+                Type::Int => Type::OptionInt,
+                Type::ResultIntStr => Type::OptionResultIntStr,
+                _ => return Err(Diagnostic::new(pos, "E_UNSUPPORTED_TYPE",
+                    "type suffix '?' requires a supported Option payload in this backend")),
+            }
+        } else { ty };
         let return_marker = allow_return_marker && *self.peek() == Tok::Lt
             && *self.peek_at(1) == Tok::Minus;
         if !return_marker && matches!(self.peek(), Tok::Lt | Tok::LBracket | Tok::Question | Tok::Pipe) {
-            return Err(unsupported(self.pos(), "generic, optional, union and sequence types"));
+            return Err(unsupported(self.pos(), "generic, nested optional, union and sequence types"));
         }
         Ok(ty)
     }
@@ -533,6 +555,14 @@ impl Parser {
     pub fn parse_program(&mut self) -> R<Program> {
         let mut prog = Program::default();
         let mut decls = 0usize;
+        loop {
+            if self.is_word("const") && self.word_at(1) == Some("Pattern") {
+                self.parse_pattern_constant()?;
+            } else if self.is_word("type") && matches!(self.peek_at(2), Tok::Assign)
+                && self.word_at(3) != Some("struct") {
+                self.parse_pattern_type_alias()?;
+            } else { break; }
+        }
         while *self.peek() != Tok::Eof {
             if decls >= MAX_FUNCS {
                 return Err(Diagnostic::new(
@@ -584,6 +614,33 @@ impl Parser {
                     return Err(unsupported(self.pos(), &what));
                 }
                 _ => prog.funcs.push(self.parse_func()?),
+            }
+        }
+        // Builtin spellings are not permission to erase nominal identity.
+        for name in prog.classes.iter().map(|d| &d.name)
+            .chain(prog.enums.iter().map(|d| &d.name))
+            .chain(prog.actors.iter().map(|d| &d.name)) {
+            if let Some(pos) = self.pattern_type_spellings.get(name) {
+                return Err(Diagnostic::new(*pos, "E_PATTERN_TYPE",
+                    "scalar pattern type spelling is shadowed by a nominal declaration"));
+            }
+            if name == "Pattern" {
+                return Err(Diagnostic::new(self.pos(), "E_PATTERN_TYPE",
+                    "Pattern is a compiler-owned compile-time category"));
+            }
+        }
+        // The initial file-scope profile prohibits runtime escape and
+        // shadowing rather than guessing at lexical binding identity.
+        for (i, token) in self.toks.iter().enumerate() {
+            if let Tok::Ident(name) = &token.tok {
+                if self.pattern_type_aliases.contains_key(name) && !self.pattern_alias_uses.contains(&i) {
+                    return Err(Diagnostic::new(token.pos, "E_PATTERN_TYPE",
+                        "scalar pattern alias used outside a resolved pattern type position"));
+                }
+                if self.pattern_constants.contains_key(name) && !self.pattern_name_uses.contains(&i) {
+                    return Err(Diagnostic::new(token.pos, "E_PATTERN_ESCAPE",
+                        "compile-time Pattern name cannot escape or be shadowed"));
+                }
             }
         }
         prog.type_names = std::mem::take(&mut self.type_names);
@@ -1116,7 +1173,22 @@ impl Parser {
                     }
                     m.fields.push(f.field);
                 }
-                Some("fnc" | "method") => {
+                Some("fnc") => {
+                    self.advance();
+                    let method = self.parse_method(public, false)?;
+                    m.methods.push(method);
+                }
+                Some("method")
+                    if matches!(self.peek_at(1), Tok::Ident(_))
+                        && matches!(self.peek_at(2), Tok::LParen | Tok::Lt) =>
+                {
+                    return Err(Diagnostic::new(self.pos(), "E_SYNTAX", "obsolete method introducer; use mtd"));
+                }
+                Some("mtd")
+                    if matches!(self.peek_at(1), Tok::Ident(_))
+                        && matches!(self.peek_at(2), Tok::LParen | Tok::Lt) =>
+                {
+                    // Contextual marker: a bare mtd() or method() is a name.
                     self.advance();
                     let method = self.parse_method(public, false)?;
                     m.methods.push(method);
@@ -1450,6 +1522,18 @@ impl Parser {
         self.in_generator = is_generator;
         let body = if prefix_type.is_some() {
             self.parse_return_first_body()?
+        } else if self.eat(&Tok::ColonColon) {
+            // Compatibility slice: explicit parenthesized scalar expression
+            // followed by end. Do not infer return from a statement block.
+            if is_generator || ret != Type::Int {
+                return Err(unsupported(self.pos(), "non-int or generator :: expression body"));
+            }
+            let expression_pos = self.pos();
+            self.expect(Tok::LParen, "'(' after '::'")?;
+            let value = self.parse_expr()?;
+            self.expect(Tok::RParen, "')' after expression body")?;
+            self.expect_word("end")?;
+            vec![Stmt::Return(Some(value), expression_pos)]
         } else {
             self.parse_block()?
         };
@@ -1689,6 +1773,30 @@ impl Parser {
                 Ok(Stmt::Continue(pos))
             }
             Some("match") => self.parse_match(false),
+            Some("do") if self.word_at(1) == Some("sync") && self.word_at(2) == Some("task") => {
+                // Check the explicit payload before parsing the body. A
+                // nonvoid annotation is always E_TASK_RETURN_TYPE, even if
+                // the body contains other unsupported effects.
+                if *self.peek_at(3) == Tok::Lt && self.word_at(4) != Some("void") {
+                    return Err(Diagnostic::new(pos, "E_TASK_RETURN_TYPE",
+                        "do sync task accepts only void; use sync task<T> without do"));
+                }
+                self.advance();
+                let expr = self.parse_expr()?;
+                // In the "do" form the payload is void-only, including
+                // when omitted and inferred. Never silently discard a value.
+                match &expr.kind {
+                    ExprKind::InlineTask { declared, result, .. }
+                        if declared.is_none_or(|ty| ty == Type::Void) && result.is_none() => {}
+                    _ => return Err(Diagnostic::new(pos, "E_TASK_RETURN_TYPE",
+                        "do sync task requires void and must not return a value")),
+                }
+                self.terminator()?;
+                Ok(Stmt::Expr(expr))
+            }
+            Some("do") if self.word_at(1) == Some("task") => {
+                Err(unsupported(pos, "supervised task with cancellation/cleanup"))
+            }
             Some("do") if self.word_at(1) == Some("match") => {
                 self.advance();
                 self.parse_match(true)
@@ -1696,6 +1804,9 @@ impl Parser {
             Some("do") if matches!(self.word_at(1), Some("switch" | "select" | "nb")) => {
                 Err(unsupported(pos, &format!("'do {}'", self.word_at(1).unwrap())))
             }
+            Some("sync") if self.word_at(1) == Some("task") =>
+                Err(Diagnostic::new(pos, "E_SYNTAX",
+                    "standalone sync task requires 'do sync task'; use nonvoid tasks in a value context")),
             Some("trap") => {
                 // Caller-side trap also works in expression-statement position.
                 let e = self.parse_expr()?;
@@ -1766,6 +1877,10 @@ impl Parser {
                         "E_UNSUPPORTED",
                         "'++' and '--' exist only in a for update clause",
                     ));
+                }
+                if matches!(e.kind, ExprKind::InlineTask { .. }) {
+                    return Err(Diagnostic::new(e.pos, "E_SYNTAX",
+                        "standalone sync task requires 'do sync task'"));
                 }
                 self.terminator()?;
                 Ok(Stmt::Expr(e))
@@ -1968,8 +2083,14 @@ impl Parser {
             }
             self.grow(1)?;
             let apos = self.pos();
-            self.expect_word("on")?;
-            let pattern = self.parse_pattern()?;
+            let pattern = if self.eat_word("in") {
+                self.parse_int_membership()?
+            } else if self.is_word("is") {
+                self.parse_static_type_pattern()?
+            } else {
+                self.expect_word("on")?;
+                self.parse_pattern()?
+            };
             let guard = if self.eat_word("when") {
                 Some(self.parse_expr()?)
             } else {
@@ -2032,15 +2153,19 @@ impl Parser {
             }
             self.grow(1)?;
             let apos = self.pos();
-            if over && !self.eat_word("on") {
+            let membership = over && self.eat_word("in");
+            let type_test = over && self.is_word("is");
+            if over && !membership && !type_test && !self.eat_word("on") {
                 let msg = if self.is_word("else") || self.is_word("default") {
                     "match has no default/else keyword; use 'on _ -> { ... }'"
                 } else {
-                    "every 'match ... over' arm must start with contextual keyword 'on'"
+                    "every 'match ... over' arm must start with 'on', 'in', or 'is'"
                 };
                 return Err(Diagnostic::new(self.pos(), "E_SYNTAX", msg));
             }
-            let pattern = if !over && self.eat_word("else") {
+            let pattern = if membership {
+                self.parse_int_membership()?
+            } else if !over && self.eat_word("else") {
                 Pattern::Wild
             } else {
                 self.parse_pattern()?
@@ -2080,9 +2205,262 @@ impl Parser {
         Ok(Stmt::Match { subject, arms, pos })
     }
 
+    fn pattern_ref(&mut self, array: bool) -> R<Pattern> {
+        let pos = self.pos();
+        let (name, _) = self.ident("compile-time pattern name")?;
+        let (actual, pattern) = self.pattern_constants.get(&name).ok_or_else(||
+            Diagnostic::new(pos, "E_PATTERN_NAME", "unknown or forward/cyclic Pattern reference"))?;
+        if *actual != array {
+            return Err(Diagnostic::new(pos, "E_PATTERN_TYPE", "Pattern and Pattern[] are distinct"));
+        }
+        self.pattern_name_uses.insert(self.i - 1);
+        Ok(pattern.clone())
+    }
+
+    fn combine_patterns(parts: Vec<Pattern>, pos: Pos) -> R<Pattern> {
+        let mut ints = Vec::new();
+        let mut bools = Vec::new();
+        let mut types = Vec::new();
+        for part in parts {
+            let (iv, bv, tv) = match part {
+                Pattern::Int(v) => (vec![v], vec![], vec![]),
+                Pattern::InInts(v) => (v, vec![], vec![]),
+                Pattern::Bool(v) => (vec![], vec![v], vec![]),
+                Pattern::StaticTypes(v) => (vec![], vec![], v),
+                Pattern::ConstSet { ints, bools, types } => (ints, bools, types),
+                _ => return Err(unsupported(pos, "stored binding or non-scalar pattern")),
+            };
+            for v in iv {
+                if ints.contains(&v) { return Err(Diagnostic::new(pos, "E_MATCH", "duplicate pattern literal")); }
+                ints.push(v);
+            }
+            for v in bv {
+                if bools.contains(&v) { return Err(Diagnostic::new(pos, "E_MATCH", "duplicate boolean pattern")); }
+                bools.push(v);
+            }
+            for v in tv {
+                if types.contains(&v) { return Err(Diagnostic::new(pos, "E_MATCH", "duplicate canonical pattern type")); }
+                types.push(v);
+            }
+            if ints.len() + bools.len() + types.len() > 64 {
+                return Err(Diagnostic::new(pos, "E_SOURCE_LIMIT", "expanded Pattern set exceeds 64 alternatives"));
+            }
+        }
+        if ints.is_empty() && bools.is_empty() && types.is_empty() {
+            return Err(Diagnostic::new(pos, "E_MATCH", "empty Pattern set"));
+        }
+        Ok(Pattern::ConstSet { ints, bools, types })
+    }
+
+    fn parse_pattern_array(&mut self, depth: u32) -> R<Pattern> {
+        let pos = self.pos();
+        if depth >= 32 { return Err(Diagnostic::new(pos, "E_SOURCE_LIMIT", "nested Pattern limit")); }
+        self.expect(Tok::LBracket, "'[' in Pattern array")?;
+        let mut parts = Vec::new();
+        loop {
+            if parts.len() >= 64 {
+                return Err(Diagnostic::new(pos, "E_SOURCE_LIMIT", "Pattern array limit"));
+            }
+            parts.push(self.parse_pattern_descriptor(depth + 1)?);
+            if self.eat(&Tok::RBracket) { break; }
+            self.expect(Tok::Comma, "comma between patterns")?;
+            if self.eat(&Tok::RBracket) { break; }
+        }
+        Self::combine_patterns(parts, pos)
+    }
+
+    fn parse_pattern_descriptor(&mut self, depth: u32) -> R<Pattern> {
+        let pos = self.pos();
+        if depth >= 32 { return Err(Diagnostic::new(pos, "E_SOURCE_LIMIT", "nested Pattern limit")); }
+        if self.eat_word("on") {
+            if self.is_word("true") || self.is_word("false") {
+                let b = self.is_word("true"); self.advance(); return Ok(Pattern::Bool(b));
+            }
+            if matches!(self.peek(), Tok::Ident(_)) { return self.pattern_ref(false); }
+            let neg = self.eat(&Tok::Minus);
+            let n = match self.peek() {
+                Tok::Int(Some(v)) => if neg { -(*v as i64) } else { *v as i64 },
+                Tok::Int(None) if neg => i64::MIN,
+                _ => return Err(unsupported(pos, "stored pattern literal must be int or bool")),
+            };
+            self.advance(); return Ok(Pattern::Int(n));
+        }
+        if self.is_word("is") { return self.parse_static_type_pattern(); }
+        if self.eat_word("in") {
+            if *self.peek() == Tok::LBracket &&
+                (matches!(self.word_at(1), Some("on" | "is" | "in")) ||
+                 self.word_at(1).is_some_and(|name| self.pattern_constants.contains_key(name))) {
+                return self.parse_pattern_array(depth + 1);
+            }
+            return self.parse_int_membership();
+        }
+        self.pattern_ref(false)
+    }
+
+    fn parse_pattern_constant(&mut self) -> R<()> {
+        let pos = self.pos();
+        self.expect_word("const")?;
+        self.expect_word("Pattern")?;
+        let array = self.eat(&Tok::LBracket);
+        if array { self.expect(Tok::RBracket, "']' in Pattern[]")?; }
+        let name_index = self.i;
+        let (name, _) = self.ident("compile-time pattern name")?;
+        if matches!(name.as_str(), "Pattern" | "Int" | "int" | "bool" | "boolean" | "float" | "f64" | "String" | "string") ||
+            self.pattern_constants.contains_key(&name) || self.pattern_type_aliases.contains_key(&name) {
+            return Err(Diagnostic::new(pos, "E_PATTERN_NAME", "duplicate or reserved Pattern name"));
+        }
+        if self.pattern_constants.len() >= 128 {
+            return Err(Diagnostic::new(pos, "E_SOURCE_LIMIT", "too many Pattern declarations"));
+        }
+        self.expect(Tok::Assign, "'=' in Pattern declaration")?;
+        let pattern = if array { self.parse_pattern_array(0)? } else { self.parse_pattern_descriptor(0)? };
+        self.expect(Tok::Semi, "';' after Pattern declaration")?;
+        self.pattern_name_uses.insert(name_index);
+        self.pattern_constants.insert(name, (array, pattern));
+        Ok(())
+    }
+
+    /// First membership slice: a bounded, nonempty literal int list.
+    /// No dynamic collection expression or implicit runtime array allocation.
+    fn parse_int_membership(&mut self) -> R<Pattern> {
+        let pos = self.pos();
+        if matches!(self.peek(), Tok::Ident(name) if self.pattern_constants.contains_key(name)) {
+            return self.pattern_ref(true);
+        }
+        if *self.peek() == Tok::LBracket &&
+            (matches!(self.word_at(1), Some("on" | "is" | "in")) ||
+             self.word_at(1).is_some_and(|name| self.pattern_constants.contains_key(name))) {
+            return self.parse_pattern_array(0);
+        }
+        if !self.eat(&Tok::LBracket) {
+            return Err(unsupported(pos, "runtime collection membership arms"));
+        }
+        if self.eat(&Tok::RBracket) {
+            return Err(Diagnostic::new(pos, "E_MATCH", "empty membership arm cannot match any value"));
+        }
+        let mut values = Vec::new();
+        loop {
+            if values.len() == 64 {
+                return Err(Diagnostic::new(pos, "E_SOURCE_LIMIT", "membership arm exceeds 64 literal values"));
+            }
+            let at = self.pos();
+            let negative = self.eat(&Tok::Minus);
+            let value = match self.peek().clone() {
+                Tok::Int(Some(v)) => if negative { -(v as i64) } else { v as i64 },
+                Tok::Int(None) if negative => i64::MIN,
+                Tok::Int(None) => return Err(Diagnostic::new(at, "E_INTEGER_RANGE", "integer literal out of range")),
+                _ => return Err(unsupported(at, "nonliteral or noninteger membership element")),
+            };
+            self.advance();
+            if values.contains(&value) {
+                return Err(Diagnostic::new(at, "E_MATCH", "duplicate integer membership element"));
+            }
+            values.push(value);
+            if self.eat(&Tok::RBracket) { break; }
+            self.expect(Tok::Comma, "comma between membership values")?;
+            if self.eat(&Tok::RBracket) { break; }
+        }
+        Ok(Pattern::InInts(values))
+    }
+
+    /// Static scalar type disjunction. The ordinary checker verifies the
+    /// subject type and every reachable body before emitting any guest.
+    fn parse_pattern_type_atom(&mut self) -> R<Vec<Type>> {
+        let pos = self.pos();
+        let spelling = match self.peek() {
+            Tok::Ident(w) => w.clone(),
+            _ => return Err(Diagnostic::new(pos, "E_SYNTAX", "expected a scalar pattern type")),
+        };
+        if let Some(types) = self.pattern_type_aliases.get(&spelling).cloned() {
+            self.pattern_alias_uses.insert(self.i);
+            self.advance();
+            return Ok(types);
+        }
+        let ty = match spelling.as_str() {
+            "int" | "Int" => Type::Int,
+            "bool" | "boolean" => Type::Bool,
+            "float" | "f64" => Type::Float,
+            "string" | "String" => Type::Str,
+            _ => return Err(unsupported(pos, "unknown, forward/cyclic or non-scalar pattern type")),
+        };
+        self.pattern_type_spellings.insert(spelling, pos);
+        self.advance();
+        Ok(vec![ty])
+    }
+
+    fn append_pattern_types(target: &mut Vec<Type>, alternatives: Vec<Type>, pos: Pos) -> R<()> {
+        for ty in alternatives {
+            if target.contains(&ty) {
+                return Err(Diagnostic::new(pos, "E_MATCH", "duplicate canonical type in pattern type set"));
+            }
+            if target.len() >= 64 {
+                return Err(Diagnostic::new(pos, "E_SOURCE_LIMIT", "pattern type expansion limit"));
+            }
+            target.push(ty);
+        }
+        Ok(())
+    }
+
+    fn parse_pattern_type_alias(&mut self) -> R<()> {
+        let pos = self.pos();
+        self.expect_word("type")?;
+        let name_index = self.i;
+        let (name, _) = self.ident("scalar pattern type alias")?;
+        if matches!(name.as_str(), "Pattern" | "Int" | "int" | "bool" | "boolean" | "float" | "f64" | "String" | "string")
+            || self.pattern_constants.contains_key(&name) || self.pattern_type_aliases.contains_key(&name) {
+            return Err(Diagnostic::new(pos, "E_PATTERN_NAME", "duplicate or reserved scalar pattern type alias"));
+        }
+        if self.pattern_type_aliases.len() >= 128 {
+            return Err(Diagnostic::new(pos, "E_SOURCE_LIMIT", "scalar pattern alias declaration limit"));
+        }
+        self.expect(Tok::Assign, "'=' in scalar pattern type alias")?;
+        let mut types = Vec::new();
+        loop {
+            let next = self.parse_pattern_type_atom()?;
+            Self::append_pattern_types(&mut types, next, pos)?;
+            if !self.eat(&Tok::Pipe) { break; }
+        }
+        self.expect(Tok::Semi, "';' after scalar pattern type alias")?;
+        self.pattern_alias_uses.insert(name_index);
+        self.pattern_type_aliases.insert(name, types);
+        Ok(())
+    }
+
+    fn parse_static_type_pattern(&mut self) -> R<Pattern> {
+        let pos = self.pos();
+        self.expect_word("is")?;
+        let plural = self.eat_word("in");
+        if plural && *self.peek() != Tok::LBracket {
+            let pattern = self.pattern_ref(true)?;
+            return match pattern {
+                Pattern::ConstSet { ints, bools, types } if ints.is_empty() && bools.is_empty() =>
+                    Ok(Pattern::StaticTypes(types)),
+                _ => Err(Diagnostic::new(pos, "E_PATTERN_TYPE", "is in requires type-test-only Pattern[]")),
+            };
+        }
+        if plural { self.expect(Tok::LBracket, "'[' in type list")?; }
+        let mut types = Vec::new();
+        loop {
+            if *self.peek() == Tok::RBracket {
+                return Err(Diagnostic::new(self.pos(), "E_SYNTAX", "type list must contain a type"));
+            }
+            let alternatives = self.parse_pattern_type_atom()?;
+            Self::append_pattern_types(&mut types, alternatives, pos)?;
+            if !plural || self.eat(&Tok::RBracket) { break; }
+            self.expect(Tok::Comma, "comma between type alternatives")?;
+        }
+        if self.is_word("as") {
+            return Err(unsupported(pos, "static type-list binding requires dedicated narrowing"));
+        }
+        Ok(Pattern::StaticTypes(types))
+    }
+
     /// Java Parser.parsePattern, restricted to the forms this compiler lowers.
     fn parse_pattern(&mut self) -> R<Pattern> {
         let pos = self.pos();
+        if matches!(self.peek(), Tok::Ident(name) if self.pattern_constants.contains_key(name)) {
+            return self.pattern_ref(false);
+        }
         match self.peek().clone() {
             Tok::Int(Some(v)) => {
                 self.advance();
@@ -2125,7 +2503,8 @@ impl Parser {
                     self.advance();
                     Ok(Pattern::Wild)
                 }
-                "is" | "structural" => Err(unsupported(pos, "type patterns")),
+                "is" => self.parse_static_type_pattern(),
+                "structural" => Err(unsupported(pos, "structural type patterns")),
                 _ => {
                     self.advance();
                     if *self.peek() == Tok::Dot {
@@ -2771,6 +3150,35 @@ impl Parser {
                     self.advance();
                     ExprKind::Spawn(actor)
                 }
+                "sync" => {
+                    self.advance();
+                    self.expect_word("task")?;
+                    let declared = if self.eat(&Tok::Lt) {
+                        let payload = self.parse_type()?;
+                        self.expect(Tok::Gt, "'>' after task payload type")?;
+                        Some(payload)
+                    } else {
+                        None
+                    };
+                    let mut prelude = self.parse_block()?;
+                    let result = if matches!(prelude.last(), Some(Stmt::Return(..))) {
+                        match prelude.pop() {
+                            Some(Stmt::Return(expr, _)) => expr.map(Box::new),
+                            _ => unreachable!("checked terminal return"),
+                        }
+                    } else {
+                        None
+                    };
+                    if !prelude.iter().all(inline_task_pure_stmt)
+                        || result.as_ref().is_some_and(|v| !inline_task_pure_expr(v)) {
+                        return Err(unsupported(pos,
+                            "sync task requires a proven non-suspending scalar body; continuation, cleanup and nested exits are not lowered"));
+                    }
+                    ExprKind::InlineTask { declared, prelude, result }
+                }
+                "task" if matches!(self.peek_at(1), Tok::Lt | Tok::LBrace) => {
+                    return Err(unsupported(pos, "task expression: typed Future, scoped cancellation and lock cleanup"));
+                }
                 "await" | "super" | "match" | "select" | "readch" | "writech" | "obj" | "arr" | "typeof" => {
                     return Err(unsupported(pos, &format!("'{s}' expressions")))
                 }
@@ -2800,6 +3208,36 @@ impl Parser {
     /// `f<int>(..)` heuristic: `<` Type `>` `(`.
     fn looks_generic(&self) -> bool {
         matches!(self.peek_at(1), Tok::Ident(_)) && *self.peek_at(2) == Tok::Gt && *self.peek_at(3) == Tok::LParen
+    }
+}
+
+// The initial executable inline-task profile is deliberately effect-free.
+// In particular, a call is not proven transitive-no-susp just because it has
+// a scalar return. This predicate runs over parsed AST nodes, never source
+// text, so comments/strings cannot bypass admission.
+fn inline_task_pure_expr(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Int(_) | ExprKind::Bool(_) | ExprKind::Var(_) => true,
+        ExprKind::Unary(_, inner) => inline_task_pure_expr(inner),
+        ExprKind::Binary(_, a, b) => inline_task_pure_expr(a) && inline_task_pure_expr(b),
+        ExprKind::Ternary(c, a, b) => inline_task_pure_expr(c)
+            && inline_task_pure_expr(a) && inline_task_pure_expr(b),
+        ExprKind::InlineTask { prelude, result, .. } => prelude.iter().all(inline_task_pure_stmt)
+            && result.as_ref().is_none_or(|x| inline_task_pure_expr(x)),
+        _ => false,
+    }
+}
+
+fn inline_task_pure_stmt(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Bind { init, .. } => inline_task_pure_expr(init),
+        Stmt::Assign { value, .. } => inline_task_pure_expr(value),
+        Stmt::Expr(value) => inline_task_pure_expr(value),
+        Stmt::Block(body) => body.iter().all(inline_task_pure_stmt),
+        Stmt::If { arms, otherwise, .. } => arms.iter().all(|(test, body)|
+            inline_task_pure_expr(test) && body.iter().all(inline_task_pure_stmt))
+            && otherwise.as_ref().is_none_or(|body| body.iter().all(inline_task_pure_stmt)),
+        _ => false,
     }
 }
 

@@ -65,6 +65,63 @@ int main() {
     catch (const std::runtime_error&) { rejected = true; }
     REQUIRE(rejected && events.empty());
 
+    // A later invalid block must not publish prior locally accepted events.
+    auto late = source_graph();
+    late.blocks[1].operations = {
+        {OwnershipV1OpKind::Drop, 0},
+        {OwnershipV1OpKind::Use, 0},
+        {OwnershipV1OpKind::ExitNormal, 0},
+    };
+    events.clear();
+    rejected = false;
+    try { (void)OwnershipDataflowV1::analyze(late, &record, &events); }
+    catch (const std::runtime_error&) { rejected = true; }
+    REQUIRE(rejected && events.empty());
+
+    // A valid 66 x 1024-operation CFG exceeds the opt-in trace budget,
+    // while preserving normal, untraced compiler analysis behavior.
+    OwnershipV1Graph large;
+    large.entry = 0;
+    large.owners = {"owned_resource"};
+    large.blocks.resize(66);
+    for (std::size_t block = 0; block < large.blocks.size(); ++block) {
+        auto& current = large.blocks[block];
+        current.operations.assign(1024, {OwnershipV1OpKind::Use, 0});
+        if (block == 0)
+            current.operations[0] = {OwnershipV1OpKind::Create, 0};
+        if (block + 1 < large.blocks.size())
+            current.successors = {block + 1};
+        else
+            current.operations.back() = {OwnershipV1OpKind::ExitNormal, 0};
+    }
+    REQUIRE(OwnershipDataflowV1::analyze(large).normal_exits.size() == 1);
+    events.clear();
+    rejected = false;
+    try { (void)OwnershipDataflowV1::analyze(large, &record, &events); }
+    catch (const std::runtime_error&) { rejected = true; }
+    REQUIRE(rejected && events.empty());
+
+    // Exactly the budget is allowed, and all events are published.
+    auto atLimit = large;
+    atLimit.blocks.resize(64);
+    atLimit.blocks.back().successors.clear();
+    atLimit.blocks.back().operations.back() = {OwnershipV1OpKind::ExitNormal, 0};
+    events.clear();
+    REQUIRE(OwnershipDataflowV1::analyze(atLimit, &record, &events).normal_exits.size() == 1);
+    REQUIRE(events.size() == OwnershipDataflowV1::MaxShadowEventsV0);
+
+    // A reachable exit does not validate a second path that cycles.
+    auto cycle = source_graph();
+    cycle.blocks.resize(3);
+    cycle.blocks[0].successors = {1, 2};
+    cycle.blocks[2].operations = {{OwnershipV1OpKind::Use, 0}};
+    cycle.blocks[2].successors = {2};
+    events.clear();
+    rejected = false;
+    try { (void)OwnershipDataflowV1::analyze(cycle, &record, &events); }
+    catch (const std::runtime_error&) { rejected = true; }
+    REQUIRE(rejected && events.empty());
+
     // A failing consumer must abort verification, never grant ownership.
     rejected = false;
     try { (void)OwnershipDataflowV1::analyze(graph, &deny, nullptr); }

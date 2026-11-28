@@ -12,12 +12,15 @@ pub mod actor_send_effect_graph;
 /// Resolved call graph parking analysis, shared with Rust backend; no guest lowering.
 pub mod runtime_parking_effects;
 pub mod check;
+/// Staged typed V2 call planning; not yet connected to executable lowering.
+pub mod call_presence_v2;
 pub mod diag;
 pub mod directed_pipe;
 pub mod generator_cfg;
 pub mod generator_frame;
 pub mod lexer;
 pub mod parser;
+mod contextual_specialization;
 mod struct_value_guest;
 mod native_scalar_c;
 mod physical_layout;
@@ -62,6 +65,10 @@ fn compile_target(source: &str, native_c: bool, isolated: bool) -> Result<Vec<u8
         ));
     }
     let toks = lexer::lex(source)?;
+    if contextual_specialization::present(&toks) && (native_c || isolated) {
+        return Err(Diagnostic::new(toks[0].pos, "E_CONTEXT_PROFILE", "contextual specialization is only implemented in the browser Wasm frontend profile"));
+    }
+    let toks = contextual_specialization::lower(toks)?;
     if let Some(pos) = directed_pipe::unlowered_pos(&toks) {
         return Err(Diagnostic::new(pos, "E_UNSUPPORTED_CONTINUOUS_PIPE",
             "typed pipe/rpipe DATA graph is planned but no guest transport or PipeHandle exists"));
@@ -127,17 +134,23 @@ fn compile_target(source: &str, native_c: bool, isolated: bool) -> Result<Vec<u8
     // cannot accidentally switch the compiler into the target grammar.
     let mut braces = 0usize;
     let mut target = false;
+    let mut explicit_target = false;
     for i in 0..toks.len() {
         match &toks[i].tok {
             lexer::Tok::LBrace => braces = braces.saturating_add(1),
             lexer::Tok::RBrace => braces = braces.saturating_sub(1),
             lexer::Tok::Ident(word) if braces == 0 => {
                 let next = toks.get(i + 1).map(|token| &token.tok);
-                if word == "declare" || word == "mtd" ||
+                if word == "declare" ||
                     (word == "use" && matches!(next,
                         Some(lexer::Tok::Ident(name)) if name == "namespace")) {
+                    explicit_target = true;
                     target = true;
                     break;
+                }
+                // Only ambiguous receiver-like tokens need a second grammar.
+                if word == "mtd" && matches!(next, Some(lexer::Tok::LParen)) {
+                    target = true;
                 }
             }
             _ => {}
@@ -157,7 +170,14 @@ fn compile_target(source: &str, native_c: bool, isolated: bool) -> Result<Vec<u8
                 "attached actor state is parsed but its guarded native/guest runtime is unavailable"));
         }
     }
-    if target {
+    // Preserve explicit target/attached actor gates above. Only ambiguous
+    // mtd() names may try the full executable grammar first.
+    let ordinary = if target && !explicit_target && !attached_actor_state {
+        parser::Parser::new(toks.clone()).parse_program().ok()
+    } else { None };
+    let program = if let Some(program) = ordinary {
+        program
+    } else if target {
         let headers = target_syntax::parse_target_declarations(&toks)?;
         // Type the declared method signatures without handing unlinked actor
         // declarations to the executable check / Wasm backend.
@@ -166,8 +186,9 @@ fn compile_target(source: &str, native_c: bool, isolated: bool) -> Result<Vec<u8
         check::check_target_actor_interface(&actor_ast)?;
         return Err(Diagnostic::new(toks[0].pos, "E_UNSUPPORTED",
             "namespace-scoped actor declarations and mtd methods are syntax-only, not browser-lowered"));
-    }
-    let program = parser::Parser::new(toks).parse_program()?;
+    } else {
+        parser::Parser::new(toks).parse_program()?
+    };
     let typed = check::check(&program)?;
     let bytes = if isolated { wasm::emit_isolated_core(&typed)? } else { wasm::emit(&typed) };
     if bytes.len() > wasm::MAX_OUTPUT {

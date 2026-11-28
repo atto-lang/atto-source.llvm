@@ -1,0 +1,15 @@
+namespace counter;
+// State views never escape the intrinsic: the writer is exclusive and the
+// reader transports a copyable scalar, not a borrowed state reference.
+mtd (Counter c) receive(ActorMail<int> mail): void {
+  self.handle_state(critical-write |s| -> {
+    s.total = s.total + mail.value;
+  });
+  self.handle_state(critical-read |s| -> {
+    self.send(s.total);
+  });
+  if mail.value == 4; do
+    self.end();
+  fi
+  return;
+}

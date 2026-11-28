@@ -37,7 +37,7 @@ class Compiler {
     std::string type(){
         if(eat("int"))return "int";
         if(eat("Channel")){need("<");need("int");need(">");return "channel";}
-        if(eat("Future")){need("<");if(eat("Array")){need("<");need("int");need(">");need(">");return "futureArray";}need("int");need(">");return "future";}
+        if(eat("Future")){if(!eat("<"))return "inferFuture";if(eat("Array")){need("<");need("int");need(">");need(">");return "futureArray";}need("int");need(">");return "future";}
         if(eat("Array")){bool b=eat("[");if(!b)need("<");need("int");need(b?"]":">");return "array";}
         bad("unsupported type");
     }
@@ -62,7 +62,7 @@ class Compiler {
         if(!binder.empty()){auto n=name();if(binder=="@count")return {"int",get(n,"int").code};if(n!=binder)bad("projection binding only");return {"int","x"};}
         if(eat("await")){
             if(pure)bad("effect in condition");
-            bool nb=eat("nb");if(eat("select"))return counted(true);if(nb)bad("nb requires select");
+            bool nb=eat("nb");if(eat("select"))return selectResult(true);if(nb)bad("nb requires select");
             auto n=name();auto i=slots.find(n);
             if(i!=slots.end()&&i->second.type=="futureArray"&&!i->second.moved&&pending==i->second.code){i->second.moved=true;pending.clear();return {"array","finish("+i->second.code+")"};}
             if(!pending.empty())bad("await batch first");
@@ -76,7 +76,7 @@ class Compiler {
     }
     static std::string join(const std::vector<std::string>& v){std::string r;for(auto& s:v){if(!r.empty())r+=",";r+=s;}return r;}
     Value counted(bool direct){
-        if(!pending.empty())bad("await batch first");if(eat("<")){need("int");need(">");}
+        if(!pending.empty())bad("await batch first");
         need("(");auto begin=pos;auto n=check(expr(0,"@count"),"int");auto end=pos;need(")");
         bool zero=false;
         if(end==begin+1&&digit(tokens[begin][0])){
@@ -100,11 +100,19 @@ class Compiler {
         auto start="start("+n+","+plan+","+(fair?"true":"false")+")";
         return direct?Value{"array","finish("+start+")"}:Value{"futureArray",start};
     }
+    Value selectResult(bool direct){
+        if(!pending.empty())bad("await batch first");
+        if(eat("<")){need("int");need(">");}
+        if(peek()=="(")return counted(direct);
+        bool over=eat("over");if(!over)need("{");need("default");need(":");need("->");need("{");need("return");
+        auto code="ready([](){return "+check(expr(0,"$none"),"int")+";})";
+        need(";");need("}");need(over?"end":"}");
+        return direct?Value{"int","observe("+code+")"}:Value{"future",code};
+    }
     std::string bind(bool mut){
         auto t=type(),n=name();if(slots.count(n)||slots.size()>=128||(mut&&t!="int"))bad("invalid binding");need("=");std::string code;int cap=0;
         if(t=="channel"){if(!pending.empty())bad("await batch first");need("Channel");need(".");need("new");need("<");need("int");need(">");need("(");cap=small(64);if(!cap)bad("zero capacity");need(")");code="std::make_shared<Channel>()";}
-        else if(t=="future"){if(!pending.empty())bad("await batch first");need("select");need("<");need("int");need(">");bool over=eat("over");if(!over)need("{");need("default");need(":");need("->");need("{");need("return");code="ready([](){return "+check(expr(0,"$none"),"int")+";})";need(";");need("}");need(over?"end":"}");}
-        else if(t=="futureArray"){eat("nb");need("select");code=check(counted(false),t);}
+        else if(t=="future"||t=="futureArray"||t=="inferFuture"){eat("nb");need("select");auto selected=selectResult(false);if(t=="inferFuture")t=selected.type;code=check(selected,t);}
         else code=check(expr(),t);
         need(";");auto slot="v"+std::to_string(slots.size());slots.emplace(n,Slot{t,slot,cap,false,mut});if(t=="futureArray")pending=slot;
         return "auto "+slot+"="+code+";\n";
@@ -129,7 +137,7 @@ public:
         std::string body;int statements=0;
         while(peek()!="return"){
             if(++statements>256)bad("statement quota");
-            if(eat("val"))body+=bind(false);else if(eat("let"))body+=bind(true);
+            if(eat("val")||eat("const"))body+=bind(false);else if(eat("let"))body+=bind(true);
             else if(eat("writech")){if(!pending.empty())bad("await batch first");auto& s=get(name(),"channel");need(",");auto v=check(expr(),"int");need(";");body+="write("+s.code+","+std::to_string(s.cap)+","+v+");\n";}
             else if(eat("if")){if(!pending.empty())bad("await batch first");pure=true;auto condition=check(expr(),"bool");pure=false;auto before=slots;need("then");need("return");auto v=check(expr(),"int");need(";");need("fi");slots=std::move(before);body+="if("+condition+")return "+v+";\n";}
             else if(pos+1<tokens.size()&&tokens[pos+1]=="="){auto& s=get(name(),"int");if(!s.mut)bad("immutable binding");need("=");auto v=check(expr(),"int");need(";");body+=s.code+"="+v+";\n";}

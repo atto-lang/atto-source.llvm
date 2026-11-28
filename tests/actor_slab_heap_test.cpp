@@ -168,6 +168,37 @@ static void handles_fifo_stale_and_quarantine() {
     REQUIRE(!bad.ok());
 }
 
+static void handle_table_requires_live_entry() {
+    ActorSlabHeap heap(config(1 << 20, 1 << 20, 3, 12));
+    REQUIRE(heap.ok());
+    const auto bits = heap.handle_slot_bits();
+    for (std::uint32_t generation = 1; generation <= 4095; ++generation) {
+        for (std::uint32_t slot = 1; slot <= 3; ++slot) {
+            const ActorSlabHeap::Handle32 candidate{(generation << bits) | slot};
+            const auto before = heap.stats();
+            REQUIRE(heap.resolve_handle(candidate).status == SlabStatus::StaleHandle);
+            REQUIRE(heap.free_handle(candidate) == SlabStatus::StaleHandle);
+            REQUIRE(heap.stats().live_objects == before.live_objects);
+            REQUIRE(heap.stats().committed_bytes == before.committed_bytes);
+            auto issued = heap.allocate_handle(32);
+            REQUIRE(issued && issued.value == candidate);
+            auto ref = heap.resolve_handle(issued.value);
+            REQUIRE(ref);
+            auto payload = heap.resolve(ref.value, 32);
+            REQUIRE(payload);
+            const auto* bytes = reinterpret_cast<const std::uint8_t*>(payload.value);
+            for (unsigned i = 0; i < 32; ++i) REQUIRE(bytes[i] == 0);
+            std::memset(payload.value, 0x5a, 32);
+            REQUIRE(heap.free_handle(issued.value) == SlabStatus::Ok);
+            REQUIRE(heap.resolve_handle(issued.value).status == SlabStatus::StaleHandle);
+        }
+    }
+    REQUIRE(heap.stats().quarantined_handles == 3);
+    REQUIRE(heap.stats().live_objects == 0);
+    REQUIRE(heap.allocate_handle(32).status == SlabStatus::HandleTableFull);
+    std::puts("SLAB_LIVE_ENTRY_PASS generations=12285");
+}
+
 static void stress_fragmentation() {
     ActorSlabHeap heap(config(8 << 20, 8 << 20));
     struct Live { Ref ref; std::uint32_t bytes; std::uint8_t tag; };
@@ -266,6 +297,7 @@ int main() {
     forged_and_interior_refs();
     budget_is_failure_atomic();
     handles_fifo_stale_and_quarantine();
+    handle_table_requires_live_entry();
     stress_fragmentation();
     caller_buffer_and_retire();
 #if defined(ORES_SLAB_HEAP_HAS_MMAP)

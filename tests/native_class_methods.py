@@ -38,6 +38,25 @@ def main():
           pub constructor(int start){return;}
           pub read()->int{return self.value;} end
           pub fnc main():int{let Box b=new Box(42);return b.read();}'''}),
+        # Contextual introducers must not steal methods that are literally
+        # named mtd()/method(); all are native-linked executable guests.
+        ('bare-mtd-name', {'main.ores':'''define class Box as let int value=40;
+          pub mtd():int{return self.value+2;}end
+          pub fnc main():int{let Box b=new Box();return b.mtd();}'''}),
+        ('bare-method-name', {'main.ores':'''define class Box as let int value=40;
+          pub method():int{return self.value+2;}end
+          pub fnc main():int{let Box b=new Box();return b.method();}'''}),
+        ('canonical-mtd-marker', {'main.ores':'''define class Box as let int value=40;
+          pub mtd add(int value):int{return self.value+value;}end
+          pub fnc main():int{let Box b=new Box();return b.add(2);}'''}),
+        ('legacy-fnc-marker', {'main.ores':'''define class Box as let int value=40;
+          pub fnc add(int value):int{return self.value+value;}end
+          pub fnc main():int{let Box b=new Box();return b.add(2);}'''}),
+        ('nested-contextual-names', {'main.ores':'''define class Box as let int value=40;
+          pub mtd method():int{return self.value+1;}
+          pub mtd mtd():int{return self.value+1;}end
+          pub fnc main():int{let Box b=new Box();return b.method()+b.mtd()-40;}'''}),
+
         ('shared-reborrow', {'main.ores':COUNTER+'''fnc read(borrow Counter c):int{return c.read()+2;}
           pub fnc main():int{let Counter c=new Counter();return read(rt borrow c);}'''}),
         ('exclusive-reborrow', {'main.ores':COUNTER+'''fnc bump(borrow mut Counter c):void{c.add(2);return;}
@@ -103,6 +122,23 @@ def main():
         ('duplicate-method-arity', '''define class Box as let int value=42;
           pub read(int n):int{return n;} pub read(borrow int n):int{return n;}end
           pub fnc main():int{return 0;}''',{},'duplicate native method'),
+        ('cross-marker-duplicate-arity', '''define class Box as let int value=40;
+          pub mtd read():int{return self.value;}
+          pub fnc read():int{return self.value;}end
+          pub fnc main():int{return 0;}''',{},'duplicate native method name/arity'),
+        ('obsolete-method-marker', '''define class Box as let int value=40;
+          pub method add(int value):int{return self.value+value;}end
+          pub fnc main():int{return 0;}''',{},'obsolete method introducer'),
+        ('double-method-introducer', '''define class Box as let int value=40;
+          pub mtd method read():int{return self.value;}end
+          pub fnc main():int{return 0;}''',{},'native duplicate instance method introducer'),
+        ('double-fnc-introducer', '''define class Box as let int value=40;
+          pub fnc mtd read():int{return self.value;}end
+          pub fnc main():int{return 0;}''',{},'native duplicate instance method introducer'),
+        ('double-legacy-introducer', '''define class Box as let int value=40;
+          pub method fnc read():int{return self.value;}end
+          pub fnc main():int{return 0;}''',{},'native duplicate instance method introducer'),
+
         # Equal receiver-erased slots always conflict, regardless of mutability,
         # declaration order, parameter type, or inline/split self spelling.
         ('implicit-then-mut-zero', '''define class Foo as
