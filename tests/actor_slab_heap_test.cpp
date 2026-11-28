@@ -291,6 +291,72 @@ static void rejects_bad_config() {
     REQUIRE(!ActorSlabHeap(config(1 << 20, 2 << 20)).ok()); // budget > reserve
 }
 
+// Small-actor profile: 1 KiB pages. Same words/encoding, smaller floor.
+static void small_page_profile() {
+    using Small = oreslang::runtime::ActorSlabHeapSmall;
+    static_assert(Small::kPageBytes == 1024, "small profile is 1 KiB pages");
+    Small heap(config(1 << 20, 1 << 20, 8));
+    REQUIRE(heap.ok());
+    std::vector<Ref> refs;
+    for (int i = 0; i < 60; ++i) refs.push_back(heap.allocate(16).value);
+    REQUIRE(heap.stats().live_pages == 2);      // 1 handle-table page + 60 x 16 B in one 1 KiB page
+    refs.push_back(heap.allocate(16).value);
+    REQUIRE(heap.stats().live_pages == 3);
+    // 961..2048 B no longer fit a 1 KiB page: they must take the large path.
+    auto mid = heap.allocate(1000);
+    REQUIRE(mid);
+    auto mp = heap.resolve(mid.value, 1000);
+    REQUIRE(mp);
+    std::memset(mp.value, 0x5A, 1000);
+    REQUIRE(heap.free(mid.value) == SlabStatus::Ok);
+    REQUIRE(heap.free(mid.value) == SlabStatus::InvalidRef);
+    for (std::size_t align : {8u, 16u, 32u, 64u}) {
+        auto r = heap.allocate(100, align);
+        REQUIRE(r);
+        REQUIRE(reinterpret_cast<std::uintptr_t>(heap.resolve(r.value, 100).value) % align == 0);
+        REQUIRE(heap.free(r.value) == SlabStatus::Ok);
+    }
+    auto big = heap.allocate(3000).value;              // multi-page run of 1 KiB pages
+    REQUIRE(heap.free(Ref::from_storage(big.storage() + 1024 / 8)) == SlabStatus::InvalidRef);
+    REQUIRE(heap.free(big) == SlabStatus::Ok);
+    for (Ref r : refs) REQUIRE(heap.free(r) == SlabStatus::Ok);
+    REQUIRE(heap.stats().live_objects == 0);
+    for (int i = 0; i < 4; ++i) REQUIRE(heap.allocate(500));   // reuses freed pages
+    auto h = heap.allocate_handle(40);
+    REQUIRE(h && heap.resolve_handle(h.value));
+    REQUIRE(heap.free_handle(h.value) == SlabStatus::Ok);
+    REQUIRE(heap.resolve_handle(h.value).status == SlabStatus::StaleHandle);
+    // Same stress as the default profile, integrity-checked.
+    Small s(config(8 << 20, 8 << 20));
+    std::vector<std::pair<Ref, std::size_t>> live;
+    std::uint32_t lcg = 777;
+    auto next = [&] { lcg = lcg * 1664525u + 1013904223u; return lcg >> 8; };
+    for (int op = 0; op < 50000; ++op) {
+        if (live.empty() || next() % 100 < 55) {
+            const std::size_t bytes = 1 + next() % 1500;
+            auto r = s.allocate(bytes);
+            if (!r) continue;
+            std::memset(s.resolve(r.value, bytes).value, static_cast<int>(bytes & 0xFF), bytes);
+            live.push_back({r.value, bytes});
+        } else {
+            const std::size_t i = next() % live.size();
+            auto* b = static_cast<unsigned char*>(s.resolve(live[i].first, live[i].second).value);
+            REQUIRE(b != nullptr);
+            for (std::size_t k = 0; k < live[i].second; ++k) REQUIRE(b[k] == (live[i].second & 0xFF));
+            REQUIRE(s.free(live[i].first) == SlabStatus::Ok);
+            live[i] = live.back();
+            live.pop_back();
+        }
+    }
+    for (auto& l : live) REQUIRE(s.free(l.first) == SlabStatus::Ok);
+    REQUIRE(s.stats().live_pages == 0);
+    // The point of the profile: a tiny actor commits far less.
+    Small tiny(config(1 << 20, 1 << 20));
+    ActorSlabHeap tiny4k(config(1 << 20, 1 << 20));
+    for (int i = 0; i < 10; ++i) { REQUIRE(tiny.allocate(16)); REQUIRE(tiny4k.allocate(16)); }
+    REQUIRE(tiny.stats().live_pages * Small::kPageBytes < tiny4k.stats().live_pages * ActorSlabHeap::kPageBytes);
+}
+
 int main() {
     basic_and_classes();
     page_packing_and_reuse();
@@ -304,6 +370,7 @@ int main() {
     pool_rejects_double_release_and_forgery();
 #endif
     rejects_bad_config();
+    small_page_profile();
     std::printf("PASS actor slab heap: %d checks, %zu-bit host, 4-byte Offset32/Handle32\n",
                 checks, sizeof(void*) * 8);
     return 0;

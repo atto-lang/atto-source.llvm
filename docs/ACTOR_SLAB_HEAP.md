@@ -132,3 +132,32 @@ monotonically, crosses actors or processes, or must be unguessable.
 Rule of thumb: **compress what is *stored many times*, not what *counts or
 identifies*.** A 4-byte reference saves memory per edge. A 4-byte counter or
 identity only saves 4 bytes once, and turns wrap-around into a security bug.
+
+## Small-actor profile (November 2026)
+
+`BasicActorSlabHeap<PageBytes>` and `BasicActorHeapRegionPool<PageBytes>` take the
+slab page size as a profile. `ActorSlabHeap`/`ActorHeapRegionPool` stay at 4 KiB,
+which is the layout the golden fixtures pin. `ActorSlabHeapSmall`/
+`ActorHeapRegionPoolSmall` use 1 KiB pages; size classes above 960 B take the
+large path.
+
+**Why the page size alone was not enough.** In a shared pool an actor's RSS is
+about `min(slot size, OS page)`, because every slot's first page is touched. Small
+pages only save memory when slots are small enough to share OS pages, so tiny
+actors need a **tight reservation** (no slack pages) as well. The pool now sizes
+slots in the heap's page profile, and on release it only `MADV_DONTNEED`s OS pages
+that lie entirely inside the slot.
+
+Measured RSS per node (aarch64 Linux, `actor_slab_heap_bench`, 16-byte nodes):
+
+| Actors × nodes | malloc + 64-bit ptrs | 4 KiB, 3 slack pages | 1 KiB, tight (0 slack) |
+| --- | --- | --- | --- |
+| 10,000 × 100 | 40.6 B | 48.8 B | **28.4 B (−30% vs malloc)** |
+| 100,000 × 10 | 44.2 B | 449 B | 142 B |
+
+Guidance: use the 4 KiB profile for actors that grow (its headers are 1.6% of a
+page against 6.3% for 1 KiB). Use the small profile with a tight reservation for
+fleets of small actors. At about 10 objects per actor the remaining floor (about
+1.4 KB) is host bookkeeping: the heap object, the page-kind table and the minimum
+1 KiB page. Shrinking that, for example by embedding the page-kind table in the
+first page, is the next step.
