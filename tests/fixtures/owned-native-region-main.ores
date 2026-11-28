@@ -2,6 +2,6 @@
 pub fnc main(): int {
   const a: owned int = 6;
   val b: owned int = a * 7;
-  const c: int = b;
+  let int c = b;
   return c;
 }
