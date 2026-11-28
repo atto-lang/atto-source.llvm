@@ -1,0 +1,3 @@
+// expect: TYPE_DENOTE_RHS_UNSUPPORTED
+denote type Count = int with min 1;
+pub fnc main(): int { return 42; }

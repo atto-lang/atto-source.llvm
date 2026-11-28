@@ -59,7 +59,6 @@ case "$aot_admission" in
 esac
 output_dir="$(cd "$(dirname "$2")" && pwd -P)"
 output_file="$output_dir/$(basename "$2")"
-[[ ! -L "$output_file" && ( ! -e "$output_file" || -f "$output_file" ) ]] || { echo 'E_ARTIFACT_PUBLICATION: output must be absent or a regular non-symlink file.' >&2; exit 64; }
 [[ "$source_file" != "$output_file" ]] || { echo 'Source and executable paths must differ.' >&2; exit 64; }
 [[ -x "$compiler" ]] || { echo 'Build oreslang-llvmc first or set ORESLANG_LLVMC.' >&2; exit 69; }
 auditor="${ORES_NO_GC_IR_AUDIT:-$root/build/oreslang-no-gc-ir-audit}"
@@ -72,6 +71,9 @@ if [[ "$output_file" -ef "$source_file" || "$output_file" -ef "$compiler" ||
   echo 'Output must not alias the source, Oreslang compiler, Clang or no-GC IR auditor.' >&2
   exit 64
 fi
+# Preserve the stricter identity diagnostic for toolchain aliases, while
+# still denying every other symlink and non-regular output before any build.
+[[ ! -L "$output_file" && ( ! -e "$output_file" || -f "$output_file" ) ]] || { echo 'E_ARTIFACT_PUBLICATION: output must be absent or a regular non-symlink file.' >&2; exit 64; }
 # Build beside the output so publication is atomic and errors preserve old output.
 work="$(mktemp -d "$output_dir/.ores-aot.XXXXXX")"
 trap 'rm -rf -- "$work"' EXIT

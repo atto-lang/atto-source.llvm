@@ -1,0 +1,4 @@
+// expect: CONSTRAINT_VALIDATION_BRIDGE_REQUIRED
+type Limited = int with min 1;
+denote type Wrapped = Limited;
+pub fnc main(): int { val Wrapped a = 0; return 42; }

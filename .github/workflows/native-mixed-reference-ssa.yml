@@ -1,0 +1,61 @@
+name: Native mixed scalar reference SSA exact head
+on:
+  pull_request:
+    paths: [src/native_readonly.rs, src/main.rs, .github/workflows/native-mixed-reference-ssa.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify source and execute compiler
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$(git write-tree)" = "$(git rev-parse HEAD^{tree})"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          git rev-parse HEAD HEAD^{tree}
+          rustup toolchain install 1.85.1 --profile minimal
+          cargo +1.85.1 test --offline --bin atto-llvm
+          cargo +1.85.1 build --offline --release --bin atto-llvm
+      - name: Compile and link mixed reference scalar guests
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          cat > "$work/mixed.atto" <<'EOF'
+          // atto-ownership: borrow-default-v1
+          define class Parcel as pub let int padding = 99; pub let int value = 20; end
+          fnc sum(Parcel a, int n, Parcel b): int { val int left = a.value + n; val int right = b.value; return left + right; }
+          fnc forward(Parcel p, int n): int { val int result = sum(p, n, p); return result; }
+          pub fnc main(): int { let p = new Parcel(); val int n = 2; return forward(p, n); }
+          EOF
+          target/release/atto-llvm "$work/mixed.atto" -o "$work/mixed.ll" --emit-llvm
+          grep -F 'define internal i64 @atto_ro_f0(ptr %arg0, i64 %arg1, ptr %arg2)' "$work/mixed.ll"
+          grep -F 'call i64 @atto_ro_f0(ptr %arg0, i64 %arg1, ptr %arg0)' "$work/mixed.ll"
+          test "$(grep -c 'alloca ' "$work/mixed.ll")" = 1
+          if grep -E 'alloca ptr|store ptr|load ptr|noalias' "$work/mixed.ll"; then exit 1; fi
+          for opt in 0 2; do
+            clang -x ir -O"$opt" "$work/mixed.ll" -o "$work/guest"
+            status=0
+            "$work/guest" || status=$?
+            test "$status" = 42
+            echo "MIXED_NATIVE_PASS O$opt exit=$status"
+          done
+          sed 's/val int left/let int left/;s/val int right/left = 1; val int right/' "$work/mixed.atto" > "$work/reject.atto"
+          if target/release/atto-llvm "$work/reject.atto" -o "$work/reject.ll" --emit-llvm; then exit 1; fi
+          test ! -e "$work/reject.ll"
+          sed 's/int value = 20/int value = 9223372036854775807/' "$work/mixed.atto" > "$work/overflow.atto"
+          target/release/atto-llvm "$work/overflow.atto" -o "$work/overflow.ll" --emit-llvm
+          clang -x ir -O2 "$work/overflow.ll" -o "$work/overflow"
+          status=0
+          (ulimit -c 0; "$work/overflow") || status=$?
+          test "$status" = 132

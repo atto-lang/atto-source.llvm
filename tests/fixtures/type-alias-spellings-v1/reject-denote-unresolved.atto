@@ -1,0 +1,3 @@
+// expect: TYPE_ALIAS_UNKNOWN_TARGET
+denote type A = Missing;
+pub fnc main(): int { return 42; }
