@@ -169,7 +169,8 @@ static void reject_with_diagnostic(std::string_view source,
 }
 
 int main(int argc, char** argv) {
-    if (argc != 2) throw std::runtime_error("expected canonical .atto fixture directory");
+    const bool arrow_only = argc == 3 && std::string_view(argv[2]) == "--binding-arrow-only";
+    if (argc != 2 && !arrow_only) throw std::runtime_error("expected canonical .atto fixture directory");
     const std::string root(argv[1]);
     // Real native parser + type/ownership admission. No object emission
     // or executable guest claim is made by this unit test.
@@ -204,6 +205,8 @@ int main(int argc, char** argv) {
         if (!rejected)
             throw std::runtime_error(std::string("unexpected arrow admission: ") + body);
     }
+
+    if (arrow_only) return 0;
 
     // Compiler-created ASTs must independently validate absolute-value
     // operand types, not rely solely on parser or codegen checks.
