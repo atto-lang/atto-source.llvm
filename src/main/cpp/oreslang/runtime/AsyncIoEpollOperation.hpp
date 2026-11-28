@@ -8,6 +8,7 @@
 #include "oreslang/runtime/NonblockingTcpLinux.hpp"
 
 #include <cstdint>
+#include <mutex>
 #include <stdexcept>
 
 namespace oreslang::runtime {
@@ -16,6 +17,8 @@ namespace oreslang::runtime {
 //
 // The reactor thread may block inside EpollReadiness::wait(). Actor/carrier
 // threads only arm, cancel, or consume completion state; they never call wait().
+// Serialize the operation's kernel registration transitions, not guest execution.
+// The owning reactor must retain the fd and this object until all callers exit.
 class AsyncIoEpollOperation final {
 public:
     AsyncIoEpollOperation(
@@ -32,7 +35,11 @@ public:
           events_(events),
           registration_token_(registration_token) {
         EpollReadiness::validate_registration(fd_, events_, registration_token_);
-        if (ticket_.actor_id == 0 || ticket_.generation == 0 || ticket_.operation_id == 0)
+        const auto& expected = lifecycle_.ticket();
+        if (ticket_.actor_id == 0 || ticket_.generation == 0 || ticket_.operation_id == 0
+                || ticket_.actor_id != expected.actor_id
+                || ticket_.generation != expected.generation
+                || ticket_.operation_id != expected.operation_id)
             throw std::invalid_argument("invalid async I/O ticket");
     }
 
@@ -42,6 +49,7 @@ public:
     AsyncIoEpollOperation& operator=(const AsyncIoEpollOperation&) = delete;
 
     void arm() {
+        std::lock_guard<std::mutex> lock(mutex_);
         if (armed_) throw std::logic_error("async I/O operation already armed");
         if (!lifecycle_.mark_registered(ticket_))
             throw std::logic_error("async I/O lifecycle rejected registration");
@@ -58,6 +66,7 @@ public:
     // Returns true only for this operation's one-shot readiness notification
     // and only while terminal arbitration is still pending.
     bool claim_ready(const EpollReadiness::Ready& ready) noexcept {
+        std::lock_guard<std::mutex> lock(mutex_);
         if (!armed_ || ready.token != registration_token_) return false;
         const std::uint32_t terminal_events =
             static_cast<std::uint32_t>(EPOLLERR | EPOLLHUP | EPOLLRDHUP);
@@ -68,15 +77,18 @@ public:
     // Called after a readiness callback consumed no bytes because the fd raced
     // back to EAGAIN/EWOULDBLOCK. The callback must retire before rearming.
     bool rearm_after_would_block() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        // The physical callback still owns its credit even if cancellation
+        // already removed the registration. Release it before checking rearm.
+        if (!lifecycle_.end_callback(ticket_)) return false;
         if (!armed_ || lifecycle_.terminal() != AsyncIoTerminal::pending)
             return false;
-        if (!lifecycle_.end_callback(ticket_)) return false;
         try {
             readiness_.rearm(fd_, events_, registration_token_);
             return true;
         } catch (...) {
             (void) lifecycle_.finish(ticket_, AsyncIoTerminal::failure);
-            disarm();
+            disarm_locked();
             throw;
         }
     }
@@ -84,7 +96,9 @@ public:
     // Terminal callback completion. If cancellation/timeout already won, this
     // returns false but still retires callback ownership.
     bool finish_callback(AsyncIoTerminal outcome) noexcept {
-        if (outcome == AsyncIoTerminal::pending) return false;
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!valid_async_io_terminal(outcome) || !lifecycle_.callback_inflight())
+            return false;
         const bool won = lifecycle_.finish(ticket_, outcome);
         const bool ended = lifecycle_.end_callback(ticket_);
         return won && ended;
@@ -93,32 +107,44 @@ public:
     // Cancellation settles the Future first, removes kernel readiness, then
     // leaves physical callback retirement (if any) to the callback owner.
     bool cancel() noexcept {
+        std::lock_guard<std::mutex> lock(mutex_);
         const bool won = lifecycle_.cancel(ticket_);
-        disarm();
+        disarm_locked();
         return won;
     }
 
     bool timeout() noexcept {
+        std::lock_guard<std::mutex> lock(mutex_);
         const bool won = lifecycle_.timeout(ticket_);
-        disarm();
+        disarm_locked();
         return won;
     }
 
     void disarm() noexcept {
+        std::lock_guard<std::mutex> lock(mutex_);
+        disarm_locked();
+    }
+
+    bool retire() noexcept {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return lifecycle_.retire(ticket_);
+    }
+
+    bool armed() const noexcept {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return armed_;
+    }
+    std::uint64_t registration_token() const noexcept { return registration_token_; }
+
+private:
+    void disarm_locked() noexcept {
         if (!armed_) return;
         readiness_.remove(fd_);
         (void) lifecycle_.mark_unregistered(ticket_);
         armed_ = false;
     }
 
-    bool retire() noexcept {
-        return lifecycle_.retire(ticket_);
-    }
-
-    bool armed() const noexcept { return armed_; }
-    std::uint64_t registration_token() const noexcept { return registration_token_; }
-
-private:
+    mutable std::mutex mutex_;
     EpollReadiness& readiness_;
     AsyncIoOperationLifecycle& lifecycle_;
     AsyncIoTicket ticket_;
