@@ -2448,6 +2448,10 @@ if(BUILD_TESTING)
         COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_type_alias_spellings.sh"
             "$<TARGET_FILE:oreslang-llvmc>" "${ORE_SOURCE_I64_CLANG}")
     set_tests_properties(native_type_alias_spellings PROPERTIES TIMEOUT 120)
+    add_test(NAME native_named_aggregate_types
+        COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/native_named_aggregate_types.sh"
+            "$<TARGET_FILE:oreslang-llvmc>" "${ORE_SOURCE_I64_CLANG}")
+    set_tests_properties(native_named_aggregate_types PROPERTIES TIMEOUT 120)
     # Java lexer parity: contextual words (borrow, critical, enum, gen, pure,
     # requires, serial, structural, suspend, using) are ordinary identifiers.
     add_test(NAME native_contextual_keyword_identifiers
