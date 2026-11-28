@@ -1,0 +1,18 @@
+define class Bag as
+  pub val Array<int> values;
+end
+fnc make_bag(int n) -> Bag {
+  val Array<int> a = new Array<int>();
+  a.add(n);
+  return new Bag(rt take a);
+}
+fnc forward_bag(int n) -> Bag {
+  return make_bag(n);
+}
+pub fnc main(): int {
+  let mut Bag first = rt take forward_bag(42);
+  if first.values.get(0) eq 42; do return 42; fi
+  let mut Bag second = rt take forward_bag(7);
+  if second.values.get(0) neq 7; do return 2; fi
+  return 42;
+}
