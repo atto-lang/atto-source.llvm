@@ -358,5 +358,35 @@ int main(int argc, char** argv) {
         if (program.functions.empty() || !program.functions[0].result)
             throw std::runtime_error("compiler ownership admission missing");
     }
+    // Production native parser/checker admission, not a native execution receipt.
+    for (const auto body : {"let a <- 42; return a;",
+                             "let int a <- 42; return a;",
+                             "let int a = 0; set a <- 42; return a;",
+                             "let int a = 0; set a = 42; return a;"}) {
+        const auto program = oreslang::parse_program(
+            std::string("pub fnc main(): int { ") + body + " }");
+        if (program.functions.empty() || !program.functions[0].result)
+            throw std::runtime_error("native scalar transfer admission missing");
+    }
+    for (const auto body : {"const a <- 42; return a;",
+                             "val a <- 42; return a;",
+                             "int a <- 42; return a;",
+                             "let a = 0; a <- 42; return a;",
+                             "let a = 0; set! a <- 42; return a;",
+                             "set missing <- 42; return 0;",
+                             "const a = 0; set a <- 42; return a;",
+                             "let a = 0; set a <- true; return a;",
+                             "let a < - 42; return a;",
+                             "let a • 42; return a;",
+                             "let b = 42; let a <- b; return a;",
+                             "let a <- 21 + 21; return a;"}) {
+        bool rejected = false;
+        try {
+            (void)oreslang::parse_program(
+                std::string("pub fnc main(): int { ") + body + " }");
+        } catch (const std::exception&) { rejected = true; }
+        if (!rejected)
+            throw std::runtime_error(std::string("native arrow unexpectedly admitted: ") + body);
+    }
     return 0;
 }

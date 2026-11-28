@@ -4547,7 +4547,15 @@ private:
                 }
                 if (!type_right_const) binding.name = identifier();
                 if (token_.text == ";") fail("E_MISSING_INITIALIZER: explicit initializer required");
-                require("=");
+                const bool transfer = accept_binding_arrow();
+                if (transfer && (mode != "let" ||
+                        (binding.scalar_type != ScalarType::I64 && binding.scalar_type != ScalarType::Bool)))
+                    fail("E_OWNERSHIP: transfer arrow requires explicit scalar let");
+                if (!transfer) require("=");
+                if (transfer) {
+                    binding.initializer = expression();
+                    require_literal_transfer(*binding.initializer);
+                } else {
                 // Lower a terminal unary `pending |> std.await` through
                 // the *same* checked Future/Task await slot and ownership
                 // obligations as `await pending`. No implicit flattening,
@@ -4634,6 +4642,7 @@ private:
                                 binding.scalar_type != ScalarType::Bool)
                             fail("E_NON_CONST_INITIALIZER: runtime non-scalar constant requires verified lowering");
                     }
+                }
                 }
             } else if ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
                     (sum_first.text == "Option" || sum_first.text == "Result")) {
@@ -4836,6 +4845,13 @@ private:
                 binding.owner_mutable = binding.owner_mutable || binding.assignable;
                 advance();
                 binding.name = identifier();
+                if (accept_binding_arrow()) {
+                    if (!binding.assignable)
+                        fail("E_OWNERSHIP: transfer arrow requires explicit let");
+                    binding.inferred_scalar = true;
+                    binding.initializer = expression();
+                    require_literal_transfer(*binding.initializer);
+                } else {
                 // Distinguish actor capabilities from scalar data before IR.
                 // Unsupported generic futures never become fake blocking calls.
                 if (token_.text != ":" && token_.text != "=") require(":");
@@ -4955,6 +4971,7 @@ private:
                 // no default-to-i64 or conversion on a failed inference.
                 binding.inferred_scalar = !explicit_type;
                 binding.initializer = expression();
+                }
             }
             require(";");
             if (!binding.class_name.empty()) class_receivers_.insert(binding.name);
@@ -6170,6 +6187,21 @@ private:
                 value.actor_stops.push_back(reference);
                 value.actor_actions.push_back({ActorAction::Kind::Stop,
                                                value.actor_stops.size() - 1});
+                continue;
+            }
+            // The existing ScalarWrite checker still validates the local
+            // target, mutability and type. Only source-less scalar literals
+            // are admitted until a typed transfer operation is available.
+            if (token_.text == "set" && peek_next().kind == Kind::Identifier) {
+                advance();
+                statement.receiver = identifier();
+                const bool transfer = accept_binding_arrow();
+                if (!transfer) require("=");
+                statement.kind = Statement::Kind::ScalarWrite;
+                statement.expression = expression();
+                if (transfer) require_literal_transfer(*statement.expression);
+                require(";");
+                value.statements.push_back(std::move(statement));
                 continue;
             }
             auto action = primary();
@@ -8139,6 +8171,27 @@ private:
         if (token_.text != "private") return false;
         Lexer lookahead = lexer_;
         return lookahead.next().text == "abstract";
+    }
+
+    // Contextual ownership marker: leave expression comparisons and unary
+    // minus lexing intact. A comment or whitespace cannot synthesize '<-'.
+    bool binding_arrow_here() const {
+        if (token_.kind != Kind::Symbol || token_.text != "<") return false;
+        const auto next = peek_next();
+        return next.kind == Kind::Symbol && next.text == "-" &&
+               next.offset == token_.offset + 1;
+    }
+
+    bool accept_binding_arrow() {
+        if (!binding_arrow_here()) return false;
+        advance();
+        advance();
+        return true;
+    }
+
+    void require_literal_transfer(const Expression& expr) {
+        if (expr.kind != Expression::Kind::Integer && expr.kind != Expression::Kind::Boolean)
+            fail("E_OWNERSHIP: binding transfer currently requires an intrinsic int/bool literal");
     }
 
     bool accept(std::string_view text) {
