@@ -7,7 +7,7 @@ use atto_compiler::{compile, lexer::lex, parser::Parser};
 fn inline_class_mtd_is_executable_not_an_external_receiver_declaration() {
     let source = r#"
         define class Calculator as
-            mtd answer(): int { return 42; }
+            pub mtd answer(): int { return 42; }
         end
         pub fnc main(): int {
             val calc = new Calculator();
@@ -52,9 +52,9 @@ fn static_mtd_does_not_bypass_static_fnc_syntax_gate() {
 fn names_mtd_and_method_do_not_trigger_external_receiver_mode() {
     let source = r#"
         define class Names as
-            mtd(): int { return 10; }
-            method(): int { return 20; }
-            mtd named(): int { return 12; }
+            pub mtd(): int { return 10; }
+            pub method(): int { return 20; }
+            pub mtd named(): int { return 12; }
         end
         pub fnc mtd(): int { return 42; }
         pub fnc main(): int {
@@ -74,7 +74,7 @@ fn names_mtd_and_method_do_not_trigger_external_receiver_mode() {
 fn end_delimited_function_call_named_mtd_uses_executable_parser() {
     let source = r#"
         pub fnc mtd(): int { return 42; }
-        pub fnc main() -> int ::
+        pub fnc int • main() begin
             return mtd();
         end
     "#;
@@ -83,11 +83,11 @@ fn end_delimited_function_call_named_mtd_uses_executable_parser() {
 }
 
 #[test]
-fn top_level_receiver_form_remains_syntax_only() {
+fn undeclared_top_level_receiver_owner_fails_closed() {
     let source = "mtd (self: Calculator) answer(): int { return 42; }";
-    let error = compile(source).expect_err("receiver-form methods need separate target lowering");
+    let error = compile(source).expect_err("receiver owner must be declared");
     assert!(
-        matches!(error.code, "E_UNSUPPORTED" | "E_SYNTAX" | "E_UNSUPPORTED_TYPE"),
+        error.code == "E_UNBOUND" && error.message.contains("receiver owner"),
         "receiver-form source must fail without an executable guest: {error}"
     );
 }
@@ -97,9 +97,17 @@ fn obsolete_method_introducer_is_rejected_without_guest() {
     for kind in ["class", "actor"] {
         for name in ["answer", "method", "mtd"] {
             let source = format!("define {kind} C as method {name}(): int {{ return 42; }} end pub fnc main(): int {{ return 0; }}");
-            let error = compile(&source).expect_err("obsolete method marker must reject");
+            let error = Parser::new(lex(&source).unwrap()).parse_program().expect_err("obsolete marker must reject in parser");
             assert_eq!(error.code, "E_SYNTAX");
             assert!(error.to_string().contains("obsolete method introducer"), "{error}");
+            assert!(compile(&source).is_err(), "production compilation emitted an obsolete method guest");
         }
     }
+}
+
+#[test]
+fn private_inline_method_does_not_gain_external_visibility() {
+    let source = "define class Calculator as mtd answer(): int { return 42; } end pub fnc main(): int { val c = new Calculator(); return c.answer(); }";
+    let e = compile(source).expect_err("private member must not be callable externally");
+    assert_eq!(e.code, "E_PRIVATE");
 }
