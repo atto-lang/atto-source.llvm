@@ -1370,3 +1370,32 @@ mod native_readonly_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod native_mixed_scalar_ssa_tests {
+    use super::*;
+    const MIXED: &str = "// atto-ownership: borrow-default-v1\ndefine class Parcel as pub let int padding = 99; pub let int value = 20; end\nfnc sum(Parcel a, int n, Parcel b): int { val int left = a.value + n; val int right = b.value; return left + right; }\nfnc forward(Parcel p, int n): int { val int result = sum(p, n, p); return result; }\npub fnc main(): int { let p = new Parcel(); val int n = 2; return forward(p, n); }";
+
+    #[test]
+    fn readonly_mixed_parameters_and_locals_are_direct_ssa() {
+        let ir = compile_ir(MIXED).expect("mixed reference scalar profile");
+        assert!(ir.contains("define internal i64 @atto_ro_f0(ptr %arg0, i64 %arg1, ptr %arg2)"));
+        assert!(ir.contains("call i64 @atto_ro_f0(ptr %arg0, i64 %arg1, ptr %arg0)"));
+        assert_eq!(ir.matches("alloca ").count(), 1);
+        assert!(!ir.contains("alloca ptr") && !ir.contains("store ptr") && !ir.contains("load ptr"));
+        assert!(!ir.contains("noalias"));
+    }
+
+    #[test]
+    fn readonly_mixed_parameters_deny_rebinding_and_unproved_shapes() {
+        for bad in [
+            MIXED.replace("val int left", "let int left").replace("val int right", "left = 1; val int right"),
+            MIXED.replace("val int result = sum(p, n, p);", "let q = p; val int result = sum(q, n, p);"),
+            MIXED.replace("sum(p, n, p)", "sum(p, n, new Parcel())"),
+            MIXED.replace("Parcel a, int n", "Parcel a, int mut n"),
+            MIXED.replace("val int left = a.value + n;", "stdio.print(1); val int left = a.value + n;"),
+        ] {
+            assert!(compile_ir(&bad).is_err(), "{bad}");
+        }
+    }
+}
