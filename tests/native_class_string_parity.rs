@@ -596,6 +596,14 @@ fn main() {
             "abc|'abc'|\"abc\"|'\"abc\"'",
         ),
         (
+            "quoted-prefix-and-lambda-tokens-are-data",
+            r#"pub fnc main():int{
+                stdio.print("|");stdio.print("||");stdio.print("trap");
+                stdio.print("!");stdio.print("new");stdio.print("match");
+                stdio.print(`|`);return 0;}"#,
+            "|||trap!newmatch|",
+        ),
+        (
             "template-two-parameter-interpolation",
             r#"fnc render(string bar,string star):string{return `${bar} is ${star}`;}
               pub fnc main():int{stdio.println(render("Mars","bright"));return 0;}"#,
