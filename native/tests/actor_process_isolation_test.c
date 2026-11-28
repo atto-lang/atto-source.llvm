@@ -34,6 +34,17 @@ static atto_actor_exit_notice run(const char *exe, const char *mode, int timeout
     return n;
 }
 
+/* Darwin can report a protection fault as SIGBUS (EXC_BAD_ACCESS).
+ * Keep Linux strict and separately test explicitly raised signal identities. */
+static int is_protected_page_fault(atto_actor_exit_notice n) {
+    if (n.kind != ATTO_ACTOR_EXIT_SIGNAL) return 0;
+#if defined(__APPLE__)
+    return n.signal_number == SIGSEGV || n.signal_number == SIGBUS;
+#else
+    return n.signal_number == SIGSEGV;
+#endif
+}
+
 typedef struct sibling_test {
     const char *executable;
     atto_actor_exit_notice result;
@@ -107,20 +118,20 @@ int main(int argc, char **argv) {
     assert(argc >= 1 && argv[0][0] == '/');
     const char *exe = argv[0];
     atto_actor_exit_notice n = run(exe, "pagefault", 5000);
-    if (n.kind != ATTO_ACTOR_EXIT_SIGNAL || n.signal_number != SIGSEGV) {
+    if (!is_protected_page_fault(n)) {
         fprintf(stderr, "protected-page worker: kind=%d exit=%d signal=%d os_error=%d (%s)\n",
                 (int)n.kind, n.exit_code, n.signal_number, n.os_error,
                 strerror(n.os_error));
     }
-    assert(n.kind == ATTO_ACTOR_EXIT_SIGNAL && n.signal_number == SIGSEGV);
+    assert(is_protected_page_fault(n));
     /* The process supervising this worker is still alive and can launch
-     * another actor after a fatal child SIGSEGV. */
+     * another actor after a fatal child protection fault. */
     sibling_test sibling = { .executable = exe };
     pthread_t sibling_thread;
     assert(pthread_create(&sibling_thread, NULL, run_healthy_sibling, &sibling) == 0);
     /* The healthy sibling remains alive while an independent actor crashes. */
     n = run(exe, "pagefault", 5000);
-    assert(n.kind == ATTO_ACTOR_EXIT_SIGNAL && n.signal_number == SIGSEGV);
+    assert(is_protected_page_fault(n));
     assert(pthread_join(sibling_thread, NULL) == 0);
     assert(sibling.result.kind == ATTO_ACTOR_EXIT_CLEAN);
     n = run(exe, "segv", 5000);
