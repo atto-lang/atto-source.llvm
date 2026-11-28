@@ -1,11 +1,11 @@
 // Loan acquisition follows source order, not the parameter slot order.
-define class Box as
+define class CallOrderOwner as
   pub let int value = 7;
 end
-fnc inspect(int value, borrow mut Box owner): int {
+fnc inspect(int value, borrow mut CallOrderOwner owner): int {
   return value;
 }
 pub fnc main(): int {
-  let mut Box b = new Box();
+  let mut CallOrderOwner b = new CallOrderOwner();
   return inspect(owner: rt mut borrow b, value: b.value);
 }

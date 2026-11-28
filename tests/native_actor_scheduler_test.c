@@ -17,10 +17,17 @@ typedef struct {
     atomic_uint_fast64_t allocation_domain[ACTORS];
     atomic_uint_fast64_t allocation_generation[ACTORS];
     atomic_int hold;
+    atomic_int require_worker_dispatch;
+    pthread_t submitter_thread;
     OresNativeActorScheduler* scheduler;
 } State;
 static void run(void* raw, size_t actor, uint64_t msg) {
     State* s = (State*)raw;
+    /* An I/O completion or submitting host thread only publishes readiness.
+     * Actor guest work must execute under a scheduler carrier claim. */
+    if (atomic_load(&s->require_worker_dispatch)
+            && pthread_equal(pthread_self(), s->submitter_thread))
+        atomic_fetch_add(&s->errors, 1);
     OresNativeExecutionContext execution = {0};
     if (!s->scheduler
             || !ores_native_actor_scheduler_current_execution_context(
@@ -80,8 +87,78 @@ static void run_far_slot(void* raw, size_t actor, uint64_t message) {
     if (actor != 4096u || message != 7u) abort();
     atomic_fetch_add_explicit((atomic_int*)raw, 1, memory_order_relaxed);
 }
+/* One carrier, 64 continuously backlogged actors: the actual native ready
+ * queue must bound warm-actor preference and preserve per-actor FIFO. This
+ * tests dispatch between completed turns, not preemption within a callback. */
+enum { FAIR_ACTORS = 64, FAIR_MESSAGES = 8 };
+typedef struct {
+    atomic_int entered, release;
+    size_t count;
+    size_t next[FAIR_ACTORS];
+    size_t first[FAIR_ACTORS];
+    size_t previous, consecutive, longest;
+} Fairness;
+
+static void fair_run(void* raw, size_t actor, uint64_t message) {
+    Fairness* f = raw;
+    check(actor < FAIR_ACTORS && message == f->next[actor]++);
+    if (f->count == 0) {
+        check(actor == 0 && message == 0);
+        atomic_store_explicit(&f->entered, 1, memory_order_release);
+        struct timespec pause = {0, 1000000};
+        for (unsigned attempt = 0; attempt < 5000 &&
+                !atomic_load_explicit(&f->release, memory_order_acquire); ++attempt)
+            nanosleep(&pause, NULL);
+        check(atomic_load_explicit(&f->release, memory_order_acquire));
+    }
+    if (message == 0) f->first[actor] = f->count;
+    f->consecutive = f->count && f->previous == actor ? f->consecutive + 1 : 1;
+    if (f->consecutive > f->longest) f->longest = f->consecutive;
+    f->previous = actor;
+    ++f->count;
+}
+
+static void test_single_carrier_fairness(void) {
+    Fairness f = {0};
+    OresNativeActorScheduler* s = ores_native_actor_scheduler_open(
+        FAIR_ACTORS, FAIR_MESSAGES, 1, fair_run, &f);
+    check(s != NULL);
+    check(ores_native_actor_scheduler_prestart_carriers(s));
+    OresNativeActorRef refs[FAIR_ACTORS];
+    for (size_t i = 0; i < FAIR_ACTORS; ++i) {
+        refs[i] = ores_native_actor_scheduler_spawn(s, i);
+        check(refs[i].scheduler_domain != 0);
+    }
+    check(ores_native_actor_scheduler_send(s, refs[0], 0));
+    struct timespec pause = {0, 1000000};
+    for (unsigned attempt = 0; attempt < 5000 &&
+            !atomic_load_explicit(&f.entered, memory_order_acquire); ++attempt)
+        nanosleep(&pause, NULL);
+    check(atomic_load_explicit(&f.entered, memory_order_acquire));
+    for (size_t i = 0; i < FAIR_ACTORS; ++i)
+        for (uint64_t msg = i == 0 ? 1 : 0; msg < FAIR_MESSAGES; ++msg)
+            check(ores_native_actor_scheduler_send(s, refs[i], msg));
+    atomic_store_explicit(&f.release, 1, memory_order_release);
+    check(ores_native_actor_scheduler_drain(s));
+    check(f.count == FAIR_ACTORS * FAIR_MESSAGES);
+    check(f.longest <= 2);
+    for (size_t i = 0; i < FAIR_ACTORS; ++i) {
+        check(f.next[i] == FAIR_MESSAGES);
+        check(f.first[i] < 2 * FAIR_ACTORS);
+        check(ores_native_actor_scheduler_stop(s, refs[i]));
+    }
+    check(ores_native_actor_scheduler_started_carriers(s) == 1);
+    ores_native_actor_scheduler_retire(s);
+    check(ores_native_actor_scheduler_try_destroy(s));
+    printf("NATIVE_SINGLE_CARRIER_FAIRNESS_PASS actors=%d turns=%zu max_consecutive=%zu\n",
+           FAIR_ACTORS, f.count, f.longest);
+}
+
 int main(void) {
+    test_single_carrier_fairness();
     State s = {0};
+    s.submitter_thread = pthread_self();
+    atomic_store(&s.require_worker_dispatch, 1);
     OresNativeActorScheduler* scheduler =
         ores_native_actor_scheduler_open(ACTORS, EACH, 8, run, &s);
     check(scheduler != NULL);

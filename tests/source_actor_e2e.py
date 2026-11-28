@@ -35,6 +35,8 @@ def expected_prefix_last(name, actor_index, processed):
         for n in range(start, start + processed):
             value = 2 * (value + n)
         return value
+    if name == "source-actor-heap-turnover.ores":
+        return sum(([7, 3], [100, 2], [5])[actor_index][:processed])
     if name == "source-actor-interleaved-stop.ores":
         sequences = ([1], [3, 4])
         return sum(sequences[actor_index][:processed])
@@ -104,6 +106,7 @@ def main():
     ap.add_argument("--clang", required=True)
     ap.add_argument("--root", required=True)
     ap.add_argument("--sanitize", action="store_true")
+    ap.add_argument("--positive-case", help="One positive guest only; not a full-suite receipt")
     args = ap.parse_args()
     root = pathlib.Path(args.root)
     fixtures = root / "tests" / "fixtures"
@@ -131,10 +134,15 @@ def main():
         ("source-actor-two-owned-heaps.ores", 2, 4, None),
         ("actor-logical-frame-aot-two-actors.atto", 2, 1, None),
         ("source-actor-interleaved-stop.ores", 2, None, None),
+        ("source-actor-heap-turnover.ores", 3, None, None),
         ("source-actor-send-moved-value.ores", 1, 2, 3),
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
     ]
     negatives = {
+        "source-actor-late-spawn-before-send-reject.atto": "actor message sent before spawn",
+        "source-actor-late-spawn-missing-stop-reject.atto": "actor reference must be stopped",
+        "source-actor-late-spawn-duplicate-reject.atto": "duplicate actor reference",
+        "source-actor-late-spawn-await-reject.atto": "late actor spawn requires straight-line synchronous root actor bootstrap",
         "source-actor-pipe-unlowered-reject.ores":
             "NATIVE_ACTOR_PIPE_UNSUPPORTED: typed actor pipe requires guest port, mailbox and supervisor lowering",
         "source-actor-transform-pipe-unlowered-reject.ores":
@@ -206,6 +214,12 @@ def main():
         "source-actor-final-group-field-reject.ores": "native final actor fields require typed field initialization and ownership lowering",
         "source-actor-suspend-method-reject.ores": "native suspends actor method requires continuation lowering",
     }
+    if args.positive_case:
+        positives = [case for case in positives if case[0] == args.positive_case]
+        if len(positives) != 1:
+            ap.error("unknown positive guest case")
+        negatives = {}
+        print("SCOPED positive guest only:", args.positive_case, flush=True)
     for name, diagnostic in negatives.items():
         flags = ["--experimental-owned-int"] if (
             name.startswith("source-actor-scoped-owned-")
@@ -232,6 +246,9 @@ def main():
             guest = run([args.compiler, *flags, str(fixtures / name)])
             assert guest.returncode == 0, (name, guest.stderr)
             assert guest.stdout.startswith("; ModuleID"), name
+            assert "@llvm.gcroot" not in guest.stdout, name
+            assert "@llvm.experimental.gc.statepoint" not in guest.stdout, name
+            assert 'gc "' not in guest.stdout, name
             assert "call i64 @oreslang_source_actor_spawn_id(" in guest.stdout, name
             assert "oreslang_source_actor_stop_id" in guest.stdout, name
             # These are executable LLVM AOT call sites, not just external declarations.
@@ -272,6 +289,14 @@ def main():
                 assert "call i64 @oreslang_source_actor_await_done_id(" in guest.stdout, name
                 assert "done_continuation" in guest.stdout, name
                 assert "call void @oreslang_source_actor_request_stop_id(" in guest.stdout, name
+            if name == "source-actor-heap-turnover.ores":
+                spawns = [m.start() for m in re.finditer(
+                    r"call i64 @oreslang_source_actor_spawn_id\(", guest.stdout)]
+                stops = [m.start() for m in re.finditer(
+                    r"call void @oreslang_source_actor_stop_id\(", guest.stdout)]
+                assert len(spawns) == len(stops) == 3, (name, spawns, stops)
+                assert spawns[0] < spawns[1] < stops[0] < spawns[2] < stops[1] < stops[2], (
+                    name, "late spawn must follow physical stop, while sibling lives")
             if name == "source-actor-interleaved-stop.ores":
                 # IR call ordering must reflect lexical source ordering.
                 # Previous lowering grouped every send before every stop.
@@ -350,6 +375,7 @@ def main():
                 expected_accepted = (
                     [1, 2][i]
                     if name == "source-actor-interleaved-stop.ores"
+                    else [2, 2, 1][i] if name == "source-actor-heap-turnover.ores"
                     else [4, 2][i] if name == "source-actor-counter-four-mailbox.ores"
                     else count)
                 assert accepted == expected_accepted, (
@@ -360,13 +386,21 @@ def main():
                 assert observed_last == expected_prefix_last(
                     name, i, processed), (
                     name, i, processed, observed_last)
+            if name == "source-actor-heap-turnover.ores":
+                group = [line for line in executed.stderr.splitlines()
+                         if line.startswith("SOURCE_ACTOR_GROUP_VERIFIED ")]
+                assert len(group) == 1 and "active=0" in group[0] and "peak=2 " in group[0], (
+                    name, "two live actors maximum, all physically retired", group)
+                assert all(r["failed"] == 0 and r["successful"] == r["processed"]
+                           and r["failure_code"] == 0 for r in receipts), (name, receipts)
             if name == "source-actor-two-owned-heaps.ores":
                 assert [r["last"] for r in receipts] == [
                     expected_prefix_last(name, i, r["processed"])
                     for i, r in enumerate(receipts)
                 ], (name, receipts)
             print("PASS native source actor:", name, "actors", actors, flush=True)
-    print("PASS current-source actor lowering and physical heap reclamation")
+    print("PASS scoped positive guest" if args.positive_case else
+          "PASS current-source actor lowering and physical heap reclamation")
 
 if __name__ == "__main__":
     main()

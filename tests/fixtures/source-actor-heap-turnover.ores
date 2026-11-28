@@ -1,0 +1,23 @@
+// Executed AOT guest: retire A while B lives, then spawn C in the same pool.
+// A, B and C must use distinct actor heap state and deterministic reclamation.
+define actor Counter as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    total = total + n;
+    return total;
+  }
+}
+pub fnc main(): int {
+  const a = spawn Counter();
+  const b = spawn Counter();
+  a.send(7);
+  b.send(100);
+  a.send(3);
+  stop a;
+  b.send(2);
+  const c = spawn Counter();
+  c.send(5);
+  stop b;
+  stop c;
+  return 43;
+}

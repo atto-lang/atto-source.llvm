@@ -44,7 +44,8 @@ typedef struct {
 typedef enum {
     ORES_NATIVE_WAKE_INVALID = 0,
     ORES_NATIVE_WAKE_PUBLISHED = 1,
-    ORES_NATIVE_WAKE_PRODUCER_RETIRED = 2
+    ORES_NATIVE_WAKE_PRODUCER_RETIRED = 2,
+    ORES_NATIVE_WAKE_TARGET_RETIRED = 3
 } OresNativeWakePublishStatus;
 
 typedef enum {
@@ -186,6 +187,59 @@ int ores_native_actor_scheduler_wait_done(
  * The actor index is a scheduler-local slot, not a cross-tenant capability.
  */
 typedef void (*OresNativeActorTaskFn)(void* ctx, size_t actor_index, uint64_t payload);
+/* Authenticated, bounded DATA completion ownership for guest handlers that
+ * suspend after the native DATA callback returns. The immutable ticket names
+ * the exact admitted message and retired actor incarnation. Keeping a ticket
+ * retains its mailbox credit AND global outstanding accounting. It does NOT
+ * hold an OS carrier or grant a right to enter actor guest state.
+ *
+ * Only the currently executing DATA callback may retain its own envelope.
+ * A later authenticated actor callback may settle an already-deferred ticket,
+ * after the guest handler has physically exited (complete) or proven cleanup
+ * has physically retired its frame (abandon). Neither API is callable from
+ * timer/Future completion threads. No callback/heap allocation on the path.
+ *
+ * These are opt-in host integration primitives; compiler-created .ores async
+ * frames and a complete actor-local dispatcher are separate requirements.
+ */
+typedef struct {
+    OresNativeActorRef actor;
+    uint64_t slot;
+    uint64_t slot_generation;
+    uint64_t execution_id;
+} OresNativeRetainedDataTicket;
+int ores_native_actor_scheduler_retain_current_data(
+    OresNativeActorScheduler* scheduler, OresNativeRetainedDataTicket* out);
+int ores_native_actor_scheduler_complete_retained_data(
+    OresNativeActorScheduler* scheduler, OresNativeRetainedDataTicket ticket);
+int ores_native_actor_scheduler_abandon_retained_data(
+    OresNativeActorScheduler* scheduler, OresNativeRetainedDataTicket ticket);
+/* Optional bootstrap-only STOP cleanup for exactly one suspended logical
+ * handler per actor. Cleanup receives an authenticated actor lease and an
+ * exact retained DATA ticket, but is not a normal guest message. Return 1
+ * only AFTER the guest frame, borrows and continuations have physically
+ * unwound. Scheduler then acknowledges abandonment under that same lease.
+ * Return 0 to quarantine the actor without falsely reporting DONE.
+ *
+ * Installing this callback before any work lets retain_current_data reserve
+ * the eventual cleanup execution ID before suspension; STOP merely activates
+ * the preallocated credit, even when no other CONTROL/WAKE was admitted.
+ * No cleanup callback is ever invoked on a timer/producer thread.
+ */
+typedef int (*OresNativeActorRetainedCleanupFn)(
+    void* ctx, size_t actor_index, OresNativeRetainedDataTicket ticket);
+int ores_native_actor_scheduler_configure_retained_cleanup(
+    OresNativeActorScheduler* scheduler,
+    OresNativeActorRetainedCleanupFn callback);
+int ores_native_actor_scheduler_retained_cleanup_failed(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+
+/* Diagnostic only. Retained tokens block STOP/terminal/quiescence and may
+ * require a separate trusted cleanup turn. Never infer physical quiescence
+ * from STOP alone. */
+size_t ores_native_actor_scheduler_retained_data_count(
+    OresNativeActorScheduler* scheduler, OresNativeActorRef actor);
+
 typedef void (*OresNativeActorWakeFn)(
     void* ctx, size_t actor_index, OresNativeWakeTicket ticket,
     OresNativeWakeOutcome outcome);
@@ -261,10 +315,13 @@ int ores_native_actor_scheduler_bind_supervisor(
  * occupy the supervisor CONTROL slot or the USER mailbox.
  *
  * The mailbox-accounting lock must serialize TRANSFER with mailbox credit
- * handoff and cancellation. For same-scheduler targets, TRANSFER revalidates
- * the exact live target incarnation so STOP cannot become a false admission.
- * Wake mutation APIs fail closed when invoked on a scheduler created without
- * wake support. No guest/user callback runs in these functions.
+ * handoff and cancellation. Only live SAME-SCHEDULER target incarnations
+ * are admitted: a foreign-scheduler target requires a distinct verified
+ * cross-scheduler bridge protocol and is currently rejected at RESERVE.
+ * TRANSFER revalidates the exact local target incarnation so STOP cannot
+ * become a false admission; a stopped/stale target and retired ticket fail
+ * closed. Wake mutation APIs fail closed for schedulers without wake support.
+ * No guest/user callback runs in these functions.
  */
 int ores_native_actor_scheduler_reserve_wake(
     OresNativeActorScheduler* scheduler, OresNativeActorRef producer,
@@ -288,9 +345,16 @@ int ores_native_actor_scheduler_cancel_wake(
  * This is NOT late producer cancellation and must settle the send as failed. */
 int ores_native_actor_scheduler_abort_transferred_wake(
     OresNativeActorScheduler* scheduler, OresNativeWakeTicket ticket);
-/* After transfer, publication cannot fail due to capacity or allocation.
- * If STOP won first it consumes the reserved ticket as a terminal failure,
- * without scheduling user code or fabricating successful delivery. */
+/* After TRANSFER, PUBLISH is allocation-free and capacity-infallible.
+ * If the producer STOPs, return PRODUCER_RETIRED and release its loan: no
+ * guest callback runs. If the separate local target STOPs after TRANSFER,
+ * return TARGET_RETIRED and queue exactly one CANCELLED wake on the still-
+ * live producer's authenticated actor lane, allowing it to unwind retained
+ * frames and release loans. This producer wake increments internal accepted/
+ * completed execution accounting; it is NOT successful target delivery.
+ * A target STOP after PUBLISH is a later event, and a PUBLISHED return alone
+ * is never proof of remote/destination mailbox delivery. On all terminal
+ * outcomes the caller must settle the target send descriptor as failed. */
 OresNativeWakePublishStatus ores_native_actor_scheduler_publish_wake(
     OresNativeActorScheduler* scheduler, OresNativeWakeTicket ticket,
     OresNativeWakeOutcome outcome);
@@ -347,6 +411,9 @@ void ores_native_actor_scheduler_retire(OresNativeActorScheduler* scheduler);
 int ores_native_actor_scheduler_drain(OresNativeActorScheduler* scheduler);
 /* Whether this OS thread is currently executing a callback from scheduler.
  * Only intended for immediate deadlock prevention in VM teardown. */
+/* True inside a native actor scheduler callback on ANY scheduler. This is
+ * a physical-carrier guard, not an actor-identity permission check. */
+int ores_native_actor_scheduler_is_any_current_carrier(void);
 int ores_native_actor_scheduler_is_current_carrier(OresNativeActorScheduler* scheduler);
 /*
  * Trusted-host bounded, nonallocating commit. Both exact actor generations
