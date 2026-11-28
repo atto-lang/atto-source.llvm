@@ -1,0 +1,45 @@
+name: Experimental native functor fused scalar ownership ABI (host C only)
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/NativeFunctorFusedV0.h'
+      - 'tests/functor_fused_v0_test.c'
+      - '.github/workflows/functor-fused-v0-host.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-fused-host-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact source and test Git blobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          for x in src/main/cpp/oreslang/runtime/NativeFunctorFusedV0.h tests/functor_fused_v0_test.c; do
+            test "$(git hash-object "$x")" = "$(git rev-parse "HEAD:$x")"
+          done
+          test "$(git rev-parse HEAD:src/main/cpp/oreslang/runtime/NativeFunctorFusedV0.h)" = '2c29c6fe9b6c451926e655321e185f0f3c03f253'
+          test "$(git rev-parse HEAD:tests/functor_fused_v0_test.c)" = 'e5cd9383e86e87bcef090101b2b65a72b189849b'
+      - name: Native GCC O0 and O2 (not AttoLang guests)
+        shell: bash
+        run: |
+          set -euo pipefail
+          for opt in 0 2; do
+            gcc -std=c11 "-O$opt" -Wall -Wextra -Wpedantic -Werror -UNDEBUG               -I src/main/cpp/oreslang/runtime tests/functor_fused_v0_test.c               -o "$RUNNER_TEMP/functor-fused-O$opt"
+            "$RUNNER_TEMP/functor-fused-O$opt"
+          done
+      - name: Clang ASan and UBSan (not AttoLang guests)
+        shell: bash
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O1 -g -Wall -Wextra -Wpedantic -Werror -UNDEBUG             -fsanitize=address,undefined -fno-omit-frame-pointer             -I src/main/cpp/oreslang/runtime tests/functor_fused_v0_test.c             -o "$RUNNER_TEMP/functor-fused-sanitized"
+          ASAN_OPTIONS=detect_leaks=1:halt_on_error=1           UBSAN_OPTIONS=halt_on_error=1 "$RUNNER_TEMP/functor-fused-sanitized"
+      - name: Evidence boundary
+        run: echo 'Native C prototype only; LLVM guest and full zero-GC NOT_EXECUTED.'

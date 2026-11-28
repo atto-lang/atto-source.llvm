@@ -139,6 +139,33 @@ inline std::vector<PipeConnection> check_actor_pipeline(
 
 
 /**
+ * Restricted, interoperable integer-only source guest admission.
+ * Keep the native host-only 1024-stage DAG contract intact; this separate
+ * 2..16-stage gate matches the Java integer guest profile and the first
+ * Wasm pipe extension. It proves only nominal topology, NEVER source
+ * actor codegen, private heaps or authenticated message delivery.
+ */
+inline std::vector<PipeConnection> check_actor_pipeline_guest_integer_v1(
+        const std::vector<PipeStage>& stages) {
+    if (stages.size() < 2 || stages.size() > 16)
+        throw std::invalid_argument(
+            "integer actor pipe guest requires between 2 and 16 stages");
+    auto links = check_actor_pipeline(stages);
+    for (const auto& link : links) {
+        if (link.payload != "int")
+            throw std::invalid_argument(
+                "integer actor pipe guest requires int-to-int edges");
+    }
+    if (stages.front().role == PipeRole::duplex
+            && stages.front().inbound != "int")
+        throw std::invalid_argument("integer actor pipe guest ingress must be int");
+    if (stages.back().role == PipeRole::duplex
+            && stages.back().outbound != "int")
+        throw std::invalid_argument("integer actor pipe guest sink output must be int");
+    return links;
+}
+
+/**
  * Checked, acyclic, multi-consumer graph. The runtime still owns edge
  * admission, backpressure and SourceTask suspension; this validates only
  * host graph topology and nominal payload contracts, not guest lowering.
