@@ -1,0 +1,22 @@
+// atto-spec bitwise-and-stream-operators-v1: `<<<=`, `>>>=` and `ashr=` are
+// `x = x op n` on a mutable scalar local, with the same checked 0..63 distance.
+// Must compile, link and EXIT ZERO.
+fnc check(): int {
+  let int x = 3;
+  x <<<= 4;
+  let int a = x;
+  x >>>= 2;
+  let int y = -64;
+  y ashr= 3;
+  let int z = -1;
+  z >>>= 63;
+  if (a != 48) { return 1; } fi
+  if (x != 12) { return 2; } fi
+  if (y != -8) { return 3; } fi
+  if (z != 1) { return 4; } fi
+  return 0;
+}
+
+pub fnc main(): int {
+  return check();
+}

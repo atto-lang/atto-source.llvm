@@ -5343,12 +5343,24 @@ private:
                     continue;
                 }
                 auto target = primary();
+                Expression::Kind compound_kind = Expression::Kind::ShiftLeft;
                 if (target->kind == Expression::Kind::Variable && token_.text == "^^=") {
                     const auto offset = token_.offset;
                     advance();
                     statement.kind = Statement::Kind::ScalarWrite;
                     statement.receiver = target->name;
                     auto rhs = make_expression(Expression::Kind::BitXor, offset);
+                    rhs->left = std::move(target);
+                    rhs->right = expression();
+                    statement.expression = std::move(rhs);
+                } else if (target->kind == Expression::Kind::Variable && accept_compound_shift(compound_kind)) {
+                    // atto-spec bitwise-and-stream-operators-v1: `x <<<= n`, `x >>>= n`,
+                    // `x ashr= n` are `x = x op n` on a scalar local; the existing
+                    // ScalarWrite mutability/type checks and checked shift lowering apply.
+                    const auto offset = target->offset;
+                    statement.kind = Statement::Kind::ScalarWrite;
+                    statement.receiver = target->name;
+                    auto rhs = make_expression(compound_kind, offset);
                     rhs->left = std::move(target);
                     rhs->right = expression();
                     statement.expression = std::move(rhs);
@@ -6193,12 +6205,24 @@ private:
             }
             // Restrict compound XOR to scalar local names. Existing ScalarWrite
             // type/mutability checks and BitXor lowering remain authoritative.
+            Expression::Kind compound_kind = Expression::Kind::ShiftLeft;
             if (action->kind == Expression::Kind::Variable && token_.text == "^^=") {
                 const auto offset = token_.offset;
                 advance();
                 statement.kind = Statement::Kind::ScalarWrite;
                 statement.receiver = action->name;
                 auto rhs = make_expression(Expression::Kind::BitXor, offset);
+                rhs->left = std::move(action);
+                rhs->right = expression();
+                statement.expression = std::move(rhs);
+            } else if (action->kind == Expression::Kind::Variable && accept_compound_shift(compound_kind)) {
+                // atto-spec bitwise-and-stream-operators-v1: `x <<<= n`, `x >>>= n`,
+                // `x ashr= n` are `x = x op n` on a scalar local; the existing
+                // ScalarWrite mutability/type checks and checked shift lowering apply.
+                const auto offset = action->offset;
+                statement.kind = Statement::Kind::ScalarWrite;
+                statement.receiver = action->name;
+                auto rhs = make_expression(compound_kind, offset);
                 rhs->left = std::move(action);
                 rhs->right = expression();
                 statement.expression = std::move(rhs);
@@ -6667,6 +6691,30 @@ private:
     // shift. `<<`/`>>` are typed channel/stream I/O, never shifts; native
     // channel I/O is not lowered, so they fail closed. The lexer keeps '<'
     // and '>' as single tokens so nested generic closers stay distinct.
+    // `<<<=`, `>>>=` (the lexer keeps `<=`/`>=` whole, so these arrive as
+    // adjacent `<` `<` `<=` and `>` `>` `>=`) and the contextual `ashr=`.
+    // Consumes the operator only on an exact adjacent match.
+    bool accept_compound_shift(Expression::Kind& kind) {
+        Lexer lookahead = lexer_;
+        const Token second = lookahead.next();
+        if (token_.kind == Kind::Identifier && token_.text == "ashr"
+                && second.text == "=" && second.offset == token_.offset + 4) {
+            advance(); advance();
+            kind = Expression::Kind::ShiftRight;
+            return true;
+        }
+        if (token_.text != "<" && token_.text != ">") return false;
+        const Token third = lookahead.next();
+        const bool left = token_.text == "<";
+        const std::string_view closer = left ? "<=" : ">=";
+        if (second.text != token_.text || second.offset != token_.offset + 1
+                || third.text != closer || third.offset != second.offset + 1)
+            return false;
+        for (int n = 0; n < 3; ++n) advance();
+        kind = left ? Expression::Kind::ShiftLeft : Expression::Kind::ShiftUnsignedRight;
+        return true;
+    }
+
     std::unique_ptr<Expression> shift() {
         auto left = additive();
         for (;;) {

@@ -1,0 +1,7 @@
+// Must compile but trap at runtime: a compound shift keeps the 0..63 guard.
+pub fnc main(): int {
+  let int x = 1;
+  let int d = 64;
+  x <<<= d;
+  return x;
+}

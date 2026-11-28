@@ -64,4 +64,13 @@ for name in odb1-bitshift-invalid-negative-distance             odb1-bitshift-in
   fi
   echo "NATIVE_ODB1_SHIFT_RUNTIME_REJECTION_PASS $name status=$rc"
 done
+# Compound shift assignment: `x <<<= n`, `x >>>= n`, `x ashr= n`.
+compile_guest compound-shift-assign-positive
+timeout 20s "$work/compound-shift-assign-positive.bin" || { echo 'compound shift assignment guest failed' >&2; exit 1; }
+echo 'NATIVE_COMPOUND_SHIFT_ASSIGN_PASS'
+compile_guest compound-shift-assign-trap
+rc=0
+timeout 20s "$work/compound-shift-assign-trap.bin" >/dev/null 2>&1 || rc=$?
+if (( rc < 128 || rc == 124 )); then echo "missing compound shift distance trap: status=$rc" >&2; exit 1; fi
+echo "NATIVE_COMPOUND_SHIFT_ASSIGN_TRAP_PASS status=$rc"
 echo 'NATIVE_ODB1_SHIFT_SOURCE_EXECUTION_PASS positive=13 compile_rejections=4 runtime_traps=4; NOT FULL DB CODEC PARITY'
