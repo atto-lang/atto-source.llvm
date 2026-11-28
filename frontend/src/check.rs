@@ -483,6 +483,12 @@ fn isolation(pos: Pos, actor: &str, what: &str, name: &str) -> Diagnostic {
 
 /// Field initializers run while the object is under construction: the Java
 /// reference forbids calls there, and this compiler admits only constants.
+fn fresh_nested_init(e: &Expr, expected: &str) -> bool {
+    matches!(&e.kind, ExprKind::New(name, args) if name == expected &&
+        (args.is_empty() || (expected == crate::array_slot_guest::INTERNAL
+            && args.iter().all(crate::array_slot_guest::literal_int))))
+}
+
 fn const_init(e: &Expr) -> bool {
     match &e.kind {
         ExprKind::Int(_) | ExprKind::Bool(_) | ExprKind::Float(_) | ExprKind::Str(_) => true,
@@ -867,8 +873,7 @@ pub fn check(p: &Program) -> R<TProgram> {
                     !f.referent_mutable && const_init(&f.init),
                 Ok(Type::Class(child)) if (f.referent_mutable || f.fixed_val) && prior[child as usize] != 0 => {
                     size = size.saturating_add(prior[child as usize]);
-                    matches!(&f.init.kind, ExprKind::New(name, args)
-                        if name == &class_names[child as usize] && args.is_empty())
+                    fresh_nested_init(&f.init, &class_names[child as usize])
                 }
                 _ => false,
             });
@@ -897,8 +902,7 @@ pub fn check(p: &Program) -> R<TProgram> {
                 Type::Int | Type::Bool => true,
                 Type::Float | Type::Str | Type::Enum(_) => !actor,
                 Type::Class(ci) => !actor && ((!f.referent_mutable && immutable_leaves[ci as usize]) || ((f.referent_mutable || f.fixed_val) && closed_copy_trees[ci as usize]))
-                    && matches!(&f.init.kind, ExprKind::New(name, args)
-                        if name == &class_names[ci as usize] && args.is_empty()),
+                    && fresh_nested_init(&f.init, &class_names[ci as usize]),
                 _ => false,
             };
             if !ok {
@@ -947,6 +951,7 @@ pub fn check(p: &Program) -> R<TProgram> {
         }
         let ctor_params = match &c.ctor {
             Some(k) => k.params.iter().map(|q| res(q.ty)).collect::<R<Vec<_>>>()?,
+            None if c.name == crate::array_slot_guest::INTERNAL => vec![Type::Int; c.fields.len()],
             None => Vec::new(),
         };
         classes.push(ClassInfo {
@@ -1241,7 +1246,10 @@ pub fn check(p: &Program) -> R<TProgram> {
                 ty: me,
             },
         )];
-        for (offset, ty, v) in field_inits {
+        for (i, (offset, ty, v)) in field_inits.into_iter().enumerate() {
+            let v = if c.name == crate::array_slot_guest::INTERNAL {
+                TE { e: TExpr::Local(i as u32), ty: Type::Int }
+            } else { v };
             body.push(TStmt::FieldSet {
                 obj: obj.clone(),
                 offset,
@@ -1492,9 +1500,14 @@ fn actor_type_ok(g: &Globals, actor: &str, t: Type, pos: Pos) -> R<()> {
 fn field_init(g: &Globals, f: &Field, ty: Type, owner: &str, actor: bool, imports: &mut Vec<Import>, data: &mut Vec<u8>) -> R<TE> {
     if let Type::Class(ci) = ty {
         let info = &g.classes[ci as usize];
-        if !actor && ((!f.referent_mutable && info.immutable_leaf) || ((f.referent_mutable || f.fixed_val) && info.closed_copy_tree)) && matches!(&f.init.kind,
-            ExprKind::New(name, args) if name == &info.name && args.is_empty()) {
-            return Ok(TE { e: TExpr::Call(info.new_idx, Vec::new()), ty });
+        if !actor && ((!f.referent_mutable && info.immutable_leaf) || ((f.referent_mutable || f.fixed_val) && info.closed_copy_tree)) && fresh_nested_init(&f.init, &info.name) {
+            let ExprKind::New(_, args) = &f.init.kind else { unreachable!() };
+            if args.len() != info.ctor_params.len() {
+                return Err(Diagnostic::new(f.init.pos, "E_COPY_UNPROVEN", "fresh field factory arity mismatch"));
+            }
+            let mut cx = FnCx::new(g, Owner::FieldInit { actor }, Type::Void, imports, data);
+            let values = cx.args(&info.name, args, &info.ctor_params)?;
+            return Ok(TE { e: TExpr::Call(info.new_idx, values), ty });
         }
         return Err(Diagnostic::new(f.init.pos, "E_COPY_UNPROVEN", "nested field requires a fresh immutable leaf"));
     }
@@ -2444,8 +2457,7 @@ impl<'a> FnCx<'a> {
                                     Type::Class(child) => {
                                         let leaf = &self.g.classes[child as usize];
                                         ((!f.referent_mutable && leaf.immutable_leaf) ||
-                                            (self.nested_linear && f.referent_mutable && leaf.closed_copy_tree)) && matches!(&value.kind,
-                                            ExprKind::New(n, args) if n == &leaf.name && args.is_empty())
+                                            (self.nested_linear && f.referent_mutable && leaf.closed_copy_tree)) && fresh_nested_init(value, &leaf.name)
                                     }
                                     _ => false,
                                 };

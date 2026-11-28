@@ -19,6 +19,7 @@ pub mod generator_frame;
 pub mod lexer;
 pub mod parser;
 mod struct_value_guest;
+mod array_slot_guest;
 mod native_scalar_c;
 mod physical_layout;
 mod physical_placement;
@@ -171,7 +172,14 @@ fn compile_target(source: &str, native_c: bool, isolated: bool) -> Result<Vec<u8
         return Err(Diagnostic::new(toks[0].pos, "E_UNSUPPORTED",
             "namespace-scoped actor declarations and mtd methods are syntax-only, not browser-lowered"));
     }
-    let program = parser::Parser::new(toks).parse_program()?;
+    let fixed_array = array_slot_guest::selected(&toks);
+    let mut parser = parser::Parser::new(toks);
+    if fixed_array { parser.enable_fixed_array_slots(); }
+    let program = parser.parse_program()?;
+    let program = if fixed_array {
+        if isolated { return Err(Diagnostic::new(Pos::default(), "E_UNSUPPORTED", "fixed Array requires the ordinary browser guest heap")); }
+        array_slot_guest::lower(program)?
+    } else { program };
     let typed = check::check(&program)?;
     let bytes = if isolated { wasm::emit_isolated_core(&typed)? } else { wasm::emit(&typed) };
     if bytes.len() > wasm::MAX_OUTPUT {

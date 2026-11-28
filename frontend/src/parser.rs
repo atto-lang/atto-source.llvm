@@ -205,6 +205,7 @@ pub struct Parser {
     cond: u32,
     /// Spellings of user type references, see `Type::Named`.
     type_names: Vec<(String, Pos)>,
+    fixed_array_slots: bool,
     /// Scope of an explicit generator function body.
     in_generator: bool,
     struct_target: bool,
@@ -305,11 +306,14 @@ impl Parser {
             height: 0,
             cond: 0,
             type_names: Vec::new(),
+            fixed_array_slots: false,
             in_generator: false,
             struct_target: false,
             struct_value_bindings: None,
         }
     }
+
+    pub(crate) fn enable_fixed_array_slots(&mut self) { self.fixed_array_slots = true; }
 
     fn peek(&self) -> &Tok {
         &self.toks[self.i].tok
@@ -443,6 +447,12 @@ impl Parser {
         self.advance();
         let ty = match name.as_str() {
             "int" => Type::Int,
+            "Array" if self.fixed_array_slots => {
+                self.expect(Tok::Lt, "'<' after Array")?;
+                self.expect_word("int")?;
+                self.expect(Tok::Gt, "'>' after Array<int>")?;
+                Type::Named(self.type_name(crate::array_slot_guest::INTERNAL.to_string(), pos))
+            }
             "Option" => {
                 self.expect(Tok::Lt, "'<' after Option")?;
                 let inner = self.parse_type()?;
@@ -2723,6 +2733,21 @@ impl Parser {
                         };
                     }
                 }
+                Tok::LBracket if self.fixed_array_slots => {
+                    let at = self.pos();
+                    self.advance();
+                    let negative = self.eat(&Tok::Minus);
+                    let n = match self.peek() {
+                        Tok::Int(Some(n)) if *n <= i64::MAX as u64 => *n as i64,
+                        _ => return Err(unsupported(at, "fixed Array index requires a signed integer literal")),
+                    };
+                    self.advance();
+                    self.expect(Tok::RBracket, "']' after fixed Array index")?;
+                    self.grow(1)?;
+                    *chain += 1;
+                    e = Expr { kind: ExprKind::Member(Box::new(e),
+                        format!("{}{}", crate::array_slot_guest::CELL, if negative { -n } else { n })), pos: at };
+                }
                 Tok::LBracket => return Err(unsupported(self.pos(), "indexing")),
                 Tok::Question if !self.question_opens_ternary() => {
                     let question = self.pos();
@@ -2770,6 +2795,11 @@ impl Parser {
                 return Ok(Expr { kind: inner.kind, pos });
             }
             Tok::Ident(s) => match s.as_str() {
+                "Array" if self.fixed_array_slots && *self.peek_at(1) == Tok::Dot
+                    && self.word_at(2) == Some("of") => {
+                    self.advance(); self.advance(); self.advance();
+                    ExprKind::New(crate::array_slot_guest::INTERNAL.to_string(), self.parse_args()?)
+                }
                 "true" => {
                     self.advance();
                     ExprKind::Bool(true)

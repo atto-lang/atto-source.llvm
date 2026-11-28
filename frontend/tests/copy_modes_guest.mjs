@@ -13,7 +13,16 @@ const deepTree='define class Scores as pub let int n = 20; end\ndefine class Pro
 const main=s=>'pub fnc main(): int { '+s+' }';
 const setterNested=mutableNested.replace('pub let int n = 20; end','pub let int n = 20; pub mut mtd adjust(int value): void { self.n = value; } end');
 const setterSetup='let mut Person a = new Person(); let mut Person b = copy! a; let mut Person c = copy! b; b.scores = new Scores(); ';
+const arrayRoot='define class Person as pub let mut Array<int> scores = Array.of(20, 3, 4); end\n';
+const arraySetup='let mut Person a = new Person(); let mut Person b = copy! a; let mut Person c = copy! b; b.scores = Array.of(10, 8, 9); ';
 const cases=[
+ ['array-detached',arrayRoot+main(arraySetup+'b.scores[0] = 22; return a.scores[0]+b.scores[0]+c.scores[0];'),62],
+ ['array-negative-index',arrayRoot+main(arraySetup+'b.scores[-1] = 22; return b.scores[2]+a.scores[2];'),26],
+ ['array-shared-a',arrayRoot+main(arraySetup+'a.scores[0] = 22; return b.scores[0];'),'E_COPY_READONLY'],
+ ['array-shared-c',arrayRoot+main(arraySetup+'c.scores[0] = 22; return b.scores[0];'),'E_COPY_READONLY'],
+ ['array-bounds',arrayRoot+main(arraySetup+'return b.scores[3];'),'E_ARRAY_BOUNDS'],
+ ['array-length-mismatch',arrayRoot+main(arraySetup+'b.scores = Array.of(1); return 0;'),'E_COPY_UNPROVEN'],
+ ['array-deep',arrayRoot+main('let mut Person a = new Person(); let mut Person b = copy! a; let mut Person c = copy!! b; c.scores[0] = 2; return a.scores[0]+b.scores[0]+c.scores[0];'),42],
  ['mutable-method-detached',setterNested+main(setterSetup+'b.scores.adjust(22); return a.scores.n+b.scores.n+c.scores.n;'),62],
  ['mutable-method-shared-a',setterNested+main(setterSetup+'a.scores.adjust(22); return b.scores.n;'),'E_COPY_READONLY'],
  ['mutable-method-shared-c',setterNested+main(setterSetup+'c.scores.adjust(22); return b.scores.n;'),'E_COPY_READONLY'],
