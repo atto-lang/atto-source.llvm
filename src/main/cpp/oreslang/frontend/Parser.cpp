@@ -6619,6 +6619,10 @@ private:
             ~DepthGuard() { --depth; }
         } depth_guard{expression_depth_};
 
+        // A quoted operator or keyword is a literal, not a prefix operator.
+        if (token_.kind == Kind::String || token_.kind == Kind::Template)
+            return primary();
+
         if (token_.text == "trap" || token_.text == "trap!") {
             const auto offset = token_.offset;
             advance();
@@ -7346,6 +7350,19 @@ private:
 
     std::unique_ptr<Expression> primary() {
         const auto offset = token_.offset;
+        // Literal payload text is data, never a keyword or lambda token.
+        // Keep real template interpolation parsing in template_literal().
+        if (token_.kind == Kind::String) {
+            auto expr = make_expression(Expression::Kind::String, offset);
+            expr->name = string_literal(token_.text);
+            advance();
+            return expr;
+        }
+        if (token_.kind == Kind::Template) {
+            const std::string_view raw = token_.text;
+            advance();
+            return template_literal(raw, offset);
+        }
         // Distinguish the contextual function name loop(...) from loop(val ...).
         if (token_.text == "loop") {
             Lexer look = lexer_;
@@ -7493,17 +7510,6 @@ private:
                 require(")");
             }
             return expr;
-        }
-        if (token_.kind == Kind::String) {
-            auto expr = make_expression(Expression::Kind::String, offset);
-            expr->name = string_literal(token_.text);
-            advance();
-            return expr;
-        }
-        if (token_.kind == Kind::Template) {
-            const std::string_view raw = token_.text;
-            advance();
-            return template_literal(raw, offset);
         }
         if ((token_.text == "stdio" || token_.text == "process") &&
                 peek_next().text == ".") {
