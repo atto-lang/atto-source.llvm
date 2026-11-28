@@ -1,0 +1,2 @@
+fnc runtime_value(): int { return 42; }
+pub fnc main(): int { const result as int = runtime_value(); return result; }

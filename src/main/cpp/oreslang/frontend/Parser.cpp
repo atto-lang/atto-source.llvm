@@ -1572,7 +1572,7 @@ public:
                  "actor entrypoint needs manifest-verified receiver, state "
                  "loan and mailbox MIR");
         while (token_.text == "export" || token_.text == "define" || token_.text == "declare" ||
-               at_bare_type_alias() ||
+               at_bare_type_alias() || at_denotation() ||
                 (token_.text == "pub" &&
                  (peek_next().text == "define" || peek_next().text == "declare"))) {
             if (token_.text == "export") {
@@ -1581,6 +1581,10 @@ public:
             }
             if (at_type_only_introducer()) {
                 type_only_declaration(program);
+                continue;
+            }
+            if (at_denotation()) {
+                type_denotation(program);
                 continue;
             }
             if (at_bare_type_alias()) {
@@ -1728,6 +1732,10 @@ public:
             }
             if (token_.text == "import")
                 fail("native contract imports require a validated cross-unit linker");
+            if (at_denotation()) {
+                type_denotation(program);
+                continue;
+            }
             if (at_bare_type_alias()) {
                 bare_type_alias(program);
                 continue;
@@ -2154,6 +2162,25 @@ private:
                (token_.text == "pub" && peek_next().text == "type");
     }
 
+    bool at_denotation() const {
+        return token_.text == "denote" &&
+            (peek_next().text == "type" || peek_next().text == "pub" ||
+             peek_next().text == "private");
+    }
+
+    void type_denotation(Program& program) {
+        require("denote");
+        // The existing scalar catalog supports transparent scalar identities,
+        // not package-linked visibility or scoped nominal/generic denotations.
+        if (!program.namespace_name.empty() || !program.module.empty() ||
+                !program.imports.empty() || !program.namespace_imports.empty())
+            fail("TYPE_DENOTE_SCOPE_UNSUPPORTED: standalone file scope required");
+        if (token_.text == "pub" || token_.text == "private")
+            fail("TYPE_DENOTE_VISIBILITY_UNSUPPORTED: explicit visibility requires linked type metadata");
+        if (token_.text != "type") fail("TYPE_DENOTE_KIND: expected type");
+        type_only_declaration(program, true, false, true);
+    }
+
     void bare_type_alias(Program& program) {
         const bool exported = accept("pub");
         if (token_.text != "type") fail("expected 'type'");
@@ -2323,7 +2350,7 @@ private:
     }
 
     void type_only_declaration(Program& program, bool already_defined = false,
-                               bool before_public = false) {
+                               bool before_public = false, bool denotation = false) {
         bool exported = before_public;
         if (already_defined) {
             if (accept("pub")) {
@@ -2378,7 +2405,7 @@ private:
         bool alias_as_spelling = false;
         if (accept("type")) {
             decl.kind = TypeOnlyDecl::Kind::Alias;
-            if (already_defined && token_.text == "alias" &&
+            if (!denotation && already_defined && token_.text == "alias" &&
                     peek_next().kind == Kind::Identifier) {
                 advance();
                 alias_as_spelling = true;
@@ -2414,6 +2441,8 @@ private:
                 require("=");
             }
             decl.alias_target = type_alias_target();
+            if (denotation && token_.text != ";")
+                fail("TYPE_DENOTE_RHS_UNSUPPORTED: only complete scalar type expressions admitted");
             type_alias_constraints(decl);
             require(";");
             scalar_alias_targets_.emplace(decl.name, decl.alias_target);
@@ -4441,22 +4470,47 @@ private:
             binding.offset = token_.offset;
             const bool type_first_const = token_.text == "int" || token_.text == "bool" ||
                     token_.text == "String" || token_.text == "string";
-            if (token_.text == "const" && peek_next().text == "mut")
-                fail("E_CONST_MUT_UNSUPPORTED: scoped owned mutable value lowering is not yet implemented");
+            // The scalar alias uses the existing val owner path. Do not
+            // admit aggregate/capability owners through this bounded slice.
+            const bool scalar_const_mut = token_.text == "const" && peek_next().text == "mut";
             Lexer sum_look = lexer_; auto sum_first = sum_look.next();
+            if (scalar_const_mut) {
+                sum_first = sum_look.next();
+                Lexer check = sum_look;
+                const auto second = check.next();
+                const auto third = check.next();
+                const auto fourth = check.next();
+                const bool typed_prefix = (sum_first.text == "int" || sum_first.text == "bool") &&
+                    second.kind == Kind::Identifier && third.text == "=";
+                const bool typed_right = sum_first.kind == Kind::Identifier &&
+                    (second.text == ":" || second.text == "as") &&
+                    (third.text == "int" || third.text == "bool") && fourth.text == "=";
+                if (!typed_prefix && !typed_right)
+                    fail("E_CONST_MUT_UNSUPPORTED: only typed int/bool local alias admitted");
+            }
             // The type-right spelling is an explicit constant, not a runtime
             // val fallback: const name: int = e == const int name = e.
             // Independent lookahead: sum_look stays at the first token for
             // the let-mut and scalar-alias checks below.
-            const bool type_right_const = token_.text == "const" &&
+            // Name-first 'as' is a type annotation, not a postfix cast.
+            // Admit only the existing primitive scalar profile for val/let;
+            // preserve the existing const colon route and capability paths.
+            const bool type_right_const =
+                    (token_.text == "const" || token_.text == "val" || token_.text == "let") &&
                     sum_first.kind == Kind::Identifier &&
                     [&] {
                         Lexer right = sum_look;
-                        if (right.next().text != ":") return false;
-                        // Preserve the separately gated experimental owned-int
-                        // declaration path. The scalar const parser cannot
-                        // consume its ownership qualifier or validate its ABI.
-                        return right.next().text != "owned";
+                        const auto separator = right.next();
+                        if (separator.text == ":" && token_.text == "const") {
+                            // Preserve the independently gated owned and ActorRef capability paths.
+                            const auto type = right.next().text;
+                            return type != "owned" && type != "ActorRef";
+                        }
+                        if (separator.text != "as") return false;
+                        const auto type = right.next();
+                        return (type.text == "int" || type.text == "bool" ||
+                                type.text == "string" || type.text == "String") &&
+                                right.next().text == "=";
                     }();
             if (token_.text == "let" && sum_first.text == "mut") sum_first = sum_look.next();
             // Java: `val Count c = 42;` with `type Count = int;` is the same
@@ -4471,12 +4525,17 @@ private:
                     ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
                     (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "String" || sum_first.text == "string" ||
                      (sum_first.text == "boolean" && sum_look.next().kind == Kind::Identifier)))) {
-                const std::string mode = type_first_const ? "const" : std::string(token_.text);
-                if (!type_first_const) { advance(); if (mode == "let") accept("mut"); }
+                const std::string mode = scalar_const_mut ? "val" :
+                    type_first_const ? "const" : std::string(token_.text);
+                if (!type_first_const) {
+                    advance();
+                    if (scalar_const_mut) require("mut");
+                    else if (mode == "let") accept("mut");
+                }
                 binding.owner_mutable = mode != "const"; binding.assignable = mode == "let";
                 if (type_right_const) {
                     binding.name = identifier();
-                    require(":");
+                    if (!accept("as")) require(":");
                 }
                 if (alias_prefixed) {
                     binding.pending_type_alias = std::string(token_.text);
@@ -4567,9 +4626,14 @@ private:
                     }
                 } else {
                     binding.initializer = expression();
-                    if (mode == "const" &&
-                            !native_const_scalar_tree(*binding.initializer, value.locals))
-                        fail("E_NON_CONST_INITIALIZER: type-first/const scalar requires a compile-time value");
+                    if (mode == "const") {
+                        // Keep proven overflow rejection, but an unproven
+                        // initializer is an eager runtime value, not an error.
+                        const bool proven = native_const_scalar_tree(*binding.initializer, value.locals);
+                        if (!proven && binding.scalar_type != ScalarType::I64 &&
+                                binding.scalar_type != ScalarType::Bool)
+                            fail("E_NON_CONST_INITIALIZER: runtime non-scalar constant requires verified lowering");
+                    }
                 }
             } else if ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
                     (sum_first.text == "Option" || sum_first.text == "Result")) {
@@ -6693,6 +6757,10 @@ private:
             ~DepthGuard() { --depth; }
         } depth_guard{expression_depth_};
 
+        // A quoted operator or keyword is a literal, not a prefix operator.
+        if (token_.kind == Kind::String || token_.kind == Kind::Template)
+            return primary();
+
         if (token_.text == "trap" || token_.text == "trap!") {
             const auto offset = token_.offset;
             advance();
@@ -7420,6 +7488,19 @@ private:
 
     std::unique_ptr<Expression> primary() {
         const auto offset = token_.offset;
+        // Literal payload text is data, never a keyword or lambda token.
+        // Keep real template interpolation parsing in template_literal().
+        if (token_.kind == Kind::String) {
+            auto expr = make_expression(Expression::Kind::String, offset);
+            expr->name = string_literal(token_.text);
+            advance();
+            return expr;
+        }
+        if (token_.kind == Kind::Template) {
+            const std::string_view raw = token_.text;
+            advance();
+            return template_literal(raw, offset);
+        }
         // Distinguish the contextual function name loop(...) from loop(val ...).
         if (token_.text == "loop") {
             Lexer look = lexer_;
@@ -7567,17 +7648,6 @@ private:
                 require(")");
             }
             return expr;
-        }
-        if (token_.kind == Kind::String) {
-            auto expr = make_expression(Expression::Kind::String, offset);
-            expr->name = string_literal(token_.text);
-            advance();
-            return expr;
-        }
-        if (token_.kind == Kind::Template) {
-            const std::string_view raw = token_.text;
-            advance();
-            return template_literal(raw, offset);
         }
         if ((token_.text == "stdio" || token_.text == "process") &&
                 peek_next().text == ".") {
@@ -10721,6 +10791,33 @@ void reject_unlowered_mutex_constructor(std::string_view source,
     }
 }
 
+// Narrow current-main forward port of the alias-only Ensemble admission
+// case from #575. Do not reserve ordinary user methods named try_publish.
+void reject_unlowered_ensemble_publication(std::string_view source,
+                                           bool experimental_pointer_int_aot) {
+    Lexer scan(source, 0, experimental_pointer_int_aot);
+    Token window[5] = {};
+    std::size_t count = 0;
+    for (auto token = scan.next(); token.kind != Kind::End; token = scan.next()) {
+        if (count < 5) {
+            window[count++] = token;
+        } else {
+            for (std::size_t i = 0; i < 4; ++i) window[i] = window[i + 1];
+            window[4] = token;
+        }
+        if (count == 5 &&
+            window[0].kind == Kind::Symbol && window[0].text == "." &&
+            window[1].kind == Kind::Identifier && window[1].text == "try_publish" &&
+            window[2].kind == Kind::Symbol && window[2].text == "(" &&
+            window[3].kind == Kind::Identifier && window[3].text == "share" &&
+            window[4].kind == Kind::Symbol && window[4].text == "!") {
+            throw std::runtime_error(
+                "E_ACTOR_PUBSUB_UNSUPPORTED: typed Ensemble Topic.try_publish(share! ...) "
+                "requires verified guest lowering at byte " + std::to_string(window[1].offset));
+        }
+    }
+}
+
 } // namespace
 
 NamedRecursiveScalarPlan parse_named_recursive_scalar(std::string_view source) {
@@ -10735,6 +10832,7 @@ Program parse_verified_namespace_source_unresolved(
     // Precondition: independently pinned physical source snapshot. Preserve
     // unresolved imports for the verified namespace graph to authorize.
     // Never run resolve_and_validate_program or emit IR here.
+    reject_unlowered_ensemble_publication(authenticated_source, false);
     return Parser(authenticated_source, false, false, true).parse();
 }
 
@@ -10742,6 +10840,7 @@ Program parse_unresolved_program(std::string_view source, bool experimental_owne
                       bool experimental_rt_scalar_loop, bool experimental_pointer_int_aot,
                       int language_version, bool relative_import_unit) {
     reject_unlowered_mutex_constructor(source, experimental_pointer_int_aot);
+    reject_unlowered_ensemble_publication(source, experimental_pointer_int_aot);
     Program program = Parser(source, experimental_owned_int,
                              experimental_rt_scalar_loop, false, 0,
                              experimental_pointer_int_aot, language_version,

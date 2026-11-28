@@ -4,6 +4,7 @@
 #include "oreslang/runtime/NativeAwaitTraceBridge.h"
 
 #include <cstdint>
+#include <mutex>
 #include <stdexcept>
 
 namespace oreslang::runtime {
@@ -78,15 +79,24 @@ public:
             OresNativeExecutionId resumed_execution_id,
             OresNativeExecutionHandle* out_execution,
             OresNativeExecutionContext* out_context = nullptr) noexcept {
-        if (!lifecycle_.ready_to_reclaim()) return false;
-        return ores_native_await_trace_ready_resume_begin(
+        std::lock_guard<std::mutex> lock(resume_mutex_);
+        if (owns_claim_ || !lifecycle_.ready_to_reclaim()) return false;
+        const bool claimed = ores_native_await_trace_ready_resume_begin(
                 executions_, continuations_, resumed_execution_id, link_,
                 out_execution, out_context) != 0;
+        if (claimed) owns_claim_ = true;
+        return claimed;
     }
 
     bool finish_resume() noexcept {
-        return ores_native_await_trace_resume_finish(
-                continuations_, link_) != 0;
+        std::lock_guard<std::mutex> lock(resume_mutex_);
+        // A losing or unrelated binding must not retire the winner's frame.
+        // The claiming carrier calls this only after its physical turn exits.
+        if (!owns_claim_) return false;
+        if (!ores_native_await_trace_resume_finish(continuations_, link_))
+            return false;
+        owns_claim_ = false;
+        return true;
     }
 
 private:
@@ -94,6 +104,8 @@ private:
     OresNativeExecutionContextStore* executions_;
     OresNativeContinuationStore* continuations_;
     OresNativeSuspensionLink link_;
+    std::mutex resume_mutex_;
+    bool owns_claim_ = false;
 };
 
 } // namespace oreslang::runtime
