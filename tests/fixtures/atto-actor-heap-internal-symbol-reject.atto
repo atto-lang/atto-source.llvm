@@ -1,0 +1,7 @@
+// Guest source may never shadow native actor heap turn capabilities.
+pub fnc ores_actor_i64_heap_enter(): int {
+  return 7;
+}
+pub fnc main(): int {
+  return 43;
+}

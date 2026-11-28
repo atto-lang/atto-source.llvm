@@ -1,0 +1,127 @@
+name: Source-compiled actor-owned scalar frames
+on:
+  pull_request:
+    paths:
+      - src/main/cpp/oreslang/runtime/SourceActorBootstrap.c
+      - src/main/cpp/oreslang/runtime/SourceActorBootstrap.h
+      - src/main/cpp/oreslang/backend/LlvmCodegen.cpp
+      - tests/source_actor_e2e.py
+      - tests/source_actor_await_trace_runtime_test.c
+      - tests/source_actor_frame_isolation_runtime_test.c
+      - CMakeLists.txt
+      - tests/fixtures/atto-actor-frame-*.atto
+      - tests/fixtures/atto-actor-heap-*.atto
+      - .github/workflows/source-actor-frame-native-guest.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-compiled-frame-guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - name: Checkout exact PR head without credential persistence
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          submodules: false
+      - name: Verify immutable compiler, runtime, fixture identities
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          git rev-parse 'HEAD^{tree}' | tee "$RUNNER_TEMP/actor-frame-tree.txt"
+          for src in src/main/cpp/oreslang/backend/LlvmCodegen.cpp \
+                     src/main/cpp/oreslang/runtime/SourceActorBootstrap.c \
+                     src/main/cpp/oreslang/runtime/SourceActorBootstrap.h \
+                     tests/source_actor_e2e.py \
+                     tests/fixtures/atto-actor-frame-two-heaps.atto; do
+            test "$(git hash-object "$src")" = "$(git rev-parse "HEAD:$src")"
+            git hash-object "$src"
+          done
+      - name: Install LLVM 19 native toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang-19 llvm-19-dev cmake ninja-build python3
+      - name: Build real LLVM compiler and source-actor runtime CTest
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B "$RUNNER_TEMP/source-actor-build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON \
+            -DLLVM_DIR=/usr/lib/llvm-19/lib/cmake/llvm
+          cmake --build "$RUNNER_TEMP/source-actor-build" --parallel 2 \
+            --target oreslang-llvmc oreslang-source-actor-await-trace-runtime-test \
+                     oreslang-source-actor-frame-isolation-runtime-test
+          ctest --test-dir "$RUNNER_TEMP/source-actor-build" --output-on-failure \
+            -R '^(source_actor_await_trace_runtime|source_actor_frame_isolation_restart_and_denial)$' \
+            | tee "$RUNNER_TEMP/source-actor-runtime-ctest.log"
+          grep -F '100% tests passed, 0 tests failed out of 2' \
+            "$RUNNER_TEMP/source-actor-runtime-ctest.log"
+      - name: Compile and execute real .atto and legacy source actors (O1)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -I tests/source_actor_e2e.py \
+            --compiler "$RUNNER_TEMP/source-actor-build/oreslang-llvmc" \
+            --clang /usr/bin/clang-19 --root . \
+            | tee "$RUNNER_TEMP/actor-frame-o1.log"
+          grep -F 'PASS native source actor: atto-actor-frame-two-heaps.atto actors 2' \
+            "$RUNNER_TEMP/actor-frame-o1.log"
+          grep -F 'PASS current-source actor lowering and physical heap reclamation' \
+            "$RUNNER_TEMP/actor-frame-o1.log"
+      - name: Execute compiler-backed ASan/UBSan native actor matrix
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1
+        run: |
+          set -euo pipefail
+          python3 -I tests/source_actor_e2e.py \
+            --compiler "$RUNNER_TEMP/source-actor-build/oreslang-llvmc" \
+            --clang /usr/bin/clang-19 --root . --sanitize \
+            | tee "$RUNNER_TEMP/actor-frame-sanitized.log"
+          grep -F 'PASS native source actor: atto-actor-frame-two-heaps.atto actors 2' \
+            "$RUNNER_TEMP/actor-frame-sanitized.log"
+      - name: Bind evidence to immutable exact head and classify scope
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          {
+            printf 'evidence_class=COMPILER_BACKED_RESTRICTED_SCALAR_ACTOR_FRAME\n'
+            printf 'actor_heap_and_frame_separate=TRUE\n'
+            printf 'arbitrary_recursive_actor_stack=NOT_VERIFIED\n'
+            printf 'source_actor_suspend_frame=NOT_VERIFIED\n'
+            printf 'native_stack_overflow_process_containment=NOT_VERIFIED\n'
+            printf 'java_parity=NOT_VERIFIED\n'
+            printf 'head_sha=%s\n' "$EXPECTED_HEAD"
+            printf 'head_tree_sha=%s\n' "$(git rev-parse 'HEAD^{tree}')"
+            printf 'run_id=%s\nrun_attempt=%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+            sha256sum "$RUNNER_TEMP/source-actor-build/oreslang-llvmc" \
+                      "$RUNNER_TEMP/actor-frame-o1.log" \
+                      "$RUNNER_TEMP/actor-frame-sanitized.log"
+          } | tee "$RUNNER_TEMP/actor-frame-source-evidence.txt"
+      - name: Preserve executed native guest logs and receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: source-compiled-actor-frames-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/actor-frame-tree.txt
+            ${{ runner.temp }}/source-actor-runtime-ctest.log
+            ${{ runner.temp }}/actor-frame-o1.log
+            ${{ runner.temp }}/actor-frame-sanitized.log
+            ${{ runner.temp }}/actor-frame-source-evidence.txt
+          if-no-files-found: warn
+          retention-days: 7

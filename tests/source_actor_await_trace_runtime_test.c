@@ -8,6 +8,22 @@ static void check(int ok) { if (!ok) abort(); }
 static void actor_init(OresActorI64Heap* heap, uint64_t domain, uint64_t epoch) {
     (void)heap;
     check(domain != 0 && epoch != 0);
+    int64_t* frame = NULL;
+    check(oreslang_source_actor_frame_i64_slot_checked(
+        domain, epoch, 0, &frame) && frame != NULL);
+    check(*frame == 0); // initialized fresh at source actor construction
+    *frame = 77;
+    int64_t* denied = frame;
+    check(!oreslang_source_actor_frame_i64_slot_checked(
+        domain, epoch + 1, 0, &denied) && denied == NULL);
+    check(!oreslang_source_actor_frame_i64_slot_checked(
+        domain, epoch, 8192, &denied) && denied == NULL);
+    check(!oreslang_source_actor_frame_i64_slot_checked(
+        domain, epoch, UINT64_MAX, &denied) && denied == NULL);
+    int64_t* last = NULL;
+    check(oreslang_source_actor_frame_i64_slot_checked(
+        domain, epoch, 8191, &last) && last != NULL && *last == 0);
+    *last = 99;
 }
 
 static int64_t actor_message(
@@ -17,7 +33,20 @@ static int64_t actor_message(
         int64_t payload) {
     (void)heap;
     check(domain != 0 && epoch != 0);
-    return payload;
+    int64_t* word = NULL;
+    check(oreslang_source_actor_frame_i64_slot_checked(
+        domain, epoch, 0, &word) && word != NULL);
+    /* This is a fresh per-turn scalar slot, not a carrier-local static. */
+    check(*word == 0);
+    int64_t* last = NULL;
+    check(oreslang_source_actor_frame_i64_slot_checked(
+        domain, epoch, 8191, &last) && last != NULL && *last == 0);
+    *word = payload;
+    check(*oreslang_source_actor_frame_i64_slot(domain, epoch, 0) == payload);
+    int64_t* invalid = word;
+    check(!oreslang_source_actor_frame_i64_slot_checked(
+        domain + 1, epoch, 0, &invalid) && invalid == NULL);
+    return *word;
 }
 
 static int64_t resumed(void* actor) {
@@ -63,6 +92,9 @@ static int64_t resumed(void* actor) {
 }
 
 int main(void) {
+    int64_t* supervisor = NULL;
+    check(!oreslang_source_actor_frame_i64_slot_checked(
+        1, 1, 0, &supervisor) && supervisor == NULL);
     void* actor = oreslang_source_actor_spawn(
         actor_init, actor_message, 1);
     check(actor != NULL);
@@ -75,6 +107,9 @@ int main(void) {
     check(!oreslang_source_actor_current_execution_handle(&outside));
 
     oreslang_source_actor_stop(actor);
+    int64_t* retired = NULL;
+    check(!oreslang_source_actor_frame_i64_slot_checked(
+        1, 1, 0, &retired) && retired == NULL);
     puts("SOURCE_ACTOR_AWAIT_TRACE_RUNTIME_PASS");
     return 0;
 }

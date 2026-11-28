@@ -1901,8 +1901,14 @@ private:
                 fail("native async gen* requires scheduler-owned async iterator continuation lowering");
             if (!accept("fnc"))
                 fail("native first async Future<int> producer requires async fnc");
-        } else if (owner.empty() && !accept("fnc") && !accept("routine")) {
-            fail("expected fnc or routine");
+        } else if (owner.empty()) {
+            if (accept("fnc")) {
+                value.direct_only_routine = false;
+            } else if (accept("routine")) {
+                value.direct_only_routine = true;
+            } else {
+                fail("expected fnc or routine");
+            }
         }
         // Compatibility spellings remain fail-closed in this first native
         // slice. Canonical bare sync gen* is handled by scalar_generator().

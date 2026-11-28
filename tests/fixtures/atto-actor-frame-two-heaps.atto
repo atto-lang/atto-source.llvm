@@ -1,0 +1,27 @@
+// Canonical AttoLang source-to-LLVM/native actor scalar frame regression.
+// Actor-private handler parameter, field cache and owned locals must reside
+// in per-incarnation native frame slots, not carrier C stack allocas.
+define actor Worker as {
+  let total: int = 0;
+  pub fnc on_message(int n): int {
+    const previous: owned int = total + n;
+    const doubled: owned int = previous + previous;
+    total = doubled;
+    return total;
+  }
+}
+pub fnc main(): int {
+  const a: ActorRef<Worker> = spawn Worker();
+  const b: ActorRef<Worker> = spawn Worker();
+  a.send(1);
+  b.send(5);
+  a.send(2);
+  b.send(6);
+  a.send(3);
+  b.send(7);
+  a.send(4);
+  b.send(8);
+  stop a;
+  stop b;
+  return 43;
+}

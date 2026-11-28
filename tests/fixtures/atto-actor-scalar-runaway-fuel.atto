@@ -1,0 +1,17 @@
+// Compiler-backed runaway tail recursion: actor must fail on its
+// 2,000,000 dispatched instruction fuel quota without growing native stack.
+fnc spin(int n): int {
+  return spin(n);
+}
+define actor Worker as {
+  let seen: int = 0;
+  pub fnc on_message(int n): int {
+    return spin(n);
+  }
+}
+pub fnc main(): int {
+  const a: ActorRef<Worker> = spawn Worker();
+  a.send(100000);
+  stop a;
+  return 43;
+}

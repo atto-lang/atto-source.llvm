@@ -27,12 +27,19 @@ def expected_prefix_last(name, actor_index, processed):
         for n in range(1, processed + 1):
             value = 2 * (value + n)
         return value
-    if name == "source-actor-two-owned-heaps.ores":
+    if name in {"source-actor-two-owned-heaps.ores",
+                "atto-actor-frame-two-heaps.atto"}:
         value = 0
         start = 1 if actor_index == 0 else 5
         for n in range(start, start + processed):
             value = 2 * (value + n)
         return value
+    if name in {"atto-actor-scalar-tail100k.atto",
+                "atto-actor-scalar-nontail-overflow.atto",
+                "atto-actor-scalar-runaway-fuel.atto"}:
+        return 0
+    if name == "atto-actor-scalar-mutual-tail.atto":
+        return 1 if processed else 0
     if name == "source-actor-interleaved-stop.ores":
         sequences = ([1], [3, 4])
         return sum(sequences[actor_index][:processed])
@@ -118,11 +125,26 @@ def main():
         ("source-actor-fifo-ten.ores", 1, 10, 2853116705),
         ("source-actor-scoped-owned-i64.ores", 1, 8, 1004),
         ("source-actor-two-owned-heaps.ores", 2, 4, None),
+        ("atto-actor-frame-two-heaps.atto", 2, 4, None),
+        ("atto-actor-scalar-tail100k.atto", 1, 1, 0),
+        ("atto-actor-scalar-nontail-overflow.atto", 1, 1, 0),
+        ("atto-actor-scalar-mutual-tail.atto", 1, 1, 1),
+        ("atto-actor-scalar-runaway-fuel.atto", 1, 1, 0),
         ("source-actor-interleaved-stop.ores", 2, None, None),
         ("source-actor-send-moved-value.ores", 1, 2, 3),
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
     ]
     negatives = {
+        "atto-actor-scalar-routine-recursion-reject.atto":
+            "native actor typed scalar frame admission: function graph is not a closed pure unary integer fnc subset",
+        "atto-actor-scalar-unsafe-nested-call-reject.atto":
+            "native actor typed scalar frame admission: actor callback may only directly return pure unary fnc(message)",
+        "atto-actor-scalar-abi-shadow-reject.atto":
+            "reserved native actor runtime symbol collision",
+        "atto-actor-frame-internal-symbol-reject.atto":
+            "reserved native actor runtime symbol collision",
+        "atto-actor-heap-internal-symbol-reject.atto":
+            "reserved native actor runtime symbol collision",
         "source-actor-pipe-unlowered-reject.ores":
             "NATIVE_ACTOR_PIPE_UNSUPPORTED: typed actor pipe requires guest port, mailbox and supervisor lowering",
         "source-actor-transform-pipe-unlowered-reject.ores":
@@ -194,17 +216,70 @@ def main():
         assert result.returncode != 0 and diagnostic in result.stderr, (name, diagnostic, result.stderr)
         assert not result.stdout.strip(), ("unsafe LLVM IR emitted for rejected source", name)
     print(f"PASS {len(negatives)} no-IR actor ownership and await boundary cases", flush=True)
+    # Shared Node? linked-object graph is a future native heap target, NOT a
+    # scalar-frame guest. A compiler may only produce executable IR once it
+    # proves nominal reference types and actor heap ownership/borrow semantics.
+    # Pin the byte-exact canonical .atto source from conformance PR #461.
+    import hashlib
+    graph_path = fixtures / "atto-actor-hybrid-memory-node-graph-reject.atto"
+    graph_bytes = graph_path.read_bytes()
+    git_blob = hashlib.sha1(
+        b"blob " + str(len(graph_bytes)).encode("ascii") + b"\0" + graph_bytes
+    ).hexdigest()
+    assert git_blob == "d472cccb3da24ee8f9fed44f99c1c7742d3240de", git_blob
+    graph_result = run([args.compiler, str(graph_path)])
+    assert graph_result.returncode != 0, (
+        "unverified linked Node? actor heap source emitted an executable guest",
+        graph_result.stdout[:500], graph_result.stderr[:500])
+    assert graph_result.stderr.strip(), "missing compiler rejection diagnostic"
+    assert not graph_result.stdout.strip(), "rejected guest emitted LLVM IR"
+    print("PASS native LLVM linked Ref32 Node graph denied before guest IR", flush=True)
+
     with tempfile.TemporaryDirectory(prefix="oreslang-native-source-actor-") as temp:
         for name, actors, count, last in positives:
             flags = ["--experimental-owned-int"] if name in {
                 "source-actor-scoped-owned-i64.ores",
                 "source-actor-two-owned-heaps.ores",
+                "atto-actor-frame-two-heaps.atto",
             } else []
             guest = run([args.compiler, *flags, str(fixtures / name)])
             assert guest.returncode == 0, (name, guest.stderr)
             assert guest.stdout.startswith("; ModuleID"), name
             assert "call i64 @oreslang_source_actor_spawn_id(" in guest.stdout, name
             assert "oreslang_source_actor_stop_id" in guest.stdout, name
+            assert "oreslang_source_actor_spawn" in guest.stdout, name
+            assert "oreslang_source_actor_stop" in guest.stdout, name
+            m3 = name in {
+                "atto-actor-scalar-tail100k.atto",
+                "atto-actor-scalar-nontail-overflow.atto",
+                "atto-actor-scalar-mutual-tail.atto",
+                "atto-actor-scalar-runaway-fuel.atto",
+            }
+            if m3:
+                vm_calls = [line for line in guest.stdout.splitlines()
+                            if "call i32 @oreslang_source_actor_scalar_vm_execute(" in line]
+                assert len(vm_calls) == 1, (name, vm_calls)
+                assert "oreslang.actor.scalar.m3.program.Worker" in guest.stdout
+                assert "oreslang.actor.scalar.m3.instructions.Worker" in guest.stdout
+                callback = guest.stdout.split(
+                    "define i64 @oreslang_actor_Worker_on_message", 1)
+                assert len(callback) == 2, (name, "no compiled callback")
+                callback_body = callback[1].split("\n}", 1)[0]
+                assert "oreslang_source_actor_scalar_vm_execute" in callback_body
+                for native in ("tail", "depth", "even", "odd"):
+                    assert "call i64 @" + native + "(" not in callback_body
+            # An LLVM declaration alone does not establish real actor-frame
+            # lowering: require actual call sites emitted by the frontend.
+            frame_calls = [line for line in guest.stdout.splitlines()
+                           if "call ptr @oreslang_source_actor_frame_i64_slot(" in line
+                           or "call i8* @oreslang_source_actor_frame_i64_slot(" in line]
+            assert len(frame_calls) >= 2, (
+                name, "compiled actor handler did not use actor frame slots", frame_calls)
+            if name == "atto-actor-frame-two-heaps.atto":
+                assert len(frame_calls) == 4, (name, frame_calls)
+                for label in ("n", "total", "previous", "doubled"):
+                    assert label + ".actor.frame.address" in guest.stdout, (
+                        name, label)
             if name not in {
                 "source-actor-spawn-stop.ores",
                 "source-actor-await-done.ores",
@@ -213,6 +288,7 @@ def main():
             if name in {
                 "source-actor-scoped-owned-i64.ores",
                 "source-actor-two-owned-heaps.ores",
+                "atto-actor-frame-two-heaps.atto",
             }:
                 assert guest.stdout.count(
                     "call void @ores_actor_i64_heap_scoped_new(") == 2, name
@@ -298,6 +374,55 @@ def main():
                                if "SOURCE_AWAIT_DONE_TRACE_PASS" in line]
                 assert len(trace_lines) == 1, (name, trace_lines)
                 assert "terminal_ack=1 execution_id_persisted=1 fresh_resume=1 root_slot=63" in trace_lines[0], trace_lines[0]
+            scalar_lines = [line for line in executed.stderr.splitlines()
+                            if line.startswith("SOURCE_ACTOR_SCALAR_VM_VERIFIED ")]
+            assert len(scalar_lines) == actors, (name, scalar_lines)
+            scalar_records = []
+            for line in scalar_lines:
+                record = {}
+                for part in line.split()[1:]:
+                    key, separator, value = part.partition("=")
+                    assert separator and value.isdecimal(), (name, line)
+                    assert key in {"actor", "steps", "tail_calls",
+                                   "non_tail_calls", "peak_frames",
+                                   "checkpoints", "error"} and key not in record, (
+                        name, line)
+                    record[key] = int(value)
+                assert set(record) == {"actor", "steps", "tail_calls",
+                                       "non_tail_calls", "peak_frames",
+                                       "checkpoints", "error"}, (name, line)
+                assert record["peak_frames"] <= 64, (name, record)
+                assert record["checkpoints"] <= record["steps"] // 256, (name, record)
+                scalar_records.append(record)
+            if not m3:
+                assert all(r["steps"] == 0 and r["tail_calls"] == 0
+                           and r["non_tail_calls"] == 0
+                           and r["peak_frames"] == 0 and r["checkpoints"] == 0
+                           and r["error"] == 0
+                           for r in scalar_records), (name, scalar_records)
+
+            frames = [line for line in executed.stderr.splitlines()
+                      if line.startswith("SOURCE_ACTOR_FRAME_RETIRE_VERIFIED ")]
+            assert len(frames) == actors, (name, frames)
+            frame_records = []
+            for receipt in frames:
+                fields = {}
+                for part in receipt.split()[1:]:
+                    key, sep, value = part.partition("=")
+                    assert sep and key in {
+                        "actor", "bytes", "high_water", "slot_calls", "released"
+                    } and key not in fields and value.isdecimal(), (name, receipt)
+                    fields[key] = int(value)
+                assert set(fields) == {
+                    "actor", "bytes", "high_water", "slot_calls", "released"
+                }, (name, receipt)
+                assert fields["actor"] != 0 and fields["bytes"] == 65536
+                assert fields["released"] == 1
+                assert fields["high_water"] <= 8192
+                frame_records.append(fields)
+            assert len({f["actor"] for f in frame_records}) == actors, (
+                name, "different actors reused the same incarnation", frame_records)
+
             lines = [line for line in executed.stderr.splitlines()
                      if "SOURCE_ACTOR_SPAWN_STOP_VERIFIED" in line]
             assert len(lines) == actors, (name, lines)
@@ -305,6 +430,45 @@ def main():
             for i, receipt in enumerate(receipts):
                 accepted = receipt["accepted"]
                 processed = receipt["processed"]
+                if m3:
+                    # The source main's immediate STOP may race an already
+                    # admitted DATA turn; M3 cooperatively cancels at the next
+                    # 256-op checkpoint. The deterministic wait-harness below,
+                    # not this racy ordinary-main path, proves full execution.
+                    error = scalar_records[i]["error"]
+                    allowed_errors = (
+                        {0, 1, 5} if name ==
+                        "atto-actor-scalar-nontail-overflow.atto"
+                        else ({0, 2, 5} if name ==
+                              "atto-actor-scalar-runaway-fuel.atto"
+                              else {0, 5}))
+                    assert error in allowed_errors, (name, i, scalar_records[i])
+                    if not processed:
+                        assert error == 0 and scalar_records[i]["steps"] == 0
+                    else:
+                        assert scalar_records[i]["steps"] > 0
+                        if error == 1:
+                            assert name == "atto-actor-scalar-nontail-overflow.atto"
+                            assert scalar_records[i]["non_tail_calls"] >= 63
+                            assert scalar_records[i]["peak_frames"] == 64
+                        if error == 2:
+                            assert name == "atto-actor-scalar-runaway-fuel.atto"
+                            assert scalar_records[i]["steps"] == 2000000
+                        if error == 5:
+                            assert scalar_records[i]["checkpoints"] >= 1, (
+                                name, scalar_records[i])
+                        if error == 0:
+                            assert name not in {
+                                "atto-actor-scalar-nontail-overflow.atto",
+                                "atto-actor-scalar-runaway-fuel.atto"}
+                            assert scalar_records[i]["tail_calls"] >= 100000, (
+                                name, scalar_records[i])
+                            assert scalar_records[i]["peak_frames"] == 1, (
+                                name, scalar_records[i])
+                if processed:
+                    assert frame_records[i]["high_water"] >= 2, (name, i)
+                    assert frame_records[i]["slot_calls"] >= 2 * processed, (
+                        name, i, receipt, frame_records[i])
                 abandoned = receipt["abandoned"]
                 observed_last = receipt["last"]
                 expected_accepted = (
@@ -316,15 +480,95 @@ def main():
                 assert 0 <= processed <= accepted, (name, i, processed, accepted)
                 assert abandoned == accepted - processed, (
                     name, i, accepted, processed, abandoned)
-                assert observed_last == expected_prefix_last(
-                    name, i, processed), (
+                expected_last = (0 if m3 and scalar_records[i]["error"] == 5
+                                 else expected_prefix_last(name, i, processed))
+                assert observed_last == expected_last, (
                     name, i, processed, observed_last)
-            if name == "source-actor-two-owned-heaps.ores":
+            if name in {"source-actor-two-owned-heaps.ores",
+                        "atto-actor-frame-two-heaps.atto"}:
                 assert [r["last"] for r in receipts] == [
                     expected_prefix_last(name, i, r["processed"])
                     for i, r in enumerate(receipts)
                 ], (name, receipts)
             print("PASS native source actor:", name, "actors", actors, flush=True)
+            if m3:
+                # The ordinary guest main must preserve STOP's right to
+                # abandon queued DATA. For a positive M3 EXECUTION receipt,
+                # link the identical compiler-generated actor init/handler
+                # against a trusted test-only native main that waits for an
+                # actual completed delivery before requesting quiescence.
+                # Only the host entry symbol is renamed; all actor code and
+                # compiled bytecode constants remain byte-for-byte identical.
+                harness_ir, renamed = re.subn(
+                    r"(?m)^(define\s+(?:dso_local\s+)?i32\s+)@main\(",
+                    r"\1@oreslang_compiled_guest_main_unused(",
+                    guest.stdout, count=1)
+                assert renamed == 1, (name, "missing one host main wrapper")
+                harness_ll = pathlib.Path(temp, name + ".executed.ll")
+                harness_ll.write_text(harness_ir)
+                harness_exe = pathlib.Path(temp, name + ".executed")
+                harness_command = command.copy()
+                harness_command[harness_command.index(str(ll))] = str(harness_ll)
+                harness_command[harness_command.index("-o") + 1] = str(harness_exe)
+                harness_command.insert(
+                    harness_command.index("-o"),
+                    str(root / "tests" /
+                        "source_actor_scalar_vm_compiled_guest_harness.c"))
+                linked_harness = run(harness_command)
+                assert linked_harness.returncode == 0, (
+                    name, "compiled harness link failed", linked_harness.stderr)
+                input_value = 100 if name == (
+                    "atto-actor-scalar-nontail-overflow.atto") else 100000
+                actual = run([str(harness_exe), str(input_value)])
+                assert actual.returncode == 0, (
+                    name, "real source-compiled M3 guest failed", actual.stderr)
+                assert actual.stdout.count(
+                    "ACTUAL_SOURCE_COMPILED_ACTOR_FRAME_VM_EXECUTED processed=1"
+                ) == 1, (name, actual.stdout)
+                real_scals = [line for line in actual.stderr.splitlines()
+                              if line.startswith(
+                                  "SOURCE_ACTOR_SCALAR_VM_VERIFIED ")]
+                assert len(real_scals) == 1, (name, real_scals)
+                real_fields = dict(piece.split("=", 1)
+                                   for piece in real_scals[0].split()[1:])
+                assert set(real_fields) == {
+                    "actor", "steps", "tail_calls",
+                    "non_tail_calls", "peak_frames", "checkpoints",
+                    "error"}, (name, real_fields)
+                assert int(real_fields["peak_frames"]) in {1, 64}, (
+                    name, real_fields)
+                assert int(real_fields["checkpoints"]) <= (
+                    int(real_fields["steps"]) // 256)
+                assert int(real_fields["actor"]) != 0
+                assert int(real_fields["steps"]) > 0
+                assert int(real_fields["error"]) == (
+                    1 if name == "atto-actor-scalar-nontail-overflow.atto"
+                    else 2 if name == "atto-actor-scalar-runaway-fuel.atto"
+                    else 0), (name, real_fields)
+                if name == "atto-actor-scalar-runaway-fuel.atto":
+                    assert int(real_fields["steps"]) == 2000000
+                    assert int(real_fields["peak_frames"]) == 1
+                    assert int(real_fields["checkpoints"]) == 2000000 // 256
+                    assert int(real_fields["tail_calls"]) >= 999999
+                elif name == "atto-actor-scalar-nontail-overflow.atto":
+                    assert int(real_fields["non_tail_calls"]) == 63
+                    assert int(real_fields["peak_frames"]) == 64
+                else:
+                    assert int(real_fields["tail_calls"]) == 100000
+                    assert int(real_fields["peak_frames"]) == 1
+                    assert int(real_fields["checkpoints"]) > 0
+                completed = [line for line in actual.stderr.splitlines()
+                             if line.startswith("SOURCE_ACTOR_SPAWN_STOP_VERIFIED ")]
+                assert len(completed) == 1, (name, completed)
+                real_receipt = parse_actor_receipt(completed[0])
+                assert real_receipt["accepted"] == 1
+                assert real_receipt["processed"] == 1
+                assert real_receipt["abandoned"] == 0
+                assert real_receipt["last"] == (
+                    1 if name == "atto-actor-scalar-mutual-tail.atto"
+                    else 0)
+                print("PASS actual compiler-backed M3 actor VM:", name,
+                      "instructions", real_fields["steps"], flush=True)
     print("PASS current-source actor lowering and physical heap reclamation")
 
 if __name__ == "__main__":
