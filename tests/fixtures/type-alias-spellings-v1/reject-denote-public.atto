@@ -1,0 +1,3 @@
+// expect: TYPE_DENOTE_VISIBILITY_UNSUPPORTED
+denote pub type Count = int;
+pub fnc main(): int { return 42; }
