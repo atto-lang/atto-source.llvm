@@ -375,7 +375,18 @@ void validate_native_scalar_types(const Program& program) {
                     statements(item.then_statements, body);
                 } else if (item.kind == Statement::Kind::ScopedLocal) {
                     const auto& binding = *item.branch_local;
-                    if (!binding.class_name.empty()) (void)immutable_record(binding.class_name);
+                    if (binding.explicit_factory_take) {
+                        const bool root = std::any_of(fn.statements.begin(), fn.statements.end(),
+                            [&](const Statement& statement) { return &statement == &item; });
+                        if (!root || fn.name != "main" || !fn.parameters.empty() ||
+                                fn.returns_void || fn.return_type != ScalarType::I64 ||
+                                !fn.return_class.empty() || !binding.owner_mutable ||
+                                binding.assignable || !binding.record_view ||
+                                !owns_arrays(binding.class_name) ||
+                                !layouts.at(binding.class_name).subobjects.empty() ||
+                                !binding.initializer || binding.initializer->kind != Expression::Kind::Call)
+                            fail(binding.offset, "E_ORDERED_OWNER_PROFILE: requires exact flat root factory result");
+                    } else if (!binding.class_name.empty()) (void)immutable_record(binding.class_name);
                     if (!binding.array_record_class.empty()) (void)immutable_record(binding.array_record_class);
                     if (binding.initializer) require(expression(*binding.initializer, scope), local_type(binding), binding.offset, "branch local initializer");
                     scope.emplace(binding.name, local_type(binding));
