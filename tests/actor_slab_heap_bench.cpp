@@ -14,6 +14,14 @@
 // prints: variant actors nodes ptr_bits rss_built_kib rss_after_stop_kib
 //         bytes_per_node alloc_ns_avg alloc_ns_max metadata_kib
 #include "oreslang/runtime/ActorSlabHeap.hpp"
+// -DORES_BENCH_SMALL_PAGES measures the 1 KiB small-actor page profile.
+#if defined(ORES_BENCH_SMALL_PAGES)
+using BenchHeap = oreslang::runtime::ActorSlabHeapSmall;
+using BenchPool = oreslang::runtime::ActorHeapRegionPoolSmall;
+#else
+using BenchHeap = oreslang::runtime::ActorSlabHeap;
+using BenchPool = oreslang::runtime::ActorHeapRegionPool;
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -111,19 +119,27 @@ int main(int argc, char** argv) {
         const bool handles = variant == "handle32";
         // Realistic bounded per-actor heaps: reserve what the actor needs plus
         // slack, never a 4 GiB cage (matters for 100k actors on a 32-bit host).
-        const std::size_t need = std::size_t{nodes} * 16 * 105 / 100 + (handles ? std::size_t{nodes} * 8 : 0);
-        const std::size_t reserve = (need / 4096 + 3) * 4096;
-        ActorHeapRegionPool pool(actors, reserve); // one mapping for all actors
+        // Size from the real page geometry of the selected profile: 16-byte
+        // nodes per slab page, plus the handle table and slack pages.
+        constexpr std::size_t page = BenchHeap::kPageBytes;
+        const std::size_t per_page = (page - BenchHeap::kHeaderBytes) / 16;
+        const std::size_t table = handles ? (std::size_t{nodes} * 8 + BenchHeap::kHeaderBytes + page - 1) / page : 0;
+        // Slack pages per actor (default 3). In a shared pool an actor costs about
+        // min(slot, OS page) of RSS, so tiny actors need a tight reservation.
+        const char* slack_env = std::getenv("ORES_BENCH_SLACK_PAGES");
+        const std::size_t slack = slack_env ? std::strtoul(slack_env, nullptr, 10) : 3;
+        const std::size_t reserve = ((nodes + per_page - 1) / per_page + table + slack) * page;
+        BenchPool pool(actors, reserve); // one mapping for all actors
         if (!pool.ok()) { std::printf("%s %u %u %zu FAILED_RESERVE\n", variant.c_str(), actors, nodes, sizeof(void*) * 8); return 1; }
-        std::vector<std::unique_ptr<ActorSlabHeap>> heaps(actors);
+        std::vector<std::unique_ptr<BenchHeap>> heaps(actors);
         std::vector<void*> slots(actors);
         // Roots per actor: the guest would hold these as 4-byte fields.
         std::vector<std::vector<std::uint32_t>> roots(actors);
         for (std::uint32_t a = 0; a < actors; ++a) {
             slots[a] = pool.acquire();
-            heaps[a] = std::make_unique<ActorSlabHeap>(slots[a], pool.slot_bytes(),
+            heaps[a] = std::make_unique<BenchHeap>(slots[a], pool.slot_bytes(),
                                                        handles ? nodes : 0u);
-            ActorSlabHeap& heap = *heaps[a];
+            BenchHeap& heap = *heaps[a];
             if (!heap.ok()) { std::printf("%s %u %u %zu FAILED_RESERVE\n", variant.c_str(), actors, nodes, sizeof(void*) * 8); return 1; }
             auto& root = roots[a];
             root.resize(nodes);
@@ -150,9 +166,9 @@ int main(int argc, char** argv) {
         }
         for (std::uint32_t a = 0; a < actors; ++a)
             for (std::uint32_t w : roots[a]) {
-                const ActorSlabHeap::Ref r = handles
-                    ? heaps[a]->resolve_handle(ActorSlabHeap::Handle32{w}).value
-                    : ActorSlabHeap::Ref::from_storage(w);
+                const BenchHeap::Ref r = handles
+                    ? heaps[a]->resolve_handle(BenchHeap::Handle32{w}).value
+                    : BenchHeap::Ref::from_storage(w);
                 checksum += static_cast<NodeCompact*>(heaps[a]->resolve(r, 16).value)->payload;
             }
         rss_built = rss_kib();

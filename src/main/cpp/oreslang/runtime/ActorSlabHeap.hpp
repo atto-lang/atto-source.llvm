@@ -80,7 +80,13 @@ struct ActorSlabHeapStats final {
     std::uint32_t quarantined_handles = 0;
 };
 
-class ActorSlabHeap final {
+// PageBytes is a per-heap profile. 4096 is the default and the golden-contract
+// layout; small actors (tens of objects) can use 1024 to avoid paying a 4 KiB
+// page per size class. Classes that do not fit a page take the large path.
+template<std::size_t PageBytes>
+class BasicActorSlabHeap final {
+    static_assert(PageBytes == 1024 || PageBytes == 2048 || PageBytes == 4096,
+                  "slab page profile must be 1, 2 or 4 KiB (bitmap holds 384 blocks)");
 public:
     using Ref = CompressedActorRef;
     struct Handle32 final {
@@ -93,7 +99,7 @@ public:
         explicit operator bool() const noexcept { return status == SlabStatus::Ok; }
     };
 
-    static constexpr std::size_t kPageBytes = 4096;
+    static constexpr std::size_t kPageBytes = PageBytes;
     static constexpr std::size_t kHeaderBytes = 64;
     static constexpr std::size_t kMaxAlignment = 64;
     static constexpr std::array<std::uint16_t, 24> kClassBytes{
@@ -164,7 +170,8 @@ private:
 
     static constexpr std::uint8_t class_for(std::size_t bytes, std::size_t align) noexcept {
         for (std::size_t c = 0; c < kClasses; ++c)
-            if (kClassBytes[c] >= bytes && kClassBytes[c] % align == 0)
+            if (kClassBytes[c] >= bytes && kClassBytes[c] % align == 0
+                    && kClassBytes[c] <= kPageBytes - kHeaderBytes)
                 return static_cast<std::uint8_t>(c);
         return static_cast<std::uint8_t>(kClasses);
     }
@@ -349,7 +356,7 @@ private:
 
 public:
     // Reserve address space and commit on demand (POSIX). Fails closed: check ok().
-    explicit ActorSlabHeap(const ActorSlabHeapConfig& config) {
+    explicit BasicActorSlabHeap(const ActorSlabHeapConfig& config) {
         const std::size_t reserve = config.reserve_bytes / kPageBytes * kPageBytes;
         if (reserve == 0 || config.budget_bytes == 0 || config.budget_bytes > reserve
                 || reserve > Ref::max_addressable_span
@@ -375,7 +382,7 @@ public:
     }
 
     // Caller-provided, already committed memory (embedded / no-MMU targets).
-    ActorSlabHeap(void* buffer, std::size_t bytes, std::uint32_t handle_capacity = 0) {
+    BasicActorSlabHeap(void* buffer, std::size_t bytes, std::uint32_t handle_capacity = 0) {
         const auto addr = reinterpret_cast<std::uintptr_t>(buffer);
         const std::size_t reserve = bytes / kPageBytes * kPageBytes;
         if (!buffer || addr % kPageBytes != 0 || reserve == 0
@@ -389,9 +396,9 @@ public:
         else return;
     }
 
-    ActorSlabHeap(const ActorSlabHeap&) = delete;
-    ActorSlabHeap& operator=(const ActorSlabHeap&) = delete;
-    ~ActorSlabHeap() { retire(); }
+    BasicActorSlabHeap(const BasicActorSlabHeap&) = delete;
+    BasicActorSlabHeap& operator=(const BasicActorSlabHeap&) = delete;
+    ~BasicActorSlabHeap() { retire(); }
 
     bool ok() const noexcept { return !retired_; }
     const ActorSlabHeapStats& stats() const noexcept { return stats_; }
@@ -605,13 +612,22 @@ private:
     }
 };
 
+// The default heap: 4 KiB pages, the layout the cross-backend golden fixtures pin.
+using ActorSlabHeap = BasicActorSlabHeap<4096>;
+// Small-actor profile: 1 KiB pages; classes above 960 B use the large path.
+using ActorSlabHeapSmall = BasicActorSlabHeap<1024>;
+
+
 // Many actors, one reservation. One mmap per actor costs a kernel mapping each
 // (and mprotect commits split them further): 100k actors exceed Linux's
 // default vm.max_map_count. The pool maps once; anonymous pages are demand-
 // paged, so untouched slot bytes cost no RSS. Each slot backs one
 // ActorSlabHeap through the caller-buffer constructor. Single owner (the
 // scheduler); acquire/release are O(1) and never allocate.
-class ActorHeapRegionPool final {
+// Slots are sized in the heap's page profile. With 1 KiB heaps several small
+// actors share one OS page, which is the only way a 1 KiB page saves RSS.
+template<std::size_t PageBytes>
+class BasicActorHeapRegionPool final {
     std::byte* base_ = nullptr;
     std::size_t slot_bytes_ = 0;
     std::uint32_t slots_ = 0;
@@ -622,11 +638,11 @@ class ActorHeapRegionPool final {
     std::uint32_t free_count_ = 0;
 
 public:
-    ActorHeapRegionPool(std::uint32_t slots, std::size_t slot_bytes) {
-        slot_bytes_ = (slot_bytes + ActorSlabHeap::kPageBytes - 1)
-                    / ActorSlabHeap::kPageBytes * ActorSlabHeap::kPageBytes;
+    BasicActorHeapRegionPool(std::uint32_t slots, std::size_t slot_bytes) {
+        slot_bytes_ = (slot_bytes + PageBytes - 1)
+                    / PageBytes * PageBytes;
         if (slots == 0 || slot_bytes_ == 0
-                || slot_bytes_ > ActorSlabHeap::Ref::max_addressable_span
+                || slot_bytes_ > CompressedActorRef::max_addressable_span
                 || slot_bytes_ > std::numeric_limits<std::size_t>::max() / slots)
             return;
 #if ORES_SLAB_HEAP_HAS_MMAP
@@ -657,9 +673,9 @@ public:
         free_count_ = slots;
 #endif
     }
-    ActorHeapRegionPool(const ActorHeapRegionPool&) = delete;
-    ActorHeapRegionPool& operator=(const ActorHeapRegionPool&) = delete;
-    ~ActorHeapRegionPool() {
+    BasicActorHeapRegionPool(const BasicActorHeapRegionPool&) = delete;
+    BasicActorHeapRegionPool& operator=(const BasicActorHeapRegionPool&) = delete;
+    ~BasicActorHeapRegionPool() {
 #if ORES_SLAB_HEAP_HAS_MMAP
         if (base_) ::munmap(base_, slot_bytes_ * slots_);
 #endif
@@ -694,11 +710,20 @@ public:
         if (acquired_[index] == 0) return false; // duplicate or never acquired
         acquired_[index] = 0;
 #if ORES_SLAB_HEAP_HAS_MMAP && defined(MADV_DONTNEED)
-        ::madvise(slot, slot_bytes_, MADV_DONTNEED); // give the RSS back
+        // Give back only OS pages lying entirely inside this slot: sub-page
+        // slots share OS pages with live neighbours. The retired heap already
+        // scrubbed its carved pages, so the shared remainder holds no data.
+        const auto os_page = static_cast<std::uintptr_t>(::sysconf(_SC_PAGESIZE));
+        const auto lo = (reinterpret_cast<std::uintptr_t>(slot) + os_page - 1) / os_page * os_page;
+        const auto hi = (reinterpret_cast<std::uintptr_t>(slot) + slot_bytes_) / os_page * os_page;
+        if (hi > lo) ::madvise(reinterpret_cast<void*>(lo), hi - lo, MADV_DONTNEED);
 #endif
         free_[free_count_++] = index;
         return true;
     }
 };
+
+using ActorHeapRegionPool = BasicActorHeapRegionPool<4096>;
+using ActorHeapRegionPoolSmall = BasicActorHeapRegionPool<1024>;
 
 } // namespace oreslang::runtime
