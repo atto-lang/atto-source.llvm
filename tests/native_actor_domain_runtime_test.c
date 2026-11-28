@@ -43,11 +43,11 @@ int main(void) {
 
         OresArenaLoan al = ores_actor_arena_borrow(arena, at, ah);
         OresActorLoan hl = ores_actor_i64_heap_borrow(heap, ht, sh);
-        check(ores_actor_i64_heap_loan_read(heap, ht, hl) == (int64_t)i,
-              "scalar loan read failed");
+        check(ores_actor_i64_heap_read(heap, ht, sh) == (int64_t)i,
+              "scalar read while loan held failed");
         observed = 0;
-        ores_actor_arena_loan_read(arena, at, al, 0, &observed, sizeof(observed));
-        check(observed == i, "arena loan read failed");
+        ores_actor_arena_read(arena, at, ah, 0, &observed, sizeof(observed));
+        check(observed == i, "arena read while loan held failed");
 
         ores_actor_arena_leave(arena, at);
         ores_actor_i64_heap_leave(heap, ht);
