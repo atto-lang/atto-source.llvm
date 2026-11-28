@@ -46,7 +46,9 @@ run_case 'pub fnc main(): int { const Record<infer R> r=(); const Record<R> s={}
 run_case 'pub fnc main(): int { const Tuple<infer T> t=(); const Tuple<T> u=(); return 42; }'
 run_case 'pub fnc main(): int { const Tuple t=(42,); return t[0]; }'
 run_case 'pub fnc main(): int { const Record r={a:40,b=2}; return r.a+r.b; }'
-reject 'const Tuple t=(42);' E_TUPLE_ARITY
+run_case 'pub fnc main(): int { const Tuple t=(42); return t[0]; }'
+run_case 'pub fnc main(): int { const Tuple<infer T> t=(1); const Tuple<T> u=(42,); return u[0]; }'
+reject 'const Tuple<infer T> t=(1,2); const Tuple<T> u=(42);' E_TYPE_MISMATCH
 reject 'const Record<infer R> r=(); const Tuple<R> t=();' E_AGGREGATE_KIND
 reject 'const Tuple<infer T> t=(); const Record<T> r=();' E_AGGREGATE_KIND
 reject 'const Record<infer R> r={a:1}; const Record<R> s=();' E_TYPE_MISMATCH
@@ -54,4 +56,4 @@ reject 'const Record<infer R> r=(); const Record<R> s={a:1};' E_TYPE_MISMATCH
 reject 'const Tuple<infer T> t=(1,2); const Tuple<T> u=();' E_TYPE_MISMATCH
 reject 'const struct s={};' E_EMPTY_AGGREGATE
 reject 'const t=(); const t=();' 'duplicate aggregate local'
-echo 'Named aggregate LLVM native guests: 9 x O0/O2, 20 rejection cases'
+echo 'Named aggregate LLVM native guests: 11 x O0/O2, 20 rejection cases'
