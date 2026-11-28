@@ -264,6 +264,7 @@ fn main() {
         ("ordered-array-scopes-loop-and-early-return", include_str!("fixtures/native-class-string/ordered-array-locals.ores"), ""),
         ("checked-copy-option-guest", include_str!("fixtures/native-class-string/copy-option-v1.atto"), "7:42:true:true:true:true:9"),
         ("ordered-val-keeps-exclusive-referent-capability", "fnc touch():void{return;}fnc observe(borrow mut int value):int{return 42;}pub fnc main():int{touch();val int value=42;return observe(rt mut borrow value)==42?0:1;}", ""),
+        ("mutable-borrow-aliases-equivalent", "fnc observe(borrow mut int value):int{return value;}pub fnc main():int{val int owner=42;return observe(rt borrow mut owner)==42&&observe(rt mut borrow owner)==42&&observe(borrow! mut owner)==42?0:1;}", ""),
         ("ordered-initial-and-later-mutable-slots", "fnc touch():void{return;}pub fnc main():int{let int initial=1;touch();let int later=2;initial=initial+later;return initial==3?0:1;}", ""),
         ("ordered-routing-counters-and-skipped-initializers", include_str!("fixtures/native-class-string/ordered-routing-locals.ores"), "enter;enter;initialize;finish;done;"),
         ("ordered-root-scalar-lives-through-defer", r#"fnc touch():void{stdio.print("enter;");return;}fnc observe(int value):void{stdio.print(value==42?"final;":"early;");return;}
@@ -925,7 +926,8 @@ fn main() {
         ("checked-copy-option-reject-arity", "pub routine main():int{val Array<int> values=new Array<int>();val Option<int> forged=values.get_copy();return 0;}".to_owned(), foo.to_owned()),
         ("ordered-array-loop-cannot-retain-borrow", "fnc touch():void{return;}pub fnc main():int{touch();for(let int i=0;i<2;i=i+1){val Array<int> values=new Array<int>();values.add(i);}return values.get(0);}".to_owned(), foo.to_owned()),
 
-        ("legacy-mut-borrow-spelling-stays-rejected", "pub fnc main():int{val int owner=1;return rt borrow mut owner;}".to_owned(), foo.to_owned()),
+        ("legacy-mut-borrow-return-escape-rejected", "pub fnc main():int{val int owner=1;return rt borrow mut owner;}".to_owned(), foo.to_owned()),
+        ("canonical-mut-borrow-return-escape-rejected", "pub fnc main():int{val int owner=1;return borrow! mut owner;}".to_owned(), foo.to_owned()),
         ("ordered-const-cannot-lend-exclusively", "fnc touch():void{return;}fnc observe(borrow mut int value):int{return 42;}pub fnc main():int{touch();const int value=42;return observe(rt mut borrow value);}".to_owned(), foo.to_owned()),
         ("ordered-array-cannot-escape-branch", "fnc touch():void{return;}pub fnc main():int{touch();if true;then val Array<int> values=new Array<int>();values.add(1);fi return values.size;}".to_owned(), foo.to_owned()),
         ("ordered-async-frame-not-on-stack", "define actor Worker as {let total:int=0;pub fnc on_message(int n):int{return n;}}pub fnc main():int{const worker:ActorRef<Worker> =spawn Worker();await worker.get_ready();let int value=1;stop worker;return value;}".to_owned(), foo.to_owned()),
@@ -1199,7 +1201,8 @@ fn main() {
         );
         assert!(rejected.stdout.is_empty(), "{name}: emitted partial IR");
         let expected_boundary = match *name {
-            "legacy-mut-borrow-spelling-stays-rejected" => Some("legacy 'rt borrow mut value' is not accepted"),
+            "legacy-mut-borrow-return-escape-rejected" |
+            "canonical-mut-borrow-return-escape-rejected" => Some("borrowed reference may only be passed to a borrowed parameter"),
             "checked-copy-option-reject-string" |
             "checked-copy-option-reject-bool-index" |
             "checked-copy-option-reject-arity" => Some("native Array.get_copy requires Array<int> and a checked int index"),
