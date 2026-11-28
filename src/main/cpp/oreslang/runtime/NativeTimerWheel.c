@@ -60,16 +60,20 @@ static void release(OresTimerWheel* w, int32_t i) {
     w->size--;
 }
 
-static void place(OresTimerWheel* w, int32_t i) {
-    uint64_t d = w->deadline[i];
-    if (d <= w->now_ns) { append(w, i, DUE); return; }
-    uint64_t e = d / w->tick_ns;
+/* Cascades must not shortcut to DUE using the final poll time. */
+static void place_by_tick(OresTimerWheel* w, int32_t i) {
+    uint64_t e = w->deadline[i] / w->tick_ns;
     if (e <= w->current_tick) { append(w, i, CURRENT); return; }
     int level = (63 - __builtin_clzll(e ^ w->current_tick)) / SLOT_BITS;
     if (level >= LEVELS) { append(w, i, OVERFLOW); return; }
     int s = (int)((e >> (level * SLOT_BITS)) & (SLOTS - 1));
     append(w, i, level * SLOTS + s);
     w->occupancy[level] |= UINT64_C(1) << s;
+}
+
+static void place(OresTimerWheel* w, int32_t i) {
+    if (w->deadline[i] <= w->now_ns) append(w, i, DUE);
+    else place_by_tick(w, i);
 }
 
 static uint64_t next_event_tick(OresTimerWheel* w) {
@@ -108,10 +112,10 @@ static void advance(OresTimerWheel* w, uint64_t now) {
     if (now < w->now_ns) now = w->now_ns;
     uint64_t target = now / w->tick_ns;
     w->now_ns = now;
-    if (target > w->current_tick) drain_current(w, true);
     for (;;) {
         uint64_t t = next_event_tick(w);
         if (t == NONE || t > target) break;
+        drain_current(w, true);
         w->current_tick = t;
         int level = w->event_level;
         int32_t list = level < 0 ? OVERFLOW
@@ -120,10 +124,13 @@ static void advance(OresTimerWheel* w, uint64_t now) {
         while (first != NIL) {
             int32_t i = first;
             first = w->next[i];
-            place(w, i);
+            place_by_tick(w, i);
         }
     }
-    if (target > w->current_tick) w->current_tick = target;
+    if (target > w->current_tick) {
+        drain_current(w, true);
+        w->current_tick = target;
+    }
     drain_current(w, false);
 }
 
