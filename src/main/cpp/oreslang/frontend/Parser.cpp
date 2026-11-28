@@ -5526,6 +5526,13 @@ private:
         return factor;
     }
 
+    QuantityUnit read_declared_dimension() {
+        const auto name = identifier();
+        const auto found = quantity_dimensions_.find(name);
+        if (found == quantity_dimensions_.end()) fail("E_UNIT_NAME: unknown or forward dimension");
+        return found->second;
+    }
+
     void quantity_declaration() {
         require("define");
         const bool dimension = accept("dimension");
@@ -5536,8 +5543,23 @@ private:
         if (quantity_dimensions_.count(name) || quantity_units_.count(name))
             fail("E_UNIT_DUPLICATE: quantity name '" + name + "' is already declared");
         if (dimension) {
+            auto vector = QuantityUnit::base(name);
+            if (accept("=")) {
+                if (strict_i64_) fail("E_VERIFY_UNSUPPORTED: compound dimension pilot is not strict-profile admitted");
+                vector = read_declared_dimension();
+                unsigned factors = 1;
+                while (token_.text == "*" || token_.text == "/") {
+                    const bool divide = accept("/");
+                    if (!divide) require("*");
+                    if (++factors > 128) fail("E_UNIT_LIMIT: compound dimension factor budget exceeded");
+                    vector = vector.combine(read_declared_dimension(), divide);
+                }
+                if (vector.powers().empty()) fail("E_UNIT_DIMENSION: empty vector requires explicit nominal kind admission");
+                for (const auto& entry : quantity_dimensions_)
+                    if (entry.second.same_dimension(vector)) fail("E_UNIT_DIMENSION: equal vectors require explicit nominal kind admission");
+            }
             require(";");
-            quantity_dimensions_.emplace(name, QuantityUnit::base(name));
+            quantity_dimensions_.emplace(name, std::move(vector));
             return;
         }
         require(":");
@@ -10705,6 +10727,101 @@ void reject_unlowered_mutex_constructor(std::string_view source,
     }
 }
 
+// Exact compiler-owned common-source #164 catalog.
+constexpr std::string_view measure_source=R"atto_measure(// Portable core reference prelude; file-local Verified Core candidate.
+// Import/export and generic refinements are not yet admitted by this profile.
+define dimension Length;
+define unit Meter: Length;
+define unit Millimeter: Length = Meter / 1000;
+define unit Centimeter: Length = Meter / 100;
+define unit Kilometer: Length = Meter * 1000;
+define unit Micrometer: Length = Meter / 1000000;
+define unit Nanometer: Length = Meter / 1000000000;
+// Complete SI decimal length prefix family; scales remain exact rational.
+define unit Decameter: Length = Meter * 10;
+define unit Hectometer: Length = Decameter * 10;
+define unit Megameter: Length = Kilometer * 1000;
+define unit Gigameter: Length = Megameter * 1000;
+define unit Terameter: Length = Gigameter * 1000;
+define unit Petameter: Length = Terameter * 1000;
+define unit Exameter: Length = Petameter * 1000;
+define unit Zettameter: Length = Exameter * 1000;
+define unit Yottameter: Length = Zettameter * 1000;
+define unit Ronnameter: Length = Yottameter * 1000;
+define unit Quettameter: Length = Ronnameter * 1000;
+define unit Decimeter: Length = Meter / 10;
+define unit Picometer: Length = Nanometer / 1000;
+define unit Femtometer: Length = Picometer / 1000;
+define unit Attometer: Length = Femtometer / 1000;
+define unit Zeptometer: Length = Attometer / 1000;
+define unit Yoctometer: Length = Zeptometer / 1000;
+define unit Rontometer: Length = Yoctometer / 1000;
+define unit Quectometer: Length = Rontometer / 1000;
+define dimension Time;
+define unit Second: Time;
+define unit Millis: Time = Second / 1000;
+define unit Micros: Time = Second / 1000000;
+define unit Nanos: Time = Second / 1000000000;
+define unit Minute: Time = Second * 60;
+define unit Hour: Time = Second * 3600;
+define unit Day: Time = Second * 86400;
+define dimension Mass;
+define unit Kilogram: Mass;
+define unit Gram: Mass = Kilogram / 1000;
+define unit Milligram: Mass = Gram / 1000;
+define dimension ElectricCurrent;
+define unit Ampere: ElectricCurrent;
+define unit Milliampere: ElectricCurrent = Ampere / 1000;
+define dimension Temperature;
+// Linear temperature differences only; absolute points are separately gated.
+define unit Kelvin: Temperature;
+define dimension AmountOfSubstance;
+define unit Mole: AmountOfSubstance;
+define dimension LuminousIntensity;
+define unit Candela: LuminousIntensity;
+define dimension Information;
+define unit Bit: Information;
+define unit Byte: Information = Bit * 8;
+define unit Kilobyte: Information = Byte * 1000;
+define unit Megabyte: Information = Byte * 1000000;
+define unit Gigabyte: Information = Byte * 1000000000;
+define unit Kibibyte: Information = Byte * 1024;
+define unit Mebibyte: Information = Byte * 1048576;
+define unit Gibibyte: Information = Byte * 1073741824;
+
+type PositiveInt = int where self > 0;
+type NegativeInt = int where self < 0;
+type NonNegativeInt = int where self >= 0;
+type NonPositiveInt = int where self <= 0;
+type PositiveI32 = i32 where self > 0;
+type NegativeI32 = i32 where self < 0;
+type NonNegativeI32 = i32 where self >= 0;
+type NonPositiveI32 = i32 where self <= 0;
+)atto_measure";
+constexpr std::string_view measure_units[]={"Meter","Millimeter","Centimeter","Kilometer","Micrometer","Nanometer","Decameter","Hectometer","Megameter","Gigameter","Terameter","Petameter","Exameter","Zettameter","Yottameter","Ronnameter","Quettameter","Decimeter","Picometer","Femtometer","Attometer","Zeptometer","Yoctometer","Rontometer","Quectometer","Second","Millis","Micros","Nanos","Minute","Hour","Day","Kilogram","Gram","Milligram","Ampere","Milliampere","Kelvin","Mole","Candela","Bit","Byte","Kilobyte","Megabyte","Gigabyte","Kibibyte","Mebibyte","Gibibyte"};
+constexpr std::string_view measure_aliases[]={"PositiveInt","NegativeInt","NonNegativeInt","NonPositiveInt","PositiveI32","NegativeI32","NonNegativeI32","NonPositiveI32"};
+bool requests_measure_prelude(std::string_view source) {
+    Lexer scan(source);
+    for(auto expected:{"pub","fnc","main"}) {
+        auto t=scan.next();if(t.kind!=Kind::Identifier||t.text!=expected)return false;
+    }
+    if(scan.next().text!="(")return false;
+    std::vector<Token> w;
+    for(std::size_t count=0;count<8192;++count){
+        auto t=scan.next();if(t.kind==Kind::End)return false;
+        w.push_back(t);
+        if(w.size()<4)continue;
+        const auto& a=w[0];const auto& b=w[1];const auto& c=w[2];const auto& d=w[3];
+        if(a.kind==Kind::Integer&&b.text=="<"&&c.kind==Kind::Identifier&&d.text==">"&&a.offset+a.text.size()==b.offset)
+            for(auto n:measure_units)if(c.text==n)return true;
+        if(a.kind==Kind::Identifier&&a.text=="val"&&b.kind==Kind::Identifier)
+            for(auto n:measure_aliases)
+                if((b.text==n&&c.kind==Kind::Identifier&&d.text=="=")||(c.text==":"&&d.kind==Kind::Identifier&&d.text==n))return true;
+        w.erase(w.begin());
+    }
+    return false;
+}
+
 } // namespace
 
 Program parse_verified_namespace_source_unresolved(
@@ -10719,9 +10836,41 @@ Program parse_unresolved_program(std::string_view source, bool experimental_owne
                       bool experimental_rt_scalar_loop, bool experimental_pointer_int_aot,
                       int language_version) {
     reject_unlowered_mutex_constructor(source, experimental_pointer_int_aot);
-    Program program = Parser(source, experimental_owned_int,
-                             experimental_rt_scalar_loop, false, 0,
-                             experimental_pointer_int_aot, language_version).parse();
+    std::string expanded;
+    if (!experimental_owned_int && !experimental_rt_scalar_loop && !experimental_pointer_int_aot &&
+            requests_measure_prelude(source)) {
+        // Existing parser remains the only admission authority.
+        expanded=std::string(measure_source)+"\n"+std::string(source);
+        source=expanded;
+    }
+    Program program;
+    try {
+        program = Parser(source, experimental_owned_int,
+                         experimental_rt_scalar_loop, false, 0,
+                         experimental_pointer_int_aot, language_version).parse();
+    } catch (const std::runtime_error& failure) {
+        if (expanded.empty()) throw;
+        // Internal offsets remain in expanded coordinates for lexer gap and
+        // adjacency checks. Map only the parser's terminal byte diagnostic.
+        std::string message(failure.what());
+        const auto marker=message.rfind(" at byte ");
+        if(marker==std::string::npos)throw;
+        const auto begin=marker+9;
+        auto end=begin;
+        std::size_t offset=0;
+        while(end<message.size() && digit(message[end])){
+            const auto d=static_cast<std::size_t>(message[end]-'0');
+            if(offset>source.size()/10 || offset*10>source.size()-d)throw;
+            offset=offset*10+d;
+            ++end;
+        }
+        if(end==begin || (end!=message.size() && !(end+1==message.size() && message[end]==')')) ||
+            offset>source.size())throw;
+        const auto prefix=measure_source.size()+1;
+        if(offset<prefix)throw std::runtime_error("E_UNIT_PRELUDE: internal catalog admission failed");
+        message.replace(begin,end-begin,std::to_string(offset-prefix));
+        throw std::runtime_error(message);
+    }
     if (experimental_rt_scalar_loop &&
             (program.functions.size() != 1 || !program.functions.front().scalar_while ||
              !program.classes.empty() || !program.actors.empty() ||
