@@ -14,7 +14,8 @@
  *
  * Records live in one slab allocated at init (capacity fixed thereafter).
  * Handles are (generation << 32) | (index + 1); 0 is never valid. A slot's
- * generation advances when the record is freed, so stale handles are inert.
+ * generation advances when the record is freed; exhausted slots retire instead
+ * of recycling a stale handle.
  *
  * The caller supplies monotonic nanoseconds on every call (virtual clocks are
  * fine). A timer fires on the first poll at or past its deadline, never
@@ -69,7 +70,8 @@ bool ores_timer_wheel_init(OresTimerWheel* w, uint32_t capacity,
                            uint64_t tick_ns, uint64_t now_ns);
 void ores_timer_wheel_destroy(OresTimerWheel* w);
 
-/* Absolute monotonic deadline. Returns 0 when full. */
+/* Absolute monotonic deadline. Returns 0 when no reusable slot remains or
+ * the reserved ORES_TIMER_NO_DEADLINE sentinel is supplied. */
 uint64_t ores_timer_wheel_arm(OresTimerWheel* w, uint64_t deadline_ns, uint64_t payload);
 /* True only if the handle named an armed or queued timer. */
 bool ores_timer_wheel_cancel(OresTimerWheel* w, uint64_t handle);
