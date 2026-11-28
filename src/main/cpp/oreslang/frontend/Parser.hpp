@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -49,7 +50,7 @@ struct Expression {
         Add, Subtract, Multiply, Remainder, Modulo, BitXor,
         Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
         LogicalAnd, LogicalOr, LogicalXor,
-        Conditional, Cast,
+        Conditional, Cast, ClosedRecur,
         Call, ArrayCall, RecordConstruct, SumConstruct, SumAccess, Copy, DeepCopy, Take, Share, Borrow, BorrowMut, Field,
         ShiftLeft, ShiftRight, ShiftUnsignedRight
     };
@@ -64,6 +65,8 @@ struct Expression {
     ScalarType cast_target = ScalarType::I64; // checked, identity-only native scalar cast
     mutable std::string resolved_class;
     std::string name;
+    // Preserve source receiver through native endpoint admission, before lowering.
+    std::string console_receiver;
     std::unique_ptr<Expression> left;
     std::unique_ptr<Expression> right;
     // Conditional is the native scalar form of Oreslang's lazy `? :`.
@@ -86,7 +89,73 @@ struct Expression {
     // A Call produced by an eager `|>` stage (java CallOrigin.VALUE_PIPE_ARGUMENT):
     // arguments[0] is the piped value. Pipeline edges have their own depth budget.
     bool pipeline_stage = false;
+    // Private lexical scalar-loop plan. Ordinary visitors must not resolve
+    // these state names against the surrounding callable's ownership scope.
+    std::vector<std::string> recur_names;
+    std::vector<std::unique_ptr<Expression>> recur_initializers;
+    std::vector<std::unique_ptr<Expression>> recur_predicates;
+    std::vector<std::unique_ptr<Expression>> recur_results;
+    std::vector<std::unique_ptr<Expression>> recur_updates;
 };
+
+// Independent structural and typed check, replayed at parser validation,
+// ownership admission and LLVM lowering. No call, external capture, owned
+// value, nested state loop or runtime effect can enter the closed operands.
+inline std::optional<ScalarType> closed_recur_operand(
+        const Expression& e, const std::vector<std::string>& scope, unsigned depth = 0) {
+    using K = Expression::Kind;
+    if (depth > 32 || e.native_box_read || !e.resolved_class.empty() ||
+        !e.sum_type.empty() || !e.arguments.empty() || !e.argument_names.empty() ||
+        !e.type_arguments.empty() || e.type_arguments_present || e.trap_origin ||
+        e.pipeline_stage || e.condition || e.condition_lhs || e.condition_rhs ||
+        e.when_true || e.when_false || !e.recur_names.empty() ||
+        !e.recur_initializers.empty() || !e.recur_predicates.empty() ||
+        !e.recur_results.empty() || !e.recur_updates.empty()) return std::nullopt;
+    if (e.kind == K::Integer || e.kind == K::Boolean)
+        return !e.left && !e.right && e.name.empty()
+            ? std::optional<ScalarType>(e.kind == K::Integer ? ScalarType::I64 : ScalarType::Bool)
+            : std::nullopt;
+    if (e.kind == K::Variable)
+        return !e.left && !e.right && std::find(scope.begin(), scope.end(), e.name) != scope.end()
+            ? std::optional<ScalarType>(ScalarType::I64) : std::nullopt;
+    if (!e.name.empty() || !e.left) return std::nullopt;
+    const auto lhs = closed_recur_operand(*e.left, scope, depth + 1);
+    if (e.kind == K::Negate)
+        return !e.right && lhs == ScalarType::I64 ? lhs : std::nullopt;
+    if (!e.right || lhs != ScalarType::I64 ||
+        closed_recur_operand(*e.right, scope, depth + 1) != ScalarType::I64) return std::nullopt;
+    switch (e.kind) {
+        case K::Add: case K::Subtract: case K::Multiply: return ScalarType::I64;
+        case K::Equal: case K::NotEqual: case K::Less: case K::LessEqual:
+        case K::Greater: case K::GreaterEqual: return ScalarType::Bool;
+        default: return std::nullopt;
+    }
+}
+inline bool valid_closed_recur(const Expression& e) {
+    if (e.kind != Expression::Kind::ClosedRecur || e.recur_names.empty() ||
+        e.recur_names.size() > 8 || e.recur_initializers.size() != e.recur_names.size() ||
+        e.recur_updates.size() != e.recur_names.size() || e.recur_predicates.empty() ||
+        e.recur_predicates.size() > 32 || e.recur_results.size() != e.recur_predicates.size() ||
+        e.left || e.right || e.condition || e.condition_lhs || e.condition_rhs ||
+        e.when_true || e.when_false || !e.arguments.empty() || !e.argument_names.empty() ||
+        !e.name.empty() || e.native_box_read || !e.resolved_class.empty() || !e.sum_type.empty() ||
+        !e.type_arguments.empty() || e.type_arguments_present || e.trap_origin || e.pipeline_stage) return false;
+    std::vector<std::string> scope;
+    for (std::size_t i = 0; i < e.recur_names.size(); ++i) {
+        const auto& name = e.recur_names[i];
+        if (name.empty() || std::find(scope.begin(), scope.end(), name) != scope.end() ||
+            !e.recur_initializers[i] ||
+            closed_recur_operand(*e.recur_initializers[i], scope) != ScalarType::I64) return false;
+        scope.push_back(name);
+    }
+    for (std::size_t i = 0; i < e.recur_predicates.size(); ++i)
+        if (!e.recur_predicates[i] || !e.recur_results[i] ||
+            closed_recur_operand(*e.recur_predicates[i], scope) != ScalarType::Bool ||
+            closed_recur_operand(*e.recur_results[i], scope) != ScalarType::I64) return false;
+    for (const auto& update : e.recur_updates)
+        if (!update || closed_recur_operand(*update, scope) != ScalarType::I64) return false;
+    return true;
+}
 
 // Phase-one native trap supports only total integer-expression structure.
 // Arithmetic overflow remains a terminal panic. This predicate deliberately
@@ -151,6 +220,7 @@ struct LocalBinding {
     // binding receives the result of exactly one scheduler-owned Future await.
     std::string future_await_name;
     bool assignable = false; // mutable lexical slot, distinct from referent capability
+    bool explicit_factory_take = false; // direct owned class result, not a place move or record view loan
 };
 
 struct ClassField {
@@ -344,6 +414,9 @@ struct Statement {
     std::unique_ptr<Expression> condition_rhs;
     std::vector<Statement> then_statements;
     std::vector<Statement> else_statements;
+    // Only statically lowered factory callbacks carry this marker.
+    // Ordinary delayed direct calls retain their legacy contract.
+    bool static_defer_factory = false;
 };
 
 // Side-effect-free equality guard with return-only taken branch.

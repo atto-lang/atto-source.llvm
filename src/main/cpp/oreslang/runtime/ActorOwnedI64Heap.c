@@ -1,4 +1,5 @@
 #include "oreslang/runtime/ActorOwnedI64Heap.h"
+#include "oreslang/runtime/NativeActorDomainId.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <stdatomic.h>
@@ -58,13 +59,7 @@ static _Atomic(uint64_t) next_domain = 1;
  * terminal value, wraps through 0 and re-issues domain 1, so stale slots and
  * loans from the first heap would validate against a new one. */
 static uint64_t reserve_domain(void) {
-    uint64_t current = atomic_load_explicit(&next_domain, memory_order_relaxed);
-    while (current != 0 && current != UINT64_MAX) {
-        if (atomic_compare_exchange_weak_explicit(&next_domain, &current, current + 1,
-                memory_order_relaxed, memory_order_relaxed))
-            return current;
-    }
-    return 0;
+    return ores_native_actor_domain_reserve(&next_domain, ORES_NATIVE_DOMAIN_SCALAR);
 }
 /* One admitted actor heap per physical carrier, not just per logical epoch.
  * Carrier migration is permitted only after a completed leave. A stolen
@@ -191,6 +186,29 @@ OresActorI64Heap* ores_actor_i64_heap_open(uint64_t actor_id,
     heap->next_loan_nonce = 1;
     for (uint64_t i = 0; i < slot_capacity; ++i) heap->slots[i].generation = 1;
     return heap;
+}
+
+int ores_actor_i64_heap_try_enter(OresActorI64Heap* heap,
+                                    uint64_t actor_id, uint64_t incarnation,
+                                    OresActorTurn* out) {
+    if (!heap || !out || !actor_id || !incarnation) rejected();
+    if (carrier_heap != NULL) return 0;
+    if (atomic_flag_test_and_set_explicit(&heap->mutex, memory_order_acquire)) return 0;
+    if (actor_id != heap->owner || incarnation != heap->incarnation)
+        rejected();
+    if (heap->retiring || heap->turn_active) {
+        unlock_heap(heap);
+        return 0;
+    }
+    if (heap->turn_epoch == UINT64_MAX) rejected();
+    ++heap->turn_epoch;
+    OresActorTurn token = {heap->domain, heap->turn_epoch};
+    heap->turn_active = 1;
+    carrier_heap = heap;
+    carrier_epoch = token.epoch;
+    *out = token;
+    unlock_heap(heap);
+    return 1;
 }
 
 OresActorTurn ores_actor_i64_heap_enter(OresActorI64Heap* heap,

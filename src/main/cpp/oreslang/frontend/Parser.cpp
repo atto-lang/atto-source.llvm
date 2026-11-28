@@ -3,6 +3,8 @@
 #include "oreslang/frontend/CallableSelector.hpp"
 #include "oreslang/frontend/ChannelGuestGate.hpp"
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/NamedRecursiveScalarSource.hpp"
+#include "oreslang/frontend/SourceInput.hpp"
 #include "oreslang/frontend/PortableUnicodeIdentifier.hpp"
 #include "oreslang/types/CoreTypeRegistry.hpp"
 #include "oreslang/frontend/PointerIntSyntax.hpp"
@@ -70,42 +72,58 @@ bool reserved_unsafe_stdlib_import(std::string_view path) {
     // G0: lexical package identity is compared before loading native modules.
     // Later path normalization must not make std/./unsafe look harmless.
     const auto reserved = [](std::string_view candidate) {
-        for (const std::string_view root : {
-                "ores.std/unsafe", "std/unsafe", "ores.std.unsafe",
-                "std.unsafe", "ores.std:unsafe", "std:unsafe"}) {
-            if (candidate == root ||
-                (candidate.size() > root.size() &&
-                 candidate.substr(0, root.size()) == root &&
-                 (candidate[root.size()] == '/' || candidate[root.size()] == '.')))
-                return true;
+        // Exact components avoid both alias laundering and substring matches.
+        std::vector<std::string_view> parts;
+        for (std::size_t from = 0; from < candidate.size();) {
+            const auto end = candidate.find_first_of("/.:", from);
+            const auto part = candidate.substr(from, end == std::string_view::npos
+                ? candidate.size() - from : end - from);
+            if (!part.empty()) parts.push_back(part);
+            if (end == std::string_view::npos) break;
+            from = end + 1;
         }
-        return false;
+        const std::size_t offset = !parts.empty() &&
+            (parts[0] == "atto" || parts[0] == "ores") ? 1 : 0;
+        return parts.size() > offset + 1 &&
+               parts[offset] == "std" && parts[offset + 1] == "unsafe";
     };
     if (reserved(path)) return true;
-    const bool rooted = path.substr(0, 4) == "std/" ||
-                        path.substr(0, 9) == "ores.std/";
-    // Relative imports may canonicalize into the reserved stdlib namespace.
-    if (path.find('/') == std::string_view::npos) return false;
-    std::vector<std::string_view> segments;
+    // Track the first three logical segments before traversal erases them.
+    // This is linear in path size and does not repeatedly join prefixes.
+    std::vector<std::string_view> prefix;
+    std::vector<std::size_t> stack;
+    std::size_t root_depth = 0;
     for (std::size_t from = 0; from <= path.size();) {
         const auto slash = path.find('/', from);
-        const auto part = path.substr(from, slash == std::string_view::npos
-                ? path.size() - from : slash - from);
-        if (part == "..") {
-            if (rooted && segments.size() <= 1) return true; // Root traversal is noncanonical.
-            if (!segments.empty()) segments.pop_back();
-        } else if (!part.empty() && part != ".") {
-            segments.push_back(part);
+        const auto component = path.substr(from, slash == std::string_view::npos
+            ? path.size() - from : slash - from);
+        if (component == "..") {
+            if (root_depth != 0 && stack.size() <= root_depth) return true;
+            if (!stack.empty()) {
+                prefix.resize(stack.back());
+                stack.pop_back();
+            }
+        } else if (!component.empty() && component != ".") {
+            stack.push_back(prefix.size());
+            for (std::size_t at = 0; at < component.size() && prefix.size() < 3;) {
+                const auto delimiter = component.find_first_of(".:", at);
+                const auto segment = component.substr(at, delimiter == std::string_view::npos
+                    ? component.size() - at : delimiter - at);
+                if (!segment.empty()) prefix.push_back(segment);
+                if (delimiter == std::string_view::npos) break;
+                at = delimiter + 1;
+            }
+            const std::size_t offset = !prefix.empty() &&
+                (prefix[0] == "atto" || prefix[0] == "ores") ? 1 : 0;
+            if (prefix.size() > offset && prefix[offset] == "std") {
+                if (root_depth == 0) root_depth = stack.size();
+                if (prefix.size() > offset + 1 && prefix[offset + 1] == "unsafe") return true;
+            }
         }
         if (slash == std::string_view::npos) break;
         from = slash + 1;
     }
-    std::string canonical;
-    for (const auto part : segments) {
-        if (!canonical.empty()) canonical.push_back('/');
-        canonical.append(part);
-    }
-    return reserved(canonical);
+    return false;
 }
 
 [[noreturn]] void template_error(std::string_view detail, std::size_t offset) {
@@ -291,6 +309,20 @@ public:
             // Existing nb-select recognition is intentionally unchanged
             // until native select lowering supports that grammar.
             const auto first = source_.substr(start, at_ - start);
+            // Transfer aliases require the same complete-bang ASCII separator
+            // as the Rust frontend. Comparisons and bare identifiers are inert.
+            if ((first == "take" || first == "move") &&
+                    at_ < source_.size() && source_[at_] == '!' &&
+                    source_.substr(at_, 2) != "!=" &&
+                    !(source_.substr(at_, 3) == "!eq" &&
+                      (at_ + 3 == source_.size() || !identifier_part_at(source_, at_ + 3)))) {
+                const auto after = at_ + 1;
+                if (after == source_.size() ||
+                        std::string_view(" \t\r\n\v\f").find(source_[after]) == std::string_view::npos)
+                    throw std::runtime_error(
+                        "E_BANG_KEYWORD_WHITESPACE: whitespace required after complete transfer bang at byte " +
+                        std::to_string(start));
+            }
             if (first == "susp")
                 return {Kind::Identifier, "suspends", start};
             // Channel<int> has a distinct result/EOF/cancellation/ownership
@@ -458,6 +490,12 @@ public:
                 at_ += 2;
                 return {Kind::Symbol, source_.substr(start, 2), start};
             }
+        }
+        // Only the bounded unary tuple-pattern parser consumes a bare bar.
+        // Ordinary closures remain explicitly unsupported.
+        if (ch == '|') {
+            ++at_;
+            return {Kind::Symbol, source_.substr(start, 1), start};
         }
         // Injected mutable state changes ownership and runtime lifetime.
         // No native annotation HIR exists yet: reject before '@' can be
@@ -939,6 +977,11 @@ std::unique_ptr<Expression> clone_native_expression(const Expression& source) {
     result->when_false = clone(source.when_false);
     for (const auto& argument : source.arguments)
         result->arguments.push_back(clone_native_expression(*argument));
+    result->recur_names = source.recur_names;
+    for (const auto& item : source.recur_initializers) result->recur_initializers.push_back(clone(item));
+    for (const auto& item : source.recur_predicates) result->recur_predicates.push_back(clone(item));
+    for (const auto& item : source.recur_results) result->recur_results.push_back(clone(item));
+    for (const auto& item : source.recur_updates) result->recur_updates.push_back(clone(item));
     return result;
 }
 
@@ -1129,6 +1172,86 @@ public:
         if (language_version_ < 0 || language_version_ > 2)
             throw std::runtime_error("E_LANGUAGE_VERSION: expected 1 or 2");
         if (!experimental_pointer_int_aot_) reject_unlowered_with_update();
+    }
+
+    NamedRecursiveScalarPlan named_recursive_scalar() {
+        using namespace backend::named_recursive;
+        // Preflight the canonical token stream, so quoted data can never
+        // satisfy keyword/punctuation matches in the closed grammar.
+        auto probe=lexer_;
+        auto item=token_;
+        std::size_t count=0;
+        while(item.kind!=Kind::End){
+            if(++count>2048||item.kind==Kind::String||item.kind==Kind::Template)
+                fail("E_NAMED_STAGE_PROFILE: token budget or quoted token");
+            item=probe.next();
+        }
+        NamedRecursiveScalarPlan plan;
+        require("pub");require("fnc");require("main");require("(");require(")");
+        if(!accept(":"))require("->");
+        require("int");require("{");require_return_marker();
+        plan.input=signed_integer_literal();
+        require("|>");require("fnc");
+        const auto self=identifier();
+        require("(");require("int");const auto param=identifier();require(")");
+        if(self==param||self=="_"||param=="_"||self=="main"||self=="on"||param=="on")
+            fail("E_NAMED_STAGE_NAME: distinct lexical identifiers required");
+        if(!accept(":"))require("->");
+        require("int");require("{");require_return_marker();
+        auto& stage=plan.stage;
+        auto add=[&](Node n){
+            if(stage.nodes.size()>=128)fail("E_NAMED_STAGE_BUDGET: node limit");
+            stage.nodes.push_back(n);return stage.nodes.size()-1;
+        };
+        std::function<std::size_t(unsigned,int)> expr;
+        expr=[&](unsigned depth,int minimum)->std::size_t{
+            if(depth>16)fail("E_NAMED_STAGE_BUDGET: expression nesting");
+            std::size_t left;
+            if(token_.kind==Kind::Integer ||
+                (token_.text=="-"&&peek_next().kind==Kind::Integer)){
+                left=add({Op::literal,0,0,signed_integer_literal()});
+            }else if(accept("-")){
+                auto zero=add({Op::literal});
+                auto rhs=expr(depth+1,30);
+                left=add({Op::sub,zero,rhs});
+            }else if(accept("(")){
+                left=expr(depth+1,0);require(")");
+            }else{
+                const auto name=identifier();
+                if(name==param)left=add({Op::parameter});
+                else if(name==self){
+                    require("(");auto arg=expr(depth+1,0);require(")");
+                    left=add({Op::self,arg});
+                }else fail("E_NAMED_STAGE_CLOSED_INT: unknown lexical reference");
+            }
+            for(;;){
+                const auto op=token_.text;
+                const int precedence=op=="*"?20:op=="+"||op=="-"?10:-1;
+                if(precedence<minimum)return left;
+                advance();
+                const auto right=expr(depth+1,precedence+1);
+                left=add({op=="*"?Op::mul:op=="+"?Op::add:Op::sub,left,right});
+            }
+        };
+        if(accept("match")){
+            if(identifier()!=param)fail("E_NAMED_STAGE_MATCH: immutable parameter subject required");
+            require("over");
+            while(!accept("end")){
+                if(stage.arms.size()>=16)fail("E_NAMED_STAGE_MATCH: arm budget");
+                require("on");
+                std::optional<std::int64_t> key;
+                if(!accept("_"))key=signed_integer_literal();
+                require("->");
+                const auto body=expr(0,0);
+                stage.arms.push_back({key,body});
+                if(!accept(",")&&token_.text!="end")
+                    fail("E_NAMED_STAGE_MATCH: expected comma or end");
+            }
+        }else stage.arms.push_back({std::nullopt,expr(0,0)});
+        accept(";");require("}");accept(";");require("}");
+        if(token_.kind!=Kind::End)fail("E_NAMED_STAGE_PROFILE: standalone main required");
+        if(!valid(stage))fail("E_NAMED_STAGE_GRAPH: invalid closed scalar graph");
+        return plan;
     }
 
     Program parse() {
@@ -1449,7 +1572,7 @@ public:
                  "actor entrypoint needs manifest-verified receiver, state "
                  "loan and mailbox MIR");
         while (token_.text == "export" || token_.text == "define" || token_.text == "declare" ||
-               at_bare_type_alias() ||
+               at_bare_type_alias() || at_denotation() ||
                 (token_.text == "pub" &&
                  (peek_next().text == "define" || peek_next().text == "declare"))) {
             if (token_.text == "export") {
@@ -1458,6 +1581,10 @@ public:
             }
             if (at_type_only_introducer()) {
                 type_only_declaration(program);
+                continue;
+            }
+            if (at_denotation()) {
+                type_denotation(program);
                 continue;
             }
             if (at_bare_type_alias()) {
@@ -1553,6 +1680,11 @@ public:
                 program.classes.push_back(std::move(cls));
                 break;
             }
+            // define [pub] fnc/routine is not a module wrapper.
+            if (token_.text == "fnc" || token_.text == "routine") {
+                program.functions.push_back(function({}, exported));
+                continue;
+            }
             if (exported && token_.text != "class") fail("native public module wrapper is not supported in the i64 subset");
             if (accept("serial")) {
                 require("actor");
@@ -1600,6 +1732,10 @@ public:
             }
             if (token_.text == "import")
                 fail("native contract imports require a validated cross-unit linker");
+            if (at_denotation()) {
+                type_denotation(program);
+                continue;
+            }
             if (at_bare_type_alias()) {
                 bare_type_alias(program);
                 continue;
@@ -1757,6 +1893,10 @@ public:
                     program.classes.push_back(std::move(cls));
                     continue;
                 }
+                if (token_.text == "fnc" || token_.text == "routine") {
+                    program.functions.push_back(function({}, public_class));
+                    continue;
+                }
                 if (public_class && token_.text != "class") fail("native pub define currently supports only class declarations");
                 if (accept("serial")) {
                     require("actor");
@@ -1783,6 +1923,16 @@ public:
             }
         }
         for (auto& method : methods_) program.functions.push_back(std::move(method));
+        if (!tuple_pattern_helpers_.empty()) {
+            // This first profile is standalone and scalar-only. No package,
+            // actor or externally visible closure ABI can be manufactured.
+            if (wrapped_module || !program.module.empty() || !program.namespace_name.empty() ||
+                !program.imports.empty() || !program.namespace_imports.empty() ||
+                !program.exports.empty() || !program.classes.empty() || !program.actors.empty())
+                fail("NATIVE_TUPLE_PATTERN_SCOPE_UNSUPPORTED: standalone scalar compilation unit required");
+            for (auto& helper : tuple_pattern_helpers_)
+                program.functions.push_back(std::move(helper));
+        }
         if (wrapped_module) require("end");
         validate_actor_forwards(program);
         if (token_.kind != Kind::End) fail("unexpected trailing source");
@@ -1858,6 +2008,10 @@ public:
                  !program.classes.empty() || !program.module.empty())) {
             fail("first AOT continuation slice requires exactly one standalone suspend function");
         }
+        if (boolean_alias_used_ && (boolean_nominal_seen_ || program.module == "boolean" ||
+                defined_type_aliases_.count("boolean") || forwards_.count("boolean") ||
+                !program.imports.empty() || !program.namespace_imports.empty()))
+            fail("E_TYPE_ALIAS_SHADOWED: boolean requires unambiguous standalone scalar type resolution");
         program.sum_types = std::move(sum_types_);
         return program;
     }
@@ -1957,6 +2111,7 @@ private:
         decl.exported = exported;
         decl.offset = token_.offset;
         decl.name = identifier();
+        if (decl.name == "boolean") boolean_nominal_seen_ = true;
         if (!inverted_struct_names_.insert(decl.name).second)
             fail("duplicate inverted struct declaration");
         require("as");
@@ -2005,6 +2160,25 @@ private:
     bool at_bare_type_alias() const {
         return (token_.text == "type" && peek_next().kind == Kind::Identifier) ||
                (token_.text == "pub" && peek_next().text == "type");
+    }
+
+    bool at_denotation() const {
+        return token_.text == "denote" &&
+            (peek_next().text == "type" || peek_next().text == "pub" ||
+             peek_next().text == "private");
+    }
+
+    void type_denotation(Program& program) {
+        require("denote");
+        // The existing scalar catalog supports transparent scalar identities,
+        // not package-linked visibility or scoped nominal/generic denotations.
+        if (!program.namespace_name.empty() || !program.module.empty() ||
+                !program.imports.empty() || !program.namespace_imports.empty())
+            fail("TYPE_DENOTE_SCOPE_UNSUPPORTED: standalone file scope required");
+        if (token_.text == "pub" || token_.text == "private")
+            fail("TYPE_DENOTE_VISIBILITY_UNSUPPORTED: explicit visibility requires linked type metadata");
+        if (token_.text != "type") fail("TYPE_DENOTE_KIND: expected type");
+        type_only_declaration(program, true, false, true);
     }
 
     void bare_type_alias(Program& program) {
@@ -2176,7 +2350,7 @@ private:
     }
 
     void type_only_declaration(Program& program, bool already_defined = false,
-                               bool before_public = false) {
+                               bool before_public = false, bool denotation = false) {
         bool exported = before_public;
         if (already_defined) {
             if (accept("pub")) {
@@ -2231,7 +2405,7 @@ private:
         bool alias_as_spelling = false;
         if (accept("type")) {
             decl.kind = TypeOnlyDecl::Kind::Alias;
-            if (already_defined && token_.text == "alias" &&
+            if (!denotation && already_defined && token_.text == "alias" &&
                     peek_next().kind == Kind::Identifier) {
                 advance();
                 alias_as_spelling = true;
@@ -2243,6 +2417,7 @@ private:
                   "define model is a runtime type and value");
 
         decl.name = identifier();
+        if (decl.name == "boolean") boolean_nominal_seen_ = true;
         if (types::protected_core_identity(decl.name))
             fail("E_PRELUDE_SPOOF: type/trait declaration cannot replace compiler-owned core identity");
         if (native_ownership_intrinsic_name(decl.name))
@@ -2266,6 +2441,8 @@ private:
                 require("=");
             }
             decl.alias_target = type_alias_target();
+            if (denotation && token_.text != ";")
+                fail("TYPE_DENOTE_RHS_UNSUPPORTED: only complete scalar type expressions admitted");
             type_alias_constraints(decl);
             require(";");
             scalar_alias_targets_.emplace(decl.name, decl.alias_target);
@@ -2868,14 +3045,15 @@ private:
             fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
         }
         if (accept("static")) {
-            if (accept("method")) fail("static method is invalid; use static fnc");
+            if (accept("method") || accept("mtd")) fail("static method is invalid; use static fnc");
             fail("native actor static fnc requires separate member lowering");
         }
         if (suspends_actor) {
             if (!accept("fnc") && !accept("mtd"))
                 fail("ATTO_TASK_E_SUSPENDS_DECL: use 'suspends fnc' or 'suspends mtd'");
         } else if (!accept("fnc")) {
-            accept("method"); // legacy synchronous actor method marker
+            if (token_.text == "method") fail("obsolete method introducer; use mtd");
+            accept("mtd"); // optional synchronous actor method marker
         }
         if (at_unsupported_critical_mode()) {
             fail("native reader/writer critical declaration requires compiler-checked RW gate and scheduler-owned logical permits");
@@ -3048,6 +3226,8 @@ private:
             fail("NATIVE_CLASS_INHERITANCE_UNSUPPORTED: native class inheritance/virtual slots unsupported: native class extends/implements needs verified parent layout and virtual/trait method dispatch; no LLVM IR may be emitted");
         require("as");
         std::unordered_set<std::string> seen;
+        std::unordered_set<std::string> checked_fresh_arrays;
+        std::size_t last_fresh_array = 0;
         while (token_.text != "end") {
             if (token_.kind == Kind::End) fail("expected 'end'");
             if (token_.text == "abstract" ||
@@ -3062,13 +3242,38 @@ private:
             if (!publicly_visible) accept("private");
             if (token_.text == "abstract")
                 fail("NATIVE_PRIVATE_ABSTRACT_UNSUPPORTED: abstract method slots cannot lower as scalar fields or methods; no IR emitted");
-            // Formatter may insert 'mtd', but method identity and receiver
-            // erasure must remain unchanged. Never consume it as a class field.
-            const bool method_marker = accept("mtd");
+            // 'mtd' and legacy 'fnc' are contextual class
+            // method introducers only when followed by a callable name and
+            // then '(' or '<'. A bare method literally named mtd() or
+            // method() must retain its own selector and receiver ABI.
+            // Probe a *copy* of the lexer so malformed/doubled markers cannot
+            // mutate parser position or bypass ordinary method admission.
+            bool method_marker = false;
+            if (token_.text == "mtd" || token_.text == "method" || token_.text == "fnc") {
+                Lexer look = lexer_;
+                const Token name = look.next();
+                const Token after = look.next();
+                // Reject stacked introducers at the declaration boundary
+                // rather than letting "mtd method foo()" fall into native
+                // field parsing with an unrelated generic diagnostic.
+                if ((name.text == "mtd" || name.text == "method" || name.text == "fnc") &&
+                    after.kind == Kind::Identifier) {
+                    const Token following = look.next();
+                    if (following.text == "(" || following.text == "<")
+                        fail("native duplicate instance method introducer");
+                }
+                if (name.kind == Kind::Identifier &&
+                    (!reserved(name.text) || name.text == "pattern") &&
+                    (after.text == "(" || after.text == "<")) {
+                    if (token_.text == "method") fail("obsolete method introducer; use mtd");
+                    advance();
+                    method_marker = true;
+                }
+            }
             const bool method_ahead = token_.kind == Kind::Identifier && token_.text != "constructor" && (!reserved(token_.text) || token_.text == "pattern")
                 && [&] { Lexer look = lexer_; const auto next = look.next().text; return next == "(" || next == "<"; }();
             if (method_marker && !method_ahead)
-                fail("native mtd marker must precede a method signature");
+                fail("native method introducer must precede a callable signature");
             if (method_ahead) {
                 auto method = function(result.name, publicly_visible);
                 ClassMethod signature;
@@ -3108,9 +3313,58 @@ private:
                     require(")");
                 }
                 require("{");
+                // A deliberately narrow initialization-only body: direct
+                // parameter-to-uninitialized-int-field assignments are pure
+                // and total, so they can use existing constructor initializer
+                // slots without a new effect/ownership or evaluation-order ABI.
+                // Never permit reinitialization, field reads, arithmetic,
+                // calls, branches, or array/nested-owner writes here.
+                while (accept("self")) {
+                    require(".");
+                    const auto target = identifier();
+                    require("=");
+                    const auto source_offset = token_.offset;
+                    auto field = std::find_if(result.fields.begin(), result.fields.end(),
+                        [&](const ClassField& item) { return item.name == target; });
+                    // Only a fresh empty int array, using the existing checked
+                    // class field allocation/shadow path. Allocation ordering
+                    // must agree with the declaration-order lowering.
+                    if (token_.text == "new") {
+                        if (field == result.fields.end() || !field->constructor_argument ||
+                                !field->int_array || !field->mutable_referent ||
+                                field->array_element_type != ScalarType::I64 ||
+                                !field->array_record_class.empty())
+                            fail("E_CONSTRUCTOR_ARRAY_INIT: requires deferred mutable Array<int> field");
+                        const auto index = static_cast<std::size_t>(field - result.fields.begin());
+                        if (!checked_fresh_arrays.empty() && index <= last_fresh_array)
+                            fail("E_CONSTRUCTOR_ARRAY_INIT: allocation order must match field declaration order");
+                        require("new"); require("Array"); require("<"); require("int"); require(">");
+                        require("("); require(")"); require(";");
+                        last_fresh_array = index;
+                        checked_fresh_arrays.insert(target);
+                        field->constructor_argument = false;
+                        continue;
+                    }
+                    const auto source = identifier();
+                    require(";");
+                    if (field == result.fields.end() || !field->constructor_argument ||
+                            field->initializer_expression || field->int_array ||
+                            !field->class_name.empty() || !field->sum_type.empty() ||
+                            field->scalar_type != ScalarType::I64)
+                        fail("E_CONSTRUCTOR_FIELD_INIT: requires an uninitialized scalar int field");
+                    if (!params.count(source))
+                        fail("E_CONSTRUCTOR_FIELD_INIT: source must be a declared int parameter");
+                    field->initializer_expression = std::make_unique<Expression>();
+                    field->initializer_expression->kind = Expression::Kind::Variable;
+                    field->initializer_expression->name = source;
+                    field->initializer_expression->offset = source_offset;
+                    // Explicit constructor parameters, not the implicit
+                    // positional field list, now determine the ABI.
+                    field->constructor_argument = false;
+                }
                 if (accept_return_marker()) require(";");
                 if (token_.text != "}")
-                    fail("native scalar constructor body must be empty or contain only 'return;'");
+                    fail("native scalar constructor body must be empty or contain only checked field initialization and 'return;'");
                 require("}");
                 continue;
             }
@@ -3235,7 +3489,8 @@ private:
             if (!field.sum_type.empty() && result.explicit_constructor) fail("native sum field constructor requires checked nominal parameters");
             if (!field.class_name.empty() && result.explicit_constructor)
                 fail("native nested owned class constructor requires checked parameter ownership");
-            if (field.int_array && result.explicit_constructor)
+            if (field.int_array && result.explicit_constructor &&
+                    !checked_fresh_arrays.count(field.name))
                 fail("native owned Array<int> constructor requires checked failure cleanup");
             if (!field.initializer_expression) continue;
             const bool literal_sum = !field.sum_type.empty() && field.initializer_expression->kind == Expression::Kind::SumConstruct &&
@@ -3574,7 +3829,13 @@ private:
             value.name = extension_function_name(
                 extension_receiver_alias_, extension_method_name_);
         } else {
-            value.exported = owner.empty() ? accept("pub") : visible;
+            if (owner.empty()) {
+                const bool inline_public = accept("pub");
+                if (visible && inline_public) fail("duplicate pub modifier");
+                value.exported = visible || inline_public;
+            } else {
+                value.exported = visible;
+            }
         const bool source_async = owner.empty() && accept("async");
         // A foreign declaration has no Atto body. Never treat its source
         // spelling as a freely chosen native linker symbol.
@@ -3594,7 +3855,61 @@ private:
         if (token_.text == "gpu" || token_.text == "cpu" || token_.text == "quantum") {
             fail("native execution domain lowering unsupported");
         }
-        if (token_.text == "suspends" || token_.text == "suspend") {
+        if (token_.text == "suspends" || token_.text == "susp") {
+            // Closed root only: lower directly to the existing checked
+            // one-producer/one-observer scheduler ABI, never actor or FFI.
+            if (!owner.empty() || source_async || value.foreign_import || !value.exported)
+                fail("native suspends declaration requires suspension-aware borrow checking and LLVM continuation lowering");
+            advance();
+            require("fnc"); require("main"); value.name = "main";
+            require("("); require(")"); require(":"); require("int"); require("{");
+            const auto binding = token_.text;
+            if (binding != "val" && binding != "let" && binding != "const")
+                fail("E_UNSUPPORTED: closed root requires a typed TaskFuture or Future binding");
+            advance();
+            const bool principal = token_.text == "TaskFuture";
+            if (!principal && token_.text != "Future")
+                fail("E_UNSUPPORTED: closed root requires TaskFuture<int> or Future<int>");
+            if (binding == "const") fail("E_CONST: runtime task handle cannot be constant");
+            advance(); require("<"); require("int"); require(">");
+            SourceTaskI64Binding task;
+            task.offset = token_.offset;
+            task.name = identifier();
+            require("="); require("task"); require("<"); require("int"); require(">");
+            require("{"); require_return_marker(); task.result = expression();
+            require(";"); require("}"); require(";");
+            if (!native_capture_free_task_tree(*task.result))
+                fail("native Task<int> v1 producer must be capture-free and scalar");
+            // Parse a bounded second-observation diagnostic path; it never
+            // returns an executable AST or creates a second observer.
+            if (token_.text == "val" || token_.text == "let") {
+                advance(); require("int");
+                const auto local = identifier();
+                if (local == task.name) fail("Task await result cannot shadow its Task binding");
+                require("="); require("await");
+                if (identifier() != task.name) fail("E_UNSUPPORTED: unknown Task observer");
+                require(";"); require_return_marker();
+                if (token_.text == local) { advance(); require("+"); }
+                require("await");
+                if (identifier() != task.name) fail("E_UNSUPPORTED: unknown Task observer");
+                require(";"); require("}");
+                fail("E_TASK_RESULT_CONSUMED: Task result cannot be observed twice");
+            }
+            require_return_marker(); require("await");
+            if (identifier() != task.name) fail("E_UNSUPPORTED: unknown Task observer");
+            require(";"); require("}");
+            task.awaited = true;
+            LocalBinding joined;
+            joined.offset = task.offset;
+            joined.name = "$closed_task_result";
+            joined.task_await_name = task.name;
+            value.locals.push_back(std::move(joined));
+            value.result = make_expression(Expression::Kind::Variable, task.offset);
+            value.result->name = "$closed_task_result";
+            value.source_tasks.push_back(std::move(task));
+            return value;
+        }
+        if (token_.text == "suspend") {
             fail("native suspends declaration requires suspension-aware borrow checking and LLVM continuation lowering");
         }
         // Check compound READ/WRITE modes before handling legacy critical,
@@ -3637,6 +3952,7 @@ private:
             do {
                 GenericParameter slot;
                 slot.name = identifier();
+                if (slot.name == "boolean") boolean_nominal_seen_ = true;
                 if (slot.name == "_" || slot.name.rfind("$", 0) == 0)
                     fail("invalid generic parameter name");
                 for (const auto& prior : value.generic_parameters)
@@ -3740,7 +4056,7 @@ private:
                 }
                 if (accept("int")) {
                     parameter.scalar_type = ScalarType::I64;
-                } else if (accept("bool")) {
+                } else if (accept_boolean_type()) {
                     parameter.scalar_type = ScalarType::Bool;
                 } else if (accept("string") || accept("String")) {
                     parameter.scalar_type = ScalarType::String;
@@ -3784,7 +4100,7 @@ private:
         if (!value.returns_void) {
             if (accept("int")) {
                 value.return_type = ScalarType::I64;
-            } else if (accept("bool")) {
+            } else if (accept_boolean_type()) {
                 value.return_type = ScalarType::Bool;
             } else if (accept("string") || accept("String")) {
                 value.return_type = ScalarType::String;
@@ -4134,7 +4450,8 @@ private:
         while (token_.text == "const" || token_.text == "val" || token_.text == "let" ||
                 token_.text == "int" || token_.text == "bool" ||
                 token_.text == "string" || token_.text == "String" ||
-                token_.text == "mut" || token_.text == "stdio" || array_effect_ahead()) {
+                token_.text == "mut" || token_.text == "stdio" ||
+                (token_.text == "process" && peek_next().text == ".") || array_effect_ahead()) {
             if (native_box_local()) continue;
             // Typed Future<void> is admitted ONLY as a linear lexical alias
             // for one already-spawned ActorRef.get_ready() lifecycle promise.
@@ -4153,16 +4470,48 @@ private:
             binding.offset = token_.offset;
             const bool type_first_const = token_.text == "int" || token_.text == "bool" ||
                     token_.text == "String" || token_.text == "string";
-            if (token_.text == "const" && peek_next().text == "mut")
-                fail("E_CONST_MUT_UNSUPPORTED: scoped owned mutable value lowering is not yet implemented");
+            // The scalar alias uses the existing val owner path. Do not
+            // admit aggregate/capability owners through this bounded slice.
+            const bool scalar_const_mut = token_.text == "const" && peek_next().text == "mut";
             Lexer sum_look = lexer_; auto sum_first = sum_look.next();
+            if (scalar_const_mut) {
+                sum_first = sum_look.next();
+                Lexer check = sum_look;
+                const auto second = check.next();
+                const auto third = check.next();
+                const auto fourth = check.next();
+                const bool typed_prefix = (sum_first.text == "int" || sum_first.text == "bool") &&
+                    second.kind == Kind::Identifier && third.text == "=";
+                const bool typed_right = sum_first.kind == Kind::Identifier &&
+                    (second.text == ":" || second.text == "as") &&
+                    (third.text == "int" || third.text == "bool") && fourth.text == "=";
+                if (!typed_prefix && !typed_right)
+                    fail("E_CONST_MUT_UNSUPPORTED: only typed int/bool local alias admitted");
+            }
             // The type-right spelling is an explicit constant, not a runtime
             // val fallback: const name: int = e == const int name = e.
             // Independent lookahead: sum_look stays at the first token for
             // the let-mut and scalar-alias checks below.
-            const bool type_right_const = token_.text == "const" &&
+            // Name-first 'as' is a type annotation, not a postfix cast.
+            // Admit only the existing primitive scalar profile for val/let;
+            // preserve the existing const colon route and capability paths.
+            const bool type_right_const =
+                    (token_.text == "const" || token_.text == "val" || token_.text == "let") &&
                     sum_first.kind == Kind::Identifier &&
-                    [&] { Lexer right = sum_look; return right.next().text == ":"; }();
+                    [&] {
+                        Lexer right = sum_look;
+                        const auto separator = right.next();
+                        if (separator.text == ":" && token_.text == "const") {
+                            // Preserve the independently gated owned and ActorRef capability paths.
+                            const auto type = right.next().text;
+                            return type != "owned" && type != "ActorRef";
+                        }
+                        if (separator.text != "as") return false;
+                        const auto type = right.next();
+                        return (type.text == "int" || type.text == "bool" ||
+                                type.text == "string" || type.text == "String") &&
+                                right.next().text == "=";
+                    }();
             if (token_.text == "let" && sum_first.text == "mut") sum_first = sum_look.next();
             // Java: `val Count c = 42;` with `type Count = int;` is the same
             // scalar local as `val c: Count = 42;`. Only a declared scalar alias
@@ -4174,23 +4523,30 @@ private:
                     sum_look.next().kind == Kind::Identifier;
             if (alias_prefixed || type_first_const || type_right_const ||
                     ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
-                    (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "String" || sum_first.text == "string"))) {
-                const std::string mode = type_first_const ? "const" : std::string(token_.text);
-                if (!type_first_const) { advance(); if (mode == "let") accept("mut"); }
+                    (sum_first.text == "int" || sum_first.text == "bool" || sum_first.text == "String" || sum_first.text == "string" ||
+                     (sum_first.text == "boolean" && sum_look.next().kind == Kind::Identifier)))) {
+                const std::string mode = scalar_const_mut ? "val" :
+                    type_first_const ? "const" : std::string(token_.text);
+                if (!type_first_const) {
+                    advance();
+                    if (scalar_const_mut) require("mut");
+                    else if (mode == "let") accept("mut");
+                }
                 binding.owner_mutable = mode != "const"; binding.assignable = mode == "let";
                 if (type_right_const) {
                     binding.name = identifier();
-                    require(":");
+                    if (!accept("as")) require(":");
                 }
                 if (alias_prefixed) {
                     binding.pending_type_alias = std::string(token_.text);
                     advance();
                     binding.scalar_type = resolve_scalar_alias(binding.pending_type_alias);
                 } else {
-                    binding.scalar_type = accept("bool") ? ScalarType::Bool : (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
+                    binding.scalar_type = accept_boolean_type() ? ScalarType::Bool : (accept("String") || accept("string")) ? ScalarType::String : ScalarType::I64;
                     if (binding.scalar_type == ScalarType::I64) require("int");
                 }
                 if (!type_right_const) binding.name = identifier();
+                if (token_.text == ";") fail("E_MISSING_INITIALIZER: explicit initializer required");
                 require("=");
                 // Lower a terminal unary `pending |> std.await` through
                 // the *same* checked Future/Task await slot and ownership
@@ -4270,9 +4626,14 @@ private:
                     }
                 } else {
                     binding.initializer = expression();
-                    if (mode == "const" &&
-                            !native_const_scalar_tree(*binding.initializer, value.locals))
-                        fail("E_NON_CONST_INITIALIZER: type-first/const scalar requires a compile-time value");
+                    if (mode == "const") {
+                        // Keep proven overflow rejection, but an unproven
+                        // initializer is an eager runtime value, not an error.
+                        const bool proven = native_const_scalar_tree(*binding.initializer, value.locals);
+                        if (!proven && binding.scalar_type != ScalarType::I64 &&
+                                binding.scalar_type != ScalarType::Bool)
+                            fail("E_NON_CONST_INITIALIZER: runtime non-scalar constant requires verified lowering");
+                    }
                 }
             } else if ((token_.text == "val" || token_.text == "const" || token_.text == "let") &&
                     (sum_first.text == "Option" || sum_first.text == "Result")) {
@@ -4284,7 +4645,8 @@ private:
                 if (binding.initializer->kind != Expression::Kind::ArrayCall ||
                         (binding.initializer->name != "add" && binding.initializer->name != "set"))
                     fail("native array effect supports only add(value) or set(index,value)");
-            } else if (token_.text == "stdio") {
+            } else if (token_.text == "stdio" ||
+                       (token_.text == "process" && peek_next().text == ".")) {
                 // ANF: discard an effect's integer status in an unspellable
                 // compiler-owned slot, preserving declaration/effect order.
                 binding.name = "$effect" + std::to_string(value.locals.size());
@@ -4417,24 +4779,53 @@ private:
                         require(")");
                     }
                     binding.new_class = true;
+                } else if (!binding.owner_mutable && token_.text != "rt" &&
+                        ![&] {
+                            if (token_.text != "take" && token_.text != "move") return false;
+                            Lexer probe = lexer_;
+                            return probe.next().text == "!";
+                        }()) {
+                    // Like const Class, immutable let may bind the existing
+                    // checked record-result path. The ownership pass still
+                    // rejects an owning array-containing result without a
+                    // mutable owner, and raw local aliases remain forbidden.
+                    binding.initializer = expression();
+                    if (binding.initializer->kind != Expression::Kind::Call &&
+                            binding.initializer->kind != Expression::Kind::Conditional &&
+                            binding.initializer->kind != Expression::Kind::ArrayCall)
+                        fail("native class initializer requires new or immutable record value");
+                    binding.record_view = true;
                 } else {
                     if (accept("rt")) {
                         require("take");
                     } else {
-                        if (token_.text != "take")
-                            fail("native class move requires explicit take! or rt take");
+                        if (token_.text != "take" && token_.text != "move")
+                            fail("native class move requires explicit take! or rt take (move! is an alias)");
                         Lexer probe = lexer_;
                         const Token bang = probe.next();
                         if (bang.text != "!" ||
                                 bang.offset != token_.offset + token_.text.size())
-                            fail("native class move requires explicit take! or rt take");
+                            fail("E_BANG_KEYWORD_WHITESPACE: take! and move! require an adjacent bang");
                         advance();
                         require("!");
                     }
                     const bool parenthesized = accept("(");
-                    binding.move_source = identifier();
+                    // Preserve the local-place move path. A fresh direct factory
+                    // call instead uses the existing owning result-region ABI.
+                    auto source = expression();
                     if (parenthesized) require(")");
-                    binding.move_class = true;
+                    if (source->kind == Expression::Kind::Variable) {
+                        binding.move_source = source->name;
+                        binding.move_class = true;
+                    } else if (source->kind == Expression::Kind::Call) {
+                        if (!binding.owner_mutable)
+                            fail("native owned factory result requires let mut owner");
+                        binding.initializer = std::move(source);
+                        binding.record_view = true;
+                        binding.explicit_factory_take = true;
+                    } else {
+                        fail("native class take requires a local owner or direct owned factory result");
+                    }
                 }
                 }
             } else {
@@ -4493,7 +4884,7 @@ private:
                         binding.heap_owned = experimental_owned_int_ && accept("owned");
                         if (accept("int")) {
                             binding.scalar_type = ScalarType::I64;
-                        } else if (accept("bool")) {
+                        } else if (accept_boolean_type()) {
                             if (binding.heap_owned)
                                 fail("native owned bool region lowering is not admitted");
                             binding.scalar_type = ScalarType::Bool;
@@ -4529,11 +4920,24 @@ private:
                     // Only this authenticated spawn boundary classifies the
                     // next contextual 'with' as actor policy, not record update.
                     advance(true);
-                    // Grouped actor spawn is not the legacy zero-argument
-                    // source actor binding. Do not emit a partial binding that
-                    // would erase quotas, scheduling policy or startup data.
-                    if (token_.text == "with")
-                        fail("E_SPAWN_OPTIONS_UNSUPPORTED: grouped actor spawn requires typed initialization, resource admission and runtime lowering");
+                    // Empty grouped options request no overrides. Preserve the
+                    // normal typed spawn binding and deny any nonempty section.
+                    if (accept("with")) {
+                        if (!accept("{"))
+                            fail("E_SPAWN_OPTIONS_UNSUPPORTED: grouped actor spawn requires typed initialization, resource admission and runtime lowering");
+                        std::unordered_set<std::string> sections;
+                        while (!accept("}")) {
+                            const auto section = token_.text;
+                            if (section != "schedule" && section != "resources" && section != "init")
+                                fail("E_SPAWN_OPTION_SECTION: unknown grouped spawn section");
+                            if (!sections.emplace(section).second)
+                                fail("E_SPAWN_OPTION_DUPLICATE: duplicate grouped spawn section");
+                            advance();
+                            require("{");
+                            if (!accept("}"))
+                                fail("E_SPAWN_OPTIONS_UNSUPPORTED: grouped actor spawn requires typed initialization, resource admission and runtime lowering");
+                        }
+                    }
                     // A source 'pipe' is a typed graph construction with
                     // atomic connections, bounded DATA, distinct supervisor
                     // CONTROL, and physical shutdown barriers. Never lower
@@ -4665,6 +5069,7 @@ private:
             statement.branch_local = std::move(local); return statement;
         };
         std::size_t statement_depth = 0;
+        std::size_t active_keyword_if = 0;
         foreach_statement = [&]() {
             Lexer look = lexer_;
             const auto open = look.next(), mode = look.next(), name = look.next(), of = look.next();
@@ -4774,6 +5179,12 @@ private:
         branch_arm = [&](bool finally_scope, bool then_scope) {
             if (++statement_depth > 16) fail("native structured statement depth exceeds 16");
             struct Depth { std::size_t& n; ~Depth() { --n; } } depth{statement_depth};
+            struct KeywordIfScope {
+                std::size_t& depth;
+                bool active;
+                KeywordIfScope(std::size_t& d, bool a) : depth(d), active(a) { if (active) ++depth; }
+                ~KeywordIfScope() { if (active) --depth; }
+            } keyword_if{active_keyword_if, then_scope};
             struct Receivers { std::unordered_set<std::string>& target; std::unordered_set<std::string> saved;
                 ~Receivers() { target = std::move(saved); } } receivers{class_receivers_, class_receivers_};
             std::vector<Statement> actions;
@@ -4894,8 +5305,9 @@ private:
                         require("{"); statement.then_statements = branch_arm(false, false); require("}");
                         if (accept("else")) { require("{"); statement.else_statements = branch_arm(false, false); require("}"); }
                     }
-                    // The native migration parser still requires 'fi' after brace forms.
-                    require("fi"); actions.push_back(std::move(statement)); continue;
+                    if (then_form) require("fi");
+                    else if (active_keyword_if == 0) accept("fi");
+                    actions.push_back(std::move(statement)); continue;
                 }
                 if ((token_.text == "break" || token_.text == "continue") &&
                         scalar_loop_depth > 0 && !finally_scope) {
@@ -4968,10 +5380,45 @@ private:
             const bool is_match = accept("match");
             if (!is_match) require("switch");
 
+            const bool delimited = accept("|");
             auto subject = expression();
+            if (delimited) require("|");
             if (!native_pure_scalar_tree(*subject))
                 fail("native procedural dispatch subject must be a replay-safe scalar expression");
-            if (is_match) require("over");
+            if (is_match || delimited) require("over");
+
+            // Delimited procedural dispatch owns a single inferred scalar
+            // snapshot, initialized before dispatch even for default-only
+            // arms. Keep legacy structural dispatch on its existing path.
+            // The name cannot be spelled by a source identifier.
+            std::unique_ptr<LocalBinding> snapshot;
+            if (delimited) {
+                if (subject->kind == Expression::Kind::Variable &&
+                        class_receivers_.count(subject->name))
+                    fail("native delimited procedural dispatch requires a scalar subject");
+                snapshot = std::make_unique<LocalBinding>();
+                snapshot->name = "$dispatch." + std::to_string(offset);
+                snapshot->offset = offset;
+                snapshot->inferred_scalar = true;
+                snapshot->initializer = std::move(subject);
+                subject = make_expression(Expression::Kind::Variable, offset);
+                subject->name = snapshot->name;
+            }
+            auto scoped_dispatch = [&](Statement inner) -> Statement {
+                if (!snapshot) return inner;
+                Statement scope;
+                scope.kind = Statement::Kind::Conditional;
+                scope.offset = offset;
+                scope.condition = make_expression(Expression::Kind::Boolean, offset);
+                scope.condition->boolean = true;
+                Statement init;
+                init.kind = Statement::Kind::ScopedLocal;
+                init.offset = offset;
+                init.branch_local = std::move(snapshot);
+                scope.then_statements.push_back(std::move(init));
+                scope.then_statements.push_back(std::move(inner));
+                return scope;
+            };
 
             struct Arm {
                 std::unique_ptr<Expression> condition;
@@ -4988,6 +5435,8 @@ private:
                     fail("native procedural dispatch arm limit exceeded (32)");
 
                 if (is_match) {
+                    if (delimited && has_fallback)
+                        fail("native delimited match fallback must be last");
                     // All three spellings designate one fallback, evaluated after concrete arms.
                     const bool bare_default = accept("default");
                     if (!bare_default) require("on");
@@ -5076,6 +5525,7 @@ private:
                 fail("expected dispatch arm or 'end' in native procedural dispatch");
             }
             require("end");
+            if (delimited) accept(";");
 
             if (arms.empty()) {
                 if (!has_fallback)
@@ -5087,7 +5537,7 @@ private:
                     Expression::Kind::Boolean, offset);
                 unconditional.condition->boolean = true;
                 unconditional.then_statements = std::move(fallback);
-                return unconditional;
+                return scoped_dispatch(std::move(unconditional));
             }
 
             std::vector<Statement> tail = std::move(fallback);
@@ -5101,7 +5551,7 @@ private:
                 tail.clear();
                 tail.push_back(std::move(conditional));
             }
-            return std::move(tail.front());
+            return scoped_dispatch(std::move(tail.front()));
         };
         // Strict first native AOT scope slice. The compiler owns the span
         // token; it is never a scalar local, closure capture, actor message,
@@ -5278,6 +5728,16 @@ private:
                 // hoist the else arm and use its return as the function result.
                 if (!value.returns_void && !value.statements.empty() && !terminal_try_finally) {
                     Statement& last = value.statements.back();
+                    // The existing structured-return emitter joins real return
+                    // edges through a cleanup snapshot. Preserve nested terminal
+                    // conditionals rather than hoisting an arm across its scope.
+                    if (last.kind == Statement::Kind::Conditional &&
+                            value.return_class.empty() &&
+                            value.return_type == ScalarType::I64 &&
+                            guard_failure_exits(value.statements)) {
+                        require("}");
+                        return value;
+                    }
                     if (last.kind == Statement::Kind::Conditional &&
                             last.then_statements.size() == 1 &&
                             last.then_statements.front().kind == Statement::Kind::Return &&
@@ -5388,11 +5848,12 @@ private:
                         fail("native protected try return requires nonthrowing scalar/field read");
                     require(";");
                     if (!then_form) require("}");
-                    // Java accepts `if c then return a; else ...; fi`. In the structured
-                    // then-form an else arm is an ordinary conditional branch; other
-                    // guarded-return contexts have no else lowering and say so.
+                    // Forward-port #786: braced terminal else uses the same
+                    // typed structured CFG. Keep legacy single return guards
+                    // and protected/class return restrictions unchanged.
                     const bool full_conditional =
-                        then_form && value.return_class.empty() && !terminal_try_finally;
+                        (then_form || token_.text == "else") &&
+                        value.return_class.empty() && !terminal_try_finally;
                     if (!full_conditional && token_.text == "else")
                         fail("native guarded return cannot take an else branch in this context");
                     if (full_conditional) {
@@ -5403,11 +5864,17 @@ private:
                         conditional.condition = std::move(guard.condition);
                         Statement terminal; terminal.kind = Statement::Kind::Return; terminal.offset = offset;
                         terminal.expression = std::move(guard.result); conditional.then_statements.push_back(std::move(terminal));
-                        if (accept("else")) conditional.else_statements = branch_arm(false, then_form);
-                        require("fi");
+                        if (accept("else")) {
+                            if (!then_form) require("{");
+                            conditional.else_statements = branch_arm(false, then_form);
+                            if (!then_form) require("}");
+                        }
+                        if (then_form) require("fi");
+                        else if (active_keyword_if == 0) accept("fi");
                         value.statements.push_back(std::move(conditional));
                     } else {
-                        require("fi");
+                        if (then_form) require("fi");
+                        else if (active_keyword_if == 0) accept("fi");
                         value.early_returns.push_back(std::move(guard));
                         return_guards_started = true;
                     }
@@ -5428,8 +5895,9 @@ private:
                         if (!then_form) require("{");
                         conditional.else_statements = branch_arm(false, then_form);
                         if (!then_form) require("}");
-                    } else if (!then_form) require("else");
-                    require("fi");
+                    }
+                    if (then_form) require("fi");
+                    else if (active_keyword_if == 0) accept("fi");
                     value.statements.push_back(std::move(conditional));
                 }
                 continue;
@@ -5510,6 +5978,82 @@ private:
                 deferred.kind = Statement::Kind::Defer;
                 deferred.offset = token_.offset;
                 auto target = primary();
+                if (token_.kind == Kind::Symbol && token_.text == "|>") {
+                    // Bounded native factory profile: one explicit immutable
+                    // int/bool capture, a chain of ordinary named scalar stages,
+                    // and one direct cleanup(capture) body. Publish the
+                    // generated local BEFORE its deferred call. The existing
+                    // root-scope lifetime and cleanup CFG keep the slot alive
+                    // through all supported returns. No closure object or
+                    // dynamic invocation is emitted.
+                    if (terminal_try_finally || value.caught_throw_value)
+                        fail("native defer factory in protected scope requires checked unwind lowering");
+                    std::size_t stages = 0;
+                    bool final_factory = false;
+                    while (accept("|>")) {
+                        if (++stages > kMaxNativePipelineStages)
+                            fail("native defer pipeline exceeds 128 stages");
+                        if (token_.kind == Kind::Symbol && token_.text == "(" &&
+                                peek_next().text == "|") {
+                            require("("); require("|");
+                            ScalarType capture_type;
+                            if (accept("int")) capture_type = ScalarType::I64;
+                            else if (accept("bool")) capture_type = ScalarType::Bool;
+                            else fail("native defer factory requires an int or bool capture");
+                            const std::string parameter = identifier();
+                            require("|"); require("->");
+                            if (!accept("_")) require("||");
+                            require("->"); require("{");
+                            const auto cleanup_offset = token_.offset;
+                            const std::string callee = identifier();
+                            if (callee == parameter)
+                                fail("native defer factory cleanup must be a direct named function");
+                            require("(");
+                            if (identifier() != parameter)
+                                fail("native defer factory may use only its explicit capture");
+                            require(")"); require(";"); require("}"); require(")"); require(";");
+
+                            Statement captured;
+                            captured.kind = Statement::Kind::ScopedLocal;
+                            captured.offset = deferred.offset;
+                            captured.branch_local = std::make_unique<LocalBinding>();
+                            auto& local = *captured.branch_local;
+                            // A dollar sign is not a native source identifier character.
+                            // Offset is unique for each registration in a function.
+                            local.name = "$defer_capture_" + std::to_string(deferred.offset);
+                            local.offset = deferred.offset;
+                            local.scalar_type = capture_type;
+                            local.initializer = std::move(target);
+                            local.assignable = false;
+                            local.owner_mutable = false;
+
+                            auto call = make_expression(Expression::Kind::Call, cleanup_offset);
+                            call->name = callee;
+                            auto argument = make_expression(Expression::Kind::Variable, cleanup_offset);
+                            argument->name = local.name;
+                            call->arguments.push_back(std::move(argument));
+                            call->argument_names.emplace_back("");
+                            deferred.expression = std::move(call);
+                            deferred.static_defer_factory = true;
+                            value.statements.push_back(std::move(captured));
+                            value.statements.push_back(std::move(deferred));
+                            final_factory = true;
+                            break;
+                        }
+                        auto stage = primary();
+                        if (stage->kind != Expression::Kind::Variable &&
+                                stage->kind != Expression::Kind::Call)
+                            fail("native defer pipeline requires named scalar stages and an inline factory");
+                        stage->kind = Expression::Kind::Call;
+                        stage->pipeline_stage = true;
+                        stage->arguments.insert(stage->arguments.begin(), std::move(target));
+                        stage->argument_names.insert(stage->argument_names.begin(), "");
+                        target = std::move(stage);
+                    }
+                    if (!final_factory)
+                        fail("native defer pipeline requires a checked inline factory");
+                    continue;
+                }
                 if (target->kind == Expression::Kind::Field && accept("=")) {
                     if (!target->left || target->left->kind != Expression::Kind::Variable)
                         fail("native deferred field assignment requires named class receiver");
@@ -5707,8 +6251,145 @@ private:
     // Eager scalar |> and reverse <| lower to the SAME checked call AST.
     // Reverse stages are right-associative: f <| g <| x means f(g(x)).
     // Continuous actor pipe/rpipe remain distinct, fail-closed operations.
+    // Recognize only an explicit tuple literal followed by a unary pattern.
+    // The probe consumes no source and does not grant admission.
+    bool unary_tuple_pattern_ahead() const {
+        if (token_.kind != Kind::Symbol || token_.text != "(") return false;
+        Lexer probe = lexer_;
+        std::size_t depth = 1;
+        bool comma = false;
+        bool first = true;
+        for (std::size_t count = 0; count < 2048; ++count) {
+            const Token t = probe.next();
+            if (t.kind == Kind::End) return false;
+            if (t.kind == Kind::Symbol) {
+                if (t.text == "(") ++depth;
+                else if (t.text == ")") {
+                    if (--depth == 0) {
+                        if (!first && !comma) return false;
+                        const Token pipe = probe.next();
+                        if (pipe.kind != Kind::Symbol || pipe.text != "|>") return false;
+                        const Token bar = probe.next();
+                        return bar.kind == Kind::Symbol && bar.text == "|";
+                    }
+                } else if (t.text == "," && depth == 1) comma = true;
+            }
+            first = false;
+        }
+        return false;
+    }
+
+    // The helper body is a closed pure scalar expression. No captures,
+    // arbitrary call targets, effects or hidden resource authority.
+    bool tuple_pattern_scalar(const Expression& e,
+            const std::unordered_set<std::string>* scope, std::size_t depth = 0) const {
+        if (depth > 64) return false;
+        using K = Expression::Kind;
+        switch (e.kind) {
+            case K::Integer: return true;
+            case K::Variable:
+                return !e.native_box_read && (!scope || scope->count(e.name) != 0);
+            case K::Negate:
+                return e.left && tuple_pattern_scalar(*e.left, scope, depth + 1);
+            case K::Add: case K::Subtract: case K::Multiply:
+                return e.left && e.right &&
+                    tuple_pattern_scalar(*e.left, scope, depth + 1) &&
+                    tuple_pattern_scalar(*e.right, scope, depth + 1);
+            case K::Call:
+                if (std::none_of(tuple_pattern_helpers_.begin(), tuple_pattern_helpers_.end(),
+                    [&](const Function& f) { return f.name == e.name; })) return false;
+                for (const auto& arg : e.arguments)
+                    if (!arg || !tuple_pattern_scalar(*arg, scope, depth + 1)) return false;
+                return true;
+            default: return false;
+        }
+    }
+
+    std::unique_ptr<Expression> unary_tuple_pattern() {
+        if (++tuple_pattern_depth_ > 32)
+            fail("NATIVE_TUPLE_PATTERN_DEPTH: nesting exceeds 32");
+        struct DepthGuard {
+            std::size_t& depth;
+            ~DepthGuard() { --depth; }
+        } guard{tuple_pattern_depth_};
+        const auto offset = token_.offset;
+        require("(");
+        std::vector<std::unique_ptr<Expression>> values;
+        if (!accept(")")) {
+            for (;;) {
+                if (values.size() >= 8) fail("NATIVE_TUPLE_PATTERN_ARITY: maximum 8");
+                auto value = expression();
+                if (!tuple_pattern_scalar(*value, nullptr))
+                    fail("NATIVE_TUPLE_PATTERN_TYPE: root elements require pure scalar int");
+                values.push_back(std::move(value));
+                if (!accept(",")) { require(")"); break; }
+                if (accept(")")) break;
+            }
+        }
+        require("|>");
+        require("|");
+        require("(");
+        Function helper;
+        helper.offset = offset;
+        helper.native_internal = true;
+        helper.return_type = ScalarType::I64;
+        std::unordered_set<std::string> bindings;
+        if (!accept(")")) {
+            for (;;) {
+                if (helper.parameters.size() >= 8)
+                    fail("NATIVE_TUPLE_PATTERN_ARITY: maximum 8");
+                auto name = identifier();
+                if (name == "arguments" || name == "self" ||
+                    (name != "_" && !bindings.insert(name).second))
+                    fail("NATIVE_TUPLE_PATTERN_DUPLICATE_BINDING");
+                if (accept(":")) {
+                    if (name == "_") fail("NATIVE_TUPLE_PATTERN_TYPED_DISCARD");
+                    require("int");
+                }
+                Parameter param;
+                param.name = name;
+                param.scalar_type = ScalarType::I64;
+                helper.parameters.push_back(std::move(param));
+                if (!accept(",")) {
+                    if (helper.parameters.size() == 1)
+                        fail("NATIVE_TUPLE_PATTERN_SINGLETON: trailing comma required");
+                    require(")");
+                    break;
+                }
+                if (accept(")")) break;
+            }
+        }
+        if (helper.parameters.size() != values.size())
+            fail("NATIVE_TUPLE_PATTERN_ARITY: pattern and value differ");
+        // The ownership CFG validates every parameter as a lexical place.
+        // Generate valid, collision-free lexical identifiers for discards only
+        // after all source binders are known. They never enter the body scope.
+        for (std::size_t i = 0; i < helper.parameters.size(); ++i) {
+            if (helper.parameters[i].name != "_") continue;
+            auto name = "__atto_tuple_discard_" + std::to_string(i);
+            while (bindings.count(name)) name += "_";
+            helper.parameters[i].name = std::move(name);
+        }
+        require("|");
+        require("->");
+        helper.result = conditional();
+        if (!tuple_pattern_scalar(*helper.result, &bindings))
+            fail("NATIVE_TUPLE_PATTERN_BODY: only closed int arithmetic over bound leaves");
+        if (tuple_pattern_helpers_.size() >= 128)
+            fail("NATIVE_TUPLE_PATTERN_LIMIT: maximum 128 helpers");
+        // '$' cannot be authored in identifiers. This private helper uses
+        // the existing typed, checked, ordered scalar call ABI.
+        helper.name = "$atto_tuple_pattern$" + std::to_string(tuple_pattern_helpers_.size());
+        auto call = make_expression(Expression::Kind::Call, offset);
+        call->name = helper.name;
+        call->arguments = std::move(values);
+        call->argument_names.resize(call->arguments.size());
+        tuple_pattern_helpers_.push_back(std::move(helper));
+        return call;
+    }
+
     std::unique_ptr<Expression> expression() {
-        auto value = conditional();
+        auto value = unary_tuple_pattern_ahead() ? unary_tuple_pattern() : conditional();
         std::size_t stages = 0;
         if (accept("<|")) {
             // Right-associative reverse application lowers to the same
@@ -5799,16 +6480,31 @@ private:
             require("then");
             if (token_.text == "break" || token_.text == "continue" || token_.text == "return")
                 fail("value if/ifnot/unless branch must produce a value; use 'do if' for control flow");
-            auto yes = expression();
+            auto result = make_expression(Expression::Kind::Conditional, offset);
+            result->condition = std::move(predicate);
+            result->when_true = expression();
+            auto* tail = result.get();
+            // The existing typed conditional join checks both arms and emits
+            // only the selected runtime arm. Extend that tree rather than
+            // constructing an eager select or duplicating a predicate.
+            for (std::size_t count = 0; token_.text == "elif"; ++count) {
+                if (count == 16) fail("native value elif chain exceeds 16 elif arms");
+                const auto branch_offset = token_.offset;
+                require("elif");
+                auto next = make_expression(Expression::Kind::Conditional, branch_offset);
+                next->condition = expression();
+                require("then");
+                if (token_.text == "break" || token_.text == "continue" || token_.text == "return")
+                    fail("value if/ifnot/unless branch must produce a value; use 'do if' for control flow");
+                next->when_true = expression();
+                tail->when_false = std::move(next);
+                tail = tail->when_false.get();
+            }
             require("else");
             if (token_.text == "break" || token_.text == "continue" || token_.text == "return")
                 fail("value if/ifnot/unless branch must produce a value; use 'do if' for control flow");
-            auto no = expression();
+            tail->when_false = expression();
             require("fi");
-            auto result = make_expression(Expression::Kind::Conditional, offset);
-            result->condition = std::move(predicate);
-            result->when_true = std::move(yes);
-            result->when_false = std::move(no);
             return result;
         }
         auto condition = logical_or();
@@ -5906,7 +6602,7 @@ private:
                     fail("native as? requires Option<T> checked-cast lowering");
                 auto cast = make_expression(Expression::Kind::Cast, offset);
                 if (accept("int")) cast->cast_target = ScalarType::I64;
-                else if (accept("bool")) cast->cast_target = ScalarType::Bool;
+                else if (accept_boolean_type()) cast->cast_target = ScalarType::Bool;
                 else if (accept("string") || accept("String"))
                     cast->cast_target = ScalarType::String;
                 else if (token_.kind == Kind::Identifier &&
@@ -6045,6 +6741,10 @@ private:
             std::size_t& depth;
             ~DepthGuard() { --depth; }
         } depth_guard{expression_depth_};
+
+        // A quoted operator or keyword is a literal, not a prefix operator.
+        if (token_.kind == Kind::String || token_.kind == Kind::Template)
+            return primary();
 
         if (token_.text == "trap" || token_.text == "trap!") {
             const auto offset = token_.offset;
@@ -6773,6 +7473,92 @@ private:
 
     std::unique_ptr<Expression> primary() {
         const auto offset = token_.offset;
+        // Literal payload text is data, never a keyword or lambda token.
+        // Keep real template interpolation parsing in template_literal().
+        if (token_.kind == Kind::String) {
+            auto expr = make_expression(Expression::Kind::String, offset);
+            expr->name = string_literal(token_.text);
+            advance();
+            return expr;
+        }
+        if (token_.kind == Kind::Template) {
+            const std::string_view raw = token_.text;
+            advance();
+            return template_literal(raw, offset);
+        }
+        // Distinguish the contextual function name loop(...) from loop(val ...).
+        if (token_.text == "loop") {
+            Lexer look = lexer_;
+            if (look.next().text == "(" && look.next().text == "val") {
+                auto plan = make_expression(Expression::Kind::ClosedRecur, offset);
+                advance(); require("(");
+                do {
+                    if (plan->recur_names.size() >= 8) fail("E_RECUR_LIMIT: state bindings");
+                    require("val");
+                    auto name = identifier();
+                    if (name == "recur" || name == "loop" ||
+                        std::find(plan->recur_names.begin(), plan->recur_names.end(), name) != plan->recur_names.end())
+                        fail("E_RECUR_BINDING: duplicate or reserved state");
+                    if (accept(":")) require("int");
+                    require("=");
+                    plan->recur_names.push_back(std::move(name));
+                    plan->recur_initializers.push_back(expression());
+                } while (accept(","));
+                require(")"); require("{");
+                bool terminal_else = false;
+                while (accept("if")) {
+                    if (plan->recur_predicates.size() >= 32) fail("E_RECUR_LIMIT: exit guards");
+                    plan->recur_predicates.push_back(expression());
+                    require("{"); require("break");
+                    plan->recur_results.push_back(expression());
+                    require(";"); require("}");
+                    if (accept("else")) { require("{"); terminal_else = true; break; }
+                }
+                require("recur"); require("(");
+                do {
+                    if (plan->recur_updates.size() >= 8) fail("E_RECUR_LIMIT: updates");
+                    plan->recur_updates.push_back(expression());
+                } while (accept(","));
+                require(")"); require(";");
+                if (terminal_else) { require("}"); accept("fi"); }
+                require("}");
+                if (token_.text == "(" || !valid_closed_recur(*plan))
+                    fail("E_VALUE_LOOP_PROFILE: invalid closed i64 recur expression");
+                return plan;
+            }
+        }
+
+        // A closed, single-valued-break loop has no observable backedge.
+        // Keep the normal typed expression and native codegen paths in
+        // authority; reject bare names/calls and general loop CFGs.
+        if (token_.text == "loop" && peek_next().text == "{") {
+            advance();
+            require("{");
+            require("break");
+            if (token_.text == ";" || token_.text == "}")
+                fail("E_BREAK_VALUE: value loop requires a break operand");
+            auto value = expression();
+            using K = Expression::Kind;
+            switch (value->kind) {
+                case K::Integer: case K::Boolean: case K::String:
+                case K::Negate: case K::Abs: case K::LogicalNot:
+                case K::Add: case K::Subtract: case K::Multiply:
+                case K::Remainder: case K::Modulo: case K::BitXor:
+                case K::Equal: case K::NotEqual: case K::Less:
+                case K::LessEqual: case K::Greater: case K::GreaterEqual:
+                case K::LogicalAnd: case K::LogicalOr: case K::LogicalXor:
+                case K::Conditional: case K::Cast:
+                case K::ShiftLeft: case K::ShiftRight: case K::ShiftUnsignedRight:
+                    break;
+                default:
+                    fail("value-loop operand requires typed CFG lowering");
+            }
+            require(";");
+            require("}");
+            if (token_.text == "(")
+                fail("calling a computed value loop");
+            return value;
+        }
 
         // Source-to-MIR analysis runs inside the real compiler parser, but
         // never publishes an executable AST or LLVM scalar fallback.
@@ -6809,6 +7595,8 @@ private:
         // closure frames and typed capture ownership are not lowered yet.
         // Fail specifically here rather than allowing a logical-or token to
         // masquerade as a value at the beginning of an expression.
+        if (token_.text == "|")
+            fail("NATIVE_INLINE_LAMBDA_UNSUPPORTED: only closed scalar unary tuple-pattern pipelines are admitted");
         if (token_.text == "||") {
             // The native lexer deliberately does not yet combine => into
             // a single token; matching it as a lookahead symbol would miss
@@ -6846,39 +7634,36 @@ private:
             }
             return expr;
         }
-        if (token_.kind == Kind::String) {
-            auto expr = make_expression(Expression::Kind::String, offset);
-            expr->name = string_literal(token_.text);
+        if ((token_.text == "stdio" || token_.text == "process") &&
+                peek_next().text == ".") {
+            const std::string receiver(token_.text);
+            if (module_names_.count(receiver) || function_import_names_.count(receiver))
+                fail("E_STDOUT_SHADOW: native stdout requires an unshadowed endpoint");
             advance();
-            return expr;
-        }
-        if (token_.kind == Kind::Template) {
-            const std::string_view raw = token_.text;
-            advance();
-            return template_literal(raw, offset);
-        }
-        if (accept("stdio")) {
             require(".");
             auto expr = make_expression(Expression::Kind::Console, offset);
+            expr->console_receiver = receiver;
             // String unless the native type checker proves an int/bool argument.
             expr->resolved_type = ScalarType::String;
             expr->name = identifier();
-            if (expr->name == "stdout") {
-                // Java stdio.stdout.write/println take exactly one argument and
-                // render it like stdio.print/println; write adds no newline.
-                // Lower onto the same Console node so output is byte-identical.
+            if ((receiver == "stdio" && (expr->name == "out" || expr->name == "stdout")) ||
+                    (receiver == "process" && expr->name == "stdout")) {
+                // Canonical stdout aliases share existing native Console lowering.
+                // Retain stdio.stdout only for old fixture compatibility.
+                const std::string endpoint = receiver + "." + expr->name;
                 require(".");
                 const std::string member = identifier();
                 if (member == "write") expr->name = "print";
-                else if (member == "println") expr->name = "println";
-                else fail("unsupported native stdio.stdout operation");
+                else if (member == "println" && endpoint == "stdio.stdout") expr->name = "println";
+                else fail("unsupported native " + endpoint + " operation");
                 require("(");
                 expr->left = expression();
-                if (token_.text == ",") fail("stdio.stdout." + member + " takes exactly one argument");
+                if (token_.text == ",") fail(endpoint + "." + member + " takes exactly one argument");
                 require(")");
                 return expr;
             }
-            if (expr->name != "print" && expr->name != "println") fail("unsupported native stdio operation");
+            if (receiver != "stdio" || (expr->name != "print" && expr->name != "println"))
+                fail("unsupported native stdio operation");
             // Java stdio.print/println concatenate arguments without an
             // inserted separator and append at most one newline. Lower all
             // string arguments to the existing checked string-concat AST so
@@ -7178,7 +7963,7 @@ private:
                 do {
                     if (named_argument_ahead()) {
                         std::string label = identifier();
-                        require(":");
+                        if (!accept(":")) require("=");
                         if (!labels.insert(label).second) {
                             fail("duplicate named argument '" + label + "'");
                         }
@@ -7234,7 +8019,7 @@ private:
                     do {
                         if (named_argument_ahead()) {
                             std::string label = identifier();
-                            require(":");
+                            if (!accept(":")) require("=");
                             if (!member_labels.insert(label).second)
                                 fail("duplicate named member argument '" + label + "'");
                             member_named_seen = true;
@@ -7293,7 +8078,11 @@ private:
     bool named_argument_ahead() const {
         if (token_.kind != Kind::Identifier || reserved(token_.text)) return false;
         Lexer lookahead = lexer_;
-        return lookahead.next().text == ":";
+        const Token separator = lookahead.next();
+        if (separator.text == "=") return true;
+        // Pair := has no native scalar argument ABI. Never reinterpret it
+        // as a named argument, even if the lexer emits separate tokens.
+        return separator.text == ":" && lookahead.next().text != "=";
     }
 
     void export_declaration(Program& program) {
@@ -7323,6 +8112,16 @@ private:
 
     bool accept(std::string_view text) {
         if (token_.text != text) return false;
+        advance();
+        return true;
+    }
+
+    // Contextual alias: consume only an unqualified type token, not an identifier
+    // in expression position. Ambiguous declarations are checked before IR.
+    bool accept_boolean_type() {
+        if (accept("bool")) return true;
+        if (token_.text != "boolean" || peek_next().text == ".") return false;
+        boolean_alias_used_ = true;
         advance();
         return true;
     }
@@ -7432,6 +8231,7 @@ private:
         // '_' is reserved for wildcard/inference-hole use, never a
         // stable runtime nominal identity or module contract name.
         std::string name = identifier();
+        if (name == "boolean") boolean_nominal_seen_ = true;
         if (native_ownership_intrinsic_name(name))
             fail("NATIVE_OWNERSHIP_INTRINSIC_RESERVED: compiler-owned nominal cannot be redefined");
         if (name == "Option" || name == "Result")
@@ -7612,11 +8412,17 @@ private:
                                     std::size_t depth = 1) {
         require_expression_depth(depth, expr);
         switch (expr.kind) {
+            case Expression::Kind::ClosedRecur:
+                if (!valid_closed_recur(expr)) throw std::runtime_error("E_VALUE_LOOP_PROFILE: invalid closed recur AST");
+                return;
             case Expression::Kind::Integer:
             case Expression::Kind::Boolean:
             case Expression::Kind::String:
                 return;
             case Expression::Kind::Console:
+                if (!expr.console_receiver.empty() &&
+                    (parameters.count(expr.console_receiver) || functions.count(expr.console_receiver)))
+                    throw std::runtime_error("E_STDOUT_SHADOW: native stdout requires an unshadowed endpoint");
                 validate_expression(*expr.left, parameters, functions, depth + 1);
                 return;
             case Expression::Kind::Variable:
@@ -7814,6 +8620,9 @@ private:
                     " at byte " + std::to_string(expr.offset));
         };
         switch (expr.kind) {
+            case Expression::Kind::ClosedRecur:
+                if (!valid_closed_recur(expr)) throw std::runtime_error("E_VALUE_LOOP_PROFILE: invalid typed recur AST");
+                return expr.resolved_type = ScalarType::I64;
             case Expression::Kind::SumConstruct:
             case Expression::Kind::SumAccess:
                 if (expr.left) (void)validate_scalar_expression(*expr.left, variables, functions, depth + 1);
@@ -7827,6 +8636,9 @@ private:
             case Expression::Kind::String:
                 return expr.resolved_type = ScalarType::String;
             case Expression::Kind::Console: {
+                if (!expr.console_receiver.empty() &&
+                    (variables.count(expr.console_receiver) || functions.count(expr.console_receiver)))
+                    throw std::runtime_error("E_STDOUT_SHADOW: native stdout requires an unshadowed endpoint");
                 // String, int or bool; int/bool are rendered as text by codegen.
                 const ScalarType argument = validate_scalar_expression(*expr.left, variables, functions, depth + 1);
                 if (argument != ScalarType::I64 && argument != ScalarType::Bool)
@@ -8965,6 +9777,29 @@ private:
                         throw std::runtime_error("unknown actor message receiver '" + send.reference + "'");
                     if (!live_actors.count(send.reference))
                         throw std::runtime_error("actor message sent after stop '" + send.reference + "'");
+                    // Actor DATA is still a scalar i64 ABI. A native Array<T>
+                    // owner is a bounded region handle, not an i64 message:
+                    // passing it through the scalar send ABI would allow
+                    // use-after-move, foreign-tenant aliasing and wrong drop.
+                    // Reject explicitly before ownership authorization or IR.
+                    const Expression* payload_place = send.payload.get();
+                    if ((payload_place->kind == Expression::Kind::Take ||
+                         payload_place->kind == Expression::Kind::Borrow ||
+                         payload_place->kind == Expression::Kind::BorrowMut ||
+                         payload_place->kind == Expression::Kind::Copy ||
+                         payload_place->kind == Expression::Kind::Share) &&
+                        payload_place->left)
+                        payload_place = payload_place->left.get();
+                    if (payload_place->kind == Expression::Kind::Variable) {
+                        const auto local = std::find_if(fn.locals.begin(), fn.locals.end(),
+                            [&](const LocalBinding& binding) {
+                                return binding.name == payload_place->name && binding.int_array;
+                            });
+                        if (local != fn.locals.end())
+                            throw std::runtime_error(
+                                "native actor Array<T> DATA send requires typed owned-buffer "
+                                "mailbox lowering; scalar i64 send forbidden");
+                    }
                     validate_expression(*send.payload, params, functions);
                 } else {
                     const auto& stop = fn.actor_stops.at(action.index);
@@ -9248,6 +10083,21 @@ private:
                     require_scalar(*stmt.expression, env.at(stmt.receiver),
                         "native scalar assignment", env);
                     return;
+                }
+                if (stmt.static_defer_factory) {
+                    if (stmt.kind != Statement::Kind::Defer || !stmt.expression ||
+                            stmt.expression->kind != Expression::Kind::Call)
+                        throw std::runtime_error("invalid static defer factory AST");
+                    const auto& call = *stmt.expression;
+                    const auto family = functions.find(call.name);
+                    if (family == functions.end() || !family->second.count(call.arguments.size()))
+                        throw std::runtime_error("native defer factory cleanup requires a resolved named void function");
+                    const auto& signature = family->second.at(call.arguments.size());
+                    if (!signature.returns_void || signature.async_source_i64 ||
+                            !signature.generics.empty() ||
+                            signature.parameter_is_scalar.size() != 1 ||
+                            !signature.parameter_is_scalar.front())
+                        throw std::runtime_error("native defer factory cleanup requires a synchronous scalar void function");
                 }
                 if (stmt.expression)
                     (void)validate_scalar_expression(*stmt.expression, env, functions);
@@ -9704,6 +10554,8 @@ private:
     std::unordered_map<std::string,
         std::unordered_map<std::string, ScalarType>> public_class_fields_;
     std::vector<Function> methods_;
+    std::vector<Function> tuple_pattern_helpers_;
+    std::size_t tuple_pattern_depth_ = 0;
     bool experimental_owned_int_;
     bool experimental_rt_scalar_loop_;
     // 0 preserves legacy syntax, 1/2 require explicit backend version selection.
@@ -9714,6 +10566,8 @@ private:
     bool relative_import_unit_ = false;
     // Type-only declarations retain source alias identity until checked
     // catalog validation and extension-call rewriting complete.
+    bool boolean_alias_used_ = false;
+    bool boolean_nominal_seen_ = false;
     std::unordered_map<std::string, std::string> scalar_alias_targets_;
     std::unordered_set<std::string> type_only_nominals_;
     std::unordered_set<std::string> constrained_aliases_;
@@ -9922,13 +10776,48 @@ void reject_unlowered_mutex_constructor(std::string_view source,
     }
 }
 
+// Narrow current-main forward port of the alias-only Ensemble admission
+// case from #575. Do not reserve ordinary user methods named try_publish.
+void reject_unlowered_ensemble_publication(std::string_view source,
+                                           bool experimental_pointer_int_aot) {
+    Lexer scan(source, 0, experimental_pointer_int_aot);
+    Token window[5] = {};
+    std::size_t count = 0;
+    for (auto token = scan.next(); token.kind != Kind::End; token = scan.next()) {
+        if (count < 5) {
+            window[count++] = token;
+        } else {
+            for (std::size_t i = 0; i < 4; ++i) window[i] = window[i + 1];
+            window[4] = token;
+        }
+        if (count == 5 &&
+            window[0].kind == Kind::Symbol && window[0].text == "." &&
+            window[1].kind == Kind::Identifier && window[1].text == "try_publish" &&
+            window[2].kind == Kind::Symbol && window[2].text == "(" &&
+            window[3].kind == Kind::Identifier && window[3].text == "share" &&
+            window[4].kind == Kind::Symbol && window[4].text == "!") {
+            throw std::runtime_error(
+                "E_ACTOR_PUBSUB_UNSUPPORTED: typed Ensemble Topic.try_publish(share! ...) "
+                "requires verified guest lowering at byte " + std::to_string(window[1].offset));
+        }
+    }
+}
+
 } // namespace
+
+NamedRecursiveScalarPlan parse_named_recursive_scalar(std::string_view source) {
+    if(source.size()>16384 || source.find("// ores:")!=std::string_view::npos)
+        throw std::runtime_error("E_NAMED_STAGE_PROFILE: source budget or target directive");
+    require_valid_source_utf8(source);
+    return Parser(source,false,false).named_recursive_scalar();
+}
 
 Program parse_verified_namespace_source_unresolved(
         std::string_view authenticated_source) {
     // Precondition: independently pinned physical source snapshot. Preserve
     // unresolved imports for the verified namespace graph to authorize.
     // Never run resolve_and_validate_program or emit IR here.
+    reject_unlowered_ensemble_publication(authenticated_source, false);
     return Parser(authenticated_source, false, false, true).parse();
 }
 
@@ -9936,6 +10825,7 @@ Program parse_unresolved_program(std::string_view source, bool experimental_owne
                       bool experimental_rt_scalar_loop, bool experimental_pointer_int_aot,
                       int language_version, bool relative_import_unit) {
     reject_unlowered_mutex_constructor(source, experimental_pointer_int_aot);
+    reject_unlowered_ensemble_publication(source, experimental_pointer_int_aot);
     Program program = Parser(source, experimental_owned_int,
                              experimental_rt_scalar_loop, false, 0,
                              experimental_pointer_int_aot, language_version,

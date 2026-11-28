@@ -1,0 +1,5 @@
+pub fnc main(): int {
+  stdio.out.write("A");
+  stdio.out.write("B");
+  return 42;
+}

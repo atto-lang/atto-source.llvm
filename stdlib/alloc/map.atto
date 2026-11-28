@@ -1,0 +1,239 @@
+// LLVM-owned atto.alloc/map candidate; independent bounded chained IntMap.
+// This copy is under the active registry's layer-owned path. Historical policy source remains frozen.
+// Unlike Java's open addressing, this backend stores index-linked bucket
+// chains. All links are indices; users cannot observe internal addresses.
+define module map as
+  pub define class IntMap as
+    let int bound;
+    let mut Array<int> bucket_heads = new Array<int>();
+    let mut Array<int> keys = new Array<int>();
+    let mut Array<int> values = new Array<int>();
+    let mut Array<int> links = new Array<int>();
+    let mut int free_head = -1;
+    let mut int entry_count = 0;
+
+    pub constructor(int capacity) {
+      if capacity < 1 || capacity > 1048576; do
+        rt fail("map: capacity outside 1..1048576");
+      fi
+      self.bound = capacity;
+      for (let int i = 0; i < capacity; i = i + 1) {
+        self.bucket_heads.add(-1);
+      }
+    }
+
+    bucket_for(int key): int {
+      let mut int bucket = key % self.bound;
+      if bucket < 0; do bucket = bucket + self.bound; fi
+      return bucket;
+    }
+
+    pub len(): int { return self.entry_count; }
+    pub capacity(): int { return self.bound; }
+    pub is_empty(): bool { return self.entry_count eq 0; }
+
+    pub get(int key): Option<int> {
+      let int b = self.bucket_for(key);
+      let mut int index = self.bucket_heads.get(b);
+      for (let int step = 0; step < self.entry_count + 1; step = step + 1) {
+        if index eq -1; do return None; fi
+        if self.keys.get(index) eq key; do
+          return Some(self.values.get(index));
+        fi
+        index = self.links.get(index);
+      }
+      rt fail("map: corrupted chain");
+      return None;
+    }
+
+    pub get_or(int key, int fallback): int {
+      let int b = self.bucket_for(key);
+      let mut int index = self.bucket_heads.get(b);
+      for (let int step = 0; step < self.entry_count + 1; step = step + 1) {
+        if index eq -1; do return fallback; fi
+        if self.keys.get(index) eq key; do
+          return self.values.get(index);
+        fi
+        index = self.links.get(index);
+      }
+      rt fail("map: corrupted chain");
+      return fallback;
+    }
+
+    pub contains_key(int key): bool {
+      let int b = self.bucket_for(key);
+      let mut int index = self.bucket_heads.get(b);
+      for (let int step = 0; step < self.entry_count + 1; step = step + 1) {
+        if index eq -1; do return false; fi
+        if self.keys.get(index) eq key; do return true; fi
+        index = self.links.get(index);
+      }
+      rt fail("map: corrupted chain");
+      return false;
+    }
+
+    // No allocations or copies of backing arrays. Walk live bucket chains,
+    // never the free list. Each chain is bounded; a cycle traps.
+    pub contains_entry(int key, int value): bool {
+      let int b = self.bucket_for(key);
+      let mut int index = self.bucket_heads.get(b);
+      for (let int step = 0; step < self.entry_count + 1; step = step + 1) {
+        if index eq -1; do return false; fi
+        if self.keys.get(index) eq key; do
+          return self.values.get(index) eq value;
+        fi
+        index = self.links.get(index);
+      }
+      rt fail("map: corrupted chain");
+      return false;
+    }
+
+    // mode 0=key count; 1=entry count; 2=overlap count; 3=conflict-free.
+    // Negative result indicates a conflicting shared key in mode 2 or 3.
+    scan_matches(borrow IntMap other, int mode): int {
+      let mut int matches = 0;
+      for (let int b = 0; b < self.bound; b = b + 1) {
+        let mut int index = self.bucket_heads.get(b);
+        let mut int steps = 0;
+        while index neq -1; do
+          if steps >= self.entry_count; do rt fail("map: corrupted chain"); fi
+          let int key = self.keys.get(index);
+          if mode eq 1; do
+            if other.contains_entry(key, self.values.get(index)); do matches = matches + 1; fi
+          else
+            if other.contains_key(key); do
+              if mode >= 2 && !other.contains_entry(key, self.values.get(index)); do return -1; fi
+              matches = matches + 1;
+            fi
+          fi
+          index = self.links.get(index);
+          steps = steps + 1;
+        done
+      }
+      return matches;
+    }
+
+    pub same_keys(borrow IntMap other): bool {
+      if self.entry_count neq other.len(); do return false; fi
+      return self.scan_matches(rt borrow other, 0) eq self.entry_count;
+    }
+
+    pub has_overlap(borrow IntMap other): bool {
+      if self.entry_count eq 0 || other.is_empty(); do return false; fi
+      for (let int b = 0; b < self.bound; b = b + 1) {
+        let mut int index = self.bucket_heads.get(b);
+        let mut int steps = 0;
+        while index neq -1; do
+          if steps >= self.entry_count; do rt fail("map: corrupted chain"); fi
+          if other.contains_key(self.keys.get(index)); do return true; fi
+          index = self.links.get(index);
+          steps = steps + 1;
+        done
+      }
+      return false;
+    }
+
+    pub contains_keys(borrow IntMap other): bool {
+      if other.len() > self.entry_count; do return false; fi
+      return self.scan_matches(rt borrow other, 0) eq other.len();
+    }
+
+    pub contains_entries(borrow IntMap other): bool {
+      if other.len() > self.entry_count; do return false; fi
+      return self.scan_matches(rt borrow other, 1) eq other.len();
+    }
+
+    pub overlapping_values_equal(borrow IntMap other): bool {
+      if self.entry_count eq 0; do return other.len() eq 0; fi
+      if other.is_empty(); do return false; fi
+      return self.scan_matches(rt borrow other, 2) > 0;
+    }
+
+    pub conflict_free(borrow IntMap other): bool {
+      return self.scan_matches(rt borrow other, 3) >= 0;
+    }
+
+    pub try_insert(mut self)(int key, int value): Result<Option<int>, String> {
+      let int b = self.bucket_for(key);
+      let mut int index = self.bucket_heads.get(b);
+      for (let int step = 0; step < self.entry_count + 1; step = step + 1) {
+        if index eq -1; do
+          // An absent key can only be inserted if there is remaining capacity.
+          if self.entry_count >= self.bound; do
+            return Err("CapacityExceeded");
+          fi
+          let mut int slot = self.keys.size;
+          if self.free_head >= 0; do
+            slot = self.free_head;
+            self.free_head = self.links.get(slot);
+            self.keys.set(slot, key);
+            self.values.set(slot, value);
+          else
+            self.keys.add(key);
+            self.values.add(value);
+            self.links.add(-1);
+          fi
+          self.links.set(slot, self.bucket_heads.get(b));
+          self.bucket_heads.set(b, slot);
+          self.entry_count = self.entry_count + 1;
+          return Ok(None);
+        fi
+        if self.keys.get(index) eq key; do
+          let int previous = self.values.get(index);
+          self.values.set(index, value);
+          return Ok(Some(previous));
+        fi
+        index = self.links.get(index);
+      }
+      rt fail("map: corrupted chain");
+      return Err("InvalidState");
+    }
+
+    pub remove(mut self)(int key): Option<int> {
+      let int b = self.bucket_for(key);
+      let mut int current = self.bucket_heads.get(b);
+      let mut int previous = -1;
+      for (let int step = 0; step < self.entry_count + 1; step = step + 1) {
+        if current eq -1; do return None; fi
+        let int next = self.links.get(current);
+        if self.keys.get(current) eq key; do
+          if previous eq -1; do
+            self.bucket_heads.set(b, next);
+          else
+            self.links.set(previous, next);
+          fi
+          let int old = self.values.get(current);
+          self.keys.set(current, 0);
+          self.values.set(current, 0);
+          self.links.set(current, self.free_head);
+          self.free_head = current;
+          self.entry_count = self.entry_count - 1;
+          return Some(old);
+        fi
+        previous = current;
+        current = next;
+      }
+      rt fail("map: corrupted chain");
+      return None;
+    }
+
+    pub clear(mut self)(): void {
+      for (let int i = 0; i < self.bound; i = i + 1) {
+        self.bucket_heads.set(i, -1);
+      }
+      self.free_head = -1;
+      for (let int i = 0; i < self.keys.size; i = i + 1) {
+        self.keys.set(i, 0);
+        self.values.set(i, 0);
+        self.links.set(i, self.free_head);
+        self.free_head = i;
+      }
+      self.entry_count = 0;
+      return;
+    }
+  end
+
+  pub fnc new_map(int capacity): IntMap {
+    return new IntMap(capacity);
+  }
+end

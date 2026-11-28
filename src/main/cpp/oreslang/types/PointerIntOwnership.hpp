@@ -11,6 +11,7 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <optional>
 
 namespace oreslang::pointer_int_aot {
 
@@ -21,7 +22,93 @@ namespace oreslang::pointer_int_aot {
 // A second, read-only verification is invoked by the backend immediately
 // before emission. This prevents a stale authorization bit from surviving a
 // later AST mutation by an optimization or compiler plug-in.
+
+inline void verify_slot_plan(const Plan& plan) {
+    const auto valid_id = [](const std::string& n) {
+        if (n.empty() || !((n[0] >= 'a' && n[0] <= 'z') ||
+                (n[0] >= 'A' && n[0] <= 'Z') || n[0] == '_')) return false;
+        for (char c : n)
+            if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                  (c >= '0' && c <= '9') || c == '_')) return false;
+        const std::string reserved[] = {"RawPointer", "Pointer", "main", "int", "return", "let",
+            "mut", "val", "ref", "deref", "unref", "null", "true", "false", "to", "empty",
+            "await", "rt", "pub", "fnc", "if", "else", "end"};
+        for (const auto& word : reserved) if (n == word) return false;
+        return true;
+    };
+    if (!valid_id(plan.local_handle) || !plan.owner.empty() || plan.local_initial ||
+        !plan.readonly_helper.empty() || !plan.readonly_parameter.empty() ||
+        !plan.mutable_helper.empty() || !plan.mutable_parameter.empty() ||
+        !plan.mutable_scalar_parameter.empty() || plan.mutable_write ||
+        plan.count != plan.slot_owners.size() || plan.count > 16 ||
+        plan.steps.size() > 32 || !plan.result)
+        ownership_error("invalid reusable slot authority");
+    std::unordered_map<std::string, std::int64_t> locals;
+    for (const auto& [name, value] : plan.slot_owners)
+        if (!valid_id(name) || name == plan.local_handle || value < 0 ||
+            !locals.emplace(name, value).second)
+            ownership_error("invalid or duplicate local place");
+    std::optional<std::size_t> bound;
+    for (const auto& step : plan.steps) {
+        if (step.second_index != 0) ownership_error("forged slot index");
+        switch (step.kind) {
+        case Step::Kind::SlotBind:
+            if (bound || step.index >= plan.count || step.value || !step.name.empty())
+                ownership_error("invalid slot bind");
+            bound = step.index;
+            break;
+        case Step::Kind::SlotDetach:
+            if (!bound || step.index || step.value || !step.name.empty())
+                ownership_error("invalid slot detach");
+            bound.reset();
+            break;
+        case Step::Kind::Scalar:
+            if (!bound || !valid_id(step.name) || step.name == plan.local_handle ||
+                step.index || !step.value || step.value->kind != Expr::Kind::Read ||
+                step.value->index != *bound || step.value->lhs || step.value->rhs ||
+                !step.value->name.empty() || step.value->known != plan.slot_owners[*bound].second ||
+                !locals.emplace(step.name, step.value->known).second)
+                ownership_error("forged slot read");
+            break;
+        default: ownership_error("unexpected reusable slot operation");
+        }
+    }
+    if (bound) ownership_error("live slot on exit");
+    std::size_t nodes = 0;
+    auto eval = [&](auto&& self, const Expr& e, unsigned depth) -> std::int64_t {
+        if (depth > 32 || ++nodes > 63 || e.index)
+            ownership_error("slot result budget or forged index");
+        std::int64_t value = 0;
+        switch (e.kind) {
+        case Expr::Kind::Literal:
+            if (e.lhs || e.rhs || !e.name.empty() || e.known < 0)
+                ownership_error("malformed slot literal");
+            value = e.known; break;
+        case Expr::Kind::Variable:
+            if (e.lhs || e.rhs || !locals.count(e.name))
+                ownership_error("slot result escape");
+            value = locals.at(e.name); break;
+        case Expr::Kind::Add:
+        case Expr::Kind::Subtract: {
+            if (!e.lhs || !e.rhs || !e.name.empty()) ownership_error("malformed slot arithmetic");
+            const auto a = self(self, *e.lhs, depth + 1);
+            const auto b = self(self, *e.rhs, depth + 1);
+            if (e.kind == Expr::Kind::Add ? __builtin_add_overflow(a, b, &value) :
+                __builtin_sub_overflow(a, b, &value))
+                ownership_error("slot arithmetic overflow");
+            break;
+        }
+        default: ownership_error("slot result must be scalar");
+        }
+        if (value != e.known) ownership_error("forged slot constant annotation");
+        return value;
+    };
+    (void)eval(eval, *plan.result, 0);
+}
+
 inline void verify_plan(const Plan& plan) {
+    if (plan.form == Plan::Form::ReusableSlot) { verify_slot_plan(plan); return; }
+    if (!plan.slot_owners.empty()) ownership_error("slot metadata outside reusable slot authority");
     const bool borrowed_local = plan.form == Plan::Form::BorrowedLocal;
     if (!borrowed_local && plan.form != Plan::Form::OwnedRegion)
         ownership_error("forged pointer authority discriminant");

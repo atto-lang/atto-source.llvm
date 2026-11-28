@@ -1,0 +1,2 @@
+namespace counter;
+pub mtd (Counter c) echo(int n): int { return n; }

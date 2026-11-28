@@ -37,7 +37,10 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--compiler", required=True)
     parser.add_argument("--clang", required=True)
+    parser.add_argument("--module", choices=MODULES, action="append",
+                        help="Qualify only selected modules; default qualifies all three")
     args = parser.parse_args()
+    modules = tuple(dict.fromkeys(args.module or MODULES))
 
     runtime_c = ROOT / "src/main/cpp/oreslang/runtime/NativeIntArrayRegion.c"
     if runtime_c.is_symlink() or not runtime_c.is_file():
@@ -49,7 +52,7 @@ def main() -> None:
     positive = negative = sanitized = 0
     with tempfile.TemporaryDirectory(prefix="atto-alloc-native-guest-") as work:
         base = Path(work)
-        for module in MODULES:
+        for module in modules:
             d = base / module
             d.mkdir()
             (d / (module + ".atto")).write_text(
@@ -106,7 +109,7 @@ def main() -> None:
 
         # Test exact canonical import spelling against embedded compiler source.
         # These are additional native guests, not a source-only registry lookup.
-        for module in MODULES:
+        for module in modules:
             d = base / ("canonical-" + module)
             d.mkdir()
             fixture = source_file(ROOT / "tests" / "fixtures" / "alloc" /
@@ -138,20 +141,22 @@ def main() -> None:
         attacks = {
             "slab": '''import module slab from "./slab";
 pub fnc main(): int {
-  let mut slab.Slab s = slab.new_slab(17, 1);
+  let mut slab.Slab s = take! slab.new_slab(17, 1);
   let slab.Handle h = s.insert(5).unwrap();
   let slab.OwnerToken stolen = h.owner_token;
   return 0;
 }''',
             "actor_heap": '''import module actor_heap from "./actor_heap";
 pub fnc main(): int {
-  let mut actor_heap.ActorHeap h = actor_heap.new_actor_heap(19, 8, 3);
+  let mut actor_heap.ActorHeap h = take! actor_heap.new_actor_heap(19, 8, 3);
   let actor_heap.HeapHandle a = h.allocate(1).unwrap();
   let actor_heap.OwnerToken stolen = a.owner_token;
   return 0;
 }''',
         }
         for module, source in attacks.items():
+            if module not in modules:
+                continue
             d = base / ("negative-" + module)
             d.mkdir()
             (d / (module + ".atto")).write_text(
@@ -160,13 +165,15 @@ pub fnc main(): int {
             entry = d / "main.atto"
             entry.write_text(source, encoding="utf-8")
             rejected = run([compiler, str(entry)])
-            if rejected.returncode == 0 or rejected.stdout.strip():
+            if not 0 < rejected.returncode < 128 or rejected.stdout.strip():
                 raise AssertionError((module, "private field access admitted or IR leaked",
                                       rejected.returncode, rejected.stderr[:1500]))
             negative += 1
-    if positive != 6 or sanitized != 3 or negative != 2:
+    expected_negative = sum(module in ("slab", "actor_heap") for module in modules)
+    if positive != 2 * len(modules) or sanitized != len(modules) or negative != expected_negative:
         raise AssertionError("incomplete guest and negative fixture coverage")
-    print(f"ATTO_ALLOC_LLVM_COMPILED_GUEST_PASS positive={positive} "
+    scope = "ALL" if set(modules) == set(MODULES) else ",".join(modules)
+    print(f"ATTO_ALLOC_LLVM_COMPILED_GUEST_PASS scope={scope} positive={positive} "
           f"sanitizer_linked={sanitized} private_denied={negative}")
 
 

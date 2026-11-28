@@ -13,8 +13,16 @@ void* operator new(std::size_t n) {
     if (void* p = std::malloc(n ? n : 1)) return p;
     throw std::bad_alloc();
 }
-void operator delete(void* p) noexcept {std::free(p);}
-void operator delete(void* p, std::size_t) noexcept {std::free(p);}
+// Keep the test's malloc/free allocator pair opaque to GCC's interprocedural
+// mismatched-new-delete diagnostic. Do not disable that warning globally.
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 9
+__attribute__((noipa))
+#elif defined(__GNUC__) || defined(__clang__)
+__attribute__((noinline))
+#endif
+static void release_test_allocation(void* p) noexcept {std::free(p);}
+void operator delete(void* p) noexcept {release_test_allocation(p);}
+void operator delete(void* p, std::size_t) noexcept {release_test_allocation(p);}
 #include "oreslang/runtime/NativeIpcReceiptTable.hpp"
 using namespace oreslang::runtime;
 static IpcReceiptEnvelope msg(std::uint64_t i) {

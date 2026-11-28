@@ -3,8 +3,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export CARGO_NET_OFFLINE=true
-test "$(git hash-object frontend/src/check.rs)" = "96978d25b1f32b6be3c0810662ad60228f59ed7a"
-test "$(git hash-object frontend/src/parser.rs)" = "2e5f64eee05a3adede33b11c13c57638be731314"
+test "$(git hash-object frontend/src/check.rs)" = "07634eb1445c35ee523d649cdcef4ddbd1a2e241"
+test "$(git hash-object frontend/src/parser.rs)" = "13a3261355b088d1b4fc6a976f5ddf45ac302cd7"
 test "$(git hash-object frontend/src/lexer.rs)" = "f12cc53cf4d59f9ee4c0918ef708673e3d2031d8"
 
 cargo test --locked --offline
@@ -215,6 +215,8 @@ if find "$work" -type f -name '*.atto-stage-*.tmp' | grep -q .; then
 fi
 echo "PASS atomic output, failure preservation, and cleanup"
 
+bash ci/test_int_membership_native.sh
 bash ci/test_guard_dual_form_native.sh
+bash ci/test_safe_signed_division_native.sh
 
 echo "PASS LLVM_NATIVE_AOT_SCALAR_GUEST cases=$total toolchain=clang no_guest_vm=1 zero_gc_scalar=1"

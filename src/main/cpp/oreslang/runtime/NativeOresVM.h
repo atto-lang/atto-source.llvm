@@ -119,7 +119,8 @@ OresNativeActorRef ores_native_vm_spawn(
 OresNativeActorRef ores_native_vm_spawn_ready(
     OresNativeVM* vm, enum OresNativeVMDomain domain, size_t actor_slot);
 /* Trusted host-only immutable parentage. Child and supervisor must be distinct
- * live actors in the SAME VM domain. A child slot is single-use. No delegation
+ * live actors in the SAME VM domain. A child slot stays occupied until
+ * explicitly reclaimed by the trusted leaf gate. No delegation
  * capability is granted to guest code, and no cross-domain parent is allowed.
  * Failed registration leaves the child slot unspawned. */
 OresNativeActorRef ores_native_vm_spawn_supervised(
@@ -150,6 +151,14 @@ int ores_native_vm_confirm_supervised_finalized(
 int ores_native_vm_publish_supervised_failure(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeActorTerminalFailure failure);
+/* Trusted external host only. Reclaim an exact retired supervised leaf
+ * after confirmed finalization and acknowledged terminal CONTROL. No live
+ * children, active turns, resource loans, DONE waiters or TASK/WAKE profile.
+ * Caller must finish external policy and all untracked host references.
+ * Returns 0 without changing identity until all gates hold. The next spawn
+ * in this slot gets a fresh generation; old references stay invalid. */
+int ores_native_vm_reclaim_supervised_leaf_v1(
+    OresNativeVM* vm, enum OresNativeVMDomain domain, OresNativeActorRef child);
 OresNativeSendStatus ores_native_vm_try_send(
     OresNativeVM* vm, enum OresNativeVMDomain domain,
     OresNativeActorRef actor, uint64_t payload);

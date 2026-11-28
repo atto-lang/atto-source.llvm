@@ -1,0 +1,60 @@
+name: Trusted actor buffer host admission (non-guest)
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/TrustedActorBuffer*.hpp'
+      - 'tests/trusted_actor_buffer_*_test.cpp'
+      - '.github/workflows/trusted-actor-buffer-exact-head.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: trusted-buffer-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  sanitized-host-tests:
+    name: ${{ matrix.compiler }} ASan+UBSan host C++17
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: ['g++', 'clang++']
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Compile and execute every host-only buffer test
+        env:
+          CXX: ${{ matrix.compiler }}
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/trusted-buffer"
+          for name in trusted_actor_buffer_pool trusted_actor_buffer_mailbox trusted_actor_buffer_scheduler_gate; do
+            "${CXX}" -std=c++17 -pthread -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+              -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
+              -Isrc/main/cpp "tests/${name}_test.cpp" -o "${RUNNER_TEMP}/trusted-buffer/${name}"
+            "${RUNNER_TEMP}/trusted-buffer/${name}"
+          done
+  thread-sanitizer:
+    name: GCC TSan host C++17
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Compile and run scheduler/send retirement race test under TSan
+        env:
+          TSAN_OPTIONS: halt_on_error=1
+        shell: bash
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -pthread -Wall -Wextra -Wpedantic -Werror -UNDEBUG \
+            -O1 -g -fsanitize=thread -fno-omit-frame-pointer \
+            -Isrc/main/cpp tests/trusted_actor_buffer_scheduler_gate_test.cpp \
+            -o "${RUNNER_TEMP}/trusted-buffer-tsan"
+          "${RUNNER_TEMP}/trusted-buffer-tsan"

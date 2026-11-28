@@ -7,6 +7,7 @@
 #include "oreslang/backend/ActorRegionV2Guest.hpp"
 #include "oreslang/backend/GpuG1AttoSaxpySource.hpp"
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/NamedRecursiveScalarSource.hpp"
 #include "oreslang/frontend/StaticFfiI64Aot.hpp"
 #include "oreslang/types/InvertedProductionSourceMir.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
@@ -600,6 +601,28 @@ int main(int argc, char** argv) {
     }
 #endif
 
+    // Explicit isolated native scalar proof: incompatible with all other
+    // targets, actor/RT policies and import or ownership capability grants.
+    // No fallback to the ordinary CLI on rejection.
+    if (argc > 1 && std::string_view(argv[1]) == "--named-recursive-scalar-v1") {
+        try {
+            if (argc!=3 || std::filesystem::path(argv[2]).extension()!=".atto")
+                throw std::invalid_argument("usage: --named-recursive-scalar-v1 source.atto");
+            const auto identity=capture_source_identity(argv[2],16384,"named stage source exceeds limit");
+            const auto source=read_regular_source(argv[2],16384,"named stage source exceeds limit",nullptr,&identity);
+            require_valid_source_utf8(source);
+            const auto plan=oreslang::parse_named_recursive_scalar(source);
+            const auto ir=oreslang::backend::named_recursive::emit(plan.stage,plan.input);
+            if(!ir)throw std::runtime_error("E_NAMED_STAGE_GRAPH: rejected before LLVM emission");
+            std::cout<<*ir;
+            std::cout.flush();
+            return std::cout?0:1;
+        }catch(const std::exception& e){
+            print_safe_diagnostic(std::cerr,e.what(),512);
+            std::cerr<<'\n';
+            return 2;
+        }
+    }
     if (argc > 1 && std::string_view(argv[1]) == "--counted-ready-v1") {
         try {
             if (argc != 3 || std::filesystem::path(argv[2]).extension() != ".atto")
@@ -816,6 +839,7 @@ int main(int argc, char** argv) {
     bool actor_region_v2_guest = false; // two-owner guarded-return cleanup
     bool wasm32_target = false;
     bool cortex_m_target = false;
+    std::string hosted_linux_triple;
     bool tenant_vm_guest = false;
     bool target_seen = false;
     enum class BuildProfile { Dev, Release, StrictAot, HardRt };
@@ -1107,18 +1131,36 @@ int main(int argc, char** argv) {
                 wasm32_target = oreslang::TargetAbi::parse("wasm32-unknown-unknown").experimental_wasm32_ir();
             } else {
                 try {
-                    (void)oreslang::TargetAbi::parse(target);
-                    std::cerr << "target has no certified IR/ABI lowering: " << target << '\n';
+                    if (oreslang::TargetAbi::parse(target).experimental_hosted_linux_ir()) {
+                        hosted_linux_triple = target;
+                    } else {
+                        std::cerr << "target has no certified IR/ABI lowering: " << target << '\n';
+                        return 2;
+                    }
                 } catch (const std::invalid_argument&) {
                     std::cerr << "unknown target triple: " << target << '\n';
+                    return 2;
                 }
-                return 2;
             }
         } else if (arg.rfind("--cpu=", 0) == 0) {
             std::cerr << "explicit CPU feature selection not implemented: " << arg << '\n';
             return 2;
         } else if (!arg.empty() && arg[0] != '-' && path == nullptr) path = argv[i];
         else { std::cerr << "unrecognized or duplicate option: " << arg << '\n'; return 2; }
+    }
+    // Cross-host IR has not qualified the specialized host-only ABI paths.
+    // Reject those selectors before source I/O rather than falling back to host IR.
+    if (!hosted_linux_triple.empty() && (stable_local_scalar_modules ||
+        experimental_owned_int || experimental_rt_scalar_loop || experimental_pointer_int_aot ||
+        experimental_static_ffi_i64 || static_ffi_i64_capability || actor_region_v1_guest ||
+        actor_region_v2_guest || tenant_vm_guest || native_hard_rt_profile || rt_check_only ||
+        rt_entry_seen || rt_report_seen || constraint_descriptors_only || frontend_check_only ||
+        analyze_requested || gpu_g1_kernel_ir || verify_actor_source_set_only ||
+        verify_actor_headers_only || expected_source_set_seen || source_log_manifest_seen ||
+        sealed_scalar_aot || sealed_class_fields_aot || actor_region_v1_aot || isolate_entry_seen ||
+        bounded_allocator_provider || freestanding || build_profile != BuildProfile::Dev)) {
+        std::cerr << "hosted Linux cross target rejects unqualified compiler profile\n";
+        return 2;
     }
     if (stable_local_scalar_modules &&
         (!target_seen || wasm32_target || cortex_m_target || tenant_vm_guest ||
@@ -1299,7 +1341,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--guest-abi=tenant-vm] [--experimental-pointer-int-aot] [--experimental-static-ffi-i64-aot] [--ffi-grant=atto.math.i64.v1] [--release|--strict-aot|--hard-rt] [--freestanding] [--deployment-profile=ebpf-xdp|ebpf-tc|carrier-linux|fpga-hls|asic-rtl (not yet certified)] [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--aot-profile=sealed-scalar-v1|sealed-class-fields-v1|actor-region-v1] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--check|--analyze] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--guest-abi=tenant-vm] [--experimental-pointer-int-aot] [--experimental-static-ffi-i64-aot] [--ffi-grant=atto.math.i64.v1] [--release|--strict-aot|--hard-rt] [--freestanding] [--deployment-profile=ebpf-xdp|ebpf-tc|carrier-linux|fpga-hls|asic-rtl (not yet certified)] [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--aot-profile=sealed-scalar-v1|sealed-class-fields-v1|actor-region-v1] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--check|--analyze] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi|x86_64-unknown-linux-gnu|aarch64-unknown-linux-gnu|i686-unknown-linux-gnu|armv7-unknown-linux-gnueabihf] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -1457,6 +1499,8 @@ int main(int argc, char** argv) {
 
 
         if (ast.inverted_main) {
+            if (!hosted_linux_triple.empty())
+                throw std::runtime_error("inverted i64 slice cross target is not qualified");
             // Bounded production two-i64 stack owner only; no escaping
             // handles, async/actor lifetime or cross-target RT guarantees.
             // wasm32 lowers the SAME parser-verified MIR and owner close,
@@ -1870,7 +1914,7 @@ int main(int argc, char** argv) {
             (void)oreslang::emit_verified_llvm_ir(
                 ast, wasm32_target, cortex_m_target,
                 bounded_allocator_provider, {}, actor_region_v1_aot, {}, {},
-                tenant_vm_guest);
+                tenant_vm_guest, hosted_linux_triple.empty() ? nullptr : hosted_linux_triple.c_str());
 
             // The shipped destructive pass remains function-only. For class
             // programs, retain every declaration rather than deleting any
@@ -1886,7 +1930,7 @@ int main(int argc, char** argv) {
                                     : std::vector<oreslang::CheckedSourceRoutineV1>{},
                 checked_source_logs ? checked_source_logs->sites
                                     : std::vector<oreslang::CheckedLogSiteV1>{},
-                tenant_vm_guest);
+                tenant_vm_guest, hosted_linux_triple.empty() ? nullptr : hosted_linux_triple.c_str());
         std::cout.flush();
         if (coreLog) coreLog->dump(stderr);
         return 0;

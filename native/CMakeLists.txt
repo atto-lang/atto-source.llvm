@@ -165,3 +165,20 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   endif()
 endif()
 add_test(NAME tenant_bytes_host_reference COMMAND atto_tenant_bytes_host_test)
+
+
+# Native Linux UDP datagram host slice. IPv4 loopback only, nonblocking and
+# explicitly policy-callback gated. NOT an imported .atto guest socket ABI.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  add_library(atto_host_udp_loopback STATIC src/host_udp_loopback.c)
+  target_include_directories(atto_host_udp_loopback PUBLIC include)
+  target_link_libraries(atto_host_udp_loopback PUBLIC Threads::Threads)
+  add_executable(atto_host_udp_loopback_test tests/host_udp_loopback_test.c)
+  target_link_libraries(atto_host_udp_loopback_test PRIVATE atto_host_udp_loopback)
+  if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(atto_host_udp_loopback PRIVATE -Wall -Wextra -Wconversion -Werror -pedantic)
+    target_compile_options(atto_host_udp_loopback_test PRIVATE -Wall -Wextra -Wconversion -Werror -pedantic -UNDEBUG)
+  endif()
+  add_test(NAME linux_udp_datagram_host_loopback COMMAND atto_host_udp_loopback_test)
+  set_tests_properties(linux_udp_datagram_host_loopback PROPERTIES TIMEOUT 15)
+endif()

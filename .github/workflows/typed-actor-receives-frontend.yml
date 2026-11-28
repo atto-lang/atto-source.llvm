@@ -9,6 +9,7 @@ on:
       - 'frontend/src/ast.rs'
       - 'frontend/src/check.rs'
       - 'frontend/src/lib.rs'
+      - 'frontend/src/contextual_specialization.rs'
       - 'frontend/src/actor_send_effect_graph.rs'
       - 'frontend/tests/fixtures/actor-bool-never-parity-v1.atto'
       - 'frontend/src/bin/attoc.rs'
@@ -20,6 +21,7 @@ on:
       - 'frontend/src/ast.rs'
       - 'frontend/src/check.rs'
       - 'frontend/src/lib.rs'
+      - 'frontend/src/contextual_specialization.rs'
       - 'frontend/src/actor_send_effect_graph.rs'
       - 'frontend/tests/fixtures/actor-bool-never-parity-v1.atto'
       - 'frontend/src/bin/attoc.rs'
@@ -59,6 +61,12 @@ jobs:
           cargo --version
           cargo test --offline --locked --manifest-path frontend/Cargo.toml --test typed_actor_receives
           cargo build --offline --locked --manifest-path frontend/Cargo.toml --bin attoc
+      - name: Execute contextual specialization compiler and real Wasm guests
+        env:
+          RUST_MIN_STACK: '16777216'
+        run: |
+          cargo test --offline --locked --manifest-path frontend/Cargo.toml --lib contextual_specialization::tests
+          cargo test --offline --locked --manifest-path frontend/Cargo.toml --lib contextual_specialization::tests::guest_capture -- --ignored
       - name: Do not count frontend Wasm as native LLVM or actor runtime parity
         run: |
           echo 'RUST_FRONTEND_TYPED_RECEIVES_SOURCE_WASM=TESTED'

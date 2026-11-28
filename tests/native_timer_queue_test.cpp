@@ -305,4 +305,36 @@ int main() {
         check(a.outstanding() == 0, "close leaked ticket");
     }
 
+    // Idle and sparse expiry polls must not reserve a buffer from the
+    // entire pending population. Linux std::vector capacity is observable
+    // here to catch the former unconditional reserve on the hot path.
+    {
+        NativeTimerQueue q(4096);
+        const auto first = q.arm_after(100, 1);
+        const auto second = q.arm_after(100, 1);
+        for (int i = 0; i < 4094; ++i) (void)q.arm_after(100, 1000);
+        for (int i = 0; i < 1000; ++i) {
+            auto idle = q.poll(100, 4096);
+            check(idle.empty() && idle.capacity() == 0,
+                  "idle poll allocated result storage");
+        }
+        auto sparse = q.poll(101, 4096);
+        check(sparse.size() == 2 && sparse[0].handle == first &&
+                  sparse[1].handle == second,
+              "sparse poll lost deadline/FIFO ordering");
+        check(sparse.capacity() < q.pending(),
+              "sparse poll sized buffer from future timers");
+        check(q.outstanding() == 4096, "polled tickets escaped admission accounting");
+        check(q.claim_delivery(first) && q.revoke_before_dispatch(second),
+              "ready token settlement failed");
+        check(!q.claim_delivery(first) && !q.claim_delivery(second),
+              "settled token revived");
+        check(q.pending() == 4094 && q.outstanding() == 4094,
+              "sparse poll changed future timers");
+        check(q.next_deadline_ns() == 1100, "sparse poll changed next deadline");
+        q.close();
+        check(q.outstanding() == 0 && q.poll(1100, 4096).empty(),
+              "close leaked timer state");
+    }
+
 }

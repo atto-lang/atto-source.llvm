@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <map>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -67,6 +68,24 @@ public:
             verify();
             return store_->at(name).initial;
         }
+        // A narrow compiler-owned checked arithmetic primitive: validate the
+        // state loan and field kind before calculating, and never mutate a
+        // live field when signed overflow would occur. No UB, no wraparound.
+        std::int64_t add_checked(const std::string& name, std::int64_t delta) {
+            verify();
+            const auto& slot = store_->at(name);
+            if (slot.type != Type::Int ||
+                    !std::holds_alternative<std::int64_t>(slot.initial))
+                throw std::invalid_argument("checked actor state add requires int field");
+            const auto old = std::get<std::int64_t>(slot.initial);
+            if ((delta > 0 && old > std::numeric_limits<std::int64_t>::max() - delta)
+                    || (delta < 0 && old < std::numeric_limits<std::int64_t>::min() - delta))
+                throw std::overflow_error("checked actor state i64 addition overflow");
+            const auto next = old + delta;
+            write(name, next);
+            return next;
+        }
+
         void write(const std::string& name, Value value) {
             verify();
             auto& slot = store_->at(name);

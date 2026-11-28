@@ -28,5 +28,10 @@ pub fnc main(): int {
   if arena.arena_can_rewind(8, 0, 1, 1, -1, 0) then return 20; fi
   if region.region_quiescent(0, 0, 0, 0, 0, -1) then return 21; fi
   if region.region_next_epoch(2147483647, 2147483647) != -1 then return 22; fi
+  if arena.remaining(-1, 9223372036854775807) != 0 then return 26; fi
+  if arena.remaining(0, -1) != 0 then return 27; fi
+  if arena.remaining(9223372036854775807, 9223372036854775807) != 0 then return 28; fi
+  if arena.remaining(0, 9223372036854775807) != 9223372036854775807 then return 29; fi
+  if arena.remaining(3, 8) != 5 then return 30; fi
   return 42;
 }

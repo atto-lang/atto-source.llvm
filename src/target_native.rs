@@ -3,7 +3,7 @@
  //! checker. This is NOT an interpreter or string substitution.
  //! Critical callbacks are lowered only for a deliberately tiny, statically
  //! checked scalar form; unsupported bodies reject before native codegen.
-use atto_compiler::ast::{Method, Program, Type};
+use atto_compiler::ast::{ActorDecl, FieldMode, Method, Program, Type};
 use atto_compiler::check;
 use atto_compiler::diag::Pos;
 use atto_compiler::lexer::{Tok, Token};
@@ -63,34 +63,57 @@ fn field_name(tokens: &[Token], at: usize, binder: &str) -> Option<String> {
     }
 }
 
+/// Authenticate the concrete nominal actor field before erasing the binder.
+fn require_state_field(owner: &ActorDecl, name: &str, write: bool) -> Result<(), String> {
+    let field = owner.fields.iter().find(|field| field.name == name)
+        .ok_or_else(|| error("E_STATE_LAYOUT", format!("unknown state field {}.{name}", owner.name)))?;
+    if field.public || !matches!(field.ty, Type::Int | Type::Bool) {
+        return Err(error("E_STATE_LAYOUT", "state field must be a private scalar of the receiver"));
+    }
+    if write && field.mode != FieldMode::ActorState {
+        return Err(error("E_STATE_LAYOUT", "state write requires a mutable declared actor field"));
+    }
+    Ok(())
+}
+
 /// Single field read or single assignment under an already validated critical
 /// callback. A receiver's guarded read/write is executed only on its own
 /// mailbox worker. There are no exposed state references or suspension points.
 fn lower_callback(tokens: &[Token], open: usize, end: usize,
-    params: &[String]) -> Result<(Vec<Token>, usize), String> {
+    params: &[String], owner: &ActorDecl, mutable_receiver: bool) -> Result<(Vec<Token>, usize), String> {
     let close = enclosing_paren(tokens, open, end)?;
-    let k = open + 1;
-    if !is_word(tokens, k, "critical")
-        || !matches!(tokens.get(k+1).map(|x| &x.tok), Some(Tok::Minus))
-        || !(is_word(tokens, k+2, "read") || is_word(tokens, k+2, "write"))
-        || !matches!(tokens.get(k+3).map(|x| &x.tok), Some(Tok::Pipe))
-        || !matches!(tokens.get(k+5).map(|x| &x.tok), Some(Tok::Pipe))
-        || !matches!(tokens.get(k+6).map(|x| &x.tok), Some(Tok::Arrow)) {
+    let (write, k) = target_syntax::state_callback_mode(tokens, open).map_err(|e| e.to_string())?;
+    if write && !mutable_receiver {
+        return Err(error("E_MUTABILITY", "critical-write requires mutable receiver"));
+    }
+    if !matches!(tokens.get(k).map(|x| &x.tok), Some(Tok::Pipe))
+        || !matches!(tokens.get(k+2).map(|x| &x.tok), Some(Tok::Pipe))
+        || !matches!(tokens.get(k+3).map(|x| &x.tok), Some(Tok::Arrow)) {
         return Err(error("E_SEALED", "critical callback requires critical-read/write |s| -> body"));
     }
-    let binder = match tokens.get(k+4).map(|x| &x.tok) {
-        Some(Tok::Ident(name)) if name != "self" => name.as_str(),
+    let binder = match tokens.get(k+1).map(|x| &x.tok) {
+        Some(Tok::Ident(name)) if name != "self" && name != "_"
+            && !target_syntax::is_state_intrinsic(name) && !params.contains(name) => name.as_str(),
         _ => return Err(error("E_SEALED", "invalid critical callback binder")),
     };
-    let start = k+7;
+    let mut start = k+4;
     let pos = tokens[open].pos;
-    if is_word(tokens, k+2, "read") {
-        if close != start + 3 {
+    if !write {
+        let mut projection_end = close;
+        if matches!(tokens.get(start).map(|x| &x.tok), Some(Tok::LBrace))
+            && is_word(tokens, start+1, "return")
+            && matches!(tokens.get(close-1).map(|x| &x.tok), Some(Tok::RBrace))
+            && matches!(tokens.get(close-2).map(|x| &x.tok), Some(Tok::Semi)) {
+            start += 2;
+            projection_end -= 2;
+        }
+        if projection_end != start + 3 {
             return Err(error("E_UNSUPPORTED_CRITICAL",
                 "only one scalar field read is currently native-lowered"));
         }
         let field = field_name(tokens, start, binder)
             .ok_or_else(|| error("E_SEALED", "critical-read requires s.field"))?;
+        require_state_field(owner, &field, false)?;
         return Ok((vec![t(Tok::Ident("self".into()),pos),
                         t(Tok::Dot,pos),t(Tok::Ident(field),pos)],close+1));
     }
@@ -105,6 +128,7 @@ fn lower_callback(tokens: &[Token], open: usize, end: usize,
     let left = start+1;
     let field = field_name(tokens, left, binder)
         .ok_or_else(|| error("E_SEALED", "critical-write needs s.field assignment"))?;
+    require_state_field(owner, &field, true)?;
     if !matches!(tokens.get(left+3).map(|x| &x.tok), Some(Tok::Assign)) {
         return Err(error("E_SEALED", "critical-write requires plain assignment"));
     }
@@ -118,6 +142,10 @@ fn lower_callback(tokens: &[Token], open: usize, end: usize,
     let mut i = rhs;
     while i < rhs_end {
         if let Some(member) = field_name(tokens,i,binder) {
+            require_state_field(owner, &member, false)?;
+            if matches!(tokens.get(i+3).map(|x| &x.tok), Some(Tok::LParen)) {
+                return Err(error("E_UNSUPPORTED_CRITICAL", "protected field projection cannot be invoked"));
+            }
             out.push(t(Tok::Ident("self".into()),tokens[i].pos));
             out.push(t(Tok::Dot,tokens[i].pos));
             out.push(t(Tok::Ident(member),tokens[i].pos));
@@ -127,7 +155,14 @@ fn lower_callback(tokens: &[Token], open: usize, end: usize,
         match &tokens[i].tok {
             Tok::Int(Some(_)) | Tok::Plus | Tok::Minus | Tok::Star
                 | Tok::LParen | Tok::RParen => {}
-            Tok::Ident(name) if params.iter().any(|x| x==name) => {}
+            Tok::Ident(name) if params.iter().any(|x| x==name) => {
+                // A parameter spelling is not proof that this occurrence is
+                // a scalar value. The downstream parser can interpret name(...)
+                // as a top-level call, including a same-named helper.
+                if matches!(tokens.get(i+1).map(|x| &x.tok), Some(Tok::LParen)) {
+                    return Err(error("E_UNSUPPORTED_CRITICAL", "calls are forbidden in scalar protected callbacks"));
+                }
+            }
             _ => return Err(error("E_UNSUPPORTED_CRITICAL",
                 "only pure integer expressions of s.field, params and literals are admitted")),
         }
@@ -144,21 +179,25 @@ fn lower_callback(tokens: &[Token], open: usize, end: usize,
     Ok((out,close+2))
 }
 fn lower_method_body(tokens: &[Token], body_start: usize, body_end: usize,
-    params: &[String]) -> Result<Vec<Token>, String> {
+    params: &[String], owner: &ActorDecl, mutable_receiver: bool) -> Result<Vec<Token>, String> {
     let mut out = Vec::new();
     let mut i = body_start;
     while i < body_end {
-        if is_word(tokens,i,"self")
+        let intrinsic_at = |j: usize| matches!(tokens.get(j).map(|x| &x.tok),
+            Some(Tok::Ident(name)) if target_syntax::is_state_intrinsic(name));
+        let open = if is_word(tokens,i,"self")
             && matches!(tokens.get(i+1).map(|x| &x.tok), Some(Tok::Dot))
-            && is_word(tokens,i+2,"handle_state") {
-            let open=i+3;
-            let write = is_word(tokens,open+3,"write");
+            && intrinsic_at(i+2) { Some(i+3) }
+            else if intrinsic_at(i) && (i == body_start || !matches!(tokens[i-1].tok, Tok::Dot)) { Some(i+1) }
+            else { None };
+        if let Some(open) = open {
+            let (write, _) = target_syntax::state_callback_mode(tokens, open).map_err(|e| e.to_string())?;
             if write && i > body_start
                 && !matches!(tokens[i-1].tok,Tok::LBrace|Tok::Semi|Tok::RBrace) {
                 return Err(error("E_UNSUPPORTED_CRITICAL",
                     "critical-write must be a standalone statement"));
             }
-            let (expanded,next) = lower_callback(tokens,open,body_end,params)?;
+            let (expanded,next) = lower_callback(tokens,open,body_end,params,owner,mutable_receiver)?;
             out.extend(expanded);
             i=next;
         } else {
@@ -199,7 +238,8 @@ fn parse_one_function(tokens: &[Token], start: usize, end: usize)
     Ok(func)
 }
 fn parse_one_receiver(tokens: &[Token], start: usize, end: usize,
-    head: &target_syntax::ReceiverHeader) -> Result<Method,String> {
+    head: &target_syntax::ReceiverHeader, owner: &ActorDecl) -> Result<Method,String> {
+    if owner.name != head.owner { return Err(error("E_STATE_LAYOUT", "receiver owner mismatch")); }
     let at=locate_pos(tokens,head.pos)?;
     let mtd=if is_word(tokens,at,"pub") {at+1} else {at};
     if !is_word(tokens,mtd,"mtd") || (is_word(tokens,at,"pub") != head.public) {
@@ -218,7 +258,7 @@ fn parse_one_receiver(tokens: &[Token], start: usize, end: usize,
     if head.public {subset.push(t(Tok::Ident("pub".into()),pos));}
     subset.extend_from_slice(&tokens[name_start..start]);
     let params=head.params.iter().map(|p|p.name.clone()).collect::<Vec<_>>();
-    subset.extend(lower_method_body(tokens,start,end,&params)?);
+    subset.extend(lower_method_body(tokens,start,end,&params,owner,head.mutable)?);
     subset.push(t(Tok::Ident("end".into()),pos));
     subset.push(t(Tok::Eof,pos));
     let p=Parser::new(subset).parse_program().map_err(|e|e.to_string())?;
@@ -250,6 +290,9 @@ pub fn lower(tokens: &[Token]) -> Result<Program,String> {
     if !headers.imports.is_empty() {
         return Err(error("E_UNSUPPORTED_NATIVE_IMPORT",
             "target module imports require verified linker, not name-only imports"));
+    }
+    if !headers.actor_state_attachments.is_empty() {
+        return Err(error("E_STATE_LAYOUT", "attached state schemas require native protected-state lowering"));
     }
     let module=target_typed::lower_target_signatures(&headers)
         .map_err(|e|e.to_string())?;
@@ -325,9 +368,9 @@ pub fn lower(tokens: &[Token]) -> Result<Program,String> {
     for &(index,start,end) in &headers.receiver_body_spans {
         let head=headers.receivers.get(index)
             .ok_or_else(||error("E_INTERNAL","receiver index mismatch"))?;
-        let m=parse_one_receiver(tokens,start,end,head)?;
         let owner=program.actors.iter_mut().find(|actor|actor.name==head.owner)
             .ok_or_else(||error("E_UNLINKED","target receiver has no concrete actor"))?;
+        let m=parse_one_receiver(tokens,start,end,head,owner)?;
         owner.methods.push(m);
     }
     // Compile all target sources by the same production typed checker as
