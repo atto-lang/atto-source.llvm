@@ -143,6 +143,9 @@ fn lower_callback(tokens: &[Token], open: usize, end: usize,
     while i < rhs_end {
         if let Some(member) = field_name(tokens,i,binder) {
             require_state_field(owner, &member, false)?;
+            if matches!(tokens.get(i+3).map(|x| &x.tok), Some(Tok::LParen)) {
+                return Err(error("E_UNSUPPORTED_CRITICAL", "protected field projection cannot be invoked"));
+            }
             out.push(t(Tok::Ident("self".into()),tokens[i].pos));
             out.push(t(Tok::Dot,tokens[i].pos));
             out.push(t(Tok::Ident(member),tokens[i].pos));
@@ -152,7 +155,14 @@ fn lower_callback(tokens: &[Token], open: usize, end: usize,
         match &tokens[i].tok {
             Tok::Int(Some(_)) | Tok::Plus | Tok::Minus | Tok::Star
                 | Tok::LParen | Tok::RParen => {}
-            Tok::Ident(name) if params.iter().any(|x| x==name) => {}
+            Tok::Ident(name) if params.iter().any(|x| x==name) => {
+                // A parameter spelling is not proof that this occurrence is
+                // a scalar value. The downstream parser can interpret name(...)
+                // as a top-level call, including a same-named helper.
+                if matches!(tokens.get(i+1).map(|x| &x.tok), Some(Tok::LParen)) {
+                    return Err(error("E_UNSUPPORTED_CRITICAL", "calls are forbidden in scalar protected callbacks"));
+                }
+            }
             _ => return Err(error("E_UNSUPPORTED_CRITICAL",
                 "only pure integer expressions of s.field, params and literals are admitted")),
         }
