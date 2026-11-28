@@ -106,6 +106,7 @@ def main():
     ap.add_argument("--clang", required=True)
     ap.add_argument("--root", required=True)
     ap.add_argument("--sanitize", action="store_true")
+    ap.add_argument("--positive-case", help="Run one named positive guest only; not a full suite receipt")
     args = ap.parse_args()
     root = pathlib.Path(args.root)
     fixtures = root / "tests" / "fixtures"
@@ -209,6 +210,12 @@ def main():
         "source-actor-final-group-field-reject.ores": "native final actor fields require typed field initialization and ownership lowering",
         "source-actor-suspend-method-reject.ores": "native suspends actor method requires continuation lowering",
     }
+    if args.positive_case:
+        positives = [case for case in positives if case[0] == args.positive_case]
+        if len(positives) != 1:
+            ap.error("unknown positive guest case")
+        negatives = {}
+        print("SCOPED positive guest only:", args.positive_case, flush=True)
     for name, diagnostic in negatives.items():
         flags = ["--experimental-owned-int"] if (
             name.startswith("source-actor-scoped-owned-")
@@ -373,7 +380,8 @@ def main():
                     for i, r in enumerate(receipts)
                 ], (name, receipts)
             print("PASS native source actor:", name, "actors", actors, flush=True)
-    print("PASS current-source actor lowering and physical heap reclamation")
+    print("PASS scoped positive guest" if args.positive_case else
+          "PASS current-source actor lowering and physical heap reclamation")
 
 if __name__ == "__main__":
     main()
