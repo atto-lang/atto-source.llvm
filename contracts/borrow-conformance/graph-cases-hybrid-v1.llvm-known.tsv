@@ -1,0 +1,7 @@
+# Known L1 differences: OwnershipCfg.hpp vs the canonical corpora.
+# case<TAB>engine verdict<TAB>engine code (- for none)<TAB>reason. Exact match required; stale rows fail.
+H04	reject	E_CFG_JOIN_UNPROVEN	OwnershipCfg rejects any join with differing live-loan provenance (no MAY-loan state); canonical reports the precise E_LOAN_ESCAPE
+H05	reject	E_CFG_JOIN_UNPROVEN	same conservative join rule; canonical reports E_UNKNOWN_LOAN
+H06	reject	E_CFG_JOIN_UNPROVEN	same conservative join rule; canonical reports E_SUSPEND_WITH_LIVE_LOAN
+H13	reject	E_CFG_JOIN_UNPROVEN	same rule at the loop back-edge; canonical reports E_BORROW_CONFLICT
+H15	reject	E_OWNER_DEF_REUSED	places initialize once (SSA-like): a loop-local owner cannot be re-initialized after Drop; STRICTER than canonical
