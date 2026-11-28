@@ -1,0 +1,67 @@
+name: core/types source oracle and real LLVM guest
+on:
+  pull_request:
+    paths:
+      - 'core/types.atto'
+      - 'src/main/cpp/oreslang/frontend/ModuleLoader.cpp'
+      - 'src/main/cpp/oreslang/frontend/Parser.cpp'
+      - 'tests/core-types-source.test.mjs'
+      - 'tests/core-types-matrix-source.test.mjs'
+      - 'tests/core-types-native-guest.sh'
+      - 'tests/fixtures/core-types-v1/**'
+      - '.github/workflows/core-types-v1.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-model:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Verify head and source-model tests
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          node --test tests/core-types-source.test.mjs tests/core-types-matrix-source.test.mjs
+          echo "CORE_TYPES_SOURCE_ONLY=PASS guest=NOT_PROVEN"
+  real-native-guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact head
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          git rev-parse 'HEAD^{tree}'
+      - name: Install native LLVM toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends clang llvm-dev cmake ninja-build
+      - name: Build compiler from exact checkout
+        run: |
+          set -euo pipefail
+          cmake -G Ninja -S . -B "$RUNNER_TEMP/core-types-build" -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DLLVM_DIR="$(llvm-config --cmakedir)"
+          cmake --build "$RUNNER_TEMP/core-types-build" --target oreslang-llvmc --parallel 2
+          test -x "$RUNNER_TEMP/core-types-build/oreslang-llvmc"
+      - name: Compile, link, execute and reject actual .atto fixtures
+        run: |
+          set -euo pipefail
+          bash tests/core-types-native-guest.sh "$RUNNER_TEMP/core-types-build/oreslang-llvmc" clang tests/fixtures/core-types-v1
+      - name: Evidence boundary
+        if: always()
+        run: echo 'Full compiled native guests require executed runner steps; zero steps are NOT_EXECUTED, not tests.' >> "$GITHUB_STEP_SUMMARY"

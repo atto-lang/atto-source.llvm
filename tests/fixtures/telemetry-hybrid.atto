@@ -1,0 +1,8 @@
+define macro operation(Syntax<Expr> value) -> Syntax<Expr> { return value; }
+
+pub fnc trace_once(int input): int {
+  using telemetry.span(operation!(syntax expr "lexical-checkout")) as scope {
+    return input + 9;
+  }
+  return 1;
+}

@@ -1,0 +1,5 @@
+// The first browser host C ABI contract is a single-purpose sealed module.
+// A type-only declaration must not silently broaden the export unit.
+declare type BrowserRawHandle = int;
+@CExportU32("ores_browser_abi_version")
+pub fnc browser_native_abi_v1(): int { return 1; }

@@ -1,0 +1,89 @@
+{
+  "schema": "atto.llvm.nominal-sealed-hardening.v1",
+  "status": "PASS_NATIVE_ACTOR_NOMINAL_INDEX_AND_SEALED_FIELD_AUDIT",
+  "source": {
+    "repository": "atto-lang/atto-source.llvm",
+    "verified_commit": "b80020c46d1a496b663243e1a4a942edcfb208f6",
+    "exact_git_tree": "c5e1f150fa628f3985a535efd83bcfcbffb03cb0",
+    "exact_blob_count": 69,
+    "checked_type_resolver_blob": "fc8806e97d94f408fd145f48b73ab33324dae2fa",
+    "native_target_linker_blob": "d9ba4ecb57c08f141613fbeff9705803927f7e6e",
+    "native_actor_script_blob": "01cbe178471277f04a6cd30069c579fd63aada0e",
+    "scalar_script_blob": "f3810718adf41e39367652ca3be7edd28a5cd890"
+  },
+  "carrier": {
+    "repository": "athlet-o/athleto-e2e",
+    "branch": "ci/atto-llvm-nominal-sealed-audit-20261114",
+    "mirror_snapshot": "a26174d8ed375b2ec87543ddcc55e0e88b3957a4",
+    "workflow_commit": "6bd55d1605b112563e6dcf8145cc7f976042e046",
+    "run": "https://github.com/athlet-o/athleto-e2e/actions/runs/43669072054",
+    "conclusion": "success",
+    "exact_full_tree_verified": true,
+    "checkout_uses_local_carrier_token_only": true,
+    "cross_org_checkout_secrets": false
+  },
+  "audit_fixes": {
+    "unresolved_type_index_checked": "E_TYPE_INDEX",
+    "forbidden_public_actor_state": "E_SEALED",
+    "reparsed_receiver_abi_types_revalidated": true,
+    "historical_scalar_and_actor_receipts_preserved_unchanged": true
+  },
+  "executed": {
+    "real_atto_guest_native_elf": true,
+    "native_guest_actor_fixture_count": 6,
+    "native_guest_actor_runs_per_fixture": 20,
+    "native_guest_actor_executions": 120,
+    "fail_closed_actor_compilation_cases": 19,
+    "adversarial_new_cases": 4,
+    "concurrent_mailbox_producers": 4,
+    "concurrent_mailbox_receiver_actors": 8,
+    "message_count_per_stress_run": 1600,
+    "stress_runs": 5,
+    "total_admitted_mailbox_messages": 8000,
+    "asan_ubsan_native_actor_guest_pass": true,
+    "asan_ubsan_host_mailbox_stress_pass": true,
+    "native_quic_http3_scalar_checks": 1255,
+    "rust_compiler_unit_tests_passed": 4,
+    "historical_receipt_python_tests_passed": 12,
+    "checked_native_overflow_and_artifact_atomicity_pass": true
+  },
+  "adversarial_fixtures": [
+    {
+      "path": "tests/actors/fail/201-target-public-sealed-state.atto",
+      "expected_error": "E_SEALED",
+      "git_blob": "b7fa449891da4ec771a80d38c95f4eb89f99279a"
+    },
+    {
+      "path": "tests/actors/fail/202-target-unrelocated-local-named-type.atto",
+      "expected_error": "E_TYPE_INDEX",
+      "git_blob": "68147baea5078c2e92ce663b13af6779abc97818"
+    },
+    {
+      "path": "tests/actors/fail/203-target-unrelocated-local-actorref.atto",
+      "expected_error": "E_TYPE_INDEX",
+      "git_blob": "41420a845eec9cdb5996d4b7aaa791d5980ccd6f"
+    },
+    {
+      "path": "tests/actors/fail/204-target-unrelocated-receiver-local.atto",
+      "expected_error": "E_TYPE_INDEX",
+      "git_blob": "5cd43aa71bf55135284c011215f4726d7447b94b"
+    }
+  ],
+  "scope": {
+    "native_legacy_and_target_scalar_actor_profile_only": true,
+    "actor_owned_private_arenas_and_dedicated_stacks": true,
+    "bounded_critical_read_one_scalar_field": true,
+    "bounded_critical_write_one_pure_scalar_assignment": true,
+    "no_guest_gc_in_this_bounded_native_profile": true,
+    "full_borrow_checker": false,
+    "real_concurrent_reader_writer_locks": false,
+    "typed_send_result": false,
+    "supervisor_priority_control": false,
+    "actor_cancel_restart": false,
+    "cooperative_work_stealing": false,
+    "full_language_native_aot": false,
+    "full_language_zero_gc": false,
+    "independent_java_net_wasm_actor_execution": false,
+    "real_quic_tls_http3_wire": false
+  }
+}

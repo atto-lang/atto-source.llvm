@@ -1,0 +1,2 @@
+// A freestanding scalar guest cannot link implicit host stdio.
+pub fnc main(): int { stdio.println(1); return 42; }

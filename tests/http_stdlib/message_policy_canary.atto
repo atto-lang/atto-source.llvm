@@ -1,0 +1,51 @@
+// Native guest canary appended to the exact stdlib .atto source.
+// Each failure returns a unique non-42 exit. Exit 42 is success.
+pub fnc main(): int {
+  if http_status_valid(100) != true then return 101; fi
+  if http_status_valid(599) != true then return 102; fi
+  if http_status_valid(99) != false then return 103; fi
+  if http_status_valid(600) != false then return 104; fi
+  if http_status_success(200) != true then return 105; fi
+  if http_status_success(300) != false then return 106; fi
+  if http_status_redirect(301) != true then return 107; fi
+  if http_status_redirect(400) != false then return 108; fi
+  if http_status_client_error(404) != true then return 109; fi
+  if http_status_client_error(500) != false then return 110; fi
+  if http_status_server_error(503) != true then return 111; fi
+  if http_status_server_error(499) != false then return 112; fi
+  if http_response_body_allowed(200, false, false) != true then return 113; fi
+  if http_response_body_allowed(100, false, false) != false then return 114; fi
+  if http_response_body_allowed(204, false, false) != false then return 115; fi
+  if http_response_body_allowed(205, false, false) != false then return 116; fi
+  if http_response_body_allowed(304, false, false) != false then return 117; fi
+  if http_response_body_allowed(200, true, false) != false then return 118; fi
+  if http_response_body_allowed(200, false, true) != false then return 119; fi
+  if http_response_body_allowed(404, false, true) != true then return 120; fi
+  if http_request_framing_allowed(true, true, true) != false then return 121; fi
+  if http_request_framing_allowed(true, false, false) != false then return 122; fi
+  if http_request_framing_allowed(true, false, true) != true then return 123; fi
+  if http_request_framing_allowed(false, true, false) != true then return 124; fi
+  if http_header_budget_allowed(8192, 64, 8192, 64) != true then return 125; fi
+  if http_header_budget_allowed(8193, 64, 8192, 64) != false then return 126; fi
+  if http_header_budget_allowed(8192, -1, 8192, 64) != false then return 127; fi
+  if http_body_bytes_allowed(0, 0) != true then return 128; fi
+  if http_body_bytes_allowed(-1, 100) != false then return 129; fi
+  if http_body_bytes_allowed(101, 100) != false then return 130; fi
+  if http_frame_range_allowed(10, 10, 20, 10) != true then return 131; fi
+  if http_frame_range_allowed(11, 10, 20, 10) != false then return 132; fi
+  if http_frame_range_allowed(9223372036854775807, 1, 9223372036854775807, 2) != false then return 133; fi
+  if http_frame_range_allowed(0, 0, 0, 0) != true then return 134; fi
+  if http_request_framing_fields_allowed(1, 0, false, false) != true then return 135; fi
+  if http_request_framing_fields_allowed(0, 1, true, false) != true then return 136; fi
+  if http_request_framing_fields_allowed(1, 1, true, false) != false then return 137; fi
+  if http_request_framing_fields_allowed(2, 0, false, false) != false then return 138; fi
+  if http_request_framing_fields_allowed(0, 2, true, false) != false then return 139; fi
+  if http_request_framing_fields_allowed(0, 1, false, false) != false then return 140; fi
+  if http_request_framing_fields_allowed(0, 1, true, true) != false then return 141; fi
+  if http_request_framing_fields_allowed(0, 0, true, false) != false then return 142; fi
+  if http_request_framing_fields_allowed(-1, 0, false, false) != false then return 143; fi
+  if http_body_chunk_allowed(7, 1, 8) != true then return 144; fi
+  if http_body_chunk_allowed(7, 2, 8) != false then return 145; fi
+  if http_body_chunk_allowed(0, 0, 1073741825) != false then return 146; fi
+  return 42;
+}

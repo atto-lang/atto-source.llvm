@@ -1,0 +1,54 @@
+// expect-exit: 42
+// Independent keyed predicate regression; baseline map guest stays unchanged.
+import module map from "atto.alloc/map";
+
+pub fnc main(): int {
+  // Differing capacities, collision chains, tombstones, zero and absence.
+  let mut left = map.new_map(4);
+  let mut right = map.new_map(7);
+  if !left.same_keys(rt borrow right) || left.has_overlap(rt borrow right) ||
+     !left.overlapping_values_equal(rt borrow right); do return 12; fi
+  left.try_insert(-1, 0);
+  if left.overlapping_values_equal(rt borrow right); do return 13; fi
+  right.try_insert(9, 0);
+  if left.has_overlap(rt borrow right) || left.overlapping_values_equal(rt borrow right);
+    do return 14; fi
+  right.try_insert(-1, 0);
+  left.try_insert(3, 20);
+  if left.same_keys(rt borrow right) || !left.has_overlap(rt borrow right) ||
+     !left.overlapping_values_equal(rt borrow right) ||
+     !right.overlapping_values_equal(rt borrow left); do return 15; fi
+  right.try_insert(-1, 1);
+  if left.overlapping_values_equal(rt borrow right); do return 16; fi
+  right.try_insert(3, 20);
+  right.remove(9);
+  if !left.same_keys(rt borrow right) || left.overlapping_values_equal(rt borrow right);
+    do return 17; fi
+  right.try_insert(-1, 0);
+  if !left.same_keys(rt borrow right) || !left.overlapping_values_equal(rt borrow right) ||
+     left.len() neq 2 || right.len() neq 2 ||
+     !right.contains_entry(-1, 0) || right.contains_entry(9, 0);
+    do return 18; fi
+  let mut subset = map.new_map(3);
+  let mut empty = map.new_map(1);
+  if !left.contains_keys(rt borrow empty) || !left.contains_entries(rt borrow empty) ||
+     !empty.contains_entries(rt borrow empty) || empty.contains_keys(rt borrow left) ||
+     !left.conflict_free(rt borrow empty); do return 19; fi
+  subset.try_insert(-1, 0);
+  if !left.contains_keys(rt borrow subset) || !left.contains_entries(rt borrow subset) ||
+     subset.contains_keys(rt borrow left) || subset.contains_entries(rt borrow left) ||
+     !left.conflict_free(rt borrow subset); do return 20; fi
+  subset.try_insert(-1, 99);
+  if !left.contains_keys(rt borrow subset) || left.contains_entries(rt borrow subset) ||
+     left.conflict_free(rt borrow subset); do return 21; fi
+  subset.remove(-1);
+  subset.try_insert(0, 0);
+  if left.contains_keys(rt borrow subset) || left.contains_entries(rt borrow subset) ||
+     !left.conflict_free(rt borrow subset) || left.overlapping_values_equal(rt borrow subset);
+    do return 22; fi
+  subset.remove(0);
+  subset.try_insert(3, 20);
+  if !left.contains_entries(rt borrow subset) || left.len() neq 2 ||
+     subset.len() neq 1 || !left.contains_entry(-1, 0); do return 23; fi
+  return 42;
+}

@@ -1,0 +1,11 @@
+// A second module with the same exports as counter.atto, in the same process.
+define actor Doubler as {
+  let last: int = 1;
+  pub fnc on_message(int ignored): int {
+    last = last + last;
+    return last;
+  }
+}
+pub fnc main(): int {
+  return 0;
+}

@@ -1,0 +1,2 @@
+namespace counter;
+declare pub actor Counter implements CounterContract;

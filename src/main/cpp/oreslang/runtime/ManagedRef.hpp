@@ -22,9 +22,16 @@ inline constexpr ManagedRefMode kDefaultManagedRefMode = ManagedRefMode::Compres
 #endif
 
 namespace detail {
+// A valid region must fit in the native address domain without wrapping.
+// Merely subtracting an address from base is insufficient when the *declared*
+// span itself crosses UINTPTR_MAX (e.g., a corrupt region descriptor).
+inline bool valid_arena_span(std::uintptr_t base, std::size_t bytes) noexcept {
+    return base != 0 && bytes != 0
+        && bytes - 1 <= std::numeric_limits<std::uintptr_t>::max() - base;
+}
 inline bool address_in_span(std::uintptr_t base, std::size_t bytes,
                             std::uintptr_t address) noexcept {
-    if (address < base) return false;
+    if (!valid_arena_span(base, bytes) || address < base) return false;
     const auto delta = address - base;
     return delta < bytes;
 }
@@ -64,9 +71,13 @@ public:
     static std::optional<ActorManagedRef> encode(std::uintptr_t arena_base,
                                                   std::size_t arena_bytes,
                                                   std::uintptr_t address) noexcept {
+        // Validate the arena descriptor even for null. Null is a zero value,
+        // not permission to bypass a malformed/overflowing region descriptor.
+        if (!detail::valid_arena_span(arena_base, arena_bytes)
+                || static_cast<std::uint64_t>(arena_bytes) > max_addressable_span
+                || (arena_base & (kQuantum - 1)) != 0)
+            return std::nullopt;
         if (address == 0) return ActorManagedRef{};
-        if (arena_base == 0 || arena_bytes == 0) return std::nullopt;
-        if ((arena_base & (kQuantum - 1)) != 0) return std::nullopt;
         if (!detail::address_in_span(arena_base, arena_bytes, address)) return std::nullopt;
         const auto offset = static_cast<std::uint64_t>(address - arena_base);
         if ((offset & (kQuantum - 1)) != 0 || offset > max_offset) return std::nullopt;
@@ -83,9 +94,10 @@ public:
 
     std::optional<std::uintptr_t> decode(std::uintptr_t arena_base,
                                           std::size_t arena_bytes) const noexcept {
-        if (encoded_ == 0) return std::uintptr_t{0};
-        if (arena_base == 0 || arena_bytes == 0
+        if (!detail::valid_arena_span(arena_base, arena_bytes)
+                || static_cast<std::uint64_t>(arena_bytes) > max_addressable_span
                 || (arena_base & (kQuantum - 1)) != 0) return std::nullopt;
+        if (encoded_ == 0) return std::uintptr_t{0};
         const auto index = static_cast<std::uint64_t>(encoded_ - 1);
         const auto offset = index << AlignmentShift;
         if (offset >= arena_bytes
@@ -102,6 +114,13 @@ public:
 
     constexpr bool is_null() const noexcept { return encoded_ == 0; }
     constexpr storage_type storage() const noexcept { return encoded_; }
+
+    // Re-read a word previously stored in a 4-byte guest field. This is NOT a
+    // proof: the bits may be stale or forged, and every dereference must still
+    // validate them against the owning heap (bounds, liveness, generation).
+    static constexpr ActorManagedRef from_storage(storage_type word) noexcept {
+        return ActorManagedRef{word};
+    }
 
     friend constexpr bool operator==(ActorManagedRef a, ActorManagedRef b) noexcept {
         return a.encoded_ == b.encoded_;
@@ -136,10 +155,12 @@ public:
     static std::optional<ActorManagedRef> encode(std::uintptr_t arena_base,
                                                   std::size_t arena_bytes,
                                                   std::uintptr_t address) noexcept {
+        // Null does not bypass validation of the arena descriptor.
+        if (!detail::valid_arena_span(arena_base, arena_bytes)
+                || (arena_base & (kQuantum - 1)) != 0)
+            return std::nullopt;
         if (address == 0) return ActorManagedRef{};
-        if (arena_base == 0 || arena_bytes == 0
-                || (arena_base & (kQuantum - 1)) != 0
-                || (address & (kQuantum - 1)) != 0
+        if ((address & (kQuantum - 1)) != 0
                 || !detail::address_in_span(arena_base, arena_bytes, address)) {
             return std::nullopt;
         }
@@ -155,12 +176,13 @@ public:
 
     std::optional<std::uintptr_t> decode(std::uintptr_t arena_base,
                                           std::size_t arena_bytes) const noexcept {
+        if (!detail::valid_arena_span(arena_base, arena_bytes)
+                || (arena_base & (kQuantum - 1)) != 0)
+            return std::nullopt;
         if (address_ == 0) return std::uintptr_t{0};
         if (address_ > std::numeric_limits<std::uintptr_t>::max()) return std::nullopt;
         const auto address = static_cast<std::uintptr_t>(address_);
-        if (arena_base == 0 || arena_bytes == 0
-                || (arena_base & (kQuantum - 1)) != 0
-                || (address & (kQuantum - 1)) != 0
+        if ((address & (kQuantum - 1)) != 0
                 || !detail::address_in_span(arena_base, arena_bytes, address)) {
             return std::nullopt;
         }

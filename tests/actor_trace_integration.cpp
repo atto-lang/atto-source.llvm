@@ -65,7 +65,7 @@ static bool reached(const TraceState& state, unsigned target) {
     return state.received.load(std::memory_order_acquire) >= target;
 }
 
-static void run(bool emit_trace) {
+static void run(bool emit_trace, bool v2) {
     TraceState state;
     HungryCarrier actor(&state, trace_handler, nullptr, unused_broker, {});
     auto producer = actor.producer_handle();
@@ -100,6 +100,43 @@ static void run(bool emit_trace) {
                 "native admitted and handled message IDs do not agree");
     require(!producer.try_send({999, 2997}), "closed actor handle admitted a message");
 
+    if (v2) {
+        // This is a real *host carrier* observation, reconstructed after
+        // quiescence; it is NOT generated from compiled .atto actor code and
+        // does not claim that an online interleaving was captured.
+        std::cout << "{\"schema\":\"atto.actor-trace.v2\",\"complete\":true,"
+                  << "\"producer\":{\"backend\":\"llvm\",\"subject\":\"runtime_host\","
+                  << "\"emission\":\"reconstructed_after_quiescence\"},\"events\":[";
+        unsigned seq = 0;
+        std::cout << "{\"seq\":" << seq++
+                  << ",\"kind\":\"actor_spawn\",\"actor_id\":\"native_actor\","
+                  << "\"generation\":1,\"serial\":true}";
+        // Successful admissions were explicitly recorded only after try_send
+        // returned success. Actual handler observations and completed count
+        // were asserted before this post-quiescence receipt was assembled.
+        for (auto id : admitted) {
+            std::cout << ",{\"seq\":" << seq++
+                      << ",\"kind\":\"send_accept\",\"actor_id\":\"native_actor\","
+                      << "\"generation\":1,\"message_id\":\"m" << id << "\"}";
+        }
+        for (auto id : state.observed) {
+            std::cout << ",{\"seq\":" << seq++
+                      << ",\"kind\":\"receive_start\",\"actor_id\":\"native_actor\","
+                      << "\"generation\":1,\"message_id\":\"m" << id
+                      << "\",\"receiver_id\":\"carrier\"}";
+            std::cout << ",{\"seq\":" << seq++
+                      << ",\"kind\":\"receive_complete\",\"actor_id\":\"native_actor\","
+                      << "\"generation\":1,\"message_id\":\"m" << id
+                      << "\",\"receiver_id\":\"carrier\"}";
+        }
+        std::cout << ",{\"seq\":" << seq++
+                  << ",\"kind\":\"actor_close\",\"actor_id\":\"native_actor\","
+                  << "\"generation\":1}";
+        std::cout << ",{\"seq\":" << seq++
+                  << ",\"kind\":\"actor_retire\",\"actor_id\":\"native_actor\","
+                  << "\"generation\":1}]}\n";
+        return;
+    }
     if (!emit_trace) {
         std::cout << "PASS native actor ingress and delivery of "
                   << TraceState::count << " messages\n";
@@ -125,9 +162,11 @@ static void run(bool emit_trace) {
 
 int main(int argc, char** argv) {
     try {
-        if (argc > 2 || (argc == 2 && std::string(argv[1]) != "--trace"))
-            throw std::invalid_argument("usage: oreslang-actor-trace-test [--trace]");
-        run(argc == 2);
+        if (argc > 2 || (argc == 2 && std::string(argv[1]) != "--trace"
+            && std::string(argv[1]) != "--trace-v2"))
+            throw std::invalid_argument("usage: oreslang-actor-trace-test [--trace|--trace-v2]");
+        run(argc == 2 && std::string(argv[1]) == "--trace",
+            argc == 2 && std::string(argv[1]) == "--trace-v2");
     } catch (const std::exception& ex) {
         std::cerr << "FAIL native actor trace: " << ex.what() << "\n";
         return EXIT_FAILURE;

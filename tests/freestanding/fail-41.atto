@@ -1,0 +1,2 @@
+// expect-harness-exit: 1 (actual compiled Atto return 41)
+pub fnc main(): int { return 41; }

@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "repository": "ores-truffle-oreslang/oreslang-source.llvm",
+  "branch": "main",
+  "state": "UNAPPROVED",
+  "checks": []
+}

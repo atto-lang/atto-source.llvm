@@ -1,0 +1,233 @@
+#!/usr/bin/env bash
+# Source-free, offline mock of post-run exact-PR-head authorization.
+set -euo pipefail
+workflow="${1:?usage: test_llvm_source_exact_postrun.sh WORKFLOW_FILE}"
+[[ -f "$workflow" ]] || { echo 'missing workflow' >&2; exit 2; }
+# Make deletion, echo-only replacement, or incorrect suite guards for the
+# real actor-ledger integration fail the source-free handoff regression.
+extract_step() {
+  local name="$1"
+  awk -v wanted="$name" '
+    $0 == "      - name: " wanted { found=1; next }
+    found && /^      - name: / { exit }
+    found { print }
+    END { if (!found) exit 12 }
+  ' "$workflow"
+}
+# No GitHub expressions are allowed in a Bash run block: workflow_dispatch
+# input substitution would happen *before* shell parsing, enabling injection
+# if a later edit weakens trusted preflight. Inputs belong in step env only.
+awk '
+  /^        run:/ { if ($0 != "        run: |") bad=1; in_run=1; next }
+  in_run && /^      - name: / { in_run=0 }
+  in_run && index($0, "${{") > 0 { bad=1 }
+  END { exit bad ? 1 : 0 }
+' "$workflow" || { echo "direct GitHub expression inside shell run block" >&2; exit 1; }
+v3_step="$(extract_step 'Run full V3 private-export security regressions (no export)')"
+grep -qxF "        if: inputs.suite == 'security-v3'" <<< "$v3_step"
+grep -qxF '          SOURCE_SHA: ${{ inputs.source_sha }}' <<< "$v3_step"
+grep -qxF '          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"' <<< "$v3_step"
+grep -qxF '          echo "V3_SECURITY_SUITE_EXECUTED_FOR_EXACT_SOURCE_SHA=$SOURCE_SHA"' <<< "$v3_step"
+printf 'SOURCEFREE_NO_INLINE_GITHUB_BASH_EXPRESSION=PASS\\n'
+
+grep -qxF '          - actor-ledger' "$workflow" || {
+  echo 'missing actor-ledger dispatch choice' >&2; exit 1;
+}
+native_step="$(extract_step 'Run real ledger, scheduler STOP and pinned physical-heap native suite')"
+grep -qxF "        if: inputs.suite == 'actor-ledger'" <<< "$native_step"
+grep -qxF '          test -x scripts/ci/run_actor_ledger_native_exact_head.sh' <<< "$native_step"
+grep -qxF '          bash scripts/ci/run_actor_ledger_native_exact_head.sh "$SOURCE_SHA"' <<< "$native_step"
+# Toolchain is intentionally shared with continuation and CGL suites.
+toolchain_step="$(extract_step 'Verify preinstalled LLVM / Clang / CMake toolchain')"
+grep -qxF "        if: inputs.suite == 'actor-llvm' || inputs.suite == 'actor-ledger' || inputs.suite == 'continuation-gate' || inputs.suite == 'cgl-compat'" <<< "$toolchain_step"
+for name in \
+  'Build actual Oreslang source compiler against LLVM' \
+  'Compile and execute real Oreslang source actor fixtures'; do
+  step="$(extract_step "$name")"
+  grep -qxF "        if: inputs.suite == 'actor-llvm' || inputs.suite == 'actor-ledger'" <<< "$step" || {
+    echo "actor-ledger missing actual compiler/guest dependency: $name" >&2; exit 1
+  }
+done
+guest_step="$(extract_step 'Execute real compiled Oreslang ledger guest fixtures')"
+grep -qxF "        if: inputs.suite == 'actor-ledger'" <<< "$guest_step"
+grep -qxF '          test -f tests/native_actor_compiled_guest_ledger.py' <<< "$guest_step"
+grep -qxF '          PYTHONOPTIMIZE=0 python3 tests/native_actor_compiled_guest_ledger.py \' <<< "$guest_step"
+san_step="$(extract_step 'Execute compiled ledger guests under Clang ASan and UBSan')"
+grep -qxF "        if: inputs.suite == 'actor-ledger' && inputs.run_sanitizers" <<< "$san_step"
+grep -qxF '          PYTHONOPTIMIZE=0 python3 tests/native_actor_compiled_guest_ledger.py \' <<< "$san_step"
+printf 'SOURCEFREE_ACTOR_LEDGER_WORKFLOW_CONTRACT=PASS\n'
+
+# The mock tests belong to trusted main, not a PR-provided checkout. Also,
+# native acceptance must run before CMake writes build-source-exact because the
+# pinned native runner rejects any untracked/dirty source tree.
+step_line() {
+  local name="$1"
+  awk -v wanted="$name" '$0 == "      - name: " wanted { print NR; exit }' "$workflow"
+}
+assert_before() {
+  local left="$1" right="$2" left_n right_n
+  left_n="$(step_line "$left")"
+  right_n="$(step_line "$right")"
+  [[ "$left_n" =~ ^[1-9][0-9]*$ && "$right_n" =~ ^[1-9][0-9]*$ &&
+     "$left_n" -lt "$right_n" ]] || {
+    echo "source-exact step order invalid: $left must precede $right" >&2
+    exit 1
+  }
+}
+trusted_step="$(extract_step 'Checkout trusted main for source-free workflow tests')"
+grep -qxF '          ref: ${{ github.sha }}' <<< "$trusted_step"
+grep -qxF '          persist-credentials: false' <<< "$trusted_step"
+preflight="$(extract_step 'Verify open same-repo PR and exact immutable head before checkout')"
+grep -Fq 'repos/${GITHUB_REPOSITORY}/branches/main/protection' <<< "$preflight"
+grep -Fq 'test "$strong_main_policy" = "true"' <<< "$preflight"
+grep -Fq '.required_status_checks.strict == true' <<< "$preflight"
+mock_step="$(extract_step 'Execute trusted source-free post-run authorization regression mocks')"
+grep -qxF '          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"' <<< "$mock_step"
+# Pre-PR trusted-main tests cannot be silently removed while the independent
+# post-run attestor happens to retain a second invocation of the same test.
+grep -Fq 'git hash-object --no-filters scripts/ci/verify_llvm_independent_attestor.py' <<< "$mock_step"
+grep -qxF '          python3 -I -B scripts/ci/test_verify_llvm_independent_attestor.py' <<< "$mock_step"
+grep -Fq 'python3 -I -B scripts/ci/verify_llvm_required_check_pins.py scripts/ci/llvm_required_check_pins.json -' <<< "$mock_step"
+grep -Fq 'python3 -I -B scripts/ci/test_verify_llvm_required_check_pins.py' <<< "$mock_step"
+grep -Fq 'bash scripts/ci/test_prepare_source_ephemeral_jit.sh scripts/ci/prepare_source_ephemeral_jit.sh' <<< "$mock_step"
+grep -Fq 'gh api "repos/${GITHUB_REPOSITORY}/branches/main/protection"' <<< "$mock_step"
+grep -qxF '          bash scripts/ci/test_llvm_source_exact_postrun.sh .github/workflows/llvm-source-exact-ephemeral.yml' <<< "$mock_step"
+grep -qxF '          python3 scripts/ci/test_verify_llvm_exact_checkout.py' <<< "$mock_step"
+grep -qxF '          python3 scripts/ci/test_materialize_llvm_exact_checkout.py' <<< "$mock_step"
+grep -qxF '          git cat-file blob HEAD:scripts/ci/materialize_llvm_exact_checkout.py > "$RUNNER_TEMP/materialize_llvm_exact_checkout.py"' <<< "$mock_step"
+grep -Fq -- 'git hash-object --no-filters scripts/ci/materialize_llvm_exact_checkout.py' <<< "$mock_step"
+grep -qxF '          git cat-file blob HEAD:scripts/ci/verify_llvm_exact_checkout.py > "$RUNNER_TEMP/verify_llvm_exact_checkout.py"' <<< "$mock_step"
+grep -Fq -- 'git hash-object --no-filters scripts/ci/verify_llvm_exact_checkout.py' <<< "$mock_step"
+exact_step="$(extract_step 'Require exact tree and preinstalled native toolchain')"
+grep -qxF '          python3 "$RUNNER_TEMP/verify_llvm_exact_checkout.py" "$SOURCE_SHA"' <<< "$exact_step"
+grep -qxF '          python3 "$RUNNER_TEMP/materialize_llvm_exact_checkout.py" "$SOURCE_SHA"' <<< "$exact_step"
+if grep -Fq 'git diff --quiet' <<< "$exact_step"; then
+  echo 'unsafe Git diff in exact-source preflight' >&2; exit 1
+fi
+pr_checkout="$(extract_step 'Fetch pinned PR objects into empty sparse checkout (never persist auth)')"
+grep -qxF '          ref: ${{ inputs.source_sha }}' <<< "$pr_checkout"
+grep -qxF '          persist-credentials: false' <<< "$pr_checkout"
+grep -qxF '          filter: blob:limit=134217728' <<< "$pr_checkout"
+grep -qxF '          sparse-checkout-cone-mode: false' <<< "$pr_checkout"
+grep -qxF '          sparse-checkout: |' <<< "$pr_checkout"
+grep -qxF '            /*' <<< "$pr_checkout"
+grep -qxF '            !/*' <<< "$pr_checkout"
+assert_before 'Verify open same-repo PR and exact immutable head before checkout' 'Checkout trusted main for source-free workflow tests'
+assert_before 'Checkout trusted main for source-free workflow tests' 'Execute trusted source-free post-run authorization regression mocks'
+assert_before 'Execute trusted source-free post-run authorization regression mocks' 'Fetch pinned PR objects into empty sparse checkout (never persist auth)'
+assert_before 'Fetch pinned PR objects into empty sparse checkout (never persist auth)' 'Require exact tree and preinstalled native toolchain'
+assert_before 'Require exact tree and preinstalled native toolchain' 'Run real ledger, scheduler STOP and pinned physical-heap native suite'
+assert_before 'Run real ledger, scheduler STOP and pinned physical-heap native suite' 'Build actual Oreslang source compiler against LLVM'
+printf 'SOURCEFREE_TRUSTED_CHECKOUT_AND_NATIVE_BEFORE_BUILD=PASS\n'
+
+# CGL is a real executed native + ELF compatibility gate, not an echo receipt.
+# The source-only handoff must fail review if future edits drop its negative
+# preflight, named CTest targets, source-to-ELF exit-42 smoke, or ASan/UBSan.
+grep -qxF '          - cgl-compat' "$workflow"
+cgl_step="$(extract_step 'Execute exact-head CGL negative preflight, native compiler, CTest and guest ELF')"
+cgl_san_step="$(extract_step 'Execute linked CGL native tests with Clang ASan and UBSan')"
+cgl_require() {
+  local needle="$1"
+  grep -Fq -- "$needle" <<< "$cgl_step" || {
+    echo "CGL suite lost required execution dependency: $needle" >&2
+    exit 1
+  }
+}
+for source_path in \
+  tests/test_cgl_preflight.py \
+  tests/test_cgl_smoke_bounded.py \
+  tests/fixtures/forward-call-main.ores \
+  tests/native_cgl_host_admission_test.cpp \
+  tests/native_cgl_dispatch_evidence_test.cpp \
+  tests/native_cgl_carrier_slice_trace_test.cpp \
+  tests/native_source_i64_executable.py \
+  scripts/cgl-native-smoke.sh \
+  scripts/cgl-preflight.py \
+  scripts/compile-aot.sh; do
+  cgl_require "test -f $source_path"
+done
+for native_target in \
+  oreslang-llvmc \
+  oreslang-native-cgl-host-admission-test \
+  oreslang-native-cgl-dispatch-evidence-test \
+  oreslang-native-cgl-carrier-slice-trace-test; do
+  cgl_require "$native_target"
+done
+for ctest_name in \
+  native_cgl_linux_host_admission \
+  native_cgl_timer_to_user_start_evidence \
+  native_cgl_carrier_slice_timestamp_provenance \
+  native_source_i64_os_exit_subset; do
+  cgl_require "$ctest_name"
+done
+cgl_require "PYTHONOPTIMIZE=0 python3 -I -B -m unittest discover -s tests -p test_cgl_preflight.py -v"
+cgl_require "PYTHONOPTIMIZE=0 python3 -I -B -m unittest discover -s tests -p test_cgl_smoke_bounded.py -v"
+cgl_require 'ctest --test-dir build-cgl-source-exact --output-on-failure'
+cgl_require '--no-tests=error -R "^${named_test}$"'
+cgl_require 'bash scripts/cgl-native-smoke.sh "$PWD/build-cgl-source-exact"'
+cgl_require 'CGL_SOURCE_TO_ELF_EXIT42_AND_CTEST_EXECUTED_FOR_SHA=$SOURCE_SHA'
+grep -qxF "        if: inputs.suite == 'cgl-compat'" <<< "$cgl_step"
+# A false run_sanitizers input must not bypass CGL native sanitizer evidence.
+grep -qxF "        if: inputs.suite == 'cgl-compat'" <<< "$cgl_san_step"
+for san_needle in \
+  '-DCMAKE_CXX_COMPILER=clang++' \
+  '-DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"' \
+  '-DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"' \
+  'ctest --test-dir build-cgl-asan-ubsan --output-on-failure' \
+  '--no-tests=error -R "^${named_test}$"' \
+  'CGL_CLANG_ASAN_UBSAN_LINKED_TESTS_EXECUTED_FOR_SHA=$SOURCE_SHA'; do
+  grep -Fq -- "$san_needle" <<< "$cgl_san_step" || {
+    echo "CGL sanitizer suite lost required execution dependency: $san_needle" >&2
+    exit 1
+  }
+done
+assert_before 'Require exact tree and preinstalled native toolchain' 'Execute exact-head CGL negative preflight, native compiler, CTest and guest ELF'
+assert_before 'Execute exact-head CGL negative preflight, native compiler, CTest and guest ELF' 'Execute linked CGL native tests with Clang ASan and UBSan'
+assert_before 'Execute linked CGL native tests with Clang ASan and UBSan' 'Exact-source result scope (never a carrier export approval)'
+printf 'SOURCEFREE_CGL_NATIVE_ELF_SANITIZER_WORKFLOW_CONTRACT=PASS\n'
+
+# Continuation-gate TSan is mandatory and cannot be silently skipped.
+tsan_step="$(extract_step 'Execute exact-head pinned continuation under GCC TSan')"
+grep -qxF "        if: inputs.suite == 'continuation-gate'" <<< "$tsan_step"
+for required in \
+  'TSAN_OPTIONS: "halt_on_error=1"' \
+  'test "$(git rev-parse HEAD)" = "$SOURCE_SHA"' \
+  'test -f tests/pinned_continuation_gate_test.cpp' \
+  'command -v g++' \
+  '-fsanitize=thread -fno-omit-frame-pointer' \
+  'timeout 120s "$scratch/pinned-test-tsan"' \
+  'PINNED_CONTINUATION_TSAN_EXECUTED_FOR_SHA=$SOURCE_SHA'; do
+  grep -Fq -- "$required" <<< "$tsan_step"
+done
+printf 'SOURCEFREE_PINNED_CONTINUATION_TSAN_CONTRACT=PASS\n'
+
+# Refuse any authorization marker after PR-controlled code on the same runner.
+if grep -Fq 'Post-run attestation of current PR head and independent reviewer' "$workflow" ||
+   grep -Fq 'POST_EXECUTION_EXACT_PR_HEAD_REVIEW=PASS' "$workflow"; then
+  echo 'insecure same-job postrun authorization still present' >&2; exit 1
+fi
+grep -qxF '  independent-postrun-attestation:' "$workflow"
+grep -qxF '    needs: [source-exact-validation]' "$workflow"
+grep -qxF '    runs-on: [self-hosted, linux, x64, oreslang-llvm-attestor-ephemeral-v1]' "$workflow"
+grep -qxF '      actions: read' "$workflow"
+grep -qxF '      pull-requests: read' "$workflow"
+attest_checkout="$(extract_step 'Checkout reviewed protected main only (no PR source)')"
+grep -qxF '          ref: ${{ github.sha }}' <<< "$attest_checkout"
+grep -qxF '          persist-credentials: false' <<< "$attest_checkout"
+attest_preflight="$(extract_step 'Verify attestor source identity and run offline negative regression')"
+grep -qxF '          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"' <<< "$attest_preflight"
+grep -qxF '          python3 -I -B scripts/ci/test_verify_llvm_independent_attestor.py' <<< "$attest_preflight"
+# The final trusted runner must hash-check both attestor code and its tests.
+grep -Fq 'git hash-object --no-filters scripts/ci/verify_llvm_independent_attestor.py' <<< "$attest_preflight"
+grep -Fq 'git hash-object --no-filters scripts/ci/test_verify_llvm_independent_attestor.py' <<< "$attest_preflight"
+grep -Fq 'scripts/ci/verify_llvm_required_check_pins.py' <<< "$attest_preflight"
+grep -Fq 'scripts/ci/llvm_required_check_pins.json' <<< "$attest_preflight"
+attest_final="$(extract_step 'Independently verify current exact head approval and actual source job steps')"
+grep -qxF '          GH_TOKEN: ${{ github.token }}' <<< "$attest_final"
+grep -qxF '          PYTHONOPTIMIZE=0 python3 -I -B scripts/ci/verify_llvm_independent_attestor.py' <<< "$attest_final"
+if grep -Fq 'ref: ${{ inputs.source_sha }}' <<< "$attest_checkout"; then
+  echo 'fresh attestor tries to checkout PR source' >&2; exit 1
+fi
+assert_before 'Exact-source result scope (never a carrier export approval)' 'Checkout reviewed protected main only (no PR source)'
+assert_before 'Checkout reviewed protected main only (no PR source)' 'Independently verify current exact head approval and actual source job steps'
+printf 'FRESH_POSTRUN_INDEPENDENT_ATTESTOR_CONTRACT=PASS\n'

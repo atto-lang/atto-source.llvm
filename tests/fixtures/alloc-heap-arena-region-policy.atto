@@ -1,0 +1,37 @@
+// Proposed exact-guest compilation vector (NOT YET EXECUTED).
+import module heap from "atto.alloc/heap";
+import module arena from "atto.alloc/arena";
+import module region from "atto.alloc/region";
+pub fnc main(): int {
+  if heap.heap_reserved_total(10, 2, 4, 16) != 16 then return 1; fi
+  if heap.heap_reserved_total(10, 2, 5, 16) != -1 then return 2; fi
+  if heap.heap_after_release(11, 12) != -1 then return 3; fi
+  if arena.arena_aligned_start(3, 4, 8, 16) != 8 then return 4; fi
+  if arena.arena_end(3, 4, 8, 16) != 12 then return 5; fi
+  if arena.arena_end(3, 9, 8, 16) != -1 then return 6; fi
+  if arena.arena_end(3, 0, 8, 16) != 3 then return 7; fi
+  if region.region_owner_matches(7, 3, 7, 4) then return 8; fi
+  if region.region_can_destroy(true, true, 0, 1, 0, 0, 0, 0) then return 9; fi
+  if region.region_can_destroy(false, true, 0, 0, 0, 0, 0, 0) then return 10; fi
+  if !region.region_can_destroy(true, true, 0, 0, 0, 0, 0, 0) then return 11; fi
+  if heap.heap_can_reserve(-1, 0, 1, 10) then return 12; fi
+  if heap.heap_can_reserve(3, 8, 1, 10) then return 13; fi
+  if heap.heap_after_release(9, 9) != 0 then return 14; fi
+  if heap.heap_next_generation(2147483647, 2147483647) != -1 then return 15; fi
+  if heap.heap_can_reclaim(true, true, 0, 0, 0, 1, 0, 0, 0) then return 16; fi
+  if heap.heap_can_reclaim(true, true, 0, 0, 1, 0, 0, 0, 0) then return 23; fi
+  if heap.heap_can_reclaim(true, true, 0, 0, 0, 0, 0, 0, 1) then return 24; fi
+  if !heap.heap_can_reclaim(true, true, 0, 0, 0, 0, 0, 0, 0) then return 25; fi
+  if arena.arena_aligned_start(3, 1, 3, 16) != -1 then return 17; fi
+  if arena.arena_aligned_start(9223372036854775806, 2, 8, 9223372036854775807) != -1 then return 18; fi
+  if arena.arena_can_rewind(8, 0, 1, 2, 0, 0) then return 19; fi
+  if arena.arena_can_rewind(8, 0, 1, 1, -1, 0) then return 20; fi
+  if region.region_quiescent(0, 0, 0, 0, 0, -1) then return 21; fi
+  if region.region_next_epoch(2147483647, 2147483647) != -1 then return 22; fi
+  if arena.remaining(-1, 9223372036854775807) != 0 then return 26; fi
+  if arena.remaining(0, -1) != 0 then return 27; fi
+  if arena.remaining(9223372036854775807, 9223372036854775807) != 0 then return 28; fi
+  if arena.remaining(0, 9223372036854775807) != 9223372036854775807 then return 29; fi
+  if arena.remaining(3, 8) != 5 then return 30; fi
+  return 42;
+}

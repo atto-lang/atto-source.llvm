@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 #include <stdatomic.h>
+#include <stddef.h>
+_Static_assert(ATOMIC_LLONG_LOCK_FREE == 2, "actor domain IDs require lock-free 64-bit atomics");
 
 /* Disjoint numerical domains for native byte arenas and scalar heaps.
  * Each partition retains its own process-lifetime atomic ordinal counter.

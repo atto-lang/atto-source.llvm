@@ -1,0 +1,55 @@
+// core/mem: freestanding layout and alignment arithmetic.
+// Alignments must be positive powers of two; invalid input yields None.
+define module mem as
+
+  pub fnc is_power_of_two(int value): bool {
+    let int p = 1;
+    loop {
+      do if p >= value then break; fi
+      do if p >= 4611686018427387904 then break; fi
+      p = p <<< 1;
+    }
+    return value > 0 && p == value;
+  }
+
+  // floor(log2(value)) for value >= 1; 0 for value < 1.
+  pub fnc log2_floor(int value): int {
+    let int k = 0;
+    let int p = 1;
+    loop {
+      do if p >= 4611686018427387904 then break; fi
+      do if (p <<< 1) > value then break; fi
+      p = p <<< 1;
+      k = k + 1;
+    }
+    return k;
+  }
+
+  pub fnc align_down(int value, int align): Option<int> {
+    if value < 0 || !is_power_of_two(align); do
+      return None;
+    fi
+    val int shift = log2_floor(align);
+    return Some((value >>> shift) <<< shift);
+  }
+
+  pub fnc align_up(int value, int align): Option<int> {
+    if value < 0 || !is_power_of_two(align); do
+      return None;
+    fi
+    val int shift = log2_floor(align);
+    val int down = (value >>> shift) <<< shift;
+    if down == value; do
+      return Some(value);
+    fi
+    if down > 9223372036854775807 - align; do
+      return None;
+    fi
+    return Some(down + align);
+  }
+
+  pub fnc is_aligned(int value, int align): bool {
+    return align_down(value, align).unwrap_or(0 - 1) == value;
+  }
+
+end

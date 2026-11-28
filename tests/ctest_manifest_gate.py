@@ -35,6 +35,7 @@ CRITICAL_TESTS = (
     "native_contract_harness_python_O",
     "native_contract_harness_python_OO",
     "native_contract_positive_object_verifies",
+    "native_scalar_generic_source_execution",
     "constant_main",
     "native_rt_while_loop_failclosed",
     "native_actor_owned_heap_contract",
@@ -59,13 +60,17 @@ CRITICAL_TESTS = (
     "reject_panic_effect",
     *VISIBILITY_NEGATIVE_FIXTURES,
     VISIBILITY_POSITIVE,
+    "native_borrow_alias_matrix_release",
+    "native_borrow_alias_matrix_sanitizer",
 )
 
-TIMED_TESTS = frozenset(CRITICAL_TESTS[:4])
+TIMED_TESTS = frozenset((*CRITICAL_TESTS[:4], "native_scalar_generic_source_execution"))
 # Bind critical CTest *names* to the real commands in CMakeLists.txt. A
 # fabricated suite containing 'python -c pass' under a critical name is not
 # evidence that the native compiler/actor/supervisor tests were registered.
 NATIVE_EXECUTABLES = {
+    "native_borrow_alias_matrix_release": "oreslang-native-borrow-alias-matrix",
+    "native_borrow_alias_matrix_sanitizer": "oreslang-native-borrow-alias-matrix",
     "native_actor_owned_heap_contract": "oreslang-actor-owned-heap-test",
     "native_ownership_cfg_dataflow_fixed_point": "oreslang-ownership-cfg-dataflow-test",
     "portable_target_abi_v1": "oreslang-target-abi-test",
@@ -114,6 +119,22 @@ def require_real_critical_command(name: str, command: list[str]) -> None:
     This is deliberately a manifest check, not binary provenance or evidence
     that the command executed. Full CTest and independent CI remain mandatory.
     """
+    if name == "native_scalar_generic_source_execution":
+        # Pin the exact interpreter, source harness, compiler, and Clang
+        # arguments. A synthetic command under the same CTest name does not
+        # prove native generic lowering or executable guest behavior.
+        clang_names = {"clang", *(f"clang-{version}" for version in range(14, 20))}
+        if (len(command) != 6 or not python_program(command[0])
+                or not command[1].endswith("/tests/native_scalar_generic_source_execution.py")
+                or not Path(command[1]).is_absolute()
+                or command[2] != "--compiler"
+                or not Path(command[3]).is_absolute()
+                or Path(command[3]).name != "oreslang-llvmc"
+                or command[4] != "--clang"
+                or not Path(command[5]).is_absolute()
+                or Path(command[5]).name not in clang_names):
+            raise ManifestFailure("native scalar generic CTest does not execute real LLVM/Clang guest harness")
+        return
     if name in VISIBILITY_NEGATIVE_FIXTURES or name == VISIBILITY_POSITIVE:
         positive = name == VISIBILITY_POSITIVE
         fixture = ("class-public-field-read-native.ores" if positive
@@ -134,10 +155,16 @@ def require_real_critical_command(name: str, command: list[str]) -> None:
             raise ManifestFailure(f"private-field gate changed negative evidence: {name}")
         return
     if name in NATIVE_EXECUTABLES:
+        is_alias_matrix = name.startswith("native_borrow_alias_matrix_")
+        if is_alias_matrix and name.endswith("_sanitizer") and "--sanitize" not in command:
+            raise ManifestFailure("borrow matrix sanitizer missing --sanitize")
+        expected_count = (5 + int(name.endswith("_sanitizer")) if is_alias_matrix
+                          else 2 if name == "portable_target_abi_v1" else 1)
         if (Path(command[0]).name != NATIVE_EXECUTABLES[name]
-                or (len(command) != 2 if name == "portable_target_abi_v1"
-                    else len(command) != 1)):
+                or len(command) != expected_count):
             raise ManifestFailure(f"critical native test targets wrong executable: {name}")
+        if is_alias_matrix and Path(option_value(command, "--compiler", name)).name != "oreslang-llvmc":
+            raise ManifestFailure(f"borrow matrix targets wrong compiler: {name}")
         if name == "portable_target_abi_v1" and not command[1].endswith(
                 "/contracts/architecture/v1/targets.tsv"):
             raise ManifestFailure("target ABI test targets wrong contract file")
@@ -205,7 +232,8 @@ UNSAFE_PROPERTIES = frozenset((
 
 
 def check_manifest(manifest: object, *, min_tests: int = 250,
-                   required: tuple[str, ...] = CRITICAL_TESTS) -> int:
+                   required: tuple[str, ...] = CRITICAL_TESTS,
+                   build_dir: Path | None = None) -> int:
     if not isinstance(manifest, dict) or not isinstance(manifest.get("tests"), list):
         raise ManifestFailure("CTest JSON must have a tests array")
     version = manifest.get("version")
@@ -283,6 +311,15 @@ def check_manifest(manifest: object, *, min_tests: int = 250,
                 raise ManifestFailure("source object CTest does not invoke contract.py")
             if not any(arg.endswith("constant-main.ores") for arg in command):
                 raise ManifestFailure("source object CTest does not compile positive guest source")
+        if name.startswith("native_borrow_alias_matrix_"):
+            for flag in ("--compiler", "--clang"):
+                if command.count(flag) != 1:
+                    raise ManifestFailure(f"borrow matrix missing/duplicate {flag}: {name}")
+                index = command.index(flag)
+                if index + 1 >= len(command) or command[index + 1].startswith("--"):
+                    raise ManifestFailure(f"borrow matrix missing value for {flag}: {name}")
+            if name.endswith("_sanitizer") and "--sanitize" not in command:
+                raise ManifestFailure("borrow matrix sanitizer missing --sanitize")
         if name == "source_actor_compiled_native_asan_ubsan" and "--sanitize" not in command:
             raise ManifestFailure("source actor sanitizer CTest is missing --sanitize")
         properties = entry.get("properties", [])
@@ -313,6 +350,20 @@ def check_manifest(manifest: object, *, min_tests: int = 250,
                 raise ManifestFailure(f"critical CTest timeout is unsafe: {name}")
         # Validate actual CMake test executables and fixtures, not names alone.
         require_real_critical_command(name, command)
+        # During real CI, verify that critical native test executables and
+        # the source compiler are built in the inspected tree. A binary of
+        # the right basename in /tmp is not the reviewed CMake target.
+        if build_dir is not None:
+            binaries = [command[0]] if name in NATIVE_EXECUTABLES else []
+            if "--compiler" in command:
+                binaries.append(option_value(command, "--compiler", name))
+            for binary in binaries:
+                target = Path(binary)
+                if (not target.is_absolute()
+                        or not target.resolve(strict=False).is_relative_to(
+                            build_dir.resolve(strict=False))):
+                    raise ManifestFailure(
+                        f"critical CTest binary escapes configured build directory: {name}")
     return len(tests)
 
 
@@ -336,7 +387,7 @@ def main() -> int:
         document = json.loads(probe.stdout)
     except json.JSONDecodeError as exc:
         raise ManifestFailure("CTest did not provide valid JSON") from exc
-    count = check_manifest(document, min_tests=args.min_tests)
+    count = check_manifest(document, min_tests=args.min_tests, build_dir=build)
     print(f"CTEST_MANIFEST_GATE=PASS tests={count} critical={len(CRITICAL_TESTS)}")
     return 0
 

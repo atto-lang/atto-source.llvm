@@ -1,4 +1,0 @@
-define actor Worker as {
-  let total: int = 0;
-  pub fnc on_message(int n): int { return rt take total; }
-}
