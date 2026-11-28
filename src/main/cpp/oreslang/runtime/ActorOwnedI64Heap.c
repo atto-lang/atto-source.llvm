@@ -1,4 +1,5 @@
 #include "oreslang/runtime/ActorOwnedI64Heap.h"
+#include "oreslang/runtime/NativeActorDomainId.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <stdatomic.h>
@@ -58,13 +59,7 @@ static _Atomic(uint64_t) next_domain = 1;
  * terminal value, wraps through 0 and re-issues domain 1, so stale slots and
  * loans from the first heap would validate against a new one. */
 static uint64_t reserve_domain(void) {
-    uint64_t current = atomic_load_explicit(&next_domain, memory_order_relaxed);
-    while (current != 0 && current != UINT64_MAX) {
-        if (atomic_compare_exchange_weak_explicit(&next_domain, &current, current + 1,
-                memory_order_relaxed, memory_order_relaxed))
-            return current;
-    }
-    return 0;
+    return ores_native_actor_domain_reserve(&next_domain, ORES_NATIVE_DOMAIN_SCALAR);
 }
 /* One admitted actor heap per physical carrier, not just per logical epoch.
  * Carrier migration is permitted only after a completed leave. A stolen

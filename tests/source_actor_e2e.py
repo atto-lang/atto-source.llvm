@@ -106,7 +106,7 @@ def main():
     ap.add_argument("--clang", required=True)
     ap.add_argument("--root", required=True)
     ap.add_argument("--sanitize", action="store_true")
-    ap.add_argument("--positive-case", help="Run one named positive guest only; not a full suite receipt")
+    ap.add_argument("--positive-case", help="One positive guest only; not a full-suite receipt")
     args = ap.parse_args()
     root = pathlib.Path(args.root)
     fixtures = root / "tests" / "fixtures"
@@ -139,6 +139,10 @@ def main():
         ("source-actor-send-reborrow-then-move.ores", 1, 2, 3),
     ]
     negatives = {
+        "source-actor-late-spawn-before-send-reject.atto": "actor message sent before spawn",
+        "source-actor-late-spawn-missing-stop-reject.atto": "actor reference must be stopped",
+        "source-actor-late-spawn-duplicate-reject.atto": "duplicate actor reference",
+        "source-actor-late-spawn-await-reject.atto": "late actor spawn requires straight-line synchronous root actor bootstrap",
         "source-actor-pipe-unlowered-reject.ores":
             "NATIVE_ACTOR_PIPE_UNSUPPORTED: typed actor pipe requires guest port, mailbox and supervisor lowering",
         "source-actor-transform-pipe-unlowered-reject.ores":
@@ -285,6 +289,14 @@ def main():
                 assert "call i64 @oreslang_source_actor_await_done_id(" in guest.stdout, name
                 assert "done_continuation" in guest.stdout, name
                 assert "call void @oreslang_source_actor_request_stop_id(" in guest.stdout, name
+            if name == "source-actor-heap-turnover.ores":
+                spawns = [m.start() for m in re.finditer(
+                    r"call i64 @oreslang_source_actor_spawn_id\(", guest.stdout)]
+                stops = [m.start() for m in re.finditer(
+                    r"call void @oreslang_source_actor_stop_id\(", guest.stdout)]
+                assert len(spawns) == len(stops) == 3, (name, spawns, stops)
+                assert spawns[0] < spawns[1] < stops[0] < spawns[2] < stops[1] < stops[2], (
+                    name, "late spawn must follow physical stop, while sibling lives")
             if name == "source-actor-interleaved-stop.ores":
                 # IR call ordering must reflect lexical source ordering.
                 # Previous lowering grouped every send before every stop.
@@ -374,6 +386,13 @@ def main():
                 assert observed_last == expected_prefix_last(
                     name, i, processed), (
                     name, i, processed, observed_last)
+            if name == "source-actor-heap-turnover.ores":
+                group = [line for line in executed.stderr.splitlines()
+                         if line.startswith("SOURCE_ACTOR_GROUP_VERIFIED ")]
+                assert len(group) == 1 and "active=0" in group[0] and "peak=2 " in group[0], (
+                    name, "two live actors maximum, all physically retired", group)
+                assert all(r["failed"] == 0 and r["successful"] == r["processed"]
+                           and r["failure_code"] == 0 for r in receipts), (name, receipts)
             if name == "source-actor-two-owned-heaps.ores":
                 assert [r["last"] for r in receipts] == [
                     expected_prefix_last(name, i, r["processed"])
