@@ -1,6 +1,6 @@
 # Native Atto `using telemetry.span` — LLVM AOT implementation candidate
 
-**Status: LLVM compiler implementation candidate, not completed guest-executable conformance.**
+**Status: Executed hosted LLVM AOT and synchronous ORC hybrid test coverage.**
 This branch is additive to the first Java/Graal compiler slice
 [Java #2993](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/2993),
 the [shared ABI specification #279](https://github.com/ores-truffle-oreslang/oreslang-common-source/pull/279),
@@ -18,9 +18,26 @@ pub fnc main(): int {
 ```
 
 The compiler parses a dedicated `UsingTelemetrySpan` statement, not a
-numeric handle or a guest-implementable method call. It allows exactly
-one nonempty **literal** operation string (up to 256 UTF-8 bytes) and
-a named lexical alias. The opaque alias may not be observed or
+numeric handle or a guest-implementable method call. It requires one
+nonempty operation string literal (up to 256 UTF-8 bytes) after macro
+expansion and a named lexical alias. An expression macro can provide it:
+
+```atto
+define macro operation(Syntax<Expr> value) -> Syntax<Expr> { return value; }
+
+pub fnc main(): int {
+  using telemetry.span(operation!(syntax expr "checkout")) as span {
+    return 42;
+  }
+  return 1;
+}
+```
+
+The compiler validates the expanded literal before emitting the same
+span begin/end calls used for a handwritten name. The host can enable
+recording at that site after the native binary has been linked.
+
+The opaque alias may not be observed or
 transferred by source expressions; it is only a scope marker for now.
 
 The compiler rejects dynamic operation expressions, unknown factories,
@@ -86,21 +103,34 @@ LLVM IR smoke fixture was linked with the exact runtime by Clang 17 and
 executed; it exited with code 42 and the native host observed one clean
 begin/end pair. **Hand-authored IR is not the Atto compiler.**
 
-**NOT EXECUTED:** End-to-end source -> native Parser/ownership ->
-LLVM IR -> Clang -> native executable path. That validation is registered
-as `native_telemetry_using_scope_aot_guest` in CTest and invokes
-`tests/native_telemetry_using_aot.sh`:
-- 3 positive native-process fixtures (early return, nested early
-  return, normal fallthrough) at **Clang -O0 and -O2**, with exact
-  exit codes and a trusted host destructor checking started == ended
-  == expected, active == 0;
-- 5 negative admission cases for forged factory, nonliteral name,
-  escaped handle, forged/manual close, and unbudgeted hard-real-time;
-- verifies generated LLVM actually calls begin/end. Source-only grep
-  is not considered a passing compiled guest run.
+The hosted compiler and Clang-linked guest passed these CTests locally
+with LLVM 19.1.7 and Apple Clang 21 on macOS arm64:
 
-The Java branch is also pending actual JUnit/guest execution at its
-latest exact head. Neither branch is ready to merge on current receipts.
+- `native_telemetry_using_scope_aot_guest` executed normal, early and
+  nested return plus taken and untaken branches at `-O0` and `-O2`.
+  The host checked the guest result and matched begin/end counts and
+  zero active spans. Compiler denials cover handle escape, manual
+  cleanup, unsupported suspension and invalid macro-expanded names.
+- `native_telemetry_live_toggle_aot_guest` linked
+  `tests/fixtures/telemetry-hybrid.atto` with the C runtime alone and
+  checked recording toggles on the same AOT binary at `-O0` and `-O2`.
+- `native_telemetry_hybrid_orc_guest` linked the same Atto guest as its
+  baseline and used ORC to compile a new call boundary around the
+  compiler-emitted guest IR. The call probe enclosed exactly one
+  lexical span in the carrier's LIFO stack. Detaching while both spans
+  were live returned new invocations to AOT and kept the ORC code alive
+  until the old call closed both spans and returned.
+
+The ORC target is a test host. The exercised path covers synchronous
+carrier-local nesting and trusted fixture admission. Production signed
+activation, W3C parent IDs, suspension and actor migration require
+separate guest execution evidence.
+
+```sh
+cmake -S . -B build -DLLVM_DIR=/path/to/llvm/lib/cmake/llvm
+cmake --build build --target oreslang-native-telemetry-hybrid-orc-test
+ctest --test-dir build -R 'native_telemetry_(using_scope_aot|live_toggle_aot|hybrid_orc)_guest' --output-on-failure
+```
 
 ## Required before declaring Java/LLVM parity
 

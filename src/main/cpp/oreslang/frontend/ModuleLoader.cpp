@@ -47,12 +47,15 @@ class Loader {
     std::unordered_map<std::string, std::optional<std::string>> import_environment;
     bool owned, scalar_loop, host, foreign_i64_granted;
     int language_version = 0;
+    bool stable_local_scalar_modules = false;
     std::uint32_t root_provider_bits = 0;
 public:
     Loader(bool owned, bool scalar_loop, bool host,
-           std::uint32_t admitted_provider_bits, bool foreign_grant, int language_version)
+           std::uint32_t admitted_provider_bits, bool foreign_grant, int language_version,
+           bool stable_local_scalar_modules)
         : owned(owned), scalar_loop(scalar_loop), host(host), foreign_i64_granted(foreign_grant),
-          language_version(language_version), root_provider_bits(admitted_provider_bits) {}
+          language_version(language_version), stable_local_scalar_modules(stable_local_scalar_modules),
+          root_provider_bits(admitted_provider_bits) {}
     Program run(const std::string& path, std::string text, SourceIdentity identity) {
         read_bytes = text.size();
         visit(fs::canonical(path), std::move(text), identity, 0, false,
@@ -64,6 +67,49 @@ public:
         for (const auto& unit : units) {
             if (!unit->program.namespace_imports.empty())
                 fail(*unit, "NAMESPACE_RUNTIME_BACKEND_UNSUPPORTED: native loader requires verified v2 namespace package linking");
+        }
+        if (stable_local_scalar_modules) {
+            // Restricted local source graph, not a package lock or verified
+            // namespace interface. Reject ambiguous module ownership before
+            // changing any physical names. Standalone provider compilation
+            // already emits module.member symbols in this exact ABI slice.
+            if (!host || owned || scalar_loop || foreign_i64_granted ||
+                    units.size()<2 || !units.front()->program.module.empty())
+                fail(*units.front(), "stable local scalar modules require an unwrapped hosted consumer");
+            std::unordered_set<std::string> module_names;
+            for (std::size_t index=0; index<units.size(); ++index) {
+                auto& unit=*units[index];
+                auto& p=unit.program;
+                if (unit.compiler_owned_library || !p.namespace_name.empty() ||
+                    !p.namespace_imports.empty() || !p.classes.empty() ||
+                    !p.actors.empty() || !p.sum_types.empty() ||
+                    !p.generators.empty() || !p.cooperative_loops.empty() ||
+                    !p.contracts.empty() || !p.conforms.empty() ||
+                    !p.type_only_declarations.empty() ||
+                    !p.type_constraint_descriptors.empty() || p.pointer_int_plan ||
+                    !p.inverted_structs.empty() || p.inverted_main ||
+                    p.functions.size()!=1)
+                    fail(unit, "stable local scalar module profile only admits one scalar function per unit");
+                const auto& fn=p.functions.front();
+                if (!fn.exported || fn.foreign_import || fn.returns_void ||
+                    fn.return_type!=ScalarType::I64 || !fn.parameters.empty() ||
+                    !fn.generic_parameters.empty() || !fn.return_class.empty() ||
+                    !fn.return_sum.empty() || fn.async_source_i64 ||
+                    fn.has_declared_effects || !fn.source_tasks.empty() ||
+                    !fn.future_pipelines.empty() || !fn.c_export_u32_symbol.empty())
+                    fail(unit, "stable local scalar module profile requires public synchronous i64()");
+                if (!index) {
+                    if (fn.name!="main") fail(unit, "stable local scalar consumer requires main");
+                    for (const auto& imp:p.imports)
+                        if (imp.selected_class || imp.selected_function)
+                            fail(unit, "stable local scalar profile requires direct module imports");
+                    continue;
+                }
+                if (!p.imports.empty() || p.module.empty() ||
+                    fn.name=="main" || !module_names.insert(p.module).second)
+                    fail(unit, "stable local scalar profile rejects nested imports or duplicate module identity");
+                unit.prefix=p.module+".";
+            }
         }
         if (units.front()->program.imports.empty()) {
             auto root = std::move(units.front()->program);
@@ -87,11 +133,26 @@ public:
             // while imported source units are combined.
             if (!unit.program.inverted_structs.empty() || unit.program.inverted_main)
                 fail(unit, "DOP_INVERTED_CROSS_UNIT_UNSUPPORTED: linked inverted owner needs checked schema/owner identity");
+            // A file-scoped `use namespace foo;` header is source metadata,
+            // NOT `import namespace`, package federation, or a module wrapper.
+            // Admit it only for already-supported explicit file function imports.
+            // Nominal classes, actor state and type/package ownership still need
+            // verified namespace v2 linkage and must fail closed here.
+            if (!unit.program.namespace_name.empty() &&
+                    (!unit.program.module.empty() ||
+                     !unit.program.classes.empty() ||
+                     !unit.program.actors.empty() ||
+                     !unit.program.sum_types.empty() ||
+                     !unit.program.contracts.empty() ||
+                     !unit.program.conforms.empty() ||
+                     !unit.program.type_only_declarations.empty() ||
+                     !unit.program.type_constraint_descriptors.empty())) {
+                fail(unit, "NAMESPACE_FUNCTION_ONLY: linked source namespace supports only plain top-level fnc declarations");
+            }
             if (!unit.program.type_only_declarations.empty() ||
-                    !unit.program.type_constraint_descriptors.empty() ||
-                    !unit.program.namespace_name.empty()) {
+                    !unit.program.type_constraint_descriptors.empty()) {
                 fail(unit,
-                    "native linked type-only declarations/namespaces require checked cross-unit type identity lowering");
+                    "native linked type-only declarations require checked cross-unit type identity lowering");
             }
             if (!unit.program.contracts.empty() || !unit.program.conforms.empty())
                 fail(unit, "native linked contract conformance requires checked cross-unit contract identity lowering");
@@ -167,7 +228,8 @@ private:
         // selected version across the resolved import graph.
         try { unit->program = parse_unresolved_program(
             text, owned, scalar_loop, false,
-            unit->compiler_owned_library ? 0 : language_version); }
+            unit->compiler_owned_library ? 0 : language_version,
+            /*relative_import_unit=*/index != 0); }
         catch (const std::exception& error) {
             // Preserve historical diagnostics for a standalone entry unit.
             if (!index) throw;
@@ -176,7 +238,10 @@ private:
         if (unit->compiler_owned_library) {
             unit->core_closure =
                 frontend::infer_core_closure_requirements(unit->program);
-            if (!frontend::core_closure_admitted(
+            // Hosted std units may perform host I/O; only core/alloc units
+            // must prove a freestanding provider closure.
+            if (unit->compiler_library_tier != frontend::CompilerLibraryTier::Std &&
+                    !frontend::core_closure_admitted(
                     unit->core_closure, unit->admitted_core_provider_bits))
                 fail(*unit,
                     "compiler-owned library inferred undeclared provider or hosted effect");
@@ -206,23 +271,36 @@ private:
 
             if (frontend::is_reserved_compiler_library_import(raw)) {
                 const auto* library =
-                    frontend::find_compiler_library_source(raw);
+                    frontend::find_compiler_library_source(raw, frontend::selected_library_target_os());
                 if (!library) {
                     if (frontend::is_reserved_core_import(raw))
                         fail(current,
-                            (raw.rfind("atto.core", 0) == 0
-                                ? "unknown compiler-owned atto.core module '" :
-                                  "unknown compiler-owned ores.core module '") + raw + "'");
+                            (raw.rfind("ores.core", 0) == 0
+                                ? "unknown compiler-owned ores.core module '" :
+                                  "unknown compiler-owned atto.core module '") + raw + "'");
+                    if (frontend::is_reserved_std_import(raw))
+                        fail(current,
+                            "unknown compiler-owned atto.std module '" + raw + "' (" +
+                            (raw.rfind("atto.std", 0) == 0
+                                ? "native atto.std package resolution remains unsupported"
+                                : "native ores.std package resolution remains unsupported") +
+                            " outside the registry)");
                     fail(current,
-                        (raw.rfind("atto.alloc", 0) == 0
-                            ? "unknown compiler-owned atto.alloc module '" :
-                              "unknown compiler-owned alloc module '") + raw + "'");
+                        "unknown compiler-owned atto.alloc module '" + raw +
+                        "' (unknown compiler-owned alloc module)");
                 }
+                if (library->tier == frontend::CompilerLibraryTier::Std && !host)
+                    fail(current,
+                        "std/* requires a hosted target; freestanding targets admit only core/* and alloc/*");
                 if (current.compiler_owned_library &&
                         !frontend::compiler_library_dependency_allowed(
                             current.compiler_library_tier, library->tier))
                     fail(current,
-                        "compiler-owned ores.core modules may not depend on alloc/*");
+                        current.compiler_library_tier == frontend::CompilerLibraryTier::Core
+                            ? (library->tier == frontend::CompilerLibraryTier::Std
+                                ? "compiler-owned core modules may not depend on std/*"
+                                : "compiler-owned ores.core modules may not depend on alloc/*")
+                            : "compiler-owned alloc modules may not depend on std/*");
                 const std::string unit_id(library->unit_id);
                 const auto known = paths.find(unit_id);
                 selected = known == paths.end() ? units.size() : known->second;
@@ -263,7 +341,8 @@ private:
                     current.core_closure =
                         frontend::merge_core_closure_requirements(
                             current.core_closure, target.core_closure);
-                    if (!frontend::core_closure_admitted(
+                    if (current.compiler_library_tier != frontend::CompilerLibraryTier::Std &&
+                            !frontend::core_closure_admitted(
                             current.core_closure,
                             current.admitted_core_provider_bits))
                         fail(current,
@@ -272,11 +351,7 @@ private:
             } else {
                 if (current.compiler_owned_library)
                     fail(current,
-                        "compiler-owned library modules may import only ores.core/* or alloc/*");
-                if (frontend::is_reserved_std_import(raw))
-                    fail(current, raw.rfind("atto.std", 0) == 0
-                        ? "native atto.std package resolution remains unsupported"
-                        : "native ores.std package resolution remains unsupported");
+                        "compiler-owned library modules may import only core/*, alloc/* or std/* (ores.core/* or alloc/*)");
                 if (!host)
                     fail(current,
                         "freestanding native imports require compiler-owned ores.core/* modules");
@@ -527,9 +602,9 @@ private:
 Program load_native_program(const std::string& path, std::string source, SourceIdentity identity,
                             bool owned, bool scalar_loop, bool host,
                             std::uint32_t admitted_provider_bits, bool foreign_i64_granted,
-                            int language_version) {
+                            int language_version, bool stable_local_scalar_modules) {
     return Loader(owned, scalar_loop, host, admitted_provider_bits, foreign_i64_granted,
-                  language_version)
+                  language_version, stable_local_scalar_modules)
         .run(path, std::move(source), identity);
 }
 frontend::VerifiedNamespaceSourceSnapshotV2 admit_native_namespace_sources_v2(

@@ -179,3 +179,31 @@ void ores_actor_region_v1_compiler_leave(OresActorRegionV1* region,
     if (!turn) deny();
     ores_actor_region_v1_leave(region, *turn);
 }
+
+/* Terminal compiler-owned cleanup; never accept a guest-fabricated pointer
+ * list as a capability. Static source admission guarantees this is the sole
+ * execution path through the terminal cleanup block, after return snapshot.
+ * All owner proofs are checked BEFORE any native slot is dropped. */
+void ores_actor_region_v1_compiler_finish(OresActorRegionV1* region,
+        const OresArenaTurn* turn, OresActorRegionV1Ref* const* owners,
+        uint32_t owner_count) {
+    region = require_region(region);
+    if (!turn || !owners || !owner_count ||
+        owner_count > ORES_ACTOR_ARENA_MAX_SCOPED_OWNERS) deny();
+    OresArenaHandle originals[ORES_ACTOR_ARENA_MAX_SCOPED_OWNERS];
+    for (uint32_t i = 0; i < owner_count; ++i) {
+        if (!owners[i]) deny();
+        originals[i] = checked_ref(region, *owners[i]).proof;
+    }
+    /* Exact live set / loan / alias preflight and reverse-order bulk drop
+     * happen under ONE physical arena lock. No interleaved partial cleanup. */
+    ores_actor_arena_drop_owned_exact(region->arena, *turn,
+                                      originals, owner_count);
+    for (uint32_t i = 0; i < owner_count; ++i) {
+        owners[i]->offset.storage = 0;
+        owners[i]->proof = (OresArenaHandle){0};
+    }
+    ores_actor_region_v1_leave(region, *turn);
+    ores_actor_region_v1_retire(region);
+    if (!ores_actor_region_v1_try_destroy(region)) deny();
+}

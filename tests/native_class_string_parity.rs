@@ -252,13 +252,19 @@ fn main() {
                 multi.size==4&&multi.get(0)=="a"&&multi.get(1)=="b"&&
                 multi.get(2)==""&&multi.get(3)==""?0:1;
          }"#, ""),
-        ("ordered-array-moves-through-owning-return", "define class Box as pub val Array<int> values;end fnc touch():void{return;}fnc build():Box{touch();val Array<int> values=new Array<int>();values.add(42);return new Box(values);}pub fnc main():int{val Box box=build();return box.values.get(0)==42?0:1;}", ""),
+        // Distinguish source-order storage from constructor parameter naming:
+        // same and different names must both work, before and after an effect.
+        ("initial-array-same-name-owning-return", "define class ArrayOwnerFixture as pub val Array<int> values;end fnc build():ArrayOwnerFixture{val Array<int> values=new Array<int>();values.add(42);return new ArrayOwnerFixture(values);}pub fnc main():int{val ArrayOwnerFixture box=build();return box.values.get(0)==42?0:1;}", ""),
+        ("initial-array-distinct-name-owning-return", "define class ArrayOwnerFixture as pub val Array<int> values;end fnc build():ArrayOwnerFixture{val Array<int> numbers=new Array<int>();numbers.add(42);return new ArrayOwnerFixture(numbers);}pub fnc main():int{val ArrayOwnerFixture box=build();return box.values.get(0)==42?0:1;}", ""),
+        ("ordered-array-distinct-name-owning-return", "define class ArrayOwnerFixture as pub val Array<int> values;end fnc touch():void{return;}fnc build():ArrayOwnerFixture{touch();val Array<int> numbers=new Array<int>();numbers.add(42);return new ArrayOwnerFixture(numbers);}pub fnc main():int{val ArrayOwnerFixture box=build();return box.values.get(0)==42?0:1;}", ""),
+        ("ordered-array-moves-through-owning-return", "define class ArrayOwnerFixture as pub val Array<int> values;end fnc touch():void{return;}fnc build():ArrayOwnerFixture{touch();val Array<int> values=new Array<int>();values.add(42);return new ArrayOwnerFixture(values);}pub fnc main():int{val ArrayOwnerFixture box=build();return box.values.get(0)==42?0:1;}", ""),
         ("ordered-array-sibling-scopes", "fnc touch():void{return;}pub fnc main():int{touch();if true;then val Array<int> values=new Array<int>();values.add(1);fi if true;then val Array<String> values=new Array<String>();values.add(\"ok\");if values.get(0)!=\"ok\";then return 1;fi fi return 0;}", ""),
         ("ordered-record-array-loop", "define class EntryValue as pub val int value;end fnc touch():void{return;}pub fnc main():int{touch();let int total=0;for(let int i=0;i<100;i=i+1){val Array<EntryValue> values=new Array<EntryValue>();values.add(new EntryValue(i));val EntryValue entry=values.get(0);total=total+entry.value;}return total==4950?0:1;}", ""),
 
         ("ordered-array-scopes-loop-and-early-return", include_str!("fixtures/native-class-string/ordered-array-locals.ores"), ""),
         ("checked-copy-option-guest", include_str!("fixtures/native-class-string/copy-option-v1.atto"), "7:42:true:true:true:true:9"),
         ("ordered-val-keeps-exclusive-referent-capability", "fnc touch():void{return;}fnc observe(borrow mut int value):int{return 42;}pub fnc main():int{touch();val int value=42;return observe(rt mut borrow value)==42?0:1;}", ""),
+        ("mutable-borrow-aliases-equivalent", "fnc observe(borrow mut int value):int{return value;}pub fnc main():int{val int owner=42;return observe(rt borrow mut owner)==42&&observe(rt mut borrow owner)==42&&observe(borrow! mut owner)==42?0:1;}", ""),
         ("ordered-initial-and-later-mutable-slots", "fnc touch():void{return;}pub fnc main():int{let int initial=1;touch();let int later=2;initial=initial+later;return initial==3?0:1;}", ""),
         ("ordered-routing-counters-and-skipped-initializers", include_str!("fixtures/native-class-string/ordered-routing-locals.ores"), "enter;enter;initialize;finish;done;"),
         ("ordered-root-scalar-lives-through-defer", r#"fnc touch():void{stdio.print("enter;");return;}fnc observe(int value):void{stdio.print(value==42?"final;":"early;");return;}
@@ -313,9 +319,9 @@ fn main() {
         ("void-structured-return-runs-defer", r#"define class Counter as pub let int value=0;end
           fnc update(borrow mut Counter counter):void{defer counter.value=99;for(let int index=0;index<2;index=index+1){if index==1;then return;fi}return;}
           pub fnc main():int{let mut Counter counter=new Counter();update(rt mut borrow counter);return counter.value==99?0:1;}"#, ""),
-        ("foreach-return-releases-loan-before-defer", r#"define class Box as pub val Array<int> values;pub let int code=7;end
-          fnc pick(borrow mut Box owner):int{defer owner.code=99;for(const item of owner.values){return owner.code;}return -1;}
-          pub fnc main():int{val Array<int> values=new Array<int>();values.add(1);val Box owner=new Box(values);val selected:int=pick(rt mut borrow owner);return selected==7&&owner.code==99?0:1;}"#, ""),
+        ("foreach-return-releases-loan-before-defer", r#"define class ArrayOwnerFixture as pub val Array<int> values;pub let int code=7;end
+          fnc pick(borrow mut ArrayOwnerFixture owner):int{defer owner.code=99;for(const item of owner.values){return owner.code;}return -1;}
+          pub fnc main():int{val Array<int> values=new Array<int>();values.add(1);val ArrayOwnerFixture owner=new ArrayOwnerFixture(values);val selected:int=pick(rt mut borrow owner);return selected==7&&owner.code==99?0:1;}"#, ""),
         ("index-loop-branch-exits-and-string-result", r#"fnc choose_text(bool first):String{for(let int index=0;index<1;index=index+1){if(first){val String result="yes";return result;}else{val String result="no";return result;}fi}return "empty";}
           pub fnc main():int{return choose_text(true)=="yes"&&choose_text(false)=="no"?0:1;}"#, ""),
         ("index-loop-update-order-and-zero-iterations", r#"define class Counter as pub let int value=0;end
@@ -425,27 +431,27 @@ fn main() {
         ),
         (
             "nested-borrows-distinguish-array-regions",
-            r#"define class Box as pub val Array<int> values; end
-              fnc sum(borrow Box left,borrow Box right):int{return left.values.get(0)+right.values.get(0);}
-              fnc nested(borrow Box parent):int {
+            r#"define class ArrayOwnerFixture as pub val Array<int> values; end
+              fnc sum(borrow ArrayOwnerFixture left,borrow ArrayOwnerFixture right):int{return left.values.get(0)+right.values.get(0);}
+              fnc nested(borrow ArrayOwnerFixture parent):int {
                 val Array<int> numbers=new Array<int>(); numbers.add(29);
-                val Box child=new Box(numbers);
+                val ArrayOwnerFixture child=new ArrayOwnerFixture(numbers);
                 return sum(rt borrow parent,rt borrow child);
               }
               pub routine main():int {
                 val Array<int> numbers=new Array<int>(); numbers.add(13);
-                val Box owner=new Box(numbers);
+                val ArrayOwnerFixture owner=new ArrayOwnerFixture(numbers);
                 return nested(rt borrow owner)==42?0:1;
               }"#,
             "",
         ),
         (
             "exclusive-class-array-borrow",
-            r#"define class Box as pub val Array<int> values; end
-              fnc append(borrow mut Box owner):void {owner.values.add(29);return;}
+            r#"define class ArrayOwnerFixture as pub val Array<int> values; end
+              fnc append(borrow mut ArrayOwnerFixture owner):void {owner.values.add(29);return;}
               pub routine main():int {
                 val Array<int> numbers=new Array<int>(); numbers.add(13);
-                val Box owner=new Box(rt take numbers);
+                val ArrayOwnerFixture owner=new ArrayOwnerFixture(rt take numbers);
                 append(rt mut borrow owner);
                 return owner.values.size==2 && owner.values.get(1)==29?0:1;
               }"#,
@@ -589,6 +595,14 @@ fn main() {
                 stdio.print('\"abc\"');stdio.print("|");
                 stdio.print(`'\"abc\"'`);return 0;}"#,
             "abc|'abc'|\"abc\"|'\"abc\"'",
+        ),
+        (
+            "quoted-prefix-and-lambda-tokens-are-data",
+            r#"pub fnc main():int{
+                stdio.print("|");stdio.print("||");stdio.print("trap");
+                stdio.print("!");stdio.print("new");stdio.print("match");
+                stdio.print(`|`);return 0;}"#,
+            "|||trap!newmatch|",
         ),
         (
             "template-two-parameter-interpolation",
@@ -842,21 +856,31 @@ fn main() {
             symlink(&fake_compiler, &symbolic).unwrap();
             let hard = scratch.0.join("clang-hardlink");
             fs::hard_link(&fake_clang, &hard).unwrap();
-            for destination in [&fake_compiler, &fake_clang, &symbolic, &hard] {
+            for (destination, expected_diagnostic) in [
+                (&fake_compiler, "must not alias"),
+                (&fake_clang, "must not alias"),
+                (&symbolic, "output must be absent or a regular non-symlink file"),
+                (&hard, "must not alias"),
+            ] {
                 let rejected = run(Command::new(driver).env("ORESLANG_LLVMC", &fake_compiler)
                     .env("CLANG", &fake_clang).arg(&source).arg(destination));
-                assert_eq!(rejected.status.code(), Some(64), "AOT alias guard: {}", String::from_utf8_lossy(&rejected.stderr));
-                assert!(String::from_utf8_lossy(&rejected.stderr).contains("must not alias"));
+                let stderr = String::from_utf8_lossy(&rejected.stderr);
+                assert_eq!(rejected.status.code(), Some(64), "AOT alias guard for {}: {stderr}", destination.display());
+                assert!(stderr.contains(expected_diagnostic), "AOT alias guard for {}: expected {expected_diagnostic:?}, got {stderr:?}", destination.display());
+                assert!(!stderr.contains("must not execute"), "protected input executed");
                 assert_eq!(fs::read(destination).unwrap(), sentinel);
+                assert_eq!(fs::read(&fake_compiler).unwrap(), sentinel);
+                assert_eq!(fs::read(&fake_clang).unwrap(), sentinel);
+                assert!(fs::symlink_metadata(&symbolic).unwrap().file_type().is_symlink());
             }
         }
         let scalar_record = r#"define class Number as pub val int code;end
           fnc create():Number{return new Number(42);}
           pub routine main():int{val Number value=create();return value.code==42?0:1;}"#;
-        let owning_int = r#"define class Box as pub val Array<int> values;end
-          fnc create():Box{val Array<int> a=new Array<int>();a.add(42);return new Box(a);}
-          pub routine main():int{val Box value=create();return value.values.get(0)==42?0:1;}"#;
-        for (source, expected) in [
+        let owning_int = r#"define class ArrayOwnerFixture as pub val Array<int> values;end
+          fnc create():ArrayOwnerFixture{val Array<int> a=new Array<int>();a.add(42);return new ArrayOwnerFixture(a);}
+          pub routine main():int{val ArrayOwnerFixture value=create();return value.values.get(0)==42?0:1;}"#;
+        for (case_index, (source, expected)) in [
             (include_str!("fixtures/native-class-string/ordered-routing-locals.ores"), "enter;enter;initialize;finish;done;"),
             (include_str!("fixtures/native-class-string/routing-option-capture.ores"), ""),
             (include_str!("fixtures/native-class-string/nested-owned-capture.ores"), "id\n"),
@@ -866,17 +890,26 @@ fn main() {
             (owning_int, ""),
             (include_str!("fixtures/native-class-string/record-return.ores"), "segment\nlocal\n"),
             (include_str!("fixtures/native-class-string/owned-aggregate-return.ores"), "/foo/:id\nid\n"),
-        ] {
-            let path = scratch.0.join("standalone.ores");
-            let binary = scratch.0.join("standalone");
+        ].into_iter().enumerate() {
+            let path = scratch.0.join(format!("standalone-{case_index}.ores"));
+            let binary = scratch.0.join(format!("standalone-{case_index}"));
+            assert!(!binary.exists(), "stale standalone case {case_index}");
             fs::write(&path, source).unwrap();
             let built = run(Command::new(driver)
                 .env("ORESLANG_LLVMC", fs::canonicalize(&compiler).unwrap())
                 .env("CLANG", &clang).arg(&path).arg(&binary));
-            assert!(built.status.success(), "AOT driver: {}", String::from_utf8_lossy(&built.stderr));
+            assert!(built.status.success(), "AOT driver case {case_index}: {}", String::from_utf8_lossy(&built.stderr));
+            let published = fs::symlink_metadata(&binary).unwrap_or_else(|error| panic!(
+                "AOT case {case_index}: driver succeeded without published executable at {binary:?}: {error}; stdout={:?}; stderr={:?}",
+                String::from_utf8_lossy(&built.stdout), String::from_utf8_lossy(&built.stderr)));
+            assert!(published.is_file() && published.len() > 0, "AOT case {case_index}: invalid published file");
+            let canonical_binary = fs::canonicalize(&binary).unwrap();
             fs::remove_file(&path).unwrap();
-            let executed = run(Command::new(&binary).env_clear().env("PATH", ""));
-            assert_eq!(executed.status.code(), Some(0), "source-free AOT: {}", String::from_utf8_lossy(&executed.stderr));
+            assert!(!path.exists(), "AOT source was not removed");
+            let executed = Command::new(&canonical_binary).env_clear().env("PATH", "").output()
+                .unwrap_or_else(|error| panic!("source-free AOT case {case_index}: launch failed at {canonical_binary:?}: {error}; published bytes={}; still present={}",
+                    published.len(), canonical_binary.exists()));
+            assert_eq!(executed.status.code(), Some(0), "source-free AOT case {case_index}: {}", String::from_utf8_lossy(&executed.stderr));
             assert_eq!(executed.stdout, expected.as_bytes());
             assert!(executed.stderr.is_empty());
             standalone_runs += 1;
@@ -893,7 +926,8 @@ fn main() {
         ("checked-copy-option-reject-arity", "pub routine main():int{val Array<int> values=new Array<int>();val Option<int> forged=values.get_copy();return 0;}".to_owned(), foo.to_owned()),
         ("ordered-array-loop-cannot-retain-borrow", "fnc touch():void{return;}pub fnc main():int{touch();for(let int i=0;i<2;i=i+1){val Array<int> values=new Array<int>();values.add(i);}return values.get(0);}".to_owned(), foo.to_owned()),
 
-        ("legacy-mut-borrow-spelling-stays-rejected", "pub fnc main():int{val int owner=1;return rt borrow mut owner;}".to_owned(), foo.to_owned()),
+        ("legacy-mut-borrow-return-escape-rejected", "pub fnc main():int{val int owner=1;return rt borrow mut owner;}".to_owned(), foo.to_owned()),
+        ("canonical-mut-borrow-return-escape-rejected", "pub fnc main():int{val int owner=1;return borrow! mut owner;}".to_owned(), foo.to_owned()),
         ("ordered-const-cannot-lend-exclusively", "fnc touch():void{return;}fnc observe(borrow mut int value):int{return 42;}pub fnc main():int{touch();const int value=42;return observe(rt mut borrow value);}".to_owned(), foo.to_owned()),
         ("ordered-array-cannot-escape-branch", "fnc touch():void{return;}pub fnc main():int{touch();if true;then val Array<int> values=new Array<int>();values.add(1);fi return values.size;}".to_owned(), foo.to_owned()),
         ("ordered-async-frame-not-on-stack", "define actor Worker as {let total:int=0;pub fnc on_message(int n):int{return n;}}pub fnc main():int{const worker:ActorRef<Worker> =spawn Worker();await worker.get_ready();let int value=1;stop worker;return value;}".to_owned(), foo.to_owned()),
@@ -908,7 +942,7 @@ fn main() {
         ("ordered-sum-assignment-rejects-payload", "fnc touch():void{return;}pub fnc main():int{touch();let Option<int> value=None;value=Some(true);return 0;}".to_owned(), foo.to_owned()),
         ("ordered-sum-assignment-rejects-integer", "fnc touch():void{return;}pub fnc main():int{touch();let Option<int> value=None;value=1;return 0;}".to_owned(), foo.to_owned()),
         ("ordered-branch-local-cannot-escape", "fnc touch():void{return;}pub fnc main():int{touch();if true;then let int value=1;fi return value;}".to_owned(), foo.to_owned()),
-        ("ordered-owner-cannot-be-replaced", "define class Box as pub val Array<int> values;end pub fnc main():int{val Array<int> values=new Array<int>();val Box owner=new Box(values);owner=1;return 0;}".to_owned(), foo.to_owned()),
+        ("ordered-owner-cannot-be-replaced", "define class ArrayOwnerFixture as pub val Array<int> values;end pub fnc main():int{val Array<int> values=new Array<int>();val ArrayOwnerFixture owner=new ArrayOwnerFixture(values);owner=1;return 0;}".to_owned(), foo.to_owned()),
         ("ordered-loop-cannot-consume-outer-owner", "fnc touch():void{return;}fnc use(int value):void{return;}pub fnc main():int{touch();let int value=1;for(let int index=0;index<2;index=index+1){use(rt take value);}return 0;}".to_owned(), foo.to_owned()),
         ("ordered-local-shadows-owner", "fnc touch():void{return;}pub fnc main():int{let int value=1;touch();let int value=2;return value;}".to_owned(), foo.to_owned()),
         ("sum-contract-not-int-parameter", "pub define contract Api as fnc inspect(int value)=>int;end define module Server conforms Api as pub fnc inspect(Option<int> value):int{return 0;}pub fnc main():int{return 0;}end".to_owned(), foo.to_owned()),
@@ -937,10 +971,10 @@ fn main() {
         ("sum-wrong-constructor-arity", "pub fnc main():int{val Option<int> item=Some(1,2);return 0;}".to_owned(), foo.to_owned()),
         ("sum-no-inferred-none", "pub fnc main():int{val item=None;return 0;}".to_owned(), foo.to_owned()),
         ("sum-no-nominal-shadow", "define class Option as val int value;end pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
-        ("sum-owned-class-payload-boundary", "define class Box as val Array<int> values;end fnc bad():Option<Box>{return None;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("sum-owned-class-payload-boundary", "define class ArrayOwnerFixture as val Array<int> values;end fnc bad():Option<ArrayOwnerFixture>{return None;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("sum-nested-payload-boundary", "fnc bad():Option<Option<int>>{return None;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("sum-not-os-status", "pub fnc main():Option<int>{return Some(0);}".to_owned(), foo.to_owned()),
-        ("sum-constructor-cannot-reinterpret-scalar", "define class Box as val Option<int> item;constructor(int item){self.item=item;}end pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("sum-constructor-cannot-reinterpret-scalar", "define class ArrayOwnerFixture as val Option<int> item;constructor(int item){self.item=item;}end pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("nested-explicit-constructor-cannot-reinterpret-scalar", r#"define class Child as pub val int value;end define class Outer as val Child child;constructor(int child){self.child=child;}end pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
         ("nested-depth-forward-order", format!("{}pub fnc main():int{{return 0;}}", (0..10).map(|i| if i==9 { "define class Level9 as val int value;end".to_owned() } else { format!("define class Level{i} as val Level{} child;end",i+1) }).collect::<String>()), foo.to_owned()),
         ("nested-depth-reverse-order", format!("{}pub fnc main():int{{return 0;}}", (0..10).rev().map(|i| if i==9 { "define class Level9 as val int value;end".to_owned() } else { format!("define class Level{i} as val Level{} child;end",i+1) }).collect::<String>()), foo.to_owned()),
@@ -976,14 +1010,14 @@ fn main() {
         ("structured-return-wrong-type", r#"pub fnc main():int{for(let int index=0;index<1;index=index+1){return true;}return 0;}"#.to_owned(), foo.to_owned()),
         ("structured-return-ownership-transfer", r#"pub fnc main():int{val external_value:int=42;for(let int index=0;index<1;index=index+1){return rt take external_value;}return 0;}"#.to_owned(), foo.to_owned()),
         ("late-defer-after-conditional-return", r#"fnc cleanup():void{return;}pub fnc main():int{for(let int index=0;index<1;index=index+1){return 0;}defer cleanup();return 0;}"#.to_owned(), foo.to_owned()),
-        ("structured-owning-class-return", r#"define class Box as pub val Array<int> values;end fnc bad():Box{val Array<int> values=new Array<int>();val Box box=new Box(values);for(let int index=0;index<1;index=index+1){return box;}return box;}pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
+        ("structured-owning-class-return", r#"define class ArrayOwnerFixture as pub val Array<int> values;end fnc bad():ArrayOwnerFixture{val Array<int> values=new Array<int>();val ArrayOwnerFixture box=new ArrayOwnerFixture(values);for(let int index=0;index<1;index=index+1){return box;}return box;}pub fnc main():int{return 0;}"#.to_owned(), foo.to_owned()),
 
         ("iteration-backedge-consumes-scalar-owner", r#"fnc consume(int value):void{return;}pub fnc main():int{val Array<int> values=new Array<int>();values.add(1);val outer:int=42;for(const item of values){consume(rt take outer);}return 0;}"#.to_owned(), foo.to_owned()),
         ("iteration-record-alias-without-borrow", r#"define class Item as pub val int value;end pub fnc main():int{val Array<Item> a=new Array<Item>();for(const item of a){val Item other=item;}return 0;}"#.to_owned(), foo.to_owned()),
         ("iteration-mutates-source", r#"pub fnc main():int{val Array<int> a=new Array<int>();a.add(1);for(const n of a){a.add(n);}return 0;}"#.to_owned(), foo.to_owned()),
-        ("iteration-mutates-source-field", r#"define class Box as pub val Array<int> a;end pub fnc main():int{val Array<int> a=new Array<int>();a.add(1);val Box b=new Box(a);for(const n of b.a){b.a.set(0,n);}return 0;}"#.to_owned(), foo.to_owned()),
-        ("iteration-exclusive-owner-helper", r#"define class Box as pub val Array<int> a;end fnc edit(borrow mut Box b):void{b.a.add(1);return;}pub fnc main():int{val Array<int> a=new Array<int>();a.add(1);val Box b=new Box(a);for(const n of b.a){edit(rt mut borrow b);}return 0;}"#.to_owned(), foo.to_owned()),
-        ("iteration-consumes-outer-owner", r#"define class Box as pub val Array<int> a;end fnc consume(Box b):void{return;}pub fnc main():int{val Array<int> a=new Array<int>();a.add(1);val Array<int> b=new Array<int>();val Box other=new Box(b);for(const n of a){consume(rt take other);}return 0;}"#.to_owned(), foo.to_owned()),
+        ("iteration-mutates-source-field", r#"define class ArrayOwnerFixture as pub val Array<int> a;end pub fnc main():int{val Array<int> a=new Array<int>();a.add(1);val ArrayOwnerFixture b=new ArrayOwnerFixture(a);for(const n of b.a){b.a.set(0,n);}return 0;}"#.to_owned(), foo.to_owned()),
+        ("iteration-exclusive-owner-helper", r#"define class ArrayOwnerFixture as pub val Array<int> a;end fnc edit(borrow mut ArrayOwnerFixture b):void{b.a.add(1);return;}pub fnc main():int{val Array<int> a=new Array<int>();a.add(1);val ArrayOwnerFixture b=new ArrayOwnerFixture(a);for(const n of b.a){edit(rt mut borrow b);}return 0;}"#.to_owned(), foo.to_owned()),
+        ("iteration-consumes-outer-owner", r#"define class ArrayOwnerFixture as pub val Array<int> a;end fnc consume(ArrayOwnerFixture b):void{return;}pub fnc main():int{val Array<int> a=new Array<int>();a.add(1);val Array<int> b=new Array<int>();val ArrayOwnerFixture other=new ArrayOwnerFixture(b);for(const n of a){consume(rt take other);}return 0;}"#.to_owned(), foo.to_owned()),
         ("iteration-element-scope-escape", r#"pub fnc main():int{val Array<int> a=new Array<int>();for(const n of a){}return n;}"#.to_owned(), foo.to_owned()),
         ("iteration-local-scope-escape", r#"pub fnc main():int{val Array<int> a=new Array<int>();for(const n of a){val int x=n;}return x;}"#.to_owned(), foo.to_owned()),
         ("iteration-element-shadow", r#"pub fnc main():int{val Array<int> a=new Array<int>();val int n=0;for(const n of a){}return 0;}"#.to_owned(), foo.to_owned()),
@@ -995,26 +1029,26 @@ fn main() {
         ("iteration-non-array-source", r#"pub fnc main():int{val int a=1;for(const n of a){}return 0;}"#.to_owned(), foo.to_owned()),
 
         ("owning-return-duplicate-array", "define class Pair as val Array<int> a;val Array<int> b;end fnc bad():Pair{val Array<int> values=new Array<int>();return new Pair(values,values);}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
-        ("owning-return-borrowed-field", "define class Box as pub val Array<int> values;end fnc bad(borrow Box value):Box{return new Box(value.values);}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
-        ("owning-return-deferred-source-reuse", "define class Box as pub val Array<int> values;end fnc observe_owner(borrow Box value):void{return;}fnc bad():Box{val Array<int> a=new Array<int>();val Box value=new Box(a);defer observe_owner(rt borrow value);return value;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
-        ("owning-result-use-after-class-move", "define class Box as pub val Array<int> values;end fnc make():Box{val Array<int> a=new Array<int>();return new Box(a);}pub fnc main():int{val Box a=make();let mut Box b=rt take a;return a.values.size;}".to_owned(), foo.to_owned()),
-        ("owning-result-by-value-call", "define class Box as pub val Array<int> values;end fnc make():Box{val Array<int> a=new Array<int>();return new Box(a);}fnc observe_owner(Box value):int{return value.values.size;}pub fnc main():int{val Box b=make();return observe_owner(b);}".to_owned(), foo.to_owned()),
+        ("owning-return-borrowed-field", "define class ArrayOwnerFixture as pub val Array<int> values;end fnc bad(borrow ArrayOwnerFixture value):ArrayOwnerFixture{return new ArrayOwnerFixture(value.values);}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("owning-return-deferred-source-reuse", "define class ArrayOwnerFixture as pub val Array<int> values;end fnc observe_owner(borrow ArrayOwnerFixture value):void{return;}fnc bad():ArrayOwnerFixture{val Array<int> a=new Array<int>();val ArrayOwnerFixture value=new ArrayOwnerFixture(a);defer observe_owner(rt borrow value);return value;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("owning-result-use-after-class-move", "define class ArrayOwnerFixture as pub val Array<int> values;end fnc make():ArrayOwnerFixture{val Array<int> a=new Array<int>();return new ArrayOwnerFixture(a);}pub fnc main():int{val ArrayOwnerFixture a=make();let mut ArrayOwnerFixture b=rt take a;return a.values.size;}".to_owned(), foo.to_owned()),
+        ("owning-result-by-value-call", "define class ArrayOwnerFixture as pub val Array<int> values;end fnc make():ArrayOwnerFixture{val Array<int> a=new Array<int>();return new ArrayOwnerFixture(a);}fnc observe_owner(ArrayOwnerFixture value):int{return value.values.size;}pub fnc main():int{val ArrayOwnerFixture b=make();return observe_owner(b);}".to_owned(), foo.to_owned()),
         ("record-return-deferred-owner-reuse", "define class Item as pub val int code;end fnc observe(borrow Item value):void{return;}fnc bad(bool first):Item{val Item value=new Item(42);defer observe(rt borrow value);return first?value:value;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("record-return-integer-forgery", "define class Item as pub val int code;end fnc bad():Item{return 42;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("record-return-wrong-nominal", "define class A as pub val int code;end define class B as pub val int code;end fnc bad():A{return new B(1);}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("record-return-mutable-identity", "define class Item as pub let int code=42;end fnc bad():Item{return new Item();}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
-        ("record-return-borrowed-array-owner", "define class Box as val Array<int> values;end fnc bad(borrow Box value):Box{return value;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("record-return-borrowed-array-owner", "define class ArrayOwnerFixture as val Array<int> values;end fnc bad(borrow ArrayOwnerFixture value):ArrayOwnerFixture{return value;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("record-return-incoming-borrow", "define class Item as pub val int code;end fnc bad(borrow Item value):Item{return value;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("record-return-moved-local", "define class Item as pub val int code;end fnc bad():Item{let mut Item value=new Item(1);let mut Item moved=rt take value;return value;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("record-return-not-os-status", "define class Item as pub val int code;end pub fnc main():Item{return new Item(42);}".to_owned(), foo.to_owned()),
         ("record-return-handle-as-int", "define class Item as pub val int code;end fnc make():Item{return new Item(42);}pub fnc main():int{return make();}".to_owned(), foo.to_owned()),
         ("record-return-unknown-type", "fnc bad():Missing{return 0;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
-        ("constructor-array-use-after-move", "define class Box as val Array<int> values; end pub fnc main():int{val Array<int> a=new Array<int>();val Box b=new Box(a);return a.size;}".to_owned(), foo.to_owned()),
+        ("constructor-array-use-after-move", "define class ArrayOwnerFixture as val Array<int> values; end pub fnc main():int{val Array<int> a=new Array<int>();val ArrayOwnerFixture b=new ArrayOwnerFixture(a);return a.size;}".to_owned(), foo.to_owned()),
         ("constructor-array-duplicate-owner", "define class Pair as val Array<int> left;val Array<int> right;end pub fnc main():int{val Array<int> a=new Array<int>();val Pair p=new Pair(a,a);return 0;}".to_owned(), foo.to_owned()),
-        ("constructor-array-element-mismatch", "define class Box as val Array<String> values;end pub fnc main():int{val Array<int> a=new Array<int>();val Box b=new Box(a);return 0;}".to_owned(), foo.to_owned()),
-        ("shared-class-array-mutation", "define class Box as pub val Array<int> values;end fnc bad(borrow Box owner):void{owner.values.add(1);return;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
-        ("constructor-array-borrowed-field", "define class Box as pub val Array<int> values;end fnc bad(borrow Box owner):int{val Box other=new Box(owner.values);return 0;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
-        ("class-array-by-value-escape", "define class Box as pub val Array<int> values;end fnc bad(Box owner):int{return owner.values.size;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("constructor-array-element-mismatch", "define class ArrayOwnerFixture as val Array<String> values;end pub fnc main():int{val Array<int> a=new Array<int>();val ArrayOwnerFixture b=new ArrayOwnerFixture(a);return 0;}".to_owned(), foo.to_owned()),
+        ("shared-class-array-mutation", "define class ArrayOwnerFixture as pub val Array<int> values;end fnc bad(borrow ArrayOwnerFixture owner):void{owner.values.add(1);return;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("constructor-array-borrowed-field", "define class ArrayOwnerFixture as pub val Array<int> values;end fnc bad(borrow ArrayOwnerFixture owner):int{val ArrayOwnerFixture other=new ArrayOwnerFixture(owner.values);return 0;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
+        ("class-array-by-value-escape", "define class ArrayOwnerFixture as pub val Array<int> values;end fnc bad(ArrayOwnerFixture owner):int{return owner.values.size;}pub fnc main():int{return 0;}".to_owned(), foo.to_owned()),
         ("mutable-record-array", "define class Item as pub let int value=1; end pub fnc main():int{val Array<Item> a=new Array<Item>();return 0;}".to_owned(), foo.to_owned()),
         ("record-array-integer-forgery", "define class Item as pub val int value; end pub fnc main():int{val Array<Item> a=new Array<Item>();a.add(1);return 0;}".to_owned(), foo.to_owned()),
         ("record-array-wrong-nominal-type", "define class A as pub val int value; end define class B as pub val int value; end pub fnc main():int{val Array<A> a=new Array<A>();a.add(new B(1));return 0;}".to_owned(), foo.to_owned()),
@@ -1047,7 +1081,7 @@ fn main() {
         ("string-array-handle-as-int", "pub fnc main():int{val Array<String> a=new Array<String>();return a.get(0);}".to_owned(), foo.to_owned()),
         ("string-array-wrong-constructor", "pub fnc main():int{val Array<String> a=new Array<int>();return 0;}".to_owned(), foo.to_owned()),
         ("string-array-copy-as-int", "pub fnc main():int{val Array<String> a=new Array<String>();val n:int=a;return n;}".to_owned(), foo.to_owned()),
-        ("string-array-take-into-int-field", "define class Box as pub mut Array<int> values=new Array<int>(); end pub fnc main():int{let mut Box b=new Box();val Array<String> a=new Array<String>();b.values=rt take a;return 0;}".to_owned(), foo.to_owned()),
+        ("string-array-take-into-int-field", "define class ArrayOwnerFixture as pub mut Array<int> values=new Array<int>(); end pub fnc main():int{let mut ArrayOwnerFixture b=new ArrayOwnerFixture();val Array<String> a=new Array<String>();b.values=rt take a;return 0;}".to_owned(), foo.to_owned()),
         ("unsupported-object-array", "pub fnc main():int{val Array<Foo> a=new Array<Foo>();return 0;}".to_owned(), foo.to_owned()),
         (
             "string-integer-equality",
@@ -1167,7 +1201,8 @@ fn main() {
         );
         assert!(rejected.stdout.is_empty(), "{name}: emitted partial IR");
         let expected_boundary = match *name {
-            "legacy-mut-borrow-spelling-stays-rejected" => Some("legacy 'rt borrow mut value' is not accepted"),
+            "legacy-mut-borrow-return-escape-rejected" |
+            "canonical-mut-borrow-return-escape-rejected" => Some("borrowed reference may only be passed to a borrowed parameter"),
             "checked-copy-option-reject-string" |
             "checked-copy-option-reject-bool-index" |
             "checked-copy-option-reject-arity" => Some("native Array.get_copy requires Array<int> and a checked int index"),
@@ -1230,6 +1265,7 @@ fn main() {
     );
 
     for (name, source, diagnostic) in [
+        ("reserved-box-cannot-be-redefined", "define class Box as pub val int value;end pub fnc main():int{return 0;}".to_owned(), "NATIVE_OWNERSHIP_INTRINSIC_RESERVED"),
         ("template-interpolation-limit", interpolation_bomb, "interpolation count limit exceeded"),
         ("template-brace-limit", brace_bomb, "brace nesting limit exceeded"),
         ("template-nesting-limit", nesting_bomb, "nesting limit exceeded"),

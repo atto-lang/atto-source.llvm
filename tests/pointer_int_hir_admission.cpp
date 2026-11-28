@@ -7,6 +7,7 @@
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <limits>
 #include <stdexcept>
 
 #ifdef NDEBUG
@@ -118,7 +119,168 @@ int main() {
     assert(!p.ownership_admitted);
     validate_ownership(p);
     assert(p.ownership_admitted);
-    std::cout << "POINTER_HIR_ADVERSARIAL_REJECTIONS=9\n";
+    p.steps[0].value = literal(0);
+    p.steps[0].value->kind = static_cast<Expr::Kind>(-1);
+    must_reject("invalid expression kind", [&] { validate_ownership(p); });
+    assert(!p.ownership_admitted);
+    p.steps[0].value = literal(42);
+    validate_ownership(p);
+    Step invalid;
+    invalid.kind = static_cast<Step::Kind>(-1);
+    p.steps.insert(p.steps.begin(), std::move(invalid));
+    must_reject("invalid step kind", [&] { validate_ownership(p); });
+    assert(!p.ownership_admitted);
+    p.steps.erase(p.steps.begin());
+    validate_ownership(p);
+    verify_plan(p);
+    auto metadata = plan();
+    metadata.steps[1].value = literal(2);
+    metadata.steps[1].value->kind = Expr::Kind::Length;
+    metadata.result->known = 2;
+    validate_ownership(metadata);
+    metadata.steps[1].value->known = 3;
+    must_reject("incorrect typed length", [&] { verify_plan(metadata); });
+    metadata.steps[1].value->kind = Expr::Kind::SizeBytes;
+    metadata.steps[1].value->known = 16;
+    metadata.result->known = 16;
+    validate_ownership(metadata);
+    metadata.steps[1].value->index = 1;
+    must_reject("malformed metadata index", [&] { verify_plan(metadata); });
+    metadata.steps[1].value->index = 0;
+    metadata.result = literal(16);
+    metadata.result->kind = Expr::Kind::SizeBytes;
+    must_reject("metadata after close", [&] { verify_plan(metadata); });
+    auto region = plan();
+    region.steps[0].kind = Step::Kind::Fill;
+    Step swap;
+    swap.kind = Step::Kind::Swap;
+    swap.second_index = 1;
+    region.steps.insert(region.steps.begin() + 1, std::move(swap));
+    validate_ownership(region);
+    region.steps[1].second_index = 2;
+    must_reject("out-of-bounds swap after admission", [&] { verify_plan(region); });
+    region.steps[1].second_index = 1;
+    region.steps[0].kind = Step::Kind::Write;
+    must_reject("swap of uninitialized cell", [&] { verify_plan(region); });
+    region.steps[0].kind = Step::Kind::Fill;
+    region.steps[0].second_index = 1;
+    must_reject("malformed fill second index", [&] { verify_plan(region); });
+    region.steps[0].second_index = 0;
+    region.steps[1].value = literal(42);
+    must_reject("malformed swap payload", [&] { verify_plan(region); });
+    region.steps[1].value.reset();
+    validate_ownership(region);
+    auto call = plan();
+    call.count = 1;
+    call.readonly_helper = "inspect";
+    call.readonly_parameter = "q";
+    call.steps[1].value->kind = Expr::Kind::ReadonlyCall;
+    call.steps[1].value->name = "inspect";
+    validate_ownership(call);
+    call.steps[1].value->name = "unknown";
+    must_reject("forged borrowed callee", [&] { verify_plan(call); });
+    call.steps[1].value->name = "inspect";
+    call.count = 2;
+    must_reject("borrowed call with wrong extent", [&] { verify_plan(call); });
+    call.count = 1;
+    call.readonly_parameter = "inspect";
+    must_reject("forged helper signature", [&] { verify_plan(call); });
+    call.readonly_parameter = "q";
+    call.steps[1].value->known = 41;
+    must_reject("forged readonly return annotation", [&] { verify_plan(call); });
+    call.steps[1].value->known = 42;
+    validate_ownership(call);
+    auto mut_call = plan();
+    mut_call.count = 1;
+    mut_call.mutable_helper = "update";
+    mut_call.mutable_parameter = "q";
+    mut_call.mutable_write = 42;
+    mut_call.steps[0].kind = Step::Kind::MutableCall;
+    mut_call.steps[0].name = "update";
+    mut_call.steps[0].value.reset();
+    validate_ownership(mut_call);
+    mut_call.steps[0].name = "unknown";
+    must_reject("forged mutable callee", [&] { verify_plan(mut_call); });
+    mut_call.steps[0].name = "update";
+    mut_call.count = 2;
+    must_reject("mutable call with wrong extent", [&] { verify_plan(mut_call); });
+    mut_call.count = 1;
+    mut_call.steps[0].value = literal(42);
+    must_reject("forged mutable call payload", [&] { verify_plan(mut_call); });
+    mut_call.steps[0].value.reset();
+    mut_call.mutable_parameter = "update";
+    must_reject("forged mutable signature", [&] { verify_plan(mut_call); });
+    mut_call.mutable_parameter = "q";
+    validate_ownership(mut_call);
+    mut_call.readonly_helper = "inspect";
+    mut_call.readonly_parameter = "q";
+    mut_call.steps[1].value->kind = Expr::Kind::ReadonlyCall;
+    mut_call.steps[1].value->name = "inspect";
+    validate_ownership(mut_call);
+    mut_call.readonly_helper = "update";
+    mut_call.steps[1].value->name = "update";
+    must_reject("conflicting readonly and mutable callee identities", [&] { verify_plan(mut_call); });
+    mut_call.readonly_helper = "inspect";
+    mut_call.steps[1].value->name = "inspect";
+    validate_ownership(mut_call);
+    mut_call.mutable_scalar_parameter = "value";
+    mut_call.mutable_write = 0;
+    mut_call.steps[0].value = literal(42);
+    validate_ownership(mut_call);
+    mut_call.steps[0].value.reset();
+    must_reject("missing scalar call payload", [&] { verify_plan(mut_call); });
+    mut_call.steps[0].value = read_slot(0, 42);
+    must_reject("owner access in exclusive scalar argument", [&] { verify_plan(mut_call); });
+    mut_call.steps[0].value = literal(42);
+    mut_call.mutable_scalar_parameter = "q";
+    must_reject("duplicate scalar formal", [&] { verify_plan(mut_call); });
+    mut_call.mutable_scalar_parameter = "value";
+    validate_ownership(mut_call);
+    std::cout << "POINTER_HIR_ADVERSARIAL_REJECTIONS=30\n";
+
+    // The independently verified HIR arithmetic must agree at the signed
+    // boundaries and reject overflow even when supplied a fabricated annotation.
+    const auto hi = std::numeric_limits<std::int64_t>::max();
+    const auto lo = std::numeric_limits<std::int64_t>::min();
+    auto arithmetic = [](Expr::Kind kind, std::int64_t lhs, std::int64_t rhs,
+                         std::int64_t known) {
+        auto e = std::make_unique<Expr>();
+        e->kind = kind;
+        e->lhs = literal(lhs);
+        if (kind != Expr::Kind::Neg) e->rhs = literal(rhs);
+        e->known = known;
+        return e;
+    };
+    auto positive = [&](Expr::Kind kind, std::int64_t lhs, std::int64_t rhs,
+                        std::int64_t expected) {
+        auto candidate = plan();
+        candidate.result = arithmetic(kind, lhs, rhs, expected);
+        validate_ownership(candidate);
+        assert(candidate.ownership_admitted);
+        verify_plan(candidate);
+    };
+    auto overflow = [&](Expr::Kind kind, std::int64_t lhs, std::int64_t rhs) {
+        auto candidate = plan();
+        validate_ownership(candidate);
+        candidate.result = arithmetic(kind, lhs, rhs, 0);
+        bool rejected = false;
+        try { validate_ownership(candidate); }
+        catch (const std::runtime_error& error) {
+            rejected = std::string(error.what()).find("checked integer arithmetic overflow") != std::string::npos;
+        }
+        if (!rejected || candidate.ownership_admitted)
+            throw std::runtime_error("HIR checked arithmetic rejection missing");
+    };
+    positive(Expr::Kind::Add, hi - 1, 1, hi);
+    positive(Expr::Kind::Subtract, lo + 1, 1, lo);
+    positive(Expr::Kind::Multiply, lo, 1, lo);
+    positive(Expr::Kind::Neg, hi, 0, -hi);
+    overflow(Expr::Kind::Add, hi, 1);
+    overflow(Expr::Kind::Subtract, lo, 1);
+    overflow(Expr::Kind::Multiply, lo, -1);
+    overflow(Expr::Kind::Multiply, hi, 2);
+    overflow(Expr::Kind::Neg, lo, 0);
+    std::cout << "POINTER_HIR_CHECKED_ARITHMETIC=4_EXECUTED_5_REJECTED\n";
     // The local borrowed pointer form has separate authority and uses the
     // *same* independent verifier as the owning Pointer.alloc region.
     Plan local;
@@ -168,4 +330,52 @@ int main() {
     validate_ownership(local);
     assert(local.ownership_admitted);
     std::cout << "POINTER_LOCAL_HIR_ADVERSARIAL_REJECTIONS=5\n";
+    Plan slot;
+    slot.form = Plan::Form::ReusableSlot;
+    slot.local_handle = "p";
+    slot.slot_owners = {{"a", 40}, {"b", 2}};
+    slot.count = 2;
+    auto bind = [&](std::size_t i) {
+        Step s; s.kind = Step::Kind::SlotBind; s.index = i;
+        slot.steps.push_back(std::move(s));
+    };
+    auto read = [&](std::size_t i, const char* name, std::int64_t known) {
+        Step s; s.kind = Step::Kind::Scalar; s.name = name;
+        s.value = read_slot(i, known); slot.steps.push_back(std::move(s));
+    };
+    auto detach = [&] {
+        Step s; s.kind = Step::Kind::SlotDetach; slot.steps.push_back(std::move(s));
+    };
+    bind(0); read(0, "first", 40); detach();
+    bind(1); read(1, "second", 2); detach();
+    slot.result = std::make_unique<Expr>();
+    slot.result->kind = Expr::Kind::Add;
+    slot.result->lhs = variable("first", 40);
+    slot.result->rhs = variable("second", 2);
+    slot.result->known = 42;
+    validate_ownership(slot);
+    assert(slot.ownership_admitted);
+    slot.steps[1].value->index = 1;
+    must_reject("read must match current slot binding", [&] { verify_plan(slot); });
+    slot.steps[1].value->index = 0;
+    slot.steps[2].kind = Step::Kind::SlotBind;
+    must_reject("live slot rebind", [&] { verify_plan(slot); });
+    slot.steps[2].kind = Step::Kind::SlotDetach;
+    slot.steps[3].index = 2;
+    must_reject("out-of-bounds bind", [&] { verify_plan(slot); });
+    slot.steps[3].index = 1;
+    slot.steps[4].value->known = 99;
+    must_reject("forged slot read value", [&] { verify_plan(slot); });
+    slot.steps[4].value->known = 2;
+    slot.steps.pop_back();
+    must_reject("live slot on exit", [&] { verify_plan(slot); });
+    detach();
+    slot.form = Plan::Form::OwnedRegion;
+    must_reject("slot metadata in owning region", [&] { verify_plan(slot); });
+    slot.form = Plan::Form::ReusableSlot;
+    slot.result->lhs->name = "p";
+    must_reject("slot value escape", [&] { verify_plan(slot); });
+    slot.result->lhs->name = "first";
+    verify_plan(slot);
+    std::cout << "POINTER_SLOT_HIR_ADVERSARIAL_REJECTIONS=7\n";
 }

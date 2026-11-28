@@ -154,6 +154,28 @@ pub fnc main(): int {
 }
 ATTO
 reject_source nonliteral
+
+cat > "$OUT/macro-nonliteral.atto" <<'ATTO'
+define macro operation(Syntax<Expr> value) -> Syntax<Expr> { return value; }
+pub fnc main(): int {
+  using telemetry.span(operation!(syntax expr 42)) as span { return 2; }
+  return 3;
+}
+ATTO
+reject_source macro-nonliteral
+grep -q 'compile-time string literal operation name' "$OUT/macro-nonliteral.err"
+
+cat > "$OUT/macro-invalid-literal.atto" <<'ATTO'
+define macro operation(Syntax<Expr> value) -> Syntax<Expr> { return value; }
+pub fnc main(): int {
+  using telemetry.span(operation!(syntax expr "")) as span { return 2; }
+  return 3;
+}
+ATTO
+reject_source macro-invalid-literal
+grep -q 'requires 1..256 UTF-8 bytes' "$OUT/macro-invalid-literal.err"
+echo 'LLVM_AOT_TELEMETRY_MACRO_ADMISSION_NEGATIVES_PASS:2'
+
 cat > "$OUT/escape.atto" <<'ATTO'
 pub fnc main(): int {
   using telemetry.span("checkout") as span { return span; }

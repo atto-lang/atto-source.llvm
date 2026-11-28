@@ -58,13 +58,50 @@ static int wait_for(int32_t ref, uint64_t ticket,
     }
     return 0;
 }
+/* Attack a real mailbox while its worker is paused and DATA is full.
+ * All attempts must fail before capacity or ticket state changes. */
+struct tenant_attack {
+    int32_t ref;
+    uint64_t ticket;
+    atto_host_receipt_route_v1 foreign;
+};
+static void *foreign_attempts(void *arg) {
+    struct tenant_attack *a = arg;
+    for (unsigned i = 0; i < 64; ++i) {
+        uint64_t denied = 999;
+        atto_host_ticket_state_v1 ignored;
+        assert(atto_host_actor_send_ticket(a->ref, 99, &a->foreign, &denied) == -1 && denied == 0);
+        assert(atto_host_actor_ticket_snapshot(a->ref, a->ticket, &a->foreign, &ignored) == -1);
+        assert(atto_host_actor_ticket_release(a->ref, a->ticket, &a->foreign) == -1);
+    }
+    return NULL;
+}
 int main(void) {
-    int32_t slow = atto_actor_spawn(0), fast = atto_actor_spawn(1);
+    assert(atto_host_actor_spawn_scoped(0, 0) == 0);
+    int32_t slow = atto_host_actor_spawn_scoped(0, 11);
+    int32_t fast = atto_host_actor_spawn_scoped(1, 22);
+    int32_t local = atto_actor_spawn(2);
+    assert(local > 0);
+    atto_host_receipt_route_v1 unbound = scoped(local, 100);
+    uint64_t refused = 999;
+    assert(atto_host_actor_send_ticket(local, 123, &unbound, &refused) == -1 &&
+           refused == 0);
+    assert(atto_actor_send(local, 42) == 0);
     assert(slow > 0 && fast > 0);
     atto_host_receipt_route_v1 a = scoped(slow, 101);
     atto_host_receipt_route_v1 b = scoped(slow, 102);
     atto_host_receipt_route_v1 c = scoped(fast, 103);
     uint64_t ta=0, tb=0, tc=0;
+    /* A matching target and generation on an empty mailbox is insufficient. */
+    atto_host_receipt_route_v1 foreign = a;
+    foreign.tenant = 22;
+    refused = 999;
+    assert(atto_host_actor_send_ticket(slow, 123, &foreign, &refused) == -1 &&
+           refused == 0);
+    refused = 999;
+    assert(atto_host_actor_send_ticket(fast, 123, &c, &refused) == -1 &&
+           refused == 0);
+    c.tenant = 22;
     assert(atto_host_actor_send_ticket(slow, 11, &a, &ta) == 0 && ta != 0);
     pthread_mutex_lock(&pause_lock);
     while (!slow_entered) pthread_cond_wait(&pause_cv, &pause_lock);
@@ -85,6 +122,7 @@ int main(void) {
     bad.tenant = 99;
     atto_host_ticket_state_v1 ignored;
     assert(atto_host_actor_ticket_snapshot(slow, tb, &bad, &ignored) == -1);
+    assert(atto_host_actor_ticket_release(slow, tb, &bad) == -1);
     bad = b; bad.attempt = 2;
     assert(atto_host_actor_ticket_snapshot(slow, tb, &bad, &ignored) == -1);
     bad = b; bad.target_incarnation++;
@@ -103,6 +141,17 @@ int main(void) {
     assert(atto_host_actor_send_ticket(slow, 77, &extra, &denied) == -2 &&
            denied == 0);
     assert(atto_actor_send(slow, 77) == -2);
+    struct tenant_attack attack = {slow, tb, b};
+    attack.foreign.tenant = 22;
+    pthread_t attackers[4];
+    for (unsigned i = 0; i < 4; ++i)
+        assert(pthread_create(&attackers[i], NULL, foreign_attempts, &attack) == 0);
+    for (unsigned i = 0; i < 4; ++i)
+        assert(pthread_join(attackers[i], NULL) == 0);
+    assert(state(slow, tb, &b) == ATTO_TICKET_ADMITTED);
+    denied = 999;
+    assert(atto_host_actor_send_ticket(slow, 77, &extra, &denied) == -2 && denied == 0);
+    puts("ATTO_LLVM_FOREIGN_FULL_MAILBOX_256=PASS");
     pthread_mutex_lock(&pause_lock);
     slow_release = 1;
     pthread_cond_broadcast(&pause_cv);
@@ -118,6 +167,7 @@ int main(void) {
     assert(atomic_load(&slow_count) == 129);
     assert(atomic_load(&fast_count) == 1);
     assert(atto_actor_send(slow, 1) == -1);
+    puts("ATTO_LLVM_PROXY_TENANT_FENCE=PASS");
     puts("ATTO_LLVM_REAL_NATIVE_MAILBOX_PER_MAIL_TICKET=PASS");
     puts("ATTO_LLVM_HOST_ONLY_NO_COMPILED_PROXY_GUEST=PASS");
     return 0;

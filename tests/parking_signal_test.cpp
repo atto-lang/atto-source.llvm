@@ -1,6 +1,8 @@
 #include "oreslang/runtime/ParkingSignal.hpp"
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <cstdlib>
 #include <exception>
 #include <iostream>
@@ -125,8 +127,69 @@ static void test_multiple_notifiers_and_wake_races() {
             "some producers failed");
 }
 
+static void test_extreme_deadlines_and_precedence() {
+    ParkingSignal gate;
+    std::atomic<bool> stop{false}, ready{false};
+    require(gate.wait_until([] {return false;}, stop, std::chrono::milliseconds::min())
+                == WaitResult::timed_out, "minimum duration must not overflow");
+    require(gate.wait_until([] {return true;}, stop, std::chrono::milliseconds::min())
+                == WaitResult::ready, "ready retains precedence over expired deadline");
+    std::thread notifier([&] {
+        std::this_thread::sleep_for(20ms);
+        ready.store(true, std::memory_order_release);
+        gate.notify();
+    });
+    const auto result = gate.wait_until([&] {return ready.load(std::memory_order_acquire);},
+        stop, std::chrono::milliseconds::max() - 1ms);
+    notifier.join();
+    require(result == WaitResult::ready, "huge finite timeout wrapped into past");
+    stop.store(true, std::memory_order_release);
+    require(gate.wait_until([] {return true;}, stop, std::chrono::milliseconds::max())
+                == WaitResult::stopped, "stop retains precedence at infinite deadline");
+}
+
+static void test_publish_in_check_to_poll_window() {
+    ParkingSignal gate;
+    std::atomic<bool> stop{false}, ready{false};
+    std::mutex lock;
+    std::condition_variable cv;
+    for (int round = 0; round < 256; ++round) {
+        ready.store(false, std::memory_order_relaxed);
+        bool checked = false, published = false, producer_ok = true;
+        std::thread producer([&] {
+            std::unique_lock guard(lock);
+            if (!cv.wait_for(guard, 2s, [&] {return checked;})) {
+                producer_ok = false;
+                return;
+            }
+            ready.store(true, std::memory_order_release);
+            gate.notify();
+            published = true;
+            cv.notify_one();
+        });
+        bool first = true, handshake_ok = true;
+        const auto result = gate.wait_until([&] {
+            if (!first) return ready.load(std::memory_order_acquire);
+            first = false;
+            // Force a stale predicate result after publication/notify but
+            // before poll: a lost-wakeup implementation would time out.
+            std::unique_lock guard(lock);
+            checked = true;
+            cv.notify_one();
+            handshake_ok = cv.wait_for(guard, 2s, [&] {return published;});
+            return false;
+        }, stop, 3s);
+        producer.join();
+        require(producer_ok && handshake_ok && result == WaitResult::ready,
+                "publication in check-to-poll window was lost");
+    }
+    std::cout << "PARKING_CHECK_TO_POLL_PASS rounds=256\n";
+}
+
 int main() {
     try {
+        test_extreme_deadlines_and_precedence();
+        test_publish_in_check_to_poll_window();
         test_ready_before_wait();
         test_spurious_and_delayed_wake();
         test_150ms_io_and_thread_identity();

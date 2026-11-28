@@ -170,6 +170,9 @@ impl Cursor<'_> {
         self.expect(&Tok::RParen, "expected ')' after receiver")?;
         let name = self.ident()?;
         let params = self.params()?;
+        if is_state_intrinsic(&name) || params.iter().any(|p| is_state_intrinsic(&p.name)) {
+            return Err(self.err("E_SEALED", "receiver method or parameter shadows sealed state intrinsic"));
+        }
         let arity = params.len();
         let return_type = if self.take(&Tok::Colon) || self.take(&Tok::Arrow) {
             self.type_name()?
@@ -493,23 +496,44 @@ fn count_args(toks: &[Token], open: usize, close: usize) -> usize {
     }
     n
 }
+pub fn is_state_intrinsic(name: &str) -> bool {
+    matches!(name, "handle_state" | "state_ro" | "state_w" | "handle_state_ro" | "handle_state_w")
+}
+fn state_intrinsic_at(toks: &[Token], i: usize) -> bool {
+    matches!(toks.get(i).map(|t| &t.tok), Some(Tok::Ident(name)) if is_state_intrinsic(name))
+}
+
+/// Shared mode decoding used by admission and native lowering. Aliases
+/// supply authority themselves and must be followed by an inline binder.
+pub fn state_callback_mode(toks: &[Token], open: usize) -> R<(bool, usize)> {
+    if open == 0 || !at(toks, open, &Tok::LParen) {
+        return Err(diagnostic(toks, open, "E_SEALED", "state intrinsic requires a direct call"));
+    }
+    let k = open + 1;
+    if word_at(toks, open-1, "state_ro") || word_at(toks, open-1, "handle_state_ro") {
+        return Ok((false, k));
+    }
+    if word_at(toks, open-1, "state_w") || word_at(toks, open-1, "handle_state_w") {
+        return Ok((true, k));
+    }
+    if !word_at(toks, open-1, "handle_state") || !word_at(toks, k, "critical")
+        || !at(toks, k+1, &Tok::Minus)
+        || !(word_at(toks, k+2, "read") || word_at(toks, k+2, "write")) {
+        return Err(diagnostic(toks, k, "E_SEALED",
+            "handle_state requires 'critical-read' or 'critical-write'"));
+    }
+    Ok((word_at(toks, k+2, "write"), k+3))
+}
 fn validate_callback(
     toks: &[Token], symbols: &TargetHeaders, receiver: &ReceiverHeader,
     open: usize, limit: usize,
 ) -> R<usize> {
     let close = close_paren(toks, open, limit)?;
-    let mut k = open + 1;
-    if !word_at(toks, k, "critical") || !at(toks, k+1, &Tok::Minus) ||
-        !(word_at(toks, k+2, "read") || word_at(toks, k+2, "write")) {
-        return Err(diagnostic(toks, k, "E_SEALED",
-            "handle_state requires 'critical-read' or 'critical-write'"));
-    }
-    let write = word_at(toks, k+2, "write");
+    let (write, mut k) = state_callback_mode(toks, open)?;
     if write && !receiver.mutable {
         return Err(diagnostic(toks, k, "E_MUTABILITY",
             "critical-write requires a mutable actor receiver"));
     }
-    k += 3;
     if !at(toks, k, &Tok::Pipe) {
         return Err(diagnostic(toks, k, "E_SEALED", "expected '|state|' callback"));
     }
@@ -518,7 +542,8 @@ fn validate_callback(
         Some(Tok::Ident(name)) if !is_reserved(name) => name.as_str(),
         _ => return Err(diagnostic(toks, binder_pos, "E_SEALED", "invalid state callback binder")),
     };
-    if binder == "self" || binder == "_" {
+    if binder == "self" || binder == "_" || is_state_intrinsic(binder)
+        || receiver.params.iter().any(|p| p.name == binder) {
         return Err(diagnostic(toks, binder_pos, "E_SEALED",
             "state callback must bind a distinct state variable"));
     }
@@ -539,7 +564,7 @@ fn validate_callback(
             return Err(diagnostic(toks, i, "E_BORROW",
                 "suspension, spawning and deferred effects are forbidden during critical access"));
         }
-        if word_at(toks, i, "handle_state") ||
+        if state_intrinsic_at(toks, i) ||
             (word_at(toks, i, "self") && at(toks, i+1, &Tok::Dot)) {
             return Err(diagnostic(toks, i, "E_BORROW",
                 "nested actor state access or self capture is forbidden in critical callback"));
@@ -577,10 +602,13 @@ fn validate_receiver_body(
     let receiver = &symbols.receivers[which];
     let mut i = start + 1;
     while i < end.saturating_sub(1) {
-        if word_at(toks, i, "handle_state") &&
-            !(i >= 2 && word_at(toks, i-2, "self") && at(toks, i-1, &Tok::Dot)) {
-            return Err(diagnostic(toks, i, "E_SEALED",
-                "actor state access must be 'self.handle_state(...)'"));
+        if state_intrinsic_at(toks, i) {
+            if (i > 0 && at(toks, i-1, &Tok::Dot)) || !at(toks, i+1, &Tok::LParen) {
+                return Err(diagnostic(toks, i, "E_SEALED",
+                    "state intrinsic requires bare or exact self-qualified direct call"));
+            }
+            i = validate_callback(toks, symbols, receiver, i+1, end)? + 1;
+            continue;
         }
         if word_at(toks, i, "self") && at(toks, i+1, &Tok::Dot) {
             let member = match toks.get(i+2).map(|t| &t.tok) {
@@ -591,7 +619,7 @@ fn validate_receiver_body(
                 return Err(diagnostic(toks, i, "E_SEALED",
                     "direct actor fields are sealed; use self.handle_state"));
             }
-            if member == "handle_state" {
+            if is_state_intrinsic(member) {
                 let closed = validate_callback(toks, symbols, receiver, i+3, end)?;
                 i = closed + 1;
                 continue;

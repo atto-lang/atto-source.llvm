@@ -1,9 +1,13 @@
 #include "oreslang/backend/LlvmCodegen.hpp"
+#include "oreslang/backend/CountedReadyGuest.hpp"
+#include "oreslang/backend/DurableCounterV1Guest.hpp"
+#include "oreslang/backend/DurableScalarV1Guest.hpp"
 #include "oreslang/backend/NativeSourceLogPathsV1.hpp"
 #include "oreslang/backend/ActorRegionV1Guest.hpp"
 #include "oreslang/backend/ActorRegionV2Guest.hpp"
 #include "oreslang/backend/GpuG1AttoSaxpySource.hpp"
 #include "oreslang/frontend/Parser.hpp"
+#include "oreslang/frontend/NamedRecursiveScalarSource.hpp"
 #include "oreslang/frontend/StaticFfiI64Aot.hpp"
 #include "oreslang/types/InvertedProductionSourceMir.hpp"
 #include "oreslang/frontend/SourceInput.hpp"
@@ -539,6 +543,116 @@ static void require_actor_region_v1_aot_graph(const oreslang::Program& program) 
 }
 
 int main(int argc, char** argv) {
+#ifdef ATTO_TEST_INTERFACE_CONSUMER
+    // Test-only fixed metadata. Production builds have no such CLI mode.
+    if ((argc==3 && std::string_view(argv[1])=="--selftest-interface-consumer") ||
+        (argc==4 && std::string_view(argv[1])=="--selftest-interface-provider")) {
+        try {
+            using namespace oreslang::package_interface;
+            const std::string mode=argv[2];
+            auto fixture=[](const std::string& name,const std::string& signature,const std::string& release="1") {
+                std::vector<std::uint8_t> bytes={'O','R','E','S','I',0,1};
+                auto str=[&](const std::string& v){
+                    const auto n=static_cast<std::uint32_t>(v.size());
+                    for(int i=3;i>=0;--i)bytes.push_back(static_cast<std::uint8_t>(n>>(8*i)));
+                    bytes.insert(bytes.end(),v.begin(),v.end());
+                };
+                str(name);str("atto-llvm-1");str("llvm-aot-v1");str("ownership-strict-v1");
+                bytes.insert(bytes.end(),{0,0,0,2});
+                str(name);bytes.push_back(0);str(name);str("");
+                str(name);bytes.push_back(1);str("value");str(signature);
+                DependencyPin pin{name,"fixture/"+name+"@"+release,"atto-llvm-1","llvm-aot-v1",
+                    "ownership-strict-v1",{{name,sha256(bytes)}}};
+                return admit(pin,{{name,bytes}});
+            };
+            if(argc==4) {
+                if(mode!="cart1"&&mode!="cart2"&&mode!="tax1"&&mode!="stale"&&mode!="signature")
+                    throw std::runtime_error("invalid provider fixture mode");
+                const std::string module=mode=="tax1"?"tax":"cart";
+                const std::string release=mode=="cart2"?"2":"1";
+                const std::string digest=mode=="cart2"?
+                    "3a9d01af5bc8e28d52eda9d078ea5332ab51e74fc926509d5b48b69244771cf9":
+                    mode=="tax1"?"e3e4ff40c5186d4fa954d5365822da31ace6ded224eb699eb983cff787cc672b":
+                    "fc0daa1f1811debe52a4caca93b91b0d4fd2a1b86f2a9a82c2e827220475e3c7";
+                const auto proof=fixture(module,mode=="signature"?"():bool":"():int",release);
+                const ScalarLogicalSlotPin slot{"fixture/app",module,
+                    "fixture/"+module+"@"+(mode=="stale"?"2":release),
+                    "atto-llvm-1","ownership-strict-v1"};
+                const auto identity=capture_source_identity(argv[3],65536,"provider fixture source exceeds limit");
+                const auto bytes=read_regular_source(argv[3],65536,"provider fixture source exceeds limit",nullptr,&identity);
+                require_valid_source_utf8(bytes);
+                std::cout<<oreslang::emit_verified_scalar_namespace_provider(
+                    bytes,digest,{proof,slot,module},module,"value");
+                return 0;
+            }
+            auto cart=fixture("cart",mode=="signature"?"():bool":"():int");
+            auto tax=fixture("tax","():int");
+            ScalarLogicalSlotPin cart_slot{"fixture/app","cart",
+                mode=="stale"?"fixture/cart@2":"fixture/cart@1","atto-llvm-1","ownership-strict-v1"};
+            ScalarLogicalSlotPin tax_slot{"fixture/app","tax","fixture/tax@1","atto-llvm-1","ownership-strict-v1"};
+            std::string source="import namespace cart from \"cart\"; import namespace tax from \"tax\"; pub fnc main(): int { return cart.value() + tax.value(); }";
+            if(mode=="missing")source.replace(source.find("cart.value"),10,"cart.unknown");
+            else if(mode=="arity")source.replace(source.find("cart.value()"),12,"cart.value(1)");
+            else if(mode!="ok"&&mode!="stale"&&mode!="signature")throw std::runtime_error("invalid fixture mode");
+            std::cout<<oreslang::emit_verified_scalar_namespace_consumer(source,
+                {{cart,cart_slot,"cart"},{tax,tax_slot,"tax"}});
+            return 0;
+        } catch(const std::exception& e) {std::cerr<<e.what()<<'\n';return 65;}
+    }
+#endif
+
+    // Explicit isolated native scalar proof: incompatible with all other
+    // targets, actor/RT policies and import or ownership capability grants.
+    // No fallback to the ordinary CLI on rejection.
+    if (argc > 1 && std::string_view(argv[1]) == "--named-recursive-scalar-v1") {
+        try {
+            if (argc!=3 || std::filesystem::path(argv[2]).extension()!=".atto")
+                throw std::invalid_argument("usage: --named-recursive-scalar-v1 source.atto");
+            const auto identity=capture_source_identity(argv[2],16384,"named stage source exceeds limit");
+            const auto source=read_regular_source(argv[2],16384,"named stage source exceeds limit",nullptr,&identity);
+            require_valid_source_utf8(source);
+            const auto plan=oreslang::parse_named_recursive_scalar(source);
+            const auto ir=oreslang::backend::named_recursive::emit(plan.stage,plan.input);
+            if(!ir)throw std::runtime_error("E_NAMED_STAGE_GRAPH: rejected before LLVM emission");
+            std::cout<<*ir;
+            std::cout.flush();
+            return std::cout?0:1;
+        }catch(const std::exception& e){
+            print_safe_diagnostic(std::cerr,e.what(),512);
+            std::cerr<<'\n';
+            return 2;
+        }
+    }
+    if (argc > 1 && std::string_view(argv[1]) == "--counted-ready-v1") {
+        try {
+            if (argc != 3 || std::filesystem::path(argv[2]).extension() != ".atto")
+                throw std::invalid_argument("usage: --counted-ready-v1 source.atto");
+            auto source = read_regular_source(argv[2], 65536, "counted source exceeds limit");
+            require_valid_source_utf8(source);
+            std::cout << oreslang::counted_ready::compile(source);
+            std::cout.flush();
+            return std::cout ? 0 : 1;
+        } catch (const std::exception& e) {
+            print_safe_diagnostic(std::cerr,e.what(),512);
+            std::cerr << '\n';
+            return 2;
+        }
+    }
+    if (argc > 1 && (std::string_view(argv[1]) == "--durable-counter-actor-v1" || std::string_view(argv[1]) == "--durable-scalar-codec-v1")) {
+        try {
+            if (argc != 3 || std::filesystem::path(argv[2]).extension() != ".atto")
+                throw std::invalid_argument(std::string("usage: ")+argv[1]+" source.atto");
+            const auto text = read_regular_source(argv[2], 16384, "durable source exceeds limit");
+            const auto ir = std::string_view(argv[1]) == "--durable-scalar-codec-v1" ? oreslang::emit_durable_scalar_v1_ir(text) : oreslang::emit_durable_counter_v1_ir(text);
+            std::cout << ir;
+            std::cout.flush();
+            return std::cout ? 0 : 1;
+        } catch (const std::exception& e) {
+            print_safe_diagnostic(std::cerr,e.what(),512);
+            std::cerr << '\n';
+            return 2;
+        }
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--selftest-native-log-info-ir") {
         try {
             auto program = oreslang::parse_program(
@@ -715,6 +829,7 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    bool stable_local_scalar_modules = false;
     bool experimental_owned_int = false;
     bool experimental_rt_scalar_loop = false;
     bool experimental_pointer_int_aot = false;
@@ -724,6 +839,7 @@ int main(int argc, char** argv) {
     bool actor_region_v2_guest = false; // two-owner guarded-return cleanup
     bool wasm32_target = false;
     bool cortex_m_target = false;
+    std::string hosted_linux_triple;
     bool tenant_vm_guest = false;
     bool target_seen = false;
     enum class BuildProfile { Dev, Release, StrictAot, HardRt };
@@ -918,6 +1034,19 @@ int main(int argc, char** argv) {
             if (arg == "--release") build_profile = BuildProfile::Release;
             else if (arg == "--strict-aot") build_profile = BuildProfile::StrictAot;
             else build_profile = BuildProfile::HardRt;
+        } else if (arg.rfind("--target-os=", 0) == 0) {
+            // Selects platform-variant library units such as std/path.
+            const std::string os = arg.substr(std::string_view("--target-os=").size());
+            if (os == "windows") {
+                oreslang::frontend::selected_library_target_os() =
+                    oreslang::frontend::LibraryTargetOs::Windows;
+            } else if (os == "linux" || os == "macos" || os == "posix" || os == "freebsd") {
+                oreslang::frontend::selected_library_target_os() =
+                    oreslang::frontend::LibraryTargetOs::Posix;
+            } else {
+                std::cerr << "unknown --target-os (expected linux|macos|freebsd|posix|windows)\n";
+                return 2;
+            }
         } else if (arg == "--freestanding") {
             if (freestanding) { std::cerr << "duplicate --freestanding\n"; return 2; }
             freestanding = true;
@@ -940,6 +1069,9 @@ int main(int argc, char** argv) {
             tenant_vm_guest = true;
         } else if (arg == "--no-core-log") {
             coreLogLevel = "off";
+        } else if (arg == "--experimental-stable-local-scalar-modules") {
+            if (stable_local_scalar_modules) { std::cerr << "duplicate stable local module option\n"; return 2; }
+            stable_local_scalar_modules = true;
         } else if (arg == "--experimental-rt-scalar-loop") {
             if (experimental_rt_scalar_loop) {
                 std::cerr << "duplicate rt scalar loop option\n"; return 2;
@@ -999,18 +1131,51 @@ int main(int argc, char** argv) {
                 wasm32_target = oreslang::TargetAbi::parse("wasm32-unknown-unknown").experimental_wasm32_ir();
             } else {
                 try {
-                    (void)oreslang::TargetAbi::parse(target);
-                    std::cerr << "target has no certified IR/ABI lowering: " << target << '\n';
+                    if (oreslang::TargetAbi::parse(target).experimental_hosted_linux_ir()) {
+                        hosted_linux_triple = target;
+                    } else {
+                        std::cerr << "target has no certified IR/ABI lowering: " << target << '\n';
+                        return 2;
+                    }
                 } catch (const std::invalid_argument&) {
                     std::cerr << "unknown target triple: " << target << '\n';
+                    return 2;
                 }
-                return 2;
             }
         } else if (arg.rfind("--cpu=", 0) == 0) {
             std::cerr << "explicit CPU feature selection not implemented: " << arg << '\n';
             return 2;
         } else if (!arg.empty() && arg[0] != '-' && path == nullptr) path = argv[i];
         else { std::cerr << "unrecognized or duplicate option: " << arg << '\n'; return 2; }
+    }
+    // Cross-host IR has not qualified the specialized host-only ABI paths.
+    // Reject those selectors before source I/O rather than falling back to host IR.
+    if (!hosted_linux_triple.empty() && (stable_local_scalar_modules ||
+        experimental_owned_int || experimental_rt_scalar_loop || experimental_pointer_int_aot ||
+        experimental_static_ffi_i64 || static_ffi_i64_capability || actor_region_v1_guest ||
+        actor_region_v2_guest || tenant_vm_guest || native_hard_rt_profile || rt_check_only ||
+        rt_entry_seen || rt_report_seen || constraint_descriptors_only || frontend_check_only ||
+        analyze_requested || gpu_g1_kernel_ir || verify_actor_source_set_only ||
+        verify_actor_headers_only || expected_source_set_seen || source_log_manifest_seen ||
+        sealed_scalar_aot || sealed_class_fields_aot || actor_region_v1_aot || isolate_entry_seen ||
+        bounded_allocator_provider || freestanding || build_profile != BuildProfile::Dev)) {
+        std::cerr << "hosted Linux cross target rejects unqualified compiler profile\n";
+        return 2;
+    }
+    if (stable_local_scalar_modules &&
+        (!target_seen || wasm32_target || cortex_m_target || tenant_vm_guest ||
+         experimental_owned_int || experimental_rt_scalar_loop ||
+         experimental_pointer_int_aot || experimental_static_ffi_i64 ||
+         static_ffi_i64_capability || actor_region_v1_guest || actor_region_v2_guest ||
+         native_hard_rt_profile || rt_check_only || rt_report_seen || rt_entry_seen ||
+         frontend_check_only || analyze_requested || gpu_g1_kernel_ir ||
+         verify_actor_source_set_only || verify_actor_headers_only || expected_source_set_seen ||
+         constraint_descriptors_only || tree_shake || !tree_shake_roots.empty() ||
+         source_log_manifest_seen || isolate_entry_seen || bounded_allocator_provider ||
+         sealed_scalar_aot || sealed_class_fields_aot || actor_region_v1_aot ||
+         freestanding || build_profile != BuildProfile::Dev || library_profile_seen)) {
+        std::cerr << "stable local scalar modules require isolated --target=host\n";
+        return 2;
     }
     if (build_profile != BuildProfile::Dev) {
         const char* requested =
@@ -1176,7 +1341,7 @@ int main(int argc, char** argv) {
     if (admittedLevel != oreslang::CoreLog::Level::Off)
         coreLog.reset(new (std::nothrow) oreslang::CoreLog(admittedLevel));
     if (path == nullptr) {
-        std::cerr << "usage: oreslang-llvmc [--guest-abi=tenant-vm] [--experimental-pointer-int-aot] [--experimental-static-ffi-i64-aot] [--ffi-grant=atto.math.i64.v1] [--release|--strict-aot|--hard-rt] [--freestanding] [--deployment-profile=ebpf-xdp|ebpf-tc|carrier-linux|fpga-hls|asic-rtl (not yet certified)] [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--aot-profile=sealed-scalar-v1|sealed-class-fields-v1|actor-region-v1] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--check|--analyze] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
+        std::cerr << "usage: oreslang-llvmc [--guest-abi=tenant-vm] [--experimental-pointer-int-aot] [--experimental-static-ffi-i64-aot] [--ffi-grant=atto.math.i64.v1] [--release|--strict-aot|--hard-rt] [--freestanding] [--deployment-profile=ebpf-xdp|ebpf-tc|carrier-linux|fpga-hls|asic-rtl (not yet certified)] [--allocator-provider=bounded-arena] [--library-profile=core|std] [--constraint-descriptors] [--aot-profile=sealed-scalar-v1|sealed-class-fields-v1|actor-region-v1] [--tree-shake] [--tree-shake-root=name ...] [--profile=native-hard-rt] [--check|--analyze] [--rt-check] [--rt-entry=name/arity] [--rt-report=path] [--target=host|wasm32|wasm32-unknown-unknown|thumbv7m-none-eabi|x86_64-unknown-linux-gnu|aarch64-unknown-linux-gnu|i686-unknown-linux-gnu|armv7-unknown-linux-gnueabihf] [--experimental-owned-int] [--experimental-rt-scalar-loop] [--core-log-level=off|error|warn|info|debug|trace] [--no-core-log] <source.atto|source.ores>\n"
                   << "Supported: int functions/parameters, return arithmetic, and same-module calls.\n";
         return 2;
     }
@@ -1308,7 +1473,8 @@ int main(int argc, char** argv) {
         auto ast = oreslang::load_native_program(
             path, text, source_identity, experimental_owned_int,
             experimental_rt_scalar_loop, !wasm32_target && !cortex_m_target,
-            admitted_provider_bits, static_ffi_i64_capability, language_version);
+            admitted_provider_bits, static_ffi_i64_capability, language_version,
+            stable_local_scalar_modules);
         source_module = ast.module;
         source_namespace = ast.namespace_name;
         // A lexical scalar loop has valid native CFG continuation semantics,
@@ -1333,6 +1499,8 @@ int main(int argc, char** argv) {
 
 
         if (ast.inverted_main) {
+            if (!hosted_linux_triple.empty())
+                throw std::runtime_error("inverted i64 slice cross target is not qualified");
             // Bounded production two-i64 stack owner only; no escaping
             // handles, async/actor lifetime or cross-target RT guarantees.
             // wasm32 lowers the SAME parser-verified MIR and owner close,
@@ -1746,7 +1914,7 @@ int main(int argc, char** argv) {
             (void)oreslang::emit_verified_llvm_ir(
                 ast, wasm32_target, cortex_m_target,
                 bounded_allocator_provider, {}, actor_region_v1_aot, {}, {},
-                tenant_vm_guest);
+                tenant_vm_guest, hosted_linux_triple.empty() ? nullptr : hosted_linux_triple.c_str());
 
             // The shipped destructive pass remains function-only. For class
             // programs, retain every declaration rather than deleting any
@@ -1762,7 +1930,7 @@ int main(int argc, char** argv) {
                                     : std::vector<oreslang::CheckedSourceRoutineV1>{},
                 checked_source_logs ? checked_source_logs->sites
                                     : std::vector<oreslang::CheckedLogSiteV1>{},
-                tenant_vm_guest);
+                tenant_vm_guest, hosted_linux_triple.empty() ? nullptr : hosted_linux_triple.c_str());
         std::cout.flush();
         if (coreLog) coreLog->dump(stderr);
         return 0;

@@ -1,0 +1,11 @@
+define class Parcel as
+  pub let int a = 4;
+  pub let int b = 42;
+end
+fnc inspect(borrow mut Parcel one, borrow Parcel two): int {
+  return one.b;
+}
+pub fnc main(): int {
+  let mut Parcel box = new Parcel();
+  return inspect(rt mut borrow box, rt borrow box);
+}

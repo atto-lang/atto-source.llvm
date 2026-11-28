@@ -1,5 +1,5 @@
 #pragma once
-// LLVM 19-23 abstraction for pointer and lifetime intrinsics.
+// LLVM 14-23 compatibility for native pointers, lifetimes, and intrinsics.
 // The language/ABI does not depend on which LLVM API spells these operations.
 #include <cstdint>
 #include "llvm/ADT/ArrayRef.h"
@@ -52,6 +52,19 @@ inline llvm::Function* native_intrinsic(llvm::Module& module,
     return llvm::Intrinsic::getOrInsertDeclaration(&module, id, overloads);
 #else
     return llvm::Intrinsic::getDeclaration(&module, id, overloads);
+#endif
+}
+
+// LLVM 23 removed CreateGlobalStringPtr. With opaque pointers, the
+// address of the global array is also the address of its first byte.
+// Keep the legacy helper for typed-pointer LLVM releases.
+inline llvm::Constant* native_global_string_ptr(llvm::IRBuilder<>& builder,
+                                               llvm::StringRef bytes,
+                                               llvm::Twine name) {
+#if LLVM_VERSION_MAJOR >= 23
+    return builder.CreateGlobalString(bytes, name);
+#else
+    return builder.CreateGlobalStringPtr(bytes, name);
 #endif
 }
 

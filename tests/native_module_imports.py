@@ -72,6 +72,19 @@ def main():
             'b.ores': 'define module B as pub fnc answer(borrow int x):int{return rt copy x;} end',
         }, 42),
     ]
+
+    # Compiler-owned core module guest tests: these must execute, not merely parse.
+    positives.extend([
+        ('core-slice-span-atto', {
+            'main.atto': 'import module slice from "atto.core/slice"; pub fnc main():int{if slice.valid_range(1,2,3) then return 42; fi return 1;}',
+        }, 42),
+        ('core-iter-cursor-atto', {
+            'main.atto': 'import module iter from "atto.core/iter"; pub fnc main():int{if iter.valid_range(1,2,3) then return 42; fi return 1;}',
+        }, 42),
+        ('core-cmp-scalar-atto', {
+            'main.atto': 'import module cmp from "atto.core/cmp"; pub fnc main():int{return cmp.compare_int(9223372036854775807,0)+41;}',
+        }, 42),
+    ])
     # Executable precursor for namespace linking: two physical provider
     # source files are compiled into one native guest. These are existing
     # module imports, NOT import namespace and NOT package/manifest admission.

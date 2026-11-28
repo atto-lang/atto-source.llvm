@@ -84,8 +84,8 @@ const CASES: &[Case] = &[
     },
 ];
 
-fn run_case(compiler: &Path, root: &Path, case: Case) -> Result<(), String> {
-    let fixture = root.join(format!("{}.ores", case.name));
+fn run_case(compiler: &Path, root: &Path, case: Case, extension: &str) -> Result<(), String> {
+    let fixture = root.join(format!("{}.{}", case.name, extension));
     fs::write(&fixture, format!("{}\n", case.source))
         .map_err(|e| format!("{}: write fixture: {e}", case.name))?;
 
@@ -127,6 +127,14 @@ fn main() {
         eprintln!("native Task borrow contract failed: expected compiler executable argument");
         std::process::exit(2);
     };
+    let extension = match args.next().as_deref() {
+        None => "ores",
+        Some(flag) if flag == std::ffi::OsStr::new("--source-ext=atto") => "atto",
+        Some(other) => {
+            eprintln!("native Task borrow contract failed: unsupported extension flag {other:?}");
+            std::process::exit(2);
+        }
+    };
     if args.next().is_some() {
         eprintln!("native Task borrow contract failed: unexpected extra arguments");
         std::process::exit(2);
@@ -142,7 +150,7 @@ fn main() {
     };
 
     for case in CASES {
-        if let Err(err) = run_case(&compiler, temp.path(), *case) {
+        if let Err(err) = run_case(&compiler, temp.path(), *case, extension) {
             eprintln!("native Task borrow contract failed: {err}");
             std::process::exit(1);
         }

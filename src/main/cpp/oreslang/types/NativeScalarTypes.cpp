@@ -91,6 +91,12 @@ void validate_native_scalar_types(const Program& program) {
         const auto evaluate = [&]() -> Type {
         using E = Expression::Kind;
         switch (e.kind) {
+            case E::ClosedRecur:
+                if (!program.actors.empty() || !program.classes.empty() ||
+                    !program.cooperative_loops.empty() || !program.generators.empty() ||
+                    !valid_closed_recur(e))
+                    fail(e.offset, "E_VALUE_LOOP_PROFILE: closed recur requires standalone scalar code");
+                return scalar(false);
             case E::SumConstruct: {
                 const auto& type = native_sum(program, e.sum_type);
                 const bool option = type.kind == NativeSumType::Kind::Option;
@@ -141,6 +147,16 @@ void validate_native_scalar_types(const Program& program) {
             case E::Field: return field_type(expression(*e.left, locals), e.name, e.offset);
             case E::Copy: case E::Take: case E::Share: case E::Borrow: case E::BorrowMut:
                 return expression(*e.left, locals);
+            case E::DeepCopy: {
+                const auto operand = expression(*e.left, locals);
+                if (operand.kind != Kind::Int && operand.kind != Kind::Bool)
+                    fail(e.offset, "E_COPY_GRAPH_UNPROVEN: copy!! requires an int or bool value");
+                return operand;
+            }
+            case E::Abs:
+                if (!e.left) fail(e.offset, "abs requires an operand");
+                require(expression(*e.left, locals), scalar(false), e.offset, "abs requires int");
+                return scalar(false);
             case E::Negate:
                 require(expression(*e.left, locals), scalar(false), e.offset, "unary - requires int");
                 return scalar(false);

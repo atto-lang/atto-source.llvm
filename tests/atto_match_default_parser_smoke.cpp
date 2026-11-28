@@ -114,6 +114,40 @@ int main(int argc, char** argv) {
         }
         ++checked;
     }
+    // Actual native parser admissions for the restricted scalar pipeline slice.
+    // These are not AOT execution receipts.
+    struct PipelineCase { std::string expr; bool accept; };
+    const std::vector<PipelineCase> pipelines{
+        {"2 |> match<int> over { on 1 -> 11, on 2 -> 42, default -> 99, }", true},
+        {"2 |> match over on 2 -> 41, default -> 0, end |> increment", true},
+        {"2 |> match over { on 2 -> { 41; }, default -> 0, } |> increment", true},
+        {"match<int> 2 over { on 2 -> 42, default -> 0, }", true},
+        {"2 |> match over { on 2 -> 42, }", false},
+        {"2 |> match 2 over { on 2 -> 42, default -> 0, }", false},
+        {"2 |> match over { default -> 0, on 2 -> 42, }", false},
+        {"2 |> match over { on 2 -> 42, default -> 0, end", false},
+        {"increment(1) |> match over { on 2 -> 42, default -> 0, }", false},
+        {"42 |> match over { on 42 -> 100; is int -> -20; }", true},
+        {"7 |> match over { on 42 -> 100; on is int -> -20; }", true},
+        {"true |> match over { is bool -> 42; }", true},
+        {"7 |> match over { is bool -> 42; }", false},
+        {"7 |> match over { is int -> 42; on _ -> 0; }", false},
+        {"7 |> match over { 7 -> 42; on _ -> 0; }", false},
+        {"7 |> match over { _ -> 42; }", false}
+    };
+    for (const auto& c : pipelines) {
+        bool accepted = false;
+        try {
+            const auto source = "fnc increment(int n): int { return n + 1; } "
+                "pub fnc main(): int { return " + c.expr + "; }";
+            accepted = !oreslang::parse_program(source).functions.empty();
+        } catch (const std::exception&) {}
+        if (accepted != c.accept) {
+            std::cerr << "FAIL pipeline fixture: " << c.expr << "\n";
+            return 1;
+        }
+        ++checked;
+    }
     std::cout << "ATTO_NATIVE_MATCH_DEFAULT_PARSER_PASS checked=" << checked
               << " GUEST_AOT_NOT_EXECUTED\n";
     return 0;

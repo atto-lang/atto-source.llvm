@@ -1,3 +1,4 @@
+#include "oreslang/types/NativeNumericErrorAbi.hpp"
 #include "oreslang/backend/LlvmCodegen.hpp"
 #include "oreslang/backend/PointerIntCodegen.hpp"
 #include "oreslang/backend/NativeFlatClasses.hpp"
@@ -39,6 +40,15 @@ namespace oreslang {
 
 // Guest identifiers exclude $, so native selector suffixes cannot alias source names.
 namespace {
+
+template <typename Map>
+const typename Map::mapped_type& require_native_entry(const Map& map,
+        const std::string& key, const char* context) {
+    const auto found = map.find(key);
+    if (found == map.end())
+        throw std::out_of_range(std::string("native lowering missing ") + context + " for '" + key + "'");
+    return found->second;
+}
 
 std::string field_key(const std::string& receiver, const std::string& field) {
     return receiver + "." + field;
@@ -90,12 +100,13 @@ struct RegionMoveLowering {
     // Source-owned Box<int> identifiers remain non-Copy even though the
     // native owned region stores their values as opaque generation tokens.
     const std::unordered_set<std::string>* native_box_names = nullptr;
+    bool hosted_trap_arithmetic = false;
 };
 
 llvm::Value* receiver_array_region(const Expression& receiver, const RegionMoveLowering* moves) {
     if (receiver.kind == Expression::Kind::Field && receiver.left &&
             moves->class_array_regions)
-        return moves->class_array_regions->at(native_place_key(*receiver.left));
+        return require_native_entry(*moves->class_array_regions, native_place_key(*receiver.left), "array receiver region");
     return moves->array_region;
 }
 
@@ -108,11 +119,11 @@ llvm::Value* array_handle_address(const Expression& receiver,
     if (!moves) throw std::runtime_error("native Array<int> operation lacks region");
     if (receiver.kind == Expression::Kind::Variable && moves->array_names &&
             moves->array_names->count(receiver.name))
-        return storage.at(receiver.name);
+        return require_native_entry(storage, receiver.name, "array receiver storage");
     if (receiver.kind == Expression::Kind::Field && receiver.left &&
             moves->array_fields) {
         const std::string key = native_place_key(receiver);
-        if (moves->array_fields->count(key)) return fields.at(key);
+        if (moves->array_fields->count(key)) return require_native_entry(fields, key, "array field storage");
     }
     throw std::runtime_error("native Array<int> receiver is not an owned place");
 }
@@ -163,6 +174,36 @@ llvm::Value* checked_signed_arithmetic(llvm::IRBuilder<>& builder,
     return value;
 }
 
+// Closed trap expressions have no calls, owners or suspension. The shared
+// overflow edge short-circuits later operands; ordinary lowering is unchanged.
+llvm::Value* lower_trapped_overflow(const Expression& e, llvm::IRBuilder<>& builder,
+                                    llvm::Type* i64, llvm::BasicBlock* failure) {
+    using K = Expression::Kind;
+    if (e.kind == K::Integer)
+        return llvm::ConstantInt::getSigned(i64, e.integer);
+    const bool negate = e.kind == K::Negate;
+    if (!negate && e.kind != K::Add && e.kind != K::Subtract && e.kind != K::Multiply)
+        throw std::runtime_error("unproved arithmetic operand in native trap");
+    if (!e.left || (!negate && !e.right))
+        throw std::runtime_error("incomplete native trap arithmetic");
+    auto* lhs = negate ? llvm::ConstantInt::get(i64, 0)
+                       : lower_trapped_overflow(*e.left, builder, i64, failure);
+    auto* rhs = lower_trapped_overflow(negate ? *e.left : *e.right, builder, i64, failure);
+    const auto op = negate || e.kind == K::Subtract ? llvm::Intrinsic::ssub_with_overflow
+        : e.kind == K::Multiply ? llvm::Intrinsic::smul_with_overflow
+        : llvm::Intrinsic::sadd_with_overflow;
+    auto* module = builder.GetInsertBlock()->getModule();
+    auto* function = builder.GetInsertBlock()->getParent();
+    auto* intrinsic = native_intrinsic(*module, op, {i64});
+    auto* checked = builder.CreateCall(intrinsic, {lhs, rhs}, "trap.arithmetic.checked");
+    auto* value = builder.CreateExtractValue(checked, {0}, "trap.arithmetic.value");
+    auto* overflow = builder.CreateExtractValue(checked, {1}, "trap.arithmetic.overflow");
+    auto* proceed = llvm::BasicBlock::Create(builder.getContext(), "trap.arithmetic.ok", function);
+    builder.CreateCondBr(overflow, failure, proceed);
+    builder.SetInsertPoint(proceed);
+    return value;
+}
+
 llvm::Value* lower(const Expression& expr,
                    llvm::IRBuilder<>& builder,
                    llvm::Type* i64,
@@ -176,15 +217,47 @@ llvm::Value* lower(const Expression& expr,
             // or silently reinterpret an unrelated native handle.
             return lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
         case Expression::Kind::SumConstruct: {
-            // Independent backend gate: a trap-origin Ok may only wrap the
-            // statically total integer subset. Never accidentally catch host,
-            // ordinary guest, panic or cancellation errors by fabricating Some.
-            if (expr.trap_origin && (expr.name != "Ok" ||
-                    expr.arguments.size() != 1 ||
-                    !native_trap_pure_integer(*expr.arguments.front()) ||
-                    expr.sum_type != "Result<int,Error>"))
-                throw std::runtime_error("unproved native trap AST reached LLVM codegen");
             const auto& type = native_sum(*moves->sum_program, expr.sum_type);
+            // Only the compiler-owned closed trap slice may mint this Error
+            // carrier. Do not admit calls, host effects or arbitrary Error objects.
+            if ((type.trap_error && !expr.trap_origin) ||
+                    (expr.trap_origin && (!type.trap_error ||
+                    type.kind != NativeSumType::Kind::Result ||
+                    type.value_type != ScalarType::I64 || expr.name != "Ok" ||
+                    expr.arguments.size() != 1 || !expr.arguments.front() ||
+                    !native_trap_pure_integer(*expr.arguments.front()) ||
+                    expr.sum_type != "Result<int,Error>")))
+                throw std::runtime_error("unproved native trap AST reached LLVM codegen");
+            if (expr.trap_origin && moves->hosted_trap_arithmetic &&
+                    expr.arguments.front()->kind != Expression::Kind::Integer) {
+                // Stable arithmetic Error ABI ID; still opaque to source.
+                constexpr auto overflow_id = static_cast<std::uint32_t>(types::NativeNumericError::ArithmeticOverflow);
+                auto* function = builder.GetInsertBlock()->getParent();
+                auto* failed = llvm::BasicBlock::Create(builder.getContext(), "trap.arithmetic.err", function);
+                auto* join = llvm::BasicBlock::Create(builder.getContext(), "trap.arithmetic.result", function);
+                auto* payload = lower_trapped_overflow(*expr.arguments.front(), builder, i64, failed);
+                auto* success = builder.GetInsertBlock();
+                builder.CreateBr(join);
+                builder.SetInsertPoint(failed);
+                builder.CreateBr(join);
+                builder.SetInsertPoint(join);
+                auto* tag = builder.CreatePHI(i64, 2, "trap.result.tag");
+                auto* ok = builder.CreatePHI(i64, 2, "trap.result.ok");
+                auto* error = builder.CreatePHI(i64, 2, "trap.result.error");
+                tag->addIncoming(llvm::ConstantInt::get(i64, 0), success);
+                tag->addIncoming(llvm::ConstantInt::get(i64, 1), failed);
+                ok->addIncoming(payload, success);
+                ok->addIncoming(llvm::ConstantInt::get(i64, 0), failed);
+                error->addIncoming(llvm::ConstantInt::get(i64, 0), success);
+                error->addIncoming(llvm::ConstantInt::get(i64, overflow_id), failed);
+                auto* fields = entry_alloca(builder, i64, llvm::ConstantInt::get(i64, 3), "trap.result.fields");
+                builder.CreateStore(tag, fields);
+                builder.CreateStore(ok, builder.CreateGEP(i64, fields, llvm::ConstantInt::get(i64, 1)));
+                builder.CreateStore(error, builder.CreateGEP(i64, fields, llvm::ConstantInt::get(i64, 2)));
+                return builder.CreateCall(moves->record_new,
+                    {llvm::ConstantInt::get(i64, moves->record_schemas->at(expr.sum_type)),
+                     llvm::ConstantInt::get(i64, 3), fields}, "trap.result");
+            }
             const bool option = type.kind == NativeSumType::Kind::Option;
             const std::size_t count = option ? 2 : 3;
             const bool error = expr.name == "Err";
@@ -227,7 +300,7 @@ llvm::Value* lower(const Expression& expr,
                     // Literal message (enforced by the sum resolver) to stderr, then the
                     // same abort path as unwrap. Java appends ": <payload>"; this slice does not.
                     const std::string message = expr.arguments[0]->name + "\n";
-                    auto* text = builder.CreateGlobalStringPtr(message, "expect.message");
+                    auto* text = native_global_string_ptr(builder, message, "expect.message");
                     auto write = function->getParent()->getOrInsertFunction("write", llvm::FunctionType::get(
                         i64, {builder.getInt32Ty(), builder.getPtrTy(), i64}, false));
                     builder.CreateCall(write, {builder.getInt32(2), text, llvm::ConstantInt::get(i64, message.size())});
@@ -286,7 +359,7 @@ llvm::Value* lower(const Expression& expr,
         }
         case Expression::Kind::String: {
             auto* module = builder.GetInsertBlock()->getModule();
-            auto* bytes = builder.CreateGlobalStringPtr(expr.name, "string.literal");
+            auto* bytes = native_global_string_ptr(builder, expr.name, "string.literal");
             auto runtime = module->getOrInsertFunction("ores_string_literal",
                 llvm::FunctionType::get(i64, {bytes->getType(), i64}, false));
             return builder.CreateCall(runtime, {bytes, llvm::ConstantInt::get(i64, expr.name.size())}, "string.handle");
@@ -330,7 +403,7 @@ llvm::Value* lower(const Expression& expr,
                     llvm::ConstantInt::get(i64, moves->record_schemas->at(cls.name)),
                     llvm::ConstantInt::get(i64, cls.fields.size()), values}, "return.record.handle");
             }
-            llvm::Value* stored = builder.CreateLoad(i64, storage.at(expr.name),
+            llvm::Value* stored = builder.CreateLoad(i64, require_native_entry(storage, expr.name, "variable storage"),
                 expr.name + ".read");
             if (moves && moves->live_flags &&
                     moves->live_flags->count(expr.name))
@@ -493,6 +566,7 @@ llvm::Value* lower(const Expression& expr,
             return builder.CreateSelect(negative, negated, value, "abs");
         }
         case Expression::Kind::Copy:
+        case Expression::Kind::DeepCopy:
         case Expression::Kind::Share:
             return lower(*expr.left, builder, i64, storage, field_storage, functions, moves);
         case Expression::Kind::Take: {
@@ -697,6 +771,76 @@ llvm::Value* lower(const Expression& expr,
             result->addIncoming(rightCanonical, rhsExit);
             return result;
         }
+        case Expression::Kind::ClosedRecur: {
+            if (!valid_closed_recur(expr))
+                throw std::runtime_error("E_VALUE_LOOP_PROFILE: invalid closed recur lowering");
+            using K = Expression::Kind;
+            std::unordered_map<std::string, llvm::Value*> state;
+            auto operand = [&](auto&& self, const Expression& e) -> llvm::Value* {
+                if (e.kind == K::Integer) return llvm::ConstantInt::getSigned(i64, e.integer);
+                if (e.kind == K::Boolean) return llvm::ConstantInt::get(i64, e.boolean ? 1 : 0);
+                if (e.kind == K::Variable) return state.at(e.name);
+                auto* lhs = self(self, *e.left);
+                if (e.kind == K::Negate)
+                    return checked_signed_arithmetic(builder, llvm::Intrinsic::ssub_with_overflow,
+                        llvm::ConstantInt::get(i64, 0), lhs, "recur.neg");
+                auto* rhs = self(self, *e.right);
+                llvm::Value* cmp = nullptr;
+                switch (e.kind) {
+                    case K::Add: return checked_signed_arithmetic(builder, llvm::Intrinsic::sadd_with_overflow, lhs, rhs, "recur.add");
+                    case K::Subtract: return checked_signed_arithmetic(builder, llvm::Intrinsic::ssub_with_overflow, lhs, rhs, "recur.sub");
+                    case K::Multiply: return checked_signed_arithmetic(builder, llvm::Intrinsic::smul_with_overflow, lhs, rhs, "recur.mul");
+                    case K::Equal: cmp = builder.CreateICmpEQ(lhs, rhs); break;
+                    case K::NotEqual: cmp = builder.CreateICmpNE(lhs, rhs); break;
+                    case K::Less: cmp = builder.CreateICmpSLT(lhs, rhs); break;
+                    case K::LessEqual: cmp = builder.CreateICmpSLE(lhs, rhs); break;
+                    case K::Greater: cmp = builder.CreateICmpSGT(lhs, rhs); break;
+                    case K::GreaterEqual: cmp = builder.CreateICmpSGE(lhs, rhs); break;
+                    default: throw std::runtime_error("invalid closed recur operand");
+                }
+                return builder.CreateZExt(cmp, i64);
+            };
+            std::vector<llvm::Value*> initial;
+            for (std::size_t i = 0; i < expr.recur_names.size(); ++i) {
+                auto* v = operand(operand, *expr.recur_initializers[i]);
+                initial.push_back(v);
+                state.emplace(expr.recur_names[i], v);
+            }
+            auto* entry = builder.GetInsertBlock();
+            auto* fn = entry->getParent();
+            auto* header = llvm::BasicBlock::Create(builder.getContext(), "recur.header", fn);
+            auto* join = llvm::BasicBlock::Create(builder.getContext(), "recur.join", fn);
+            builder.CreateBr(header);
+            builder.SetInsertPoint(header);
+            std::vector<llvm::PHINode*> phis;
+            for (std::size_t i = 0; i < initial.size(); ++i) {
+                auto* phi = builder.CreatePHI(i64, 2, "recur.state");
+                phi->addIncoming(initial[i], entry);
+                phis.push_back(phi);
+                state.at(expr.recur_names[i]) = phi;
+            }
+            std::vector<std::pair<llvm::Value*, llvm::BasicBlock*>> exits;
+            for (std::size_t i = 0; i < expr.recur_predicates.size(); ++i) {
+                auto* condition = operand(operand, *expr.recur_predicates[i]);
+                auto* taken = llvm::BasicBlock::Create(builder.getContext(), "recur.break", fn);
+                auto* next = llvm::BasicBlock::Create(builder.getContext(), "recur.next", fn);
+                builder.CreateCondBr(builder.CreateICmpNE(condition, llvm::ConstantInt::get(i64, 0)), taken, next);
+                builder.SetInsertPoint(taken);
+                auto* value = operand(operand, *expr.recur_results[i]);
+                exits.emplace_back(value, builder.GetInsertBlock());
+                builder.CreateBr(join);
+                builder.SetInsertPoint(next);
+            }
+            std::vector<llvm::Value*> updates;
+            for (const auto& update : expr.recur_updates) updates.push_back(operand(operand, *update));
+            auto* backedge = builder.GetInsertBlock();
+            for (std::size_t i = 0; i < phis.size(); ++i) phis[i]->addIncoming(updates[i], backedge);
+            builder.CreateBr(header);
+            builder.SetInsertPoint(join);
+            auto* result = builder.CreatePHI(i64, static_cast<unsigned>(exits.size()), "recur.result");
+            for (const auto& exit : exits) result->addIncoming(exit.first, exit.second);
+            return result;
+        }
         case Expression::Kind::Conditional: {
             // Type admission has proven a bool condition and compatible arm
             // result types; ownership admission has proven a valid affine join.
@@ -746,7 +890,7 @@ llvm::Value* lower(const Expression& expr,
         case Expression::Kind::Call: {
             const std::string call_selector = native_function_slot(
                 expr.name, expr.arguments.size());
-            llvm::Function* callee = functions.at(call_selector);
+            llvm::Function* callee = require_native_entry(functions, call_selector, "call declaration");
             if (moves && moves->frozen_scalar_dispatch) {
                 const auto* witness = moves->frozen_scalar_dispatch->find_direct(call_selector);
                 if (witness) {
@@ -772,9 +916,9 @@ llvm::Value* lower(const Expression& expr,
             }
             const std::vector<std::size_t> no_hidden;
             const auto& hidden = moves && moves->class_array_parameters
-                ? moves->class_array_parameters->at(native_function_slot(expr.name, expr.arguments.size())) : no_hidden;
+                ? require_native_entry(*moves->class_array_parameters, call_selector, "call region parameters") : no_hidden;
             const bool owning = moves && moves->owning_results &&
-                moves->owning_results->at(native_function_slot(expr.name, expr.arguments.size()));
+                require_native_entry(*moves->owning_results, call_selector, "call owning-result metadata");
             if (callee->arg_size() != expr.arguments.size() + hidden.size() + (owning ? 2 : 0)) {
                 throw std::runtime_error("native named call argument count mismatch");
             }
@@ -842,25 +986,31 @@ llvm::Value* lower(const Expression& expr,
 
 } // namespace
 
-std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
+static std::string emit_verified_llvm_ir_impl(const Program& source, bool wasm32_target,
                                   bool cortex_m_target,
                                   bool bounded_allocator_provider,
                                   const std::string& isolate_entry,
                                   bool actor_region_v1,
                                   const std::vector<CheckedSourceRoutineV1>& checked_routines,
                                   const std::vector<CheckedLogSiteV1>& checked_sites,
-                                  bool tenant_vm_guest) {
+                                  bool tenant_vm_guest,
+                                  const std::unordered_set<std::string>& interface_declarations,
+                                  const char* hosted_linux_triple = nullptr) {
+    if (hosted_linux_triple && (wasm32_target || cortex_m_target || bounded_allocator_provider ||
+            tenant_vm_guest || !isolate_entry.empty() || actor_region_v1 ||
+            !checked_routines.empty() || !checked_sites.empty() || !interface_declarations.empty()))
+        throw std::runtime_error("hosted Linux cross target conflicts with unqualified lowering profile");
     for (const auto& fn : source.functions)
         for (const auto& binding : fn.locals)
             if (binding.native_box_i64 &&
                     (wasm32_target || cortex_m_target ||
-                     !isolate_entry.empty() || tenant_vm_guest || sizeof(void*) != 8 ||
+                     !isolate_entry.empty() || tenant_vm_guest || hosted_linux_triple || sizeof(void*) != 8 ||
                      fn.name != "main" || !fn.parameters.empty()))
                 throw std::runtime_error(
                     "ATTO_BOX_MAIN_V1_REJECT: Box<int> requires hosted native 64-bit main ABI");
     if (source.pointer_int_plan) {
         if (wasm32_target || cortex_m_target || bounded_allocator_provider ||
-                tenant_vm_guest || !source.functions.empty() ||
+                tenant_vm_guest || hosted_linux_triple || !source.functions.empty() ||
                 !source.actors.empty() || !source.classes.empty() ||
                 !source.imports.empty())
             throw std::runtime_error(
@@ -1092,6 +1242,14 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
             throw std::runtime_error("reserved isolate ABI symbol collision");
     if (!source.imports.empty())
         throw std::runtime_error("unresolved native module imports cannot reach LLVM emission");
+    // Compiler/runtime-only frame symbols carry trusted actor-turn authority.
+    // Guest functions must not impersonate them or link against raw frame
+    // tokens, including in scalar-only modules without declared actors.
+    for (const auto& fn : source.functions)
+        if (fn.name.compare(0, sizeof("oreslang_source_actor_frame_") - 1,
+                            "oreslang_source_actor_frame_") == 0)
+            throw std::runtime_error("reserved native actor frame ABI symbol collision");
+
     for (const auto& actor : source.actors) {
         // The frontend can stage one typed, capture-free actor Task and its
         // explicit 'return await' edge, but a synchronous on_message ABI
@@ -1108,7 +1266,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     }
     if (wasm32_target && cortex_m_target) throw std::runtime_error("conflicting LLVM target selectors");
     if (source.functions.size() == 1 && source.functions.front().scalar_while) {
-        if (wasm32_target || !source.classes.empty() || !source.actors.empty())
+        if (wasm32_target || hosted_linux_triple || !source.classes.empty() || !source.actors.empty())
             throw std::runtime_error("experimental scalar loop unsupported target/owners");
         return emit_scalar_while_frame_llvm_ir(*source.functions.front().scalar_while);
     }
@@ -1359,6 +1517,25 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 || actual.isLittleEndian() != (profile.endian() == "little"))
             throw std::runtime_error("wasm32 target ABI/data layout mismatch");
     }
+    if (hosted_linux_triple) {
+        // Same IR as the host target, stamped for another hosted Linux machine.
+        // The guest heap word stays 32-bit on every one of these (Offset32).
+        if (wasm32_target || cortex_m_target || tenant_vm_guest || bounded_allocator_provider)
+            throw std::runtime_error("hosted Linux cross target conflicts with another target selector");
+        const auto profile = TargetAbi::parse(hosted_linux_triple);
+        if (!profile.experimental_hosted_linux_ir())
+            throw std::runtime_error("target has no hosted Linux IR lowering");
+#if LLVM_VERSION_MAJOR >= 21
+        module.setTargetTriple(llvm::Triple(std::string(profile.triple())));
+#else
+        module.setTargetTriple(std::string(profile.triple()));
+#endif
+        module.setDataLayout(std::string(profile.data_layout()));
+        const auto& actual = module.getDataLayout();
+        if (actual.getPointerSizeInBits(0) != profile.pointer_bits()
+                || actual.isLittleEndian() != (profile.endian() == "little"))
+            throw std::runtime_error("hosted Linux target ABI/data layout mismatch");
+    }
     auto* i64 = llvm::Type::getInt64Ty(context);
     llvm::Type* i32 = llvm::Type::getInt32Ty(context);
     llvm::Type* loan_ptr = native_pointer_type(context, i64);
@@ -1546,6 +1723,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     llvm::FunctionCallee sourceSpawn, sourceSend, sourceStop, sourceRequestStop,
         sourceAwaitReady, sourceAwaitDone;
     llvm::FunctionCallee actorScopedNew, actorScopedDrop;
+    llvm::FunctionCallee actorFramePush, actorFrameStore, actorFrameLoad, actorFramePop;
     std::unordered_map<std::string, llvm::Function*> actorInits, actorHandlers;
     if (!source.actors.empty() && wasm32_target && tenant_vm_guest) {
         // References are i64 here, and name actors only within the caller's own VM. Each import is
@@ -1571,6 +1749,18 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         actorScopedDrop = module.getOrInsertFunction("ores_actor_i64_heap_scoped_drop",
             llvm::FunctionType::get(voidTy,
                 {native_ptr, i64, i64, native_ptr}, false));
+        // First preallocated actor-owned logical frame ABI: source receiver
+        // scalar message crosses the frame, not just a carrier C alloca.
+        // The SourceActorBootstrap binding authenticates the physical turn.
+        // These calls are statically linked; no runtime compiler/JIT is used.
+        actorFramePush = module.getOrInsertFunction("oreslang_source_actor_frame_push",
+            llvm::FunctionType::get(i32, {}, false));
+        actorFrameStore = module.getOrInsertFunction("oreslang_source_actor_frame_store_i64",
+            llvm::FunctionType::get(i32, {i64}, false));
+        actorFrameLoad = module.getOrInsertFunction("oreslang_source_actor_frame_load_i64",
+            llvm::FunctionType::get(i32, {native_ptr}, false));
+        actorFramePop = module.getOrInsertFunction("oreslang_source_actor_frame_pop",
+            llvm::FunctionType::get(i32, {}, false));
         sourceSpawn = module.getOrInsertFunction("oreslang_source_actor_spawn_id",
             llvm::FunctionType::get(i64, {native_ptr, native_ptr, i64}, false));
         sourceSend = module.getOrInsertFunction("oreslang_source_actor_send_id",
@@ -1758,7 +1948,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         // C ABI symbol stays an external declaration. It must be satisfied
         // by the already-approved statically linked object, never by source
         // code, an inferred symbol alias, or a generated empty function body.
-        if (fn.foreign_import) continue;
+        if (fn.foreign_import || interface_declarations.count(fn.name)) continue;
         llvm::Function* function = declarations.at(native_function_slot(fn.name, fn.parameters.size()));
         llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", function);
         llvm::IRBuilder<> builder(entry);
@@ -1825,13 +2015,15 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         // converted from a host address. Linear ActorRef cannot escape into
         // source scalar values, native calls, or foreign FFI.
         std::unordered_map<std::string, llvm::Value*> actorRefs;
-        for (const auto& spawn : fn.actor_spawns) {
+        auto emit_actor_spawn = [&](const ActorSpawnBinding& spawn) {
+            if (tenant_vm_guest && spawn.after_actor_effect)
+                throw std::runtime_error("late actor spawn requires physical host stop semantics");
             if (tenant_vm_guest) {
                 const auto kind = std::find_if(source.actors.begin(), source.actors.end(),
                     [&](const ActorDecl& a) { return a.name == spawn.actor_type; }) - source.actors.begin();
                 actorRefs.emplace(spawn.name, builder.CreateCall(sourceSpawn,
                     {llvm::ConstantInt::get(i64, static_cast<std::uint64_t>(kind))}, spawn.name + ".actor.ref"));
-                continue;
+                return;
             }
             llvm::Value* ctor = builder.CreatePointerCast(actorInits.at(spawn.actor_type),
                 native_ptr);
@@ -1845,7 +2037,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                         actor->fields.size() + actor->on_message.locals.size())},
                 spawn.name + ".actor.checked.id");
             actorRefs.emplace(spawn.name, ref);
-        }
+        };
+        for (const auto& spawn : fn.actor_spawns)
+            if (!spawn.after_actor_effect) emit_actor_spawn(spawn);
         // An explicitly "owned int" lives in a bounded native C region;
         // ordinary int remains stack-owned. Both allow only call-scoped loans.
         struct LocalSlot {
@@ -1993,6 +2187,9 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         region_moves.native_box_names = &native_box_names;
         region_moves.sum_program = &source;
         region_moves.sum_check = sum_check;
+        region_moves.hosted_trap_arithmetic = !wasm32_target && !cortex_m_target &&
+            !bounded_allocator_provider && !tenant_vm_guest && !actor_region_v1 &&
+            source.actors.empty();
         region_moves.frozen_scalar_dispatch = &frozen_i64_dispatch;
         region_moves.frozen_scalar_callees = &frozen_scalar_callees;
         region_moves.frozen_scalar_symbols = &frozen_scalar_symbols;
@@ -2486,7 +2683,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                         result = (result << 8) | id.bytes[k];
                     return result;
                 };
-                auto* literal = builder.CreateGlobalStringPtr(
+                auto* literal = native_global_string_ptr(builder, 
                     effect.telemetry_operation, "atto.telemetry.log.literal");
                 auto* siteCall = builder.CreateCall(telemetryLog, {
                     llvm::ConstantInt::get(i64, lane(rid, 0)),
@@ -2552,7 +2749,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                         storage, field_storage, declarations, &region_moves);
                 }
                 init = new_checked_array(local.name);
-                result.array_shadow = array_failure_places.at(local.name);
+                result.array_shadow = require_native_entry(array_failure_places, local.name, "scoped array cleanup shadow");
                 array_names.insert(local.name);
                 if (local.initializer) {
                     if (!array_region || !array_failure || !array_failure_status)
@@ -2692,7 +2889,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 if (!has_native_telemetry || !telemetryBegin.getCallee()
                         || !telemetryEnd.getCallee())
                     throw std::runtime_error("LLVM native telemetry ABI missing");
-                llvm::Value* name = builder.CreateGlobalStringPtr(
+                llvm::Value* name = native_global_string_ptr(builder, 
                     stmt.telemetry_operation, "atto.telemetry.operation");
                 llvm::Value* token = builder.CreateCall(
                     telemetryBegin,
@@ -2956,10 +3153,12 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                 },
                 "future.await.done.result");
         } else {
-            // Emit observable actor effects in source order. Reordering all
-            // sends ahead of all stops executes stopped workers' messages.
+            // Emit observable actor effects in source order, including
+            // late construction after the earlier actor physically retires.
             for (const auto& action : fn.actor_actions) {
-                if (action.kind == ActorAction::Kind::Send) {
+                if (action.kind == ActorAction::Kind::Spawn) {
+                    emit_actor_spawn(fn.actor_spawns.at(action.index));
+                } else if (action.kind == ActorAction::Kind::Send) {
                     const auto& send = fn.actor_sends.at(action.index);
                     llvm::Value* payload = lower(
                         *send.payload,
@@ -3050,15 +3249,15 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
                     llvm::Value* source_place = nullptr;
                     if (expr.kind == Expression::Kind::Variable) {
                         source_key = field_key(expr.name, field.name);
-                        source_place = field_storage.at(source_key);
+                        source_place = require_native_entry(field_storage, source_key, "owning return field storage");
                     } else {
-                        source_key = constructor_sources.at(field.name);
-                        source_place = storage.count(source_key) ? storage.at(source_key) : field_storage.at(source_key);
+                        source_key = require_native_entry(constructor_sources, field.name, "owning return constructor source");
+                        source_place = storage.count(source_key) ? require_native_entry(storage, source_key, "owning return local storage") : require_native_entry(field_storage, source_key, "owning return projected storage");
                     }
                     auto* index = llvm::ConstantInt::get(i64, position++);
                     builder.CreateStore(destination, builder.CreateGEP(loan_ptr, destinations, index));
                     builder.CreateStore(source_place, builder.CreateGEP(loan_ptr, sources, index));
-                    shadows.push_back(array_failure_places.at(source_key));
+                    shadows.push_back(require_native_entry(array_failure_places, source_key, "owning return cleanup shadow"));
                 } else {
                     auto* value = expr.kind == Expression::Kind::Variable
                         ? builder.CreateLoad(i64, field_storage.at(field_key(expr.name, field.name)))
@@ -3645,10 +3844,27 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
         llvm::Value* currentDomain = &*args++;
         llvm::Value* currentEpoch = &*args++;
         llvm::Value* incoming = &*args++;
+        // Actor-owned frame entry/exit is emitted by LLVM, not discovered via
+        // reflection or host-side interpretation. Fail closed before user
+        // effects if frame quota/admission fails. This v1 profile supports
+        // synchronous scalar handlers only, not pinned suspendable locals.
+        auto guard_frame = [&](llvm::Value* admitted, const std::string& name) {
+            auto* ok = llvm::BasicBlock::Create(context, name + ".ok", handler);
+            auto* denied = llvm::BasicBlock::Create(context, name + ".denied", handler);
+            builder.CreateCondBr(
+                builder.CreateICmpNE(admitted, llvm::ConstantInt::get(i32, 0)),
+                ok, denied);
+            builder.SetInsertPoint(denied);
+            builder.CreateRet(llvm::ConstantInt::get(i64, 0));
+            builder.SetInsertPoint(ok);
+        };
+        guard_frame(builder.CreateCall(actorFramePush), "actor.frame.push");
         std::unordered_map<std::string, llvm::Value*> values, emptyFields;
         const std::string param = actor.on_message.parameters[0].name;
         llvm::Value* pslot = builder.CreateAlloca(i64, nullptr, param + ".slot");
-        builder.CreateStore(incoming, pslot);
+        guard_frame(builder.CreateCall(actorFrameStore, {incoming}), "actor.frame.store");
+        guard_frame(builder.CreateCall(actorFrameLoad,
+            {builder.CreatePointerCast(pslot, native_ptr)}), "actor.frame.load");
         values.emplace(param, pslot);
         for (std::size_t i=0; i<actor.fields.size(); ++i) {
             const auto& field = actor.fields[i];
@@ -3698,6 +3914,7 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
              it != actor_owned_tokens.rend(); ++it)
             builder.CreateCall(actorScopedDrop,
                 {actorHeap, currentDomain, currentEpoch, *it});
+        guard_frame(builder.CreateCall(actorFramePop), "actor.frame.pop");
         builder.CreateRet(result);
     }
 
@@ -4109,6 +4326,156 @@ std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
     module.print(output, nullptr);
     output.flush();
     return result;
+}
+
+
+std::string emit_verified_llvm_ir(const Program& source, bool wasm32_target,
+                                  bool cortex_m_target, bool bounded_allocator_provider,
+                                  const std::string& isolate_entry, bool actor_region_v1,
+                                  const std::vector<CheckedSourceRoutineV1>& checked_routines,
+                                  const std::vector<CheckedLogSiteV1>& checked_sites,
+                                  bool tenant_vm_guest, const char* hosted_linux_triple) {
+    return emit_verified_llvm_ir_impl(source, wasm32_target, cortex_m_target,
+        bounded_allocator_provider, isolate_entry, actor_region_v1,
+        checked_routines, checked_sites, tenant_vm_guest, {}, hosted_linux_triple);
+}
+
+std::string emit_verified_scalar_namespace_consumer(
+        std::string_view admitted_consumer_source,
+        const std::vector<VerifiedScalarNamespaceBinding>& bindings) {
+    // The host has already authenticated consumer bytes and interface pins.
+    // The AST is admitted afresh; no provider implementation is loaded.
+    if (admitted_consumer_source.size()>65536 || bindings.empty() || bindings.size()>32)
+        throw std::runtime_error("restricted interface consumer inventory limit");
+    auto program=parse_verified_namespace_source_unresolved(admitted_consumer_source);
+    if (program.namespace_imports.size()!=bindings.size() ||
+            !program.imports.empty() || !program.exports.empty() ||
+            !program.module.empty() || !program.namespace_name.empty() ||
+            !program.classes.empty() || !program.actors.empty() ||
+            !program.sum_types.empty() || !program.contracts.empty() ||
+            !program.conforms.empty() || !program.type_only_declarations.empty() ||
+            !program.type_constraint_descriptors.empty() ||
+            !program.generators.empty() || !program.cooperative_loops.empty() ||
+            program.pointer_int_plan || !program.inverted_structs.empty() ||
+            program.inverted_main || program.functions.size()!=1)
+        throw std::runtime_error("restricted interface consumer requires standalone scalar main");
+    auto& main=program.functions.front();
+    if (main.name!="main" || !main.exported || main.foreign_import ||
+            main.returns_void || main.return_type!=ScalarType::I64 ||
+            !main.parameters.empty() || !main.generic_parameters.empty() ||
+            !main.locals.empty() || !main.statements.empty() ||
+            !main.early_returns.empty() || main.scalar_while ||
+            !main.source_tasks.empty() || !main.future_pipelines.empty() ||
+            !main.actor_spawns.empty() || !main.actor_actions.empty() ||
+            !main.actor_sends.empty() || !main.actor_stops.empty() ||
+            !main.actor_field_writes.empty() || main.caught_throw_value ||
+            !main.caught_throw_defers.empty() || main.has_declared_effects ||
+            main.async_source_i64 || !main.c_export_u32_symbol.empty() ||
+            !main.return_class.empty() || !main.return_sum.empty() || !main.result)
+        throw std::runtime_error("restricted interface consumer requires pure i64 main expression");
+    std::unordered_map<std::string,const VerifiedScalarNamespaceBinding*> aliases;
+    std::unordered_set<std::string> used_aliases, symbols;
+    std::unordered_set<const VerifiedScalarNamespaceBinding*> selected_bindings;
+    std::map<std::string,std::string> symbol_owners;
+    for (const auto& imp : program.namespace_imports) {
+        const VerifiedScalarNamespaceBinding* selected=nullptr;
+        for (const auto& b:bindings)
+            if (b.interface.alias()==imp.package_selector) {
+                if (selected) throw std::runtime_error("ambiguous interface selector");
+                selected=&b;
+            }
+        if (!selected || !selected_bindings.insert(selected).second ||
+                !aliases.emplace(imp.local_name,selected).second)
+            throw std::runtime_error("unbound interface selector");
+    }
+    std::vector<Function> witnesses;
+    auto bind_expression=[&](const auto& self,Expression& e,std::size_t depth)->void {
+        if(depth>64)throw std::runtime_error("restricted interface expression depth");
+        using K=Expression::Kind;
+        if(e.kind==K::Integer)return;
+        if(e.kind==K::Negate && e.left){self(self,*e.left,depth+1);return;}
+        if((e.kind==K::Add||e.kind==K::Subtract||e.kind==K::Multiply)&&e.left&&e.right){
+            self(self,*e.left,depth+1);self(self,*e.right,depth+1);return;
+        }
+        if(e.kind!=K::Call||!e.arguments.empty()||e.type_arguments_present||e.pipeline_stage)
+            throw std::runtime_error("unsupported interface consumer expression");
+        const auto dot=e.name.find('.');
+        if(dot==std::string::npos)throw std::runtime_error("unqualified interface call");
+        const auto alias=e.name.substr(0,dot);
+        const auto found=aliases.find(alias);
+        if(found==aliases.end())throw std::runtime_error("unknown interface alias");
+        const auto& binding=*found->second;
+        const auto imp=std::find_if(program.namespace_imports.begin(),program.namespace_imports.end(),
+            [&](const auto& i){return i.local_name==alias;});
+        const auto symbol=package_interface::stable_scalar_link_symbol(
+            binding.interface,binding.slot,imp->namespace_name,binding.module,e.name.substr(dot+1));
+        const auto owner=symbol_owners.emplace(symbol,alias);
+        if(!owner.second && owner.first->second!=alias)
+            throw std::runtime_error("duplicate logical interface slot");
+        used_aliases.insert(alias);
+        e.name=symbol;
+        if(symbols.insert(symbol).second){
+            // Signature witness for existing type and ownership passes only.
+            // Its sentinel body never reaches LLVM code generation.
+            Function signature;
+            signature.name=symbol;signature.exported=true;
+            signature.result=std::make_unique<Expression>();
+            signature.result->kind=K::Integer;
+            signature.result->integer=0;
+            witnesses.push_back(std::move(signature));
+        }
+    };
+    bind_expression(bind_expression,*main.result,0);
+    if(used_aliases.size()!=aliases.size())
+        throw std::runtime_error("unused interface binding");
+    program.namespace_imports.clear();
+    for(auto& witness:witnesses)program.functions.push_back(std::move(witness));
+    resolve_and_validate_program(program);
+    return emit_verified_llvm_ir_impl(program,false,false,false,{},false,{},{},false,symbols);
+}
+
+
+std::string emit_verified_scalar_namespace_provider(
+        std::string_view admitted_provider_source,
+        std::string_view expected_source_sha256,
+        const VerifiedScalarNamespaceBinding& binding,
+        std::string_view namespace_name,
+        std::string_view function_name) {
+    // Both pins are selected by the trusted host, not by provider source.
+    if (admitted_provider_source.size()>65536 ||
+        !package_interface::detail::sha_hex(std::string(expected_source_sha256)) ||
+        package_interface::sha256(std::vector<std::uint8_t>(
+            admitted_provider_source.begin(),admitted_provider_source.end()))!=expected_source_sha256)
+        throw std::runtime_error("verified provider source digest mismatch");
+    const auto symbol=package_interface::stable_scalar_link_symbol(
+        binding.interface,binding.slot,namespace_name,binding.module,function_name);
+    auto p=parse_unresolved_program(admitted_provider_source);
+    if(p.module!=binding.module || !p.namespace_name.empty() ||
+        !p.namespace_imports.empty() || !p.imports.empty() || !p.exports.empty() ||
+        !p.classes.empty() || !p.actors.empty() || !p.sum_types.empty() ||
+        !p.contracts.empty() || !p.conforms.empty() || !p.type_only_declarations.empty() ||
+        !p.type_constraint_descriptors.empty() || !p.generators.empty() ||
+        !p.cooperative_loops.empty() || p.pointer_int_plan || !p.inverted_structs.empty() ||
+        p.inverted_main || p.functions.size()!=1)
+        throw std::runtime_error("restricted provider module inventory mismatch");
+    auto& fn=p.functions.front();
+    if(fn.name!=function_name || fn.name=="main" || !fn.exported ||
+        fn.foreign_import || fn.returns_void || fn.return_type!=ScalarType::I64 ||
+        !fn.parameters.empty() || !fn.generic_parameters.empty() || !fn.locals.empty() ||
+        !fn.statements.empty() || !fn.early_returns.empty() || fn.scalar_while ||
+        !fn.source_tasks.empty() || !fn.future_pipelines.empty() ||
+        !fn.actor_spawns.empty() || !fn.actor_actions.empty() || !fn.actor_sends.empty() ||
+        !fn.actor_stops.empty() || !fn.actor_field_writes.empty() || fn.caught_throw_value ||
+        !fn.caught_throw_defers.empty() || fn.has_declared_effects || fn.async_source_i64 ||
+        !fn.c_export_u32_symbol.empty() || !fn.return_class.empty() ||
+        !fn.return_sum.empty() || !fn.result || !native_trap_pure_integer(*fn.result))
+        throw std::runtime_error("restricted provider must define one public pure i64 function");
+    // Admit the source declaration before translating its compiler-owned
+    // physical name. The same checked scalar ABI is used on both sides.
+    resolve_and_validate_program(p);
+    p.module.clear();
+    p.functions.front().name=symbol;
+    return emit_verified_llvm_ir(p);
 }
 
 } // namespace oreslang

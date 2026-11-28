@@ -48,7 +48,34 @@ int main() {
         h=writer.allocate(sizeof(std::uint64_t));
         std::uint64_t x=0x1234567890abcdefull;
         writer.write(h, &x,sizeof(x));
+        reject([&] { (void)a.read(101, 7, writerGrant); });
+        reject([&] { (void)a.write(101, 7, writerGrant); });
+        reject([&] { (void)a.grant(105, 7, true, false); });
+        require(!a.try_revoke(readerGrant));
+        {
+            auto nested = other.read(104, 7, foreignGrant);
+            reject([&] { (void)a.read(101, 7, writerGrant); });
+        }
+        std::atomic<bool> foreignDenied{false};
+        std::thread alien([&] {
+            std::uint64_t value = 0;
+            try { writer.read(h, &value, sizeof(value)); }
+            catch (const std::logic_error&) { foreignDenied.store(true); }
+        });
+        alien.join();
+        require(foreignDenied.load());
+        std::uint64_t check = 0;
+        writer.read(h, &check, sizeof(check));
+        require(check == x);
         reject([&] { writer.read(h, &x,sizeof(x)-1); });
+    }
+    {
+        auto reader = a.read(102, 7, readerGrant);
+        reject([&] { (void)a.read(102, 7, readerGrant); });
+        reject([&] { (void)a.write(101, 7, writerGrant); });
+        std::uint64_t x = 0;
+        reader.read(h, &x, sizeof(x));
+        require(x == 0x1234567890abcdefull);
     }
     std::atomic<std::uint64_t> observed{0};
     std::thread otherCarrier([&] {

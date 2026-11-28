@@ -1,0 +1,4 @@
+pub fnc main(): int {
+    val Result<int,Error> good = trap! ((7 * 7) - 5 + (-2));
+    return good.is_ok() ? good.unwrap_or(0) : 0;
+}

@@ -8,11 +8,16 @@ pub fnc main(): int {
     (false || true) == true &&
     (true || false) == true &&
     (true || true) == true &&
-    (false ^^ false) == false &&
-    (false ^^ true) == true &&
-    (true ^^ false) == true &&
-    (true ^^ true) == false &&
-    (true ^^ true ^^ true) == true &&
-    (false || true ^^ true && false) == true
+    Xor(false, false) == false &&
+    Xor(false, true) == true &&
+    Xor(true, false) == true &&
+    Xor(true, true) == false &&
+    Xor(Xor(true, true), true) == true &&
+    (false || true && false) == false &&
+    (11 ^^ 4) == 15 &&
+    (-1 ^^ -1) == 0 &&
+    (11 ^^ 4 ^^ 7) == 8 &&
+    ((2 + 1) ^^ (5 * 2)) == 9 &&
+    ((-9223372036854775807 - 1) ^^ -1) == 9223372036854775807
   ) ? 42 : 7;
 }

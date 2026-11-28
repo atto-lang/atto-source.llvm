@@ -1,0 +1,3 @@
+# Current-main native DATA codec policy and decode budget port
+
+Exact C++ header/test blobs from #902 are imported after comparing current-main MessagePackWireV2.hpp line-by-line: all differences are the conservative DecodeLimits, shared cumulative expanded/element/work/depth counters and decode overload. No other runtime/actor/compiler files overwritten. Run existing portable MessagePack vectors plus new strict host policy and decode-budget tests under GCC and Clang sanitizers. This is a host/native reference, not generated Atto guest, runtime admission or supported-codec proof. Independent review required.

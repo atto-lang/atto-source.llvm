@@ -115,6 +115,8 @@ pub enum TExpr {
     /// operand type is the type of `l`
     Bin(BinOp, Box<TE>, Box<TE>),
     Ternary(Box<TE>, Box<TE>, Box<TE>),
+    /// Explicit typed IR boundary for caller-inline task execution. Never spawn.
+    InlineTask { body: Vec<TStmt>, value: Option<Box<TE>> },
     Call(u32, Vec<TE>),
     Builtin(Builtin, Box<TE>, Box<TE>),
     /// `stdio.print` / `stdio.println` of an int or bool value
@@ -330,11 +332,14 @@ struct ActorInfo {
 /// Program-wide declaration tables shared by every body check.
 struct Globals<'a> {
     sigs: BTreeMap<(String, usize), (u32, Vec<Type>, Type)>,
+    overloads: BTreeMap<(String, usize), Vec<(u32, Vec<Type>, Type)>>,
+    presence_families: BTreeMap<String, Vec<(u32, Vec<crate::call_presence_v2::Formal>, Type)>>,
     names: BTreeMap<String, Vec<usize>>,
     classes: Vec<ClassInfo>,
     enums: &'a [EnumDecl],
     actors: Vec<ActorInfo>,
     type_names: &'a [(String, Pos)],
+    native_readonly_candidate: bool,
 }
 
 /// Where the code being checked lives.
@@ -376,6 +381,9 @@ struct FnCx<'a> {
     loops: u32,
     /// First slot declared inside each enclosing loop body.
     loop_floors: Vec<u32>,
+    /// Only a statically untaken ternary arm may contain unproved signed division.
+    /// Both arms still undergo ordinary type, name and ownership checking.
+    dead_division_arm: bool,
     /// Class-typed locals whose value has been moved out.
     moved: BTreeSet<u32>,
     imports: &'a mut Vec<Import>,
@@ -640,6 +648,17 @@ fn generator_arg(f: &Func, target: &Func, args: &[Expr]) -> Option<TGenArg> {
 }
 
 pub fn check(p: &Program) -> R<TProgram> {
+    check_impl(p, false)
+}
+
+/// Candidate typed tree only. The native backend must subsequently prove
+/// the closed readonly stack-object profile before emitting any artifact.
+/// Never select this candidate checker for ordinary browser or native code.
+pub fn check_native_readonly_candidate(p: &Program) -> R<TProgram> {
+    check_impl(p, true)
+}
+
+fn check_impl(p: &Program, native_readonly_candidate: bool) -> R<TProgram> {
     // Validate the bounded CFG and integer-only suspension/lifetime profile
     // before registering signatures. Reject unsupported generator effects
     // before emission; never substitute eager iterator materialization.
@@ -744,7 +763,8 @@ pub fn check(p: &Program) -> R<TProgram> {
     let res = |t: Type| resolve(t, tn, &class_names, &p.enums, &actor_names);
 
     // ---- top-level signatures keep indices 0..funcs.len()
-    let mut sigs = BTreeMap::new();
+    let mut sigs: BTreeMap<(String, usize), (u32, Vec<Type>, Type)> = BTreeMap::new();
+    let mut overloads: BTreeMap<(String, usize), Vec<(u32, Vec<Type>, Type)>> = BTreeMap::new();
     let mut names: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (i, f) in p.funcs.iter().enumerate() {
         if matches!(f.name.as_str(), "And" | "Or" | "Xor" | "stdio" | "Ok" | "Err" | "Some" | "None") {
@@ -755,20 +775,54 @@ pub fn check(p: &Program) -> R<TProgram> {
             ));
         }
         let key = (f.name.clone(), f.params.len());
-        if sigs.contains_key(&key) {
-            return Err(Diagnostic::new(
-                f.pos,
-                "E_DUPLICATE",
-                format!(
-                    "function '{}' already has arity {}; overload identity is name + arity",
-                    f.name,
-                    f.params.len()
-                ),
-            ));
-        }
         let params = f.params.iter().map(|q| res(q.ty)).collect::<R<Vec<_>>>()?;
-        sigs.insert(key, (i as u32, params, res(f.ret)?));
-        names.entry(f.name.clone()).or_default().push(f.params.len());
+        let ret = res(f.ret)?;
+        if let Some(first) = sigs.get(&key) {
+            // This bounded profile only admits exact, concrete Copy-like
+            // caller types. Never select a generator or nominal owner by guess.
+            let admitted = |t: Type| matches!(t, Type::Int | Type::Bool | Type::Float
+                | Type::Str | Type::OptionInt | Type::OptionResultIntStr);
+            let family = overloads.entry(key.clone()).or_insert_with(|| vec![first.clone()]);
+            if f.name == "main" || f.is_generator || family.iter().any(|s| p.funcs[s.0 as usize].is_generator)
+                || !params.iter().copied().all(admitted)
+                || family.iter().any(|s| !s.1.iter().copied().all(admitted) || s.1 == params) {
+                return Err(Diagnostic::new(f.pos, "E_DUPLICATE",
+                    format!("function '{}' has duplicate or unsupported typed overload", f.name)));
+            }
+            family.push((i as u32, params, ret));
+        } else {
+            sigs.insert(key, (i as u32, params, ret));
+            names.entry(f.name.clone()).or_default().push(f.params.len());
+        }
+    }
+
+    // The full family is kept for any name with an omittable formal.
+    // Do not let the legacy name/arity table bypass provenance lowering.
+    if p.classes.iter().any(|c| c.ctor.as_ref().is_some_and(|k| k.params.iter().any(|q| q.omittable)) || c.methods.iter().any(|m| m.params.iter().any(|q| q.omittable)))
+        || p.actors.iter().any(|a| a.methods.iter().any(|m| m.params.iter().any(|q| q.omittable))) {
+        return Err(Diagnostic::new(Pos::default(), "E_UNSUPPORTED", "omittable method and constructor ABI is not implemented"));
+    }
+    let mut presence_families: BTreeMap<String, Vec<(u32, Vec<crate::call_presence_v2::Formal>, Type)>> = BTreeMap::new();
+    for f in &p.funcs {
+        if f.params.iter().any(|q| q.omittable) {
+            if f.name == "main" || f.is_generator || f.params.len() + f.params.iter().filter(|q| q.omittable).count() > crate::parser::MAX_PARAMS {
+                return Err(Diagnostic::new(f.pos, "E_UNSUPPORTED", "entrypoints, generators and over-budget hidden parameter frames cannot have omittable parameters in this slice"));
+            }
+            presence_families.entry(f.name.clone()).or_default();
+        }
+    }
+    for (i, f) in p.funcs.iter().enumerate() {
+        if let Some(family) = presence_families.get_mut(&f.name) {
+            if f.is_generator || f.params.iter().any(|q| !matches!(q.ty, Type::Int | Type::Bool | Type::Float | Type::Str | Type::OptionInt | Type::OptionResultIntStr)) || f.params.iter().any(|q| q.omittable &&
+                (q.mutable || !matches!(q.ty, Type::OptionInt | Type::OptionResultIntStr))) {
+                return Err(Diagnostic::new(f.pos, "E_UNSUPPORTED", "unsupported omittable overload family"));
+            }
+            let formals = f.params.iter().map(|q| Ok(crate::call_presence_v2::Formal {
+                ty: res(q.ty)?, omittable: q.omittable,
+                none_default: false, omission_default: false,
+            })).collect::<R<Vec<_>>>()?;
+            family.push((i as u32, formals, res(f.ret)?));
+        }
     }
 
     // ---- member function indices follow the top-level functions
@@ -926,11 +980,14 @@ pub fn check(p: &Program) -> R<TProgram> {
 
     let g = Globals {
         sigs,
+        overloads,
+        presence_families,
         names,
         classes,
         enums: &p.enums,
         actors,
         type_names: tn,
+        native_readonly_candidate,
     };
 
     let main = match g.sigs.get(&("main".to_string(), 0)) {
@@ -966,7 +1023,8 @@ pub fn check(p: &Program) -> R<TProgram> {
     // ---- top-level functions
     let mut generators = Vec::new();
     for (i, f) in p.funcs.iter().enumerate() {
-        let (_, params, ret) = g.sigs[&(f.name.clone(), f.params.len())].clone();
+        let params = f.params.iter().map(|q| res(q.ty)).collect::<R<Vec<_>>>()?;
+        let ret = res(f.ret)?;
         if f.is_generator {
             if let Some(mut plan) = generator_lower::lower(f)? {
                 plan.function = i as u32;
@@ -1005,12 +1063,15 @@ pub fn check(p: &Program) -> R<TProgram> {
             });
             continue;
         }
-        let named: Vec<(&str, Type, bool)> = f
+        let mut named: Vec<(&str, Type, bool)> = f
             .params
             .iter()
             .zip(&params)
             .map(|(q, t)| (q.name.as_str(), *t, q.mutable))
             .collect();
+        let hidden_names = f.params.iter().enumerate().filter(|(_, q)| q.omittable)
+            .map(|(i, _)| format!("\0omitted:{i}")).collect::<Vec<_>>();
+        named.extend(hidden_names.iter().map(|n| (n.as_str(), Type::Bool, false)));
         let body = body_check(
             &g,
             Owner::TopLevel,
@@ -1025,7 +1086,7 @@ pub fn check(p: &Program) -> R<TProgram> {
         )?;
         funcs[i] = Some(TFunc {
             name: f.name.clone(),
-            params,
+            params: named.iter().map(|n| n.1).collect(),
             ret,
             locals: body.1,
             body: body.0,
@@ -1174,6 +1235,7 @@ pub fn check(p: &Program) -> R<TProgram> {
         for (m, mi) in a.methods.iter().zip(&info.methods) {
             for (q, t) in m.params.iter().zip(&mi.params).map(|(q, t)| (q, *t)).chain(std::iter::once((
                 &Param {
+                    omittable: false,
                     name: String::new(),
                     ty: mi.ret,
                     mutable: false,
@@ -1267,8 +1329,11 @@ pub fn check(p: &Program) -> R<TProgram> {
         .any(|f| f.params.contains(&Type::Str) || f.ret == Type::Str || f.locals.contains(&Type::Str) || any_in_stmts(&f.body, &uses_str))
         || tactors.iter().any(|a| a.inits.iter().any(|(_, e)| any_in(e, &uses_str)));
     let concat = funcs.iter().any(|f| any_in_stmts(&f.body, &uses_concat));
-    let adt_alloc = funcs.iter().any(|f| any_in_stmts(&f.body,
-        &|e| matches!(e.e, TExpr::AdtNew { .. } | TExpr::Trap { .. })));
+    // Even uncalled match-only functions emit tag and payload loads.
+    // The module's memory must not depend on a call constructing an ADT.
+    let adt_memory_access = funcs.iter().any(|f| any_in_stmts(&f.body,
+        &|e| matches!(e.e, TExpr::AdtNew { .. } | TExpr::AdtIs { .. }
+            | TExpr::AdtPayload(_) | TExpr::AdtPropagate { .. } | TExpr::Trap { .. })));
     let guest_eh = funcs.iter().any(|f| guest_eh_in_stmts(&f.body)
         || any_in_stmts(&f.body, &|e| matches!(e.e, TExpr::Trap { .. })));
     Ok(TProgram {
@@ -1276,7 +1341,7 @@ pub fn check(p: &Program) -> R<TProgram> {
         main,
         imports,
         data,
-        heap: !p.classes.is_empty() || concat || adt_alloc || !generators.is_empty(),
+        heap: !p.classes.is_empty() || concat || adt_memory_access || !generators.is_empty(),
         generators,
         globals,
         actors: tactors,
@@ -1419,6 +1484,8 @@ fn any_in(e: &TE, f: &dyn Fn(&TE) -> bool) -> bool {
         TExpr::Neg(a) | TExpr::Not(a) | TExpr::FNeg(a) | TExpr::IntToFloat(a) => any_in(a, f),
         TExpr::Bin(_, a, b) | TExpr::Builtin(_, a, b) => any_in(a, f) || any_in(b, f),
         TExpr::Ternary(c, a, b) => any_in(c, f) || any_in(a, f) || any_in(b, f),
+        TExpr::InlineTask { body, value } => any_in_stmts(body, f)
+            || value.as_ref().is_some_and(|v| any_in(v, f)),
         TExpr::Str(_, a, b) => any_in(a, f) || b.as_ref().is_some_and(|b| any_in(b, f)),
         TExpr::Call(_, args) => args.iter().any(|a| any_in(a, f)),
         TExpr::AdtNew { payload, .. } => payload.as_ref().is_some_and(|p| any_in(p, f)),
@@ -1476,6 +1543,7 @@ impl<'a> FnCx<'a> {
             nparams: 0,
             loops: 0,
             loop_floors: Vec::new(),
+            dead_division_arm: false,
             moved: BTreeSet::new(),
             imports,
             data,
@@ -1537,6 +1605,43 @@ impl<'a> FnCx<'a> {
         let slot = self.nparams + self.locals.len() as u32;
         self.locals.push(ty);
         Ok(slot)
+    }
+
+    // No actor reference, object owner or non-scalar temporary may enter the
+    // first pure-inline profile, including through a parent lexical capture.
+    // The existing checker proves types and loans before this admission gate.
+    // Independently inspect typed operands: a scalar result alone does not
+    // prove that evaluation is free of ownership, allocation or host effects.
+    fn pure_inline_scalar_value(value: &TE) -> bool {
+        if !matches!(value.ty, Type::Int | Type::Bool | Type::Void) {
+            return false;
+        }
+        match &value.e {
+            TExpr::I64(_) | TExpr::Bool(_) | TExpr::Local(_) => true,
+            TExpr::Neg(v) | TExpr::Not(v) => Self::pure_inline_scalar_value(v),
+            TExpr::Bin(_, a, b) =>
+                Self::pure_inline_scalar_value(a) && Self::pure_inline_scalar_value(b),
+            TExpr::Ternary(c, a, b) => c.ty == Type::Bool
+                && Self::pure_inline_scalar_value(c)
+                && Self::pure_inline_scalar_value(a)
+                && Self::pure_inline_scalar_value(b),
+            TExpr::InlineTask { body, value } => Self::pure_inline_scalar_body(body)
+                && value.as_ref().is_none_or(|v| Self::pure_inline_scalar_value(v)),
+            _ => false,
+        }
+    }
+
+    fn pure_inline_scalar_body(body: &[TStmt]) -> bool {
+        body.iter().all(|s| match s {
+            TStmt::Set(_, value) | TStmt::Expr(value) =>
+                Self::pure_inline_scalar_value(value),
+            TStmt::Block(nested) => Self::pure_inline_scalar_body(nested),
+            TStmt::If(arms, otherwise) => arms.iter().all(|(cond, branch)|
+                cond.ty == Type::Bool && Self::pure_inline_scalar_value(cond)
+                    && Self::pure_inline_scalar_body(branch))
+                && otherwise.as_ref().is_none_or(|x| Self::pure_inline_scalar_body(x)),
+            _ => false,
+        })
     }
 
     fn scoped(&mut self, body: &[Stmt]) -> R<Vec<TStmt>> {
@@ -1821,7 +1926,7 @@ impl<'a> FnCx<'a> {
                 ));
             }
             // (pattern test, literal key for reachability, binding name)
-            let (test, key, bind): (Option<TE>, Option<i64>, Option<&str>) = match &arm.pattern {
+            let (test, keys, bind): (Option<TE>, Option<Vec<i64>>, Option<&str>) = match &arm.pattern {
                 Pattern::Wild => (None, None, None),
                 Pattern::Bind(n) => (None, None, Some(n.as_str())),
                 Pattern::Int(v) => {
@@ -1837,9 +1942,63 @@ impl<'a> FnCx<'a> {
                             e: TExpr::Bin(BinOp::Eq, Box::new(get()), Box::new(lit)),
                             ty: Type::Bool,
                         }),
-                        Some(*v),
+                        Some(vec![*v]),
                         None,
                     )
+                }
+                Pattern::ConstSet { ints, bools, types } => {
+                    if types.contains(&sty) {
+                        (None, None, None)
+                    } else {
+                        let literals: Vec<TE> = match sty {
+                            Type::Int => ints.iter().map(|v| TE { e: TExpr::I64(*v), ty: sty }).collect(),
+                            Type::Bool => bools.iter().map(|v| TE { e: TExpr::Bool(*v), ty: sty }).collect(),
+                            _ => Vec::new(),
+                        };
+                        if literals.is_empty() {
+                            return Err(Diagnostic::new(arm.pos, "E_MATCH", "stored pattern set has no alternative for subject"));
+                        }
+                        let keys = if sty == Type::Int { ints.clone() } else { bools.iter().map(|b| i64::from(*b)).collect() };
+                        let mut test = TE { e: TExpr::Bool(false), ty: Type::Bool };
+                        for lit in literals.into_iter().rev() {
+                            let eq = TE { e: TExpr::Bin(BinOp::Eq, Box::new(get()), Box::new(lit)), ty: Type::Bool };
+                            test = TE { e: TExpr::Ternary(Box::new(eq),
+                                Box::new(TE { e: TExpr::Bool(true), ty: Type::Bool }), Box::new(test)), ty: Type::Bool };
+                        }
+                        (Some(test), Some(keys), None)
+                    }
+                }
+                Pattern::StaticTypes(types) => {
+                    if !types.contains(&sty) {
+                        return Err(Diagnostic::new(arm.pos, "E_MATCH",
+                            "unreachable type arm: subject has no listed static scalar type"));
+                    }
+                    (None, None, None)
+                }
+                Pattern::InInts(values) => {
+                    if sty != Type::Int {
+                        return Err(type_err(arm.pos, "int membership requires an int subject"));
+                    }
+                    if values.is_empty() || values.len() > 64 {
+                        return Err(Diagnostic::new(arm.pos, "E_MATCH", "invalid membership list size"));
+                    }
+                    // Reuse the once-evaluated scrutinee and existing lazy
+                    // conditional IR; emit one body, no temporary guest array.
+                    let mut test = TE { e: TExpr::Bool(false), ty: Type::Bool };
+                    for v in values.iter().rev() {
+                        let eq = TE {
+                            e: TExpr::Bin(BinOp::Eq, Box::new(get()),
+                                Box::new(TE { e: TExpr::I64(*v), ty: Type::Int })),
+                            ty: Type::Bool,
+                        };
+                        test = TE {
+                            e: TExpr::Ternary(Box::new(eq),
+                                Box::new(TE { e: TExpr::Bool(true), ty: Type::Bool }),
+                                Box::new(test)),
+                            ty: Type::Bool,
+                        };
+                    }
+                    (Some(test), Some(values.clone()), None)
                 }
                 Pattern::Bool(b) => {
                     if sty != Type::Bool {
@@ -1854,7 +2013,7 @@ impl<'a> FnCx<'a> {
                             e: TExpr::Bin(BinOp::Eq, Box::new(get()), Box::new(lit)),
                             ty: Type::Bool,
                         }),
-                        Some(*b as i64),
+                        Some(vec![*b as i64]),
                         None,
                     )
                 }
@@ -1881,13 +2040,13 @@ impl<'a> FnCx<'a> {
                             e: TExpr::Bin(BinOp::Eq, Box::new(get()), Box::new(ev)),
                             ty: Type::Bool,
                         }),
-                        Some(ord),
+                        Some(vec![ord]),
                         None,
                     )
                 }
             };
-            if let Some(k) = key {
-                if seen.contains(&k) {
+            if let Some(keys) = &keys {
+                if keys.iter().all(|k| seen.contains(k)) {
                     return Err(Diagnostic::new(
                         arm.pos,
                         "E_MATCH",
@@ -1941,9 +2100,9 @@ impl<'a> FnCx<'a> {
             self.scopes.pop();
             let (cond, body) = r?;
             if arm.guard.is_none() {
-                match key {
-                    Some(k) => {
-                        seen.insert(k);
+                match keys {
+                    Some(keys) => {
+                        seen.extend(keys);
                         if seen.len() == variants {
                             covered = true;
                         }
@@ -2441,11 +2600,32 @@ impl<'a> FnCx<'a> {
                 }
                 if a.ty == Type::Int && b.ty == Type::Int {
                     if *op == BinOp::Div {
-                        return Err(Diagnostic::new(
-                            pos,
-                            "E_UNSUPPORTED",
-                            "'/' on two ints is not admitted: whether int / int yields float or int is undecided (spec S-25); write a float operand, e.g. 7.0 / 2",
-                        ));
+                        // Signed quotient truncates toward zero. Admit only
+                        // divisions proved incapable of a division-specific
+                        // ordinary error until typed error edges are available.
+                        let literal = |v: &TE| match &v.e {
+                            TExpr::I64(n) => Some(*n),
+                            TExpr::Neg(inner) => match &inner.e {
+                                TExpr::I64(n) => n.checked_neg(),
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+                        let safe = match literal(&b) {
+                            Some(0) | None => false,
+                            Some(-1) => literal(&a).is_some_and(|n| n != i64::MIN),
+                            Some(_) => true,
+                        };
+                        if !safe {
+                            if !self.dead_division_arm {
+                                return Err(Diagnostic::new(pos, "E_UNSUPPORTED",
+                                    "checked integer division requires a proven nonzero divisor and no MIN/-1 overflow, or typed ordinary-error lowering"));
+                            }
+                            // Operands have already been checked. Do not emit a
+                            // potentially trapping divide even in the statically
+                            // unreachable arm. Its value cannot be observed.
+                            return Ok(TE { e: TExpr::I64(0), ty: Type::Int });
+                        }
                     }
                 } else {
                     // Java binary numeric promotion: an int operand widens to float.
@@ -2471,8 +2651,7 @@ impl<'a> FnCx<'a> {
                 }
             }
             let ty = match op {
-                BinOp::Add | BinOp::Sub | BinOp::Mul => Type::Int,
-                BinOp::Div => unreachable!("int / int rejected above"),
+                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => Type::Int,
                 BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => Type::Bool,
                 BinOp::Eq | BinOp::Ne => {
                     if a.ty != b.ty {
@@ -2524,12 +2703,20 @@ impl<'a> FnCx<'a> {
         })
     }
 
+    fn ternary_arm(&mut self, expr: &Expr, untaken: bool) -> R<TE> {
+        let previous = self.dead_division_arm;
+        self.dead_division_arm = previous || untaken;
+        let result = self.value(expr);
+        self.dead_division_arm = previous;
+        result
+    }
+
     #[inline(never)]
     fn ternary(&mut self, c: &Expr, a: &Expr, b: &Expr, pos: Pos) -> R<TE> {
         Ok({
             let c = self.cond(c, "ternary")?;
-            let a = self.value(a)?;
-            let b = self.value(b)?;
+            let a = self.ternary_arm(a, matches!(&c.e, TExpr::Bool(false)))?;
+            let b = self.ternary_arm(b, matches!(&c.e, TExpr::Bool(true)))?;
             if a.ty != b.ty {
                 return Err(type_err(
                     pos,
@@ -2642,6 +2829,40 @@ impl<'a> FnCx<'a> {
             | ExprKind::Propagate(..) => unreachable!("handled by expr"),
             ExprKind::Call(name, _) if matches!(name.as_str(), "Ok" | "Err" | "Some" | "None") =>
                 return Err(type_err(pos, format!("'{name}' requires a contextual Result/Option type"))),
+            ExprKind::InlineTask { declared, prelude, result } => {
+                // A lexical scope within the caller; no child TaskId/Future is made.
+                // The parser has already restricted this v1 admission to pure
+                // scalar statements without suspensions, cleanup or early exits.
+                self.scopes.push(Vec::new());
+                let checked = (|| -> R<TE> {
+                    let body = self.stmts(prelude)?;
+                    if !Self::pure_inline_scalar_body(&body) {
+                        return Err(Diagnostic::new(pos, "E_UNSUPPORTED",
+                            "inline task body cannot capture or move non-scalar owners"));
+                    }
+                    let value = match result {
+                        Some(expr) => Some(Box::new(self.value(expr)?)),
+                        None => None,
+                    };
+                    let actual = value.as_ref().map_or(Type::Void, |v| v.ty);
+                    if !matches!(actual, Type::Int | Type::Bool | Type::Void)
+                        || value.as_ref().is_some_and(|v| !Self::pure_inline_scalar_value(v)) {
+                        return Err(Diagnostic::new(pos, "E_UNSUPPORTED",
+                            "inline task currently admits only int, bool or void results"));
+                    }
+                    if let Some(ty) = declared {
+                        let expected = self.resolve(*ty, pos)?;
+                        if actual != expected {
+                            return Err(Diagnostic::new(pos, "E_TASK_RETURN_TYPE",
+                                format!("sync task declared {} but returns {}",
+                                    self.tn(expected), self.tn(actual))));
+                        }
+                    }
+                    Ok(TE { e: TExpr::InlineTask { body, value }, ty: actual })
+                })();
+                self.scopes.pop();
+                checked?
+            },
             ExprKind::Call(name, args) => self.call(name, args, pos)?,
             ExprKind::SelfRef => {
                 return Err(match self.owner {
@@ -2749,7 +2970,14 @@ impl<'a> FnCx<'a> {
     fn args(&mut self, callee: &str, args: &[Expr], params: &[Type]) -> R<Vec<TE>> {
         let mut out = Vec::new();
         for (i, (a, want)) in args.iter().zip(params).enumerate() {
-            let v = self.consume_expected(a, *want)?;
+            let v = if self.g.native_readonly_candidate && matches!(*want, Type::Class(_)) {
+                if !matches!(&a.kind, ExprKind::Var(_)) {
+                    return Err(Diagnostic::new(a.pos, "E_BORROW", "native readonly candidate needs a named local class argument"));
+                }
+                self.value(a)?
+            } else {
+                self.consume_expected(a, *want)?
+            };
             if v.ty != *want {
                 return Err(type_err(
                     a.pos,
@@ -3093,7 +3321,50 @@ impl<'a> FnCx<'a> {
         })
     }
 
+    /// Read only syntactically stable argument types before selecting a
+    /// target. No speculative consumption, effect execution or AST rewriting.
+    /// More complex expressions need an explicitly typed local in this slice.
+    fn overload_item(&self, arg: &Expr) -> R<crate::call_presence_v2::Item> {
+        use crate::call_presence_v2::Item;
+        let ty = match &arg.kind {
+            ExprKind::Int(_) => Type::Int,
+            ExprKind::Bool(_) => Type::Bool,
+            ExprKind::Float(_) => Type::Float,
+            ExprKind::Str(_) => Type::Str,
+            ExprKind::Var(name) if name == "None" => return Ok(Item::UntypedNone),
+            ExprKind::Var(name) => self.lookup(name)
+                .filter(|l| l.mail.is_none())
+                .map(|l| l.ty)
+                .ok_or_else(|| Diagnostic::new(arg.pos, "E_UNBOUND",
+                    format!("unknown or unsupported overload argument '{name}'")))?,
+            ExprKind::Call(name, args) if name == "Some" && args.len() == 1 => {
+                match self.overload_item(&args[0])? {
+                    Item::Typed(Type::Int) => Type::OptionInt,
+                    Item::Typed(Type::ResultIntStr) => Type::OptionResultIntStr,
+                    _ => return Err(type_err(arg.pos, "unsupported Some payload for typed overload")),
+                }
+            }
+            _ => return Err(Diagnostic::new(arg.pos, "E_UNSUPPORTED",
+                "typed overload argument needs a literal, typed binding, or supported Some payload")),
+        };
+        Ok(Item::Typed(ty))
+    }
+
     fn call(&mut self, name: &str, args: &[Expr], pos: Pos) -> R<TE> {
+        if name == "\0is_omitted" {
+            if self.owner != Owner::TopLevel || args.len() != 1 {
+                return Err(Diagnostic::new(pos, "E_OMISSION_PROVENANCE", "is omitted requires an omittable formal"));
+            }
+            if let ExprKind::Var(n) = &args[0].kind {
+                if let Some(local) = self.lookup(n) {
+                    let hidden = format!("\0omitted:{}", local.slot);
+                    if let Some(bit) = self.lookup(&hidden) {
+                        return Ok(TE { e: TExpr::Local(bit.slot), ty: Type::Bool });
+                    }
+                }
+            }
+            return Err(Diagnostic::new(pos, "E_OMISSION_PROVENANCE", "is omitted requires an original omittable formal binding"));
+        }
         if matches!(self.owner, Owner::FieldInit { .. }) {
             return Err(Diagnostic::new(pos, "E_UNSUPPORTED", "calls in a field initializer"));
         }
@@ -3197,7 +3468,68 @@ impl<'a> FnCx<'a> {
                 return Err(isolation(pos, me, "file/module callable", name));
             }
         }
-        let (idx, params, ret) = match self.g.sigs.get(&(name.to_string(), args.len())) {
+        if let Some(family) = self.g.presence_families.get(name) {
+            use crate::call_presence_v2::{self, Item, Origin, Error};
+            let items = args.iter().map(|a| {
+                if matches!(&a.kind, ExprKind::Var(n) if (n == "omit" || n == "_") && self.lookup(n).is_none()) {
+                    Ok(Item::Hole)
+                } else {
+                    self.overload_item(a)
+                }
+            }).collect::<R<Vec<_>>>()?;
+            let candidates = family.iter().map(|s| s.1.clone()).collect::<Vec<_>>();
+            let plan = call_presence_v2::select(&candidates, &items).map_err(|err| {
+                Diagnostic::new(pos, match err {
+                    Error::Ambiguous => "E_AMBIGUOUS",
+                    Error::NoMatch => "E_ARITY",
+                    _ => "E_DUPLICATE",
+                }, format!("omittable overload selection for '{name}' failed: {err:?}"))
+            })?;
+            let (idx, formals, ret) = family[plan.candidate].clone();
+            let mut typed = Vec::new();
+            let mut provenance = Vec::new();
+            for (formal, slot) in formals.iter().zip(&plan.slots) {
+                let supplied = match slot.origin {
+                    Origin::Supplied(i) => {
+                        let value = self.consume_expected(&args[i], formal.ty)?;
+                        if value.ty != formal.ty { return Err(type_err(pos, "selected argument type differs")); }
+                        typed.push(value);
+                        true
+                    }
+                    Origin::ExplicitHole(_) | Origin::Absent => {
+                        let none = Expr { kind: ExprKind::Var("None".into()), pos };
+                        typed.push(self.consume_expected(&none, formal.ty)?);
+                        false
+                    }
+                };
+                if formal.omittable {
+                    provenance.push(TE { e: TExpr::Bool(!supplied), ty: Type::Bool });
+                }
+            }
+            typed.extend(provenance);
+            return Ok(TE { e: TExpr::Call(idx, typed), ty: ret });
+        }
+        let key = (name.to_string(), args.len());
+        if let Some(family) = self.g.overloads.get(&key) {
+            use crate::call_presence_v2::{self, Formal, Error};
+            let items = args.iter().map(|a| self.overload_item(a)).collect::<R<Vec<_>>>()?;
+            let candidates = family.iter().map(|s| s.1.iter().map(|&ty| Formal {
+                ty, omittable: false, none_default: false, omission_default: false,
+            }).collect::<Vec<_>>()).collect::<Vec<_>>();
+            let plan = call_presence_v2::select(&candidates, &items).map_err(|err| {
+                Diagnostic::new(pos, match err {
+                    Error::Ambiguous => "E_AMBIGUOUS",
+                    Error::NoMatch => "E_TYPE",
+                    _ => "E_DUPLICATE",
+                }, format!("typed overload selection for '{name}' failed: {err:?}"))
+            })?;
+            let (idx, params, ret) = family[plan.candidate].clone();
+            // The ordinary ownership/type checker still verifies every operand
+            // against the selected signature, in source order, exactly once.
+            let targs = self.args(name, args, &params)?;
+            return Ok(TE { e: TExpr::Call(idx, targs), ty: ret });
+        }
+        let (idx, params, ret) = match self.g.sigs.get(&key) {
             Some(s) => s.clone(),
             None => {
                 return Err(match self.g.names.get(name) {

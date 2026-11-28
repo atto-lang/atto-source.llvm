@@ -10,6 +10,7 @@
 #include "oreslang/runtime/NativeExecutionContext.h"
 #include "oreslang/runtime/NativePhysicalTurnGate.h"
 #include <pthread.h>
+#include <errno.h> /* ENOTSUP for the musl affinity fallback */
 #include <sched.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -41,6 +42,15 @@ typedef struct {
      * outside-DATA and generic callback reservations. Never guest supplied. */
     uint64_t originating_data_mail;
 } WakeCredit;
+/* Preallocated DATA receipt escrow; separate from WAKE and supervisor CONTROL.
+ * The caller's logical guest turn may outlive its native DATA callback. */
+typedef enum { RETAINED_EMPTY=0, RETAINED_IN_CALLBACK=1, RETAINED_PENDING=2
+} RetainedDataState;
+typedef struct {
+    uint64_t generation;
+    uint64_t execution_id;
+    RetainedDataState state;
+} RetainedDataCredit;
 typedef struct {
     uint64_t* messages; /* fixed ring, assigned at scheduler startup */
     uint64_t* mail_sequences; /* monotonic admission ordinal per ring entry */
@@ -59,12 +69,18 @@ typedef struct {
     uint32_t failure_head, failure_tail; /* intrusive per-parent FIFO */
     WakeCredit* wakes; /* preallocated producer-local escrow credits */
     size_t wake_live, wake_ready, wake_cursor;
+    RetainedDataCredit* retained; /* preallocated DATA receipts */
+    size_t retained_live;
+    unsigned retained_in_callback; /* active DATA already counted in retained_live */
+    unsigned cleanup_reserved, cleanup_ready, cleanup_running, cleanup_failed;
+    OresNativeRetainedDataTicket cleanup_ticket;
     uint64_t control_payload;
     OresNativeActorTerminalFailure failure;
     unsigned control_is_failure;
     unsigned spawned, retired;
     uint64_t generation;
     uint64_t resource_loans; /* exact-incarnation external physical resources */
+    size_t done_waiters; /* observers pinned across cond_wait */
     uint64_t accepted_user_messages;
     uint64_t processed_user_messages;
     uint64_t abandoned_user_messages;
@@ -77,15 +93,15 @@ typedef struct {
     /* Intrusive ready-queue links, one per turn class (see TURN_*). A lane is
      * linked into class k exactly when it is idle and has class-k work, so a
      * carrier finds its next turn in O(1) instead of scanning every lane. */
-    uint32_t rq_next[4], rq_prev[4];
-    unsigned char rq_in[4];
+    uint32_t rq_next[5], rq_prev[5];
+    unsigned char rq_in[5];
     /* Carrier slot that ran this lane's last turn, plus one (0 = none). A
      * soft placement hint only: it never grants the carrier any authority. */
     uint32_t last_carrier1;
 } ActorLane;
 /* Turn classes double as the dispatch `kind` and as ready-queue indexes.
  * Supervisor CONTROL outranks WAKE which outranks DATA. */
-enum { TURN_DATA = 0, TURN_TASK = 1, TURN_WAKE = 2, TURN_CONTROL = 3, TURN_CLASSES = 4 };
+enum { TURN_DATA = 0, TURN_TASK = 1, TURN_WAKE = 2, TURN_CONTROL = 3, TURN_CLEANUP = 4, TURN_CLASSES = 5 };
 #define RQ_NIL UINT32_MAX
 enum { MAX_CARRIERS = 128, MAX_IDLE_SPIN_NS = 1000000 };
 typedef struct {
@@ -103,6 +119,7 @@ struct OresNativeActorScheduler {
     uint64_t* sequence_slots;
     uint64_t* task_slots;
     WakeCredit* wake_slots;
+    RetainedDataCredit* retained_slots;
     pthread_t* threads;
     CarrierSlot* carrier_slots;
     size_t actor_count, per_actor_capacity, worker_count, started_workers;
@@ -137,6 +154,7 @@ struct OresNativeActorScheduler {
     uint64_t next_execution;
     uint64_t reserved_executions;
     uint64_t reserved_wakes; /* future accepted/execution credits */
+    uint64_t reserved_cleanup_acceptances; /* STOP cleanup acceptance slots */
     uint64_t resource_loans; /* external resources across all actor lanes */
     uint64_t accepted, rejected, completed, control_completed, wakes_completed;
     int retired;
@@ -148,12 +166,26 @@ struct OresNativeActorScheduler {
     OresNativeActorTaskFn control_callback;
     OresNativeActorPanicFn panic_callback;
     OresNativeActorWakeFn wake_callback;
+    OresNativeActorRetainedCleanupFn cleanup_callback;
     OresNativeActorTaskFn task_callback;
     OresNativeActorTaskFn task_cancel_callback;
     void* context;
     OresNativePhysicalTurnGate* physical_turn_gate;
 };
+/* Account for retained DATA without charging its active carrier twice. */
+static size_t actor_data_occupancy(const ActorLane* lane) {
+    return lane->queued + lane->retained_live
+        + (size_t)(lane->active && !lane->retained_in_callback);
+}
+/* Keep future WAKE and prepaid STOP cleanup acceptance credits separate. */
+static int accepted_capacity_available(const OresNativeActorScheduler* s) {
+    return s->reserved_cleanup_acceptances <= UINT64_MAX - s->reserved_wakes
+        && s->accepted < UINT64_MAX - s->reserved_wakes
+                          - s->reserved_cleanup_acceptances;
+}
 static _Thread_local OresNativeActorScheduler* executing;
+static _Thread_local int executing_retained_valid;
+static _Thread_local OresNativeRetainedDataTicket executing_retained_ticket;
 static _Thread_local int executing_kind = -1;
 static _Thread_local OresNativeActorRef executing_actor;
 static _Thread_local OresExecutionClaim executing_claim;
@@ -230,7 +262,7 @@ static void publish_terminal_locked(
             || !lane->retired || lane->active || lane->queued || lane->has_control
             || lane->failure_state == 1 || lane->failure_state == 2
             || lane->wake_live || lane->wake_ready || lane->task_queued
-            || lane->resource_loans)
+            || lane->retained_live || lane->cleanup_failed || lane->resource_loans)
         return;
     if (ores_execution_phase(&lane->authority) != ORES_EXEC_TERMINATED)
         return;
@@ -269,14 +301,15 @@ int ores_native_actor_scheduler_test_set_next_execution(
 #endif
 static int lane_has_work(const ActorLane* lane) {
     return lane->queued || lane->task_queued || lane->has_control || lane->wake_ready
-        || lane->failure_head != RQ_NIL;
+        || lane->failure_head != RQ_NIL || lane->cleanup_ready;
 }
 static int lane_wants_class(const ActorLane* lane, int k) {
     if (lane->active) return 0;
     return k == TURN_CONTROL ? (lane->has_control != 0 || lane->failure_head != RQ_NIL)
          : k == TURN_WAKE ? lane->wake_ready != 0
          : k == TURN_TASK ? lane->task_queued != 0
-         : lane->queued != 0;
+         : k == TURN_CLEANUP ? lane->cleanup_ready != 0
+         : lane->queued != 0 && !lane->retained_live;
 }
 static void rq_push_locked(OresNativeActorScheduler* s, size_t i, int k) {
     ActorLane* lane = &s->actors[i];
@@ -320,6 +353,7 @@ static int rq_any_locked(const OresNativeActorScheduler* s) {
     return s->rq_head[TURN_CONTROL] != RQ_NIL
         || s->rq_head[TURN_WAKE] != RQ_NIL
         || s->rq_head[TURN_TASK] != RQ_NIL
+        || s->rq_head[TURN_CLEANUP] != RQ_NIL
         || s->rq_head[TURN_DATA] != RQ_NIL;
 }
 #ifdef ORESLANG_NATIVE_SCHED_VALIDATE
@@ -410,9 +444,13 @@ static int find_ready(OresNativeActorScheduler* s, size_t* actor, int* kind,
         *actor = pick_affine_locked(s, TURN_TASK, self); *kind = TURN_TASK;
         return 1;
     }
+    if (s->rq_head[TURN_CLEANUP] != RQ_NIL) {
+        *actor = s->rq_head[TURN_CLEANUP]; *kind = TURN_CLEANUP;
+        return 1;
+    }
     if (recent_actor < s->actor_count && consecutive < 2
             && !s->actors[recent_actor].active
-            && s->actors[recent_actor].queued) {
+            && s->actors[recent_actor].queued && !s->actors[recent_actor].retained_live) {
         *actor = recent_actor; *kind = TURN_DATA;
         return 1;
     }
@@ -453,7 +491,7 @@ static void maybe_finish_stopped_locked(OresNativeActorScheduler* s, size_t i) {
     ActorLane* lane = &s->actors[i];
     if (!lane->retired || lane->active || lane_has_work(lane)
             || lane->failure_state == 1 || lane->failure_state == 2
-            || lane->wake_live || lane->resource_loans)
+            || lane->wake_live || lane->retained_live || lane->cleanup_failed || lane->resource_loans)
         return;
     if (ores_execution_phase(&lane->authority) == ORES_EXEC_STOPPING
             && !ores_execution_retired(&lane->authority, lane->generation))
@@ -583,6 +621,7 @@ static void* carrier(void* raw) {
         OresNativeWakeTicket wake_ticket = {0};
         OresNativeWakeOutcome wake_outcome = ORES_NATIVE_WAKE_FAILED;
         WakeCredit* active_wake = NULL;
+        OresNativeRetainedDataTicket cleanup_ticket = {0};
         int typed_failure = 0;
         size_t failure_child = SIZE_MAX;
         int task_cancelled = kind == TURN_TASK && lane->retired;
@@ -604,6 +643,16 @@ static void* carrier(void* raw) {
                 lane->control_is_failure = 0;
                 lane->has_control = 0;
             }
+        } else if (kind == TURN_CLEANUP) {
+            if (!lane->cleanup_ready || !lane->cleanup_reserved
+                    || !s->cleanup_callback || !lane->retained_live) abort();
+            cleanup_ticket = lane->cleanup_ticket;
+            lane->cleanup_ready = 0;
+            lane->cleanup_reserved = 0;
+            lane->cleanup_running = 1;
+            if (!s->reserved_cleanup_acceptances || s->accepted == UINT64_MAX) abort();
+            --s->reserved_cleanup_acceptances;
+            ++s->accepted;
         } else if (kind == TURN_WAKE) {
             for (size_t offset = 0; offset < ORES_NATIVE_WAKE_CREDITS_PER_ACTOR; ++offset) {
                 size_t w = (lane->wake_cursor + offset)
@@ -671,7 +720,14 @@ static void* carrier(void* raw) {
         executing_wake = wake_ticket;
         executing_wake_outcome = kind == TURN_WAKE
                 ? wake_outcome : ORES_NATIVE_WAKE_FAILED;
-        if (typed_failure) s->panic_callback(s->context, i, failure);
+        executing_retained_valid = 0;
+        executing_retained_ticket = (OresNativeRetainedDataTicket){0};
+        int cleanup_succeeded = 0;
+        if (kind == TURN_CLEANUP) {
+            cleanup_succeeded = s->cleanup_callback(s->context, i, cleanup_ticket) == 1;
+            if (cleanup_succeeded
+                    && !ores_native_actor_scheduler_abandon_retained_data(s, cleanup_ticket)) abort();
+        } else if (typed_failure) s->panic_callback(s->context, i, failure);
         else if (kind == TURN_CONTROL)
             s->control_callback(s->context, i, payload);
         else if (kind == TURN_WAKE)
@@ -683,6 +739,10 @@ static void* carrier(void* raw) {
                 s->task_cancel_callback(s->context, i, payload);
             else s->task_callback(s->context, i, payload);
         } else s->callback(s->context, i, payload);
+        const int data_retained = executing_retained_valid;
+        const OresNativeRetainedDataTicket retained_ticket = executing_retained_ticket;
+        executing_retained_valid = 0;
+        executing_retained_ticket = (OresNativeRetainedDataTicket){0};
         executing_wake_valid = 0;
         executing_wake = (OresNativeWakeTicket){0};
         executing_wake_outcome = ORES_NATIVE_WAKE_FAILED;
@@ -714,12 +774,34 @@ static void* carrier(void* raw) {
         }
         lane->active = 0;
         lane->carrier_owner_valid = 0;
-        s->outstanding--;
-        s->completed++;
-        if (kind == TURN_DATA) {
-            if (lane->processed_user_messages == UINT64_MAX) abort();
-            ++lane->processed_user_messages;
-        } else if (kind == TURN_WAKE) {
+        if (kind == TURN_CLEANUP) {
+            if (!lane->cleanup_running) abort();
+            lane->cleanup_running = 0;
+            if (!cleanup_succeeded) lane->cleanup_failed = 1;
+        }
+        if (kind == TURN_DATA && data_retained) {
+            if (retained_ticket.actor.scheduler_domain != s->domain
+                    || retained_ticket.actor.actor_slot != i
+                    || retained_ticket.actor.generation != lane->generation
+                    || retained_ticket.slot >= s->per_actor_capacity) abort();
+            RetainedDataCredit* credit = &lane->retained[retained_ticket.slot];
+            if (credit->state != RETAINED_IN_CALLBACK
+                    || credit->generation != retained_ticket.slot_generation
+                    || credit->execution_id != retained_ticket.execution_id
+                    || !lane->retained_in_callback) abort();
+            credit->state = RETAINED_PENDING;
+            lane->retained_in_callback = 0;
+            /* Original DATA receipt and mailbox credit remain outstanding. */
+        } else {
+            if (!s->outstanding || s->completed == UINT64_MAX) abort();
+            --s->outstanding;
+            ++s->completed;
+            if (kind == TURN_DATA) {
+                if (lane->processed_user_messages == UINT64_MAX) abort();
+                ++lane->processed_user_messages;
+            }
+        }
+        if (kind == TURN_WAKE) {
             if (!active_wake || active_wake->state != WAKE_EXECUTING
                     || !lane->wake_live || s->wakes_completed == UINT64_MAX)
                 abort();
@@ -741,6 +823,8 @@ static void* carrier(void* raw) {
             s->actors[failure_child].failure_state = 3;
             maybe_finish_stopped_locked(s, failure_child);
         }
+        if (kind == TURN_CLEANUP && !cleanup_succeeded)
+            pthread_cond_broadcast(&s->drained);
         if (kind == TURN_CONTROL) ++s->control_completed;
         /* Requeue at the tail if the lane still has work. No signal: this
          * carrier is about to look for its next turn itself, and the chain
@@ -798,6 +882,7 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_with_options(
     size_t initialized = 0;
     s->actors = (ActorLane*)calloc(actors, sizeof(ActorLane));
     s->slots = (uint64_t*)calloc(actors * capacity, sizeof(uint64_t));
+    s->retained_slots = (RetainedDataCredit*)calloc(actors * capacity, sizeof(RetainedDataCredit));
     s->sequence_slots = (uint64_t*)calloc(actors * capacity, sizeof(uint64_t));
     if (task_callback) s->task_slots = (uint64_t*)calloc(
         actors * ORES_NATIVE_TASK_SLOTS_PER_ACTOR, sizeof(uint64_t));
@@ -805,7 +890,7 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_with_options(
         actors * ORES_NATIVE_WAKE_CREDITS_PER_ACTOR, sizeof(WakeCredit));
     s->threads = (pthread_t*)calloc(workers, sizeof(pthread_t));
     s->carrier_slots = (CarrierSlot*)calloc(workers, sizeof(CarrierSlot));
-    if (!s->actors || !s->slots || !s->sequence_slots
+    if (!s->actors || !s->slots || !s->sequence_slots || !s->retained_slots
             || (task_callback && !s->task_slots)
             || (wake_callback && !s->wake_slots)
             || !s->threads || !s->carrier_slots)
@@ -834,6 +919,7 @@ OresNativeActorScheduler* ores_native_actor_scheduler_open_with_options(
         s->actors[i].failure_head = s->actors[i].failure_tail = RQ_NIL;
         s->actors[i].failure_next = RQ_NIL;
         s->actors[i].messages = s->slots + i * capacity;
+        s->actors[i].retained = s->retained_slots + i * capacity;
         s->actors[i].mail_sequences = s->sequence_slots + i * capacity;
         s->actors[i].tasks = task_callback
             ? s->task_slots + i * ORES_NATIVE_TASK_SLOTS_PER_ACTOR : NULL;
@@ -863,6 +949,7 @@ allocation_failed:
     free(s->sequence_slots);
     free(s->task_slots);
     free(s->wake_slots);
+    free(s->retained_slots);
     free(s->actors);
     free(s);
     return NULL;
@@ -927,7 +1014,7 @@ static int create_carrier(pthread_t* tid, void* context) {
             rc = pthread_attr_setschedparam(&attr, &param);
         }
     }
-#if defined(__linux__)
+#if defined(__linux__) && defined(__GLIBC__)
     /* Pin in the attributes, not after start: the carrier never executes an
      * instruction (or takes a turn) on a CPU outside its reservation. */
     if (rc == 0 && s->cpu_affinity_configured) {
@@ -936,6 +1023,11 @@ static int create_carrier(pthread_t* tid, void* context) {
         CPU_SET(s->cpus[slot->index % s->cpu_count], &set);
         rc = pthread_attr_setaffinity_np(&attr, sizeof(set), &set);
     }
+#elif defined(__linux__)
+    /* musl has no pthread_attr_setaffinity_np. Pinning after start would let
+     * the carrier run outside its reservation, so pinned schedulers fail
+     * closed here; unpinned schedulers are unaffected. */
+    if (rc == 0 && s->cpu_affinity_configured) rc = ENOTSUP;
 #endif
     if (rc == 0) rc = pthread_create(tid, &attr, carrier, context);
     if (pthread_attr_destroy(&attr) != 0) abort();
@@ -1090,8 +1182,8 @@ static int enqueue_locked(OresNativeActorScheduler* s, size_t i, uint64_t payloa
     if (s->retired || i >= s->actor_count
         || !s->actors[i].spawned || s->actors[i].retired
         || s->actors[i].accepted_user_messages == UINT64_MAX
-        || s->actors[i].queued + s->actors[i].active >= s->per_actor_capacity
-        || s->accepted >= UINT64_MAX - s->reserved_wakes
+        || actor_data_occupancy(&s->actors[i]) >= s->per_actor_capacity
+        || !accepted_capacity_available(s)
         || !execution_slot_available_locked(s)) {
         if (s->rejected != UINT64_MAX) s->rejected++;
         return 0;
@@ -1225,9 +1317,9 @@ static OresNativeSendStatus try_send_impl(
         if (s->retired || lane->retired) {
             status = ORES_NATIVE_SEND_TERMINATED;
         } else if (lane->accepted_user_messages == UINT64_MAX
-                || lane->queued + lane->active >= s->per_actor_capacity) {
+                || actor_data_occupancy(lane) >= s->per_actor_capacity) {
             status = ORES_NATIVE_SEND_MAILBOX_FULL;
-        } else if (s->accepted >= UINT64_MAX - s->reserved_wakes
+        } else if (!accepted_capacity_available(s)
                 || !execution_slot_available_locked(s)) {
             status = ORES_NATIVE_SEND_RESOURCE_EXHAUSTED;
         } else {
@@ -1280,7 +1372,7 @@ OresNativeTaskAdmissionStatus ores_native_actor_scheduler_try_schedule_task(
             status = ORES_NATIVE_TASK_STOPPED;
         } else if (lane->task_queued >= ORES_NATIVE_TASK_SLOTS_PER_ACTOR) {
             status = ORES_NATIVE_TASK_MAILBOX_FULL;
-        } else if (s->accepted >= UINT64_MAX - s->reserved_wakes
+        } else if (!accepted_capacity_available(s)
                 /* size_t: UINT64_MAX made this guard dead on 32-bit hosts */
                 || s->outstanding == SIZE_MAX
                 || !execution_slot_available_locked(s)) {
@@ -1369,11 +1461,11 @@ int ores_native_actor_scheduler_reserve_wake(
         return 0;
     lock(s);
     int ok = !s->retired && s->wake_callback && matching(s, producer)
-        && (target.scheduler_domain != s->domain
-            || (matching(s, target) && !s->actors[target.actor_slot].retired))
+        && target.scheduler_domain == s->domain
+        && matching(s, target) && !s->actors[target.actor_slot].retired
         && !s->actors[producer.actor_slot].retired
         && s->reserved_wakes < UINT64_MAX
-        && s->accepted < UINT64_MAX - s->reserved_wakes
+        && accepted_capacity_available(s)
         && execution_slot_available_locked(s);
     WakeCredit* w = NULL;
     ActorLane* lane = NULL;
@@ -1452,9 +1544,9 @@ int ores_native_actor_scheduler_transfer_wake(
     /* For a same-scheduler target, transfer is the irreversible mailbox-credit
      * handoff boundary. Revalidate the target incarnation here so a STOP that
      * won after reservation cannot be converted into a fabricated admission.
-     * Cross-scheduler targets require their separate verified bridge authority. */
-    if (ok && ticket.target.scheduler_domain == s->domain)
-        ok = matching(s, ticket.target)
+     * Cross-scheduler targets are denied until a separate bridge owns admission. */
+    if (ok)
+        ok = ticket.target.scheduler_domain == s->domain && matching(s, ticket.target)
             && !s->actors[ticket.target.actor_slot].retired;
     if (ok) w->state = WAKE_TRANSFERRED;
     unlock(s);
@@ -1506,7 +1598,9 @@ OresNativeWakePublishStatus ores_native_actor_scheduler_publish_wake(
     if (!s->reserved_wakes || s->accepted == UINT64_MAX) abort();
     const int new_lane = !lane->active && !lane_has_work(lane);
     --s->reserved_wakes;
-    w->outcome = outcome;
+    const int target_retired = !matching(s, ticket.target)
+        || s->actors[ticket.target.actor_slot].retired;
+    w->outcome = target_retired ? ORES_NATIVE_WAKE_CANCELLED : outcome;
     w->state = WAKE_READY;
     ++lane->wake_ready;
     if (new_lane) ++s->runnable_lanes;
@@ -1516,7 +1610,7 @@ OresNativeWakePublishStatus ores_native_actor_scheduler_publish_wake(
     if (rq_sync_locked(s, (size_t)ticket.producer.actor_slot)) wake_one_locked(s);
     RQ_VALIDATE(s);
     unlock(s);
-    return ORES_NATIVE_WAKE_PUBLISHED;
+    return target_retired ? ORES_NATIVE_WAKE_TARGET_RETIRED : ORES_NATIVE_WAKE_PUBLISHED;
 }
 int ores_native_actor_scheduler_is_current_wake(
         OresNativeActorScheduler* s, OresNativeWakeTicket ticket) {
@@ -1568,7 +1662,7 @@ int ores_native_actor_scheduler_publish_control(
     int ok = !s->retired && s->control_callback && matching(s, parent)
         && !s->actors[parent.actor_slot].retired
         && !s->actors[parent.actor_slot].has_control
-        && s->accepted < UINT64_MAX - s->reserved_wakes
+        && accepted_capacity_available(s)
         && execution_slot_available_locked(s);
     if (ok) {
         ActorLane* lane = &s->actors[parent.actor_slot];
@@ -1641,7 +1735,7 @@ int ores_native_actor_scheduler_publish_failure(
         && s->actors[failure.child.actor_slot].supervisor.actor_slot == parent.actor_slot
         && s->actors[failure.child.actor_slot].supervisor.generation == parent.generation
         && s->actors[failure.child.actor_slot].failure_state == 0
-        && s->accepted < UINT64_MAX - s->reserved_wakes
+        && accepted_capacity_available(s)
         && execution_slot_available_locked(s);
     if (ok) {
         ActorLane* owner = &s->actors[parent.actor_slot];
@@ -1677,6 +1771,23 @@ uint64_t ores_native_actor_scheduler_control_completed(OresNativeActorScheduler*
     unlock(s);
     return n;
 }
+/* Activation cannot fail: a dedicated execution ID was already reserved by
+ * the authenticated handler before it suspended. No new user DATA is
+ * admitted or executed after STOP. */
+static void activate_retained_cleanup_locked(
+        OresNativeActorScheduler* s, size_t i) {
+    ActorLane* lane=&s->actors[i];
+    if (!s->cleanup_callback || !lane->retained_live
+            || !lane->cleanup_reserved || lane->cleanup_ready
+            || lane->cleanup_running || lane->cleanup_failed) return;
+    if (s->outstanding == SIZE_MAX) abort();
+    if (!lane->active && !lane_has_work(lane)) ++s->runnable_lanes;
+    lane->cleanup_ready=1;
+    ++s->outstanding;
+    rq_sync_locked(s, i);
+    RQ_VALIDATE(s);
+    wake_one_locked(s);
+}
 static int stop_locked(
         OresNativeActorScheduler* s,
         OresNativeActorRef actor,
@@ -1701,7 +1812,7 @@ static int stop_locked(
          * runnable-lane set when its queued user mail is sealed away.
          */
         if (!lane->active && !lane->has_control && !lane->wake_ready
-                && !lane->task_queued) {
+                && !lane->task_queued && !lane->cleanup_ready && lane->failure_head == RQ_NIL) {
             if (!s->runnable_lanes) abort();
             --s->runnable_lanes;
         }
@@ -1716,6 +1827,7 @@ static int stop_locked(
     }
 
     if (!ores_execution_stop(&lane->authority, lane->generation)) abort();
+    activate_retained_cleanup_locked(s, (size_t)actor.actor_slot);
     maybe_finish_stopped_locked(s, (size_t)actor.actor_slot);
     if (!s->outstanding) {
         /*
@@ -1814,14 +1926,73 @@ int ores_native_actor_scheduler_wait_done(OresNativeActorScheduler* s,
         return 0;
     }
     ActorLane* lane = &s->actors[actor.actor_slot];
-    while (lane_has_work(lane) || lane->active || lane->wake_live
-        || lane->resource_loans
+    if (lane->done_waiters == SIZE_MAX) { unlock(s); return 0; }
+    ++lane->done_waiters;
+    while (!lane->cleanup_failed && (lane_has_work(lane) || lane->active || lane->wake_live
+        || lane->retained_live || lane->resource_loans
         || ores_execution_phase(&lane->authority) != ORES_EXEC_TERMINATED
-        || !lane->terminal_valid) {
+        || !lane->terminal_valid)) {
         if (pthread_cond_wait(&s->drained, &s->lock) != 0) abort();
     }
+    const int success = !lane->cleanup_failed && lane->terminal_valid;
+    --lane->done_waiters;
     unlock(s);
-    return 1;
+    return success;
+}
+
+/* Opt-in trusted VM leaf reclamation. The caller separately confirms host
+ * finalizers and owns VM registration. No TASK/WAKE profile is admitted
+ * until its external continuation ownership can be proven. */
+int ores_native_actor_scheduler_reclaim_supervised_leaf_v1(
+        OresNativeActorScheduler* s, OresNativeActorRef actor) {
+    if (!s || executing == s) return 0;
+    lock(s);
+    int ok = !s->retired && !s->wake_callback && !s->task_callback && !s->cleanup_callback
+        && matching(s, actor);
+    ActorLane* a = ok ? &s->actors[actor.actor_slot] : NULL;
+    if (ok) ok = a->retired && a->terminal_valid && a->supervisor_bound
+        && a->failure_state == 3 && a->failure_next == RQ_NIL
+        && a->failure_tail == RQ_NIL && !a->active && !a->carrier_owner_valid
+        && !lane_has_work(a) && !a->wake_live && !a->retained_live && !a->cleanup_failed && !a->resource_loans
+        && !a->done_waiters;
+    if (ok) {
+        for (size_t i = 0; i < s->actor_count; ++i) {
+            const ActorLane* child = &s->actors[i];
+            if (child->spawned && child->supervisor_bound
+                && child->supervisor.scheduler_domain == actor.scheduler_domain
+                && child->supervisor.actor_slot == actor.actor_slot
+                && child->supervisor.generation == actor.generation) { ok = 0; break; }
+        }
+        for (int k = 0; k < TURN_CLASSES; ++k)
+            if (a->rq_in[k] || a->rq_next[k] != RQ_NIL || a->rq_prev[k] != RQ_NIL)
+                ok = 0;
+    }
+    const uint64_t next = ok ? ores_execution_restart(&a->authority) : 0;
+    if (next) {
+        /* Preserve the authority mutex, monotonic turn sequence and fixed
+         * ring allocations; scrub prior incarnation data and receipts. */
+        memset(a->messages, 0, s->per_actor_capacity * sizeof(uint64_t));
+        memset(a->mail_sequences, 0, s->per_actor_capacity * sizeof(uint64_t));
+        a->head = a->tail = a->queued = 0;
+        a->task_head = a->task_tail = a->task_queued = 0;
+        a->wake_cursor = 0;
+        a->has_control = a->control_is_failure = 0;
+        a->control_payload = 0;
+        a->supervisor = (OresNativeActorRef){0};
+        a->supervisor_bound = a->failure_state = 0;
+        a->failure = (OresNativeActorTerminalFailure){0};
+        a->accepted_user_messages = a->processed_user_messages = a->abandoned_user_messages = 0;
+        a->requested_terminal_kind = 0;
+        a->terminal_valid = 0;
+        a->terminal = (OresNativeActorTerminalState){0};
+        a->allocation_domain = (OresNativeAllocationDomainRef){0};
+        a->last_carrier1 = 0; /* no prior-incarnation affinity hint */
+        a->generation = next;
+        a->spawned = a->retired = 0;
+        RQ_VALIDATE(s);
+    }
+    unlock(s);
+    return next != 0;
 }
 void ores_native_actor_scheduler_retire(OresNativeActorScheduler* s) {
     if (!s) abort();
@@ -1836,6 +2007,7 @@ void ores_native_actor_scheduler_retire(OresNativeActorScheduler* s) {
             if (ores_execution_phase(&lane->authority) != ORES_EXEC_STOPPING
                 && ores_execution_phase(&lane->authority) != ORES_EXEC_TERMINATED)
                 if (!ores_execution_stop(&lane->authority, lane->generation)) abort();
+            activate_retained_cleanup_locked(s, i);
             maybe_finish_stopped_locked(s, i);
         }
     }
@@ -1902,6 +2074,159 @@ int ores_native_actor_scheduler_is_current_actor(
     // is acquired here, never while an actor callback itself is invoked.
     return ores_execution_owns(&s->actors[actor.actor_slot].authority, executing_claim);
 }
+/* Retained DATA receipts are actor-generation-fenced and have a separate
+ * preallocated slot incarnation. Caller-supplied tickets are never trusted. */
+static RetainedDataCredit* matching_retained_locked(
+        OresNativeActorScheduler* s, OresNativeRetainedDataTicket ticket) {
+    if (!matching(s, ticket.actor) || ticket.slot >= s->per_actor_capacity
+            || !ticket.slot_generation || !ticket.execution_id)
+        return NULL;
+    RetainedDataCredit* credit =
+        &s->actors[ticket.actor.actor_slot].retained[ticket.slot];
+    return credit->state != RETAINED_EMPTY
+        && credit->generation == ticket.slot_generation
+        && credit->execution_id == ticket.execution_id ? credit : NULL;
+}
+int ores_native_actor_scheduler_configure_retained_cleanup(
+        OresNativeActorScheduler* s, OresNativeActorRetainedCleanupFn callback) {
+    if (!s || !callback || executing == s) return 0;
+    lock(s);
+    const int ok = !s->retired && !s->cleanup_callback
+        && !s->started_workers && !s->accepted && !s->outstanding
+        && !s->reserved_executions && !s->reserved_wakes;
+    if (ok) s->cleanup_callback=callback;
+    unlock(s);
+    return ok;
+}
+int ores_native_actor_scheduler_retained_cleanup_failed(
+        OresNativeActorScheduler* s, OresNativeActorRef actor) {
+    if (!s) return 0;
+    lock(s);
+    const int failed=matching(s, actor)
+        && s->actors[actor.actor_slot].cleanup_failed;
+    unlock(s);
+    return failed;
+}
+int ores_native_actor_scheduler_retain_current_data(
+        OresNativeActorScheduler* s, OresNativeRetainedDataTicket* out) {
+    if (out) *out = (OresNativeRetainedDataTicket){0};
+    if (!s || !out || executing != s || executing_kind != TURN_DATA
+            || executing_retained_valid || !executing_context.id.execution
+            || !ores_native_actor_scheduler_is_current_actor(s, executing_actor))
+        return 0;
+    const OresNativeActorRef actor = executing_actor;
+    const uint64_t execution_id = executing_context.id.execution;
+    lock(s);
+    ActorLane* lane = &s->actors[actor.actor_slot];
+    int ok = lane->active && lane->carrier_owner_valid
+        && pthread_equal(lane->carrier_owner, pthread_self())
+        && matching(s, actor) && !s->retired && !lane->retired
+        && lane->retained_live == 0
+        && (!s->cleanup_callback
+            || (execution_slot_available_locked(s)
+                && !lane->cleanup_reserved
+                && accepted_capacity_available(s)));
+    size_t slot = 0;
+    if (ok) {
+        for (; slot < s->per_actor_capacity; ++slot)
+            if (lane->retained[slot].state == RETAINED_EMPTY
+                    && lane->retained[slot].generation != UINT64_MAX)
+                break;
+        ok = slot < s->per_actor_capacity;
+    }
+    if (ok) {
+        RetainedDataCredit* credit=&lane->retained[slot];
+        ++credit->generation;
+        credit->execution_id=execution_id;
+        credit->state=RETAINED_IN_CALLBACK;
+        ++lane->retained_live;
+        lane->retained_in_callback=1;
+        *out=(OresNativeRetainedDataTicket){
+            .actor=actor, .slot=(uint64_t)slot,
+            .slot_generation=credit->generation, .execution_id=execution_id
+        };
+        if (s->cleanup_callback) {
+            /* Reserve CPU turn ID BEFORE suspension. No extra outstanding
+             * callback is counted unless STOP actually activates cleanup. */
+            ++s->reserved_executions;
+            ++s->reserved_cleanup_acceptances;
+            lane->cleanup_reserved=1;
+            lane->cleanup_ticket=*out;
+        }
+        executing_retained_ticket=*out;
+        executing_retained_valid=1;
+    }
+    unlock(s);
+    return ok;
+}
+static int settle_retained_data(
+        OresNativeActorScheduler* s, OresNativeRetainedDataTicket ticket,
+        int abandoned) {
+    /* A timer producer never owns the actor heap: even after STOP, only a
+     * currently authenticated actor turn may acknowledge physical cleanup. */
+    if (!s || !ores_native_actor_scheduler_is_current_actor(s, ticket.actor))
+        return 0;
+    lock(s);
+    RetainedDataCredit* credit=matching_retained_locked(s, ticket);
+    int ok = credit && credit->state == RETAINED_PENDING
+        && !s->actors[ticket.actor.actor_slot].cleanup_failed;
+    if (ok) {
+        ActorLane* lane=&s->actors[ticket.actor.actor_slot];
+        if (!lane->active || !lane->carrier_owner_valid
+                || !pthread_equal(lane->carrier_owner, pthread_self())
+                || !lane->retained_live || !s->outstanding)
+            abort();
+        if ((!abandoned && (lane->processed_user_messages == UINT64_MAX
+                        || s->completed == UINT64_MAX))
+                || (abandoned && lane->abandoned_user_messages == UINT64_MAX))
+            abort();
+        if (lane->cleanup_reserved) {
+            if (!s->reserved_executions || !s->reserved_cleanup_acceptances)
+                abort();
+            --s->reserved_executions;
+            --s->reserved_cleanup_acceptances;
+            lane->cleanup_reserved=0;
+            if (lane->cleanup_ready) {
+                if (!s->outstanding) abort();
+                lane->cleanup_ready=0;
+                --s->outstanding;
+            }
+        }
+        lane->cleanup_ticket=(OresNativeRetainedDataTicket){0};
+        --lane->retained_live;
+        --s->outstanding;
+        if (abandoned) ++lane->abandoned_user_messages;
+        else {
+            ++lane->processed_user_messages;
+            ++s->completed;
+        }
+        credit->state=RETAINED_EMPTY;
+        credit->execution_id=0;
+        maybe_finish_stopped_locked(s, (size_t)ticket.actor.actor_slot);
+        if (!s->outstanding) {
+            pthread_cond_broadcast(&s->drained);
+            if (s->retired) pthread_cond_broadcast(&s->ready);
+        }
+    }
+    unlock(s);
+    return ok;
+}
+int ores_native_actor_scheduler_complete_retained_data(
+        OresNativeActorScheduler* s, OresNativeRetainedDataTicket ticket) {
+    return settle_retained_data(s, ticket, 0);
+}
+int ores_native_actor_scheduler_abandon_retained_data(
+        OresNativeActorScheduler* s, OresNativeRetainedDataTicket ticket) {
+    return settle_retained_data(s, ticket, 1);
+}
+size_t ores_native_actor_scheduler_retained_data_count(
+        OresNativeActorScheduler* s, OresNativeActorRef actor) {
+    if (!s) return 0;
+    lock(s);
+    size_t count = matching(s, actor) ? s->actors[actor.actor_slot].retained_live : 0;
+    unlock(s);
+    return count;
+}
 /* Original user DATA-mail sequence is available only while the authenticated
  * actor callback is RUNNING on this scheduler's physical carrier. It is not
  * available to CONTROL, WAKE, detached Tasks or external Future producers.
@@ -1941,19 +2266,25 @@ int ores_native_actor_scheduler_signal_control(OresNativeActorScheduler* s) {
     unlock(s);
     return ok;
 }
+static int any_cleanup_failed_locked(OresNativeActorScheduler* s) {
+    for (size_t i = 0; i < s->actor_count; ++i)
+        if (s->actors[i].cleanup_failed) return 1;
+    return 0;
+}
 int ores_native_actor_scheduler_drain(OresNativeActorScheduler* s) {
     if (!s || executing == s) return 0;
     lock(s);
-    while (s->outstanding || s->resource_loans)
+    while ((s->outstanding || s->resource_loans) && !any_cleanup_failed_locked(s))
         if (pthread_cond_wait(&s->drained, &s->lock) != 0) abort();
+    const int success = !s->outstanding && !s->resource_loans && !any_cleanup_failed_locked(s);
     unlock(s);
-    return 1;
+    return success;
 }
 int ores_native_actor_scheduler_try_destroy(OresNativeActorScheduler* s) {
     if (!s || executing == s) return 0;
     lock(s);
     int ready = s->retired && !s->outstanding && !s->reserved_wakes
-        && !s->resource_loans;
+        && !s->reserved_cleanup_acceptances && !s->reserved_executions && !s->resource_loans;
     if (ready) {
         for (size_t i = 0; i < s->actor_count; ++i) {
             ActorLane* lane = &s->actors[i];
@@ -1982,6 +2313,7 @@ int ores_native_actor_scheduler_try_destroy(OresNativeActorScheduler* s) {
     free(s->sequence_slots);
     free(s->task_slots);
     free(s->wake_slots);
+    free(s->retained_slots);
     free(s->actors);
     free(s);
     return 1;

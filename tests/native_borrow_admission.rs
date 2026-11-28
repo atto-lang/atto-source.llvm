@@ -83,13 +83,17 @@ fn check_case_with_suffix(
     let stderr_path = root.join(format!("{name}.stderr"));
     // Snapshot the parent after creating the harness-owned log files.
     // A failed compiler must not leave artifacts alongside its fixture.
-    let stdout_file = fs::File::create(&stdout_path).unwrap();
-    let stderr_file = fs::File::create(&stderr_path).unwrap();
+    let stdout_file = fs::OpenOptions::new().read(true).write(true).create_new(true).open(&stdout_path).unwrap();
+    let stderr_file = fs::OpenOptions::new().read(true).write(true).create_new(true).open(&stderr_path).unwrap();
     // Capture file names alone are not sufficient provenance: a malicious
     // compiler can replace an existing log with a symlink or another file.
+    // Keep the original open descriptions alive during execution. Size
+    // checks must not race unlink/replacement of the path, and keeping the
+    // inode alive prevents unlink/recreate from recycling its identity.
+    let capture_handles = [stdout_file.try_clone().unwrap(), stderr_file.try_clone().unwrap()];
     let capture_before = [
-        fs::symlink_metadata(&stdout_path).unwrap(),
-        fs::symlink_metadata(&stderr_path).unwrap(),
+        capture_handles[0].metadata().unwrap(),
+        capture_handles[1].metadata().unwrap(),
     ];
     let root_before = entries(root);
     let mut command = Command::new(compiler);
@@ -104,9 +108,8 @@ fn check_case_with_suffix(
         if let Some(status) = child.try_wait().unwrap() {
             break status;
         }
-        let excessive = [&stdout_path, &stderr_path]
-            .iter()
-            .any(|p| fs::metadata(p).unwrap().len() > 1024 * 1024);
+        let excessive = capture_handles.iter()
+            .any(|file| file.metadata().map_or(true, |meta| meta.len() > 1024 * 1024));
         if Instant::now() >= deadline || excessive {
             let _ = child.kill();
             let _ = child.wait();
@@ -119,7 +122,7 @@ fn check_case_with_suffix(
     for (stream_path, original) in [(&stdout_path, &capture_before[0]),
                                     (&stderr_path, &capture_before[1])] {
         let current = fs::symlink_metadata(stream_path)
-            .expect("compiler removed its harness-owned capture file");
+            .unwrap_or_else(|_| panic!("{name}: compiler replaced harness-owned capture file: {}", stream_path.display()));
         assert!(current.file_type().is_file(),
             "{name}: compiler replaced harness-owned capture file: {}", stream_path.display());
         #[cfg(unix)]
@@ -133,14 +136,25 @@ fn check_case_with_suffix(
     }
     // The running-process check can race a compiler that exits immediately.
     // Enforce the output budget again before reading any potentially huge file.
-    for stream_path in [&stdout_path, &stderr_path] {
+    for file in &capture_handles {
         assert!(
-            fs::metadata(stream_path).unwrap().len() <= 1024 * 1024,
+            file.metadata().unwrap().len() <= 1024 * 1024,
             "{name}: compiler exceeded final output budget"
         );
     }
-    let stdout = fs::read_to_string(stdout_path).unwrap();
-    let stderr = fs::read_to_string(stderr_path).unwrap();
+    // Read the same open files that received the child output, never
+    // reopen paths that could be swapped after the provenance check.
+    let read_capture = |mut file: fs::File| {
+        use std::io::{Read, Seek, SeekFrom};
+        file.seek(SeekFrom::Start(0)).unwrap();
+        let mut bytes = Vec::new();
+        file.take(1024 * 1024 + 1).read_to_end(&mut bytes).unwrap();
+        assert!(bytes.len() <= 1024 * 1024, "{name}: compiler exceeded final output budget");
+        String::from_utf8(bytes).unwrap()
+    };
+    let [stdout_capture, stderr_capture] = capture_handles;
+    let stdout = read_capture(stdout_capture);
+    let stderr = read_capture(stderr_capture);
     assert!(
         fs::symlink_metadata(&input).unwrap().file_type().is_file(),
         "{name}: replaced input"
@@ -242,7 +256,14 @@ fn main() {
     let root = Scratch::new();
     let negatives = [
         ("canonical-immutable-owner", include_str!("fixtures/audit-immutable-owner.atto"), "cannot mutably borrow immutable owner 'player'"),
-        ("canonical-overlapping-loans", include_str!("fixtures/audit-overlap.atto"), "conflicting active native borrow of 'box'"),
+        ("canonical-overlapping-loans", include_str!("fixtures/ownership-bang-v1/overlapping-call-loans-reject.atto"), "conflicting active native borrow of 'box'"),
+        ("copy-deep-overlapping-mutable-loan",
+            "fnc inspect(borrow mut int owner, int snapshot): int { return snapshot; }
+             pub fnc main(): int {
+                 let mut int item = 42;
+                 return inspect(borrow! mut item, copy!! item);
+             }",
+            "read conflicts with active mutable borrow of 'item'"),
         ("mut-share-scalar-reject", "pub fnc main(): int { let int v = 42; return rt mut share v; }\n", "native rt mut share requires verified SharedMutex<T> capability"),
         ("mut-share-borrow-reject", "pub fnc main(): int { let int v = 42; return rt mut share (rt borrow v); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
         ("mut-share-parenthesized-owned-reject", "pub fnc main(): int { let int v = 42; return rt mut share (v); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
@@ -253,7 +274,7 @@ fn main() {
         ("mut-share-function-argument-reject", "fnc consume(int x): int { return x; }\npub fnc main(): int { let int v = 42; return consume(rt mut share v); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
         ("mut-share-nested-group-reject", "pub fnc main(): int { let int v = 42; return rt mut share ((v)); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
 
-        ("mut-share-constructor-argument-reject", "pub define class Box as let int value=start;\n  pub constructor(int start){return;}\n  pub read()->int{return self.value;}\nend\npub fnc main(): int { let int v = 42; let Box box = new Box(rt mut share v); return box.read(); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
+        ("mut-share-constructor-argument-reject", "pub define class Parcel as let int value=start;\n  pub constructor(int start){return;}\n  pub read()->int{return self.value;}\nend\npub fnc main(): int { let int v = 42; let Parcel box = new Parcel(rt mut share v); return box.read(); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
         ("mut-share-binary-expression-reject", "pub fnc main(): int { let int v = 42; return 1 + (rt mut share v); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
         ("mut-share-borrowed-call-argument-reject", "fnc read(borrow int x): int { return x; }\npub fnc main(): int { let int v = 42; return read(rt mut share v); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
         ("mut-share-nested-rt-borrow-reject", "pub fnc main(): int { let int v = 42; return rt borrow (rt mut share v); }\n", "native rt mut share requires verified SharedMutex<T> capability"),
@@ -280,7 +301,7 @@ fn main() {
         ("temporary-borrow", "fnc get(borrow int x): int { return x; }\npub fnc main(): int { return get(rt borrow (40 + 2)); }\n", "native borrow requires an addressable named int"),
         ("shared-to-mutable", "fnc edit(borrow mut int x): int { return x; }\nfnc inner(borrow int x): int { return edit(rt mut borrow x); }\npub fnc main(): int { let int v = 42; return inner(rt borrow v); }\n", "cannot mutably reborrow shared parameter"),
         ("borrow-to-owned-parameter", "fnc consume(int x): int { return x; }\npub fnc main(): int { let int v = 42; return consume(rt borrow v); }\n", "borrowed reference may only be passed to a borrowed parameter"),
-        ("borrow-to-owned-constructor", "pub define class Box as let int value=start;\n  pub constructor(int start){return;}\n  pub read()->int{return self.value;}\nend\npub fnc main(): int { let int v = 42; let Box box = new Box(rt borrow v); return box.read(); }\n", "native scalar constructor argument requires pure integer expression"),
+        ("borrow-to-owned-constructor", "pub define class Parcel as let int value=start;\n  pub constructor(int start){return;}\n  pub read()->int{return self.value;}\nend\npub fnc main(): int { let int v = 42; let Parcel box = new Parcel(rt borrow v); return box.read(); }\n", "native scalar constructor argument requires pure integer expression"),
         ("generator-yield-loan-unsupported", "generator fnc values(): int { let int x = 1; yield rt borrow x; return; }\n", "bare native generator declaration requires 'generator*'"),
         ("canonical-borrowed-yield-unsupported", "gen* values(): Iterator<int> { yield rt borrow x; return; }\n", "expected integer literal"),
     ];
@@ -294,7 +315,7 @@ fn main() {
         ("valid-shared-borrow", "fnc read(borrow int x): int { return x; }\npub fnc main(): int { let int v = 42; return read(rt borrow v); }\n"),
         ("valid-exclusive-mutable-borrow", "fnc read(borrow mut int x): int { return x; }\npub fnc main(): int { let int v = 42; return read(rt mut borrow v); }\n"),
         ("valid-owned-scalar-call", "fnc consume(int x): int { return x; }\npub fnc main(): int { return consume(42); }\n"),
-        ("valid-owned-constructor", "pub define class Box as let int value=start;\n  pub constructor(int start){return;}\n  pub read()->int{return self.value;}\nend\npub fnc main(): int { let Box box = new Box(42); return box.read(); }\n"),
+        ("valid-owned-constructor", "pub define class Parcel as let int value=start;\n  pub constructor(int start){return;}\n  pub read()->int{return self.value;}\nend\npub fnc main(): int { let Parcel box = new Parcel(42); return box.read(); }\n"),
     ];
     let admitted = positives.len();
     for (name, source) in positives {
@@ -574,6 +595,14 @@ mod tests {
     fn negative_admission_rejects_capture_regular_file_replacement() {
         check_replaced_capture_file(
             "rm ../invalid-mutable-share.stderr\nprintf 'bad ownership\\n' > ../invalid-mutable-share.stderr\nexit 2",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn negative_admission_rejects_capture_removal() {
+        check_replaced_capture_file(
+            "rm ../invalid-mutable-share.stderr\nprintf 'bad ownership\\n' >&2\nexit 2",
         );
     }
 

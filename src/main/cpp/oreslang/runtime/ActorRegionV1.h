@@ -83,6 +83,15 @@ void ores_actor_region_v1_compiler_drop(OresActorRegionV1* region,
     const OresArenaTurn* turn, OresActorRegionV1Ref* ref);
 void ores_actor_region_v1_compiler_leave(OresActorRegionV1* region,
     const OresArenaTurn* turn);
+/* Checked AOT terminal cleanup for the restricted 1..8 fully initialized
+ * lexical-owner subset. Owners are in verified reverse destruction order.
+ * Preflight is all-or-none; successful return means all owned slots dropped,
+ * turn left, arena retired and physical storage reclaimed. No exceptions,
+ * live suspension, callback registration, or extra guest allocations are
+ * admitted by this ABI. A later unsupported exit must fail at compilation. */
+void ores_actor_region_v1_compiler_finish(OresActorRegionV1* region,
+    const OresArenaTurn* turn, OresActorRegionV1Ref* const* owners,
+    uint32_t owner_count);
 
 #ifdef __cplusplus
 }

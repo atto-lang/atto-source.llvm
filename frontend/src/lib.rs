@@ -9,13 +9,22 @@
 pub mod ast;
 /// Pure bounded typed-IR DATA send-effect closure, shared with peer frontend.
 pub mod actor_send_effect_graph;
+/// Resolved call graph parking analysis, shared with Rust backend; no guest lowering.
+pub mod runtime_parking_effects;
 pub mod check;
+/// Staged typed V2 call planning; not yet connected to executable lowering.
+pub mod call_presence_v2;
 pub mod diag;
 pub mod directed_pipe;
 pub mod generator_cfg;
 pub mod generator_frame;
 pub mod lexer;
 pub mod parser;
+mod contextual_specialization;
+mod struct_value_guest;
+mod native_scalar_c;
+mod physical_layout;
+mod physical_placement;
 pub mod target_syntax;
 pub mod target_typed;
 pub mod wasm;
@@ -28,6 +37,26 @@ pub const COMPILER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Compile one `.atto` source file to a guest WebAssembly module.
 pub fn compile(source: &str) -> Result<Vec<u8>, Diagnostic> {
+    compile_target(source, false, false)
+}
+
+/// Explicit isolated core-wasm.i64-v1 profile; the browser ABI is unchanged.
+pub fn compile_isolated_core(source: &str) -> Result<Vec<u8>, Diagnostic> {
+    compile_target(source, false, true)
+}
+
+/// Restricted attached nominal scalar source -> checked C11 (Clang GNU expressions).
+/// The caller must compile/link this text; this is not the independent C++ frontend.
+pub fn compile_struct_native_c(source: &str) -> Result<String, Diagnostic> {
+    String::from_utf8(compile_target(source, true, false)?).map_err(|_| native_scalar_c::unsupported())
+}
+
+/// Explicit closed source-defined physical placement -> native C/Clang lane.
+pub fn compile_physical_placement_c(source:&str)->Result<String,Diagnostic>{
+    physical_placement::compile(source)
+}
+
+fn compile_target(source: &str, native_c: bool, isolated: bool) -> Result<Vec<u8>, Diagnostic> {
     if source.len() > SOURCE_CAP {
         return Err(Diagnostic::new(
             Pos { line: 1, col: 1 },
@@ -36,27 +65,92 @@ pub fn compile(source: &str) -> Result<Vec<u8>, Diagnostic> {
         ));
     }
     let toks = lexer::lex(source)?;
+    if contextual_specialization::present(&toks) && (native_c || isolated) {
+        return Err(Diagnostic::new(toks[0].pos, "E_CONTEXT_PROFILE", "contextual specialization is only implemented in the browser Wasm frontend profile"));
+    }
+    let toks = contextual_specialization::lower(toks)?;
     if let Some(pos) = directed_pipe::unlowered_pos(&toks) {
         return Err(Diagnostic::new(pos, "E_UNSUPPORTED_CONTINUOUS_PIPE",
             "typed pipe/rpipe DATA graph is planned but no guest transport or PipeHandle exists"));
     }
+    // Attached nominal struct syntax has its own target AST. Never route it
+    // through identity-bearing class or structural shape lowering. Locate
+    // top-level declaration headers using lexer tokens, not source text.
+    let mut depth = 0usize;
+    let mut pending_struct = None;
+    for (i, token) in toks.iter().enumerate() {
+        if depth == 0 && (matches!(toks.get(i..i.saturating_add(5)),
+            Some([lexer::Token { tok: lexer::Tok::Ident(a), .. },
+                  lexer::Token { tok: lexer::Tok::Ident(_), .. },
+                  lexer::Token { tok: lexer::Tok::Assign, .. },
+                  lexer::Token { tok: lexer::Tok::Ident(b), .. },
+                  lexer::Token { tok: lexer::Tok::LBrace, .. }])
+                if a == "type" && b == "struct")
+            || matches!(toks.get(i..i.saturating_add(4)),
+                Some([lexer::Token { tok: lexer::Tok::Ident(a), .. },
+                      lexer::Token { tok: lexer::Tok::Ident(b), .. },
+                      lexer::Token { tok: lexer::Tok::Ident(_), .. },
+                      lexer::Token { tok: lexer::Tok::LBrace, .. }])
+                    if a == "define" && b == "struct")) {
+            pending_struct = Some(i);
+        }
+        match &token.tok {
+            lexer::Tok::LBrace => depth += 1,
+            lexer::Tok::RBrace => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    if let Some(start) = pending_struct.take() {
+                        if matches!(toks.get(i+1).map(|t| &t.tok),
+                            Some(lexer::Tok::Ident(w)) if w == "with") {
+                            if start != 0 {
+                                return Err(Diagnostic::new(toks[start].pos, "E_UNSUPPORTED",
+                                    "attached struct execution requires leading file-local declarations"));
+                            }
+                            let program = struct_value_guest::lower(toks.clone())?;
+                            let typed = check::check(&program)?;
+                            if typed.heap || typed.strings || !typed.actors.is_empty()
+                                || !typed.generators.is_empty() || !typed.globals.is_empty() {
+                                return Err(Diagnostic::new(toks[start].pos, "E_UNSUPPORTED",
+                                    "scalar struct lowering must not allocate or use actor/generator/global state"));
+                            }
+                            if native_c { return native_scalar_c::emit(&typed).map(String::into_bytes); }
+                            let bytes = if isolated { wasm::emit_isolated_core(&typed)? } else { wasm::emit(&typed) };
+                            if bytes.len() > wasm::MAX_OUTPUT {
+                                return Err(Diagnostic::new(toks[start].pos, "E_OUTPUT_LIMIT",
+                                    "generated module exceeds 1 MiB"));
+                            }
+                            return Ok(bytes);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    if native_c { return Err(native_scalar_c::unsupported()); }
     // Detect target declarations at any file-scope position, not only at
     // source byte zero. Ignore comments/strings (the lexer already tokenizes
     // them) and ignore nested brace bodies so a string or local expression
     // cannot accidentally switch the compiler into the target grammar.
     let mut braces = 0usize;
     let mut target = false;
+    let mut explicit_target = false;
     for i in 0..toks.len() {
         match &toks[i].tok {
             lexer::Tok::LBrace => braces = braces.saturating_add(1),
             lexer::Tok::RBrace => braces = braces.saturating_sub(1),
             lexer::Tok::Ident(word) if braces == 0 => {
                 let next = toks.get(i + 1).map(|token| &token.tok);
-                if word == "declare" || word == "mtd" ||
+                if word == "declare" ||
                     (word == "use" && matches!(next,
                         Some(lexer::Tok::Ident(name)) if name == "namespace")) {
+                    explicit_target = true;
                     target = true;
                     break;
+                }
+                // Only ambiguous receiver-like tokens need a second grammar.
+                if word == "mtd" && matches!(next, Some(lexer::Tok::LParen)) {
+                    target = true;
                 }
             }
             _ => {}
@@ -76,7 +170,14 @@ pub fn compile(source: &str) -> Result<Vec<u8>, Diagnostic> {
                 "attached actor state is parsed but its guarded native/guest runtime is unavailable"));
         }
     }
-    if target {
+    // Preserve explicit target/attached actor gates above. Only ambiguous
+    // mtd() names may try the full executable grammar first.
+    let ordinary = if target && !explicit_target && !attached_actor_state {
+        parser::Parser::new(toks.clone()).parse_program().ok()
+    } else { None };
+    let program = if let Some(program) = ordinary {
+        program
+    } else if target {
         let headers = target_syntax::parse_target_declarations(&toks)?;
         // Type the declared method signatures without handing unlinked actor
         // declarations to the executable check / Wasm backend.
@@ -85,10 +186,11 @@ pub fn compile(source: &str) -> Result<Vec<u8>, Diagnostic> {
         check::check_target_actor_interface(&actor_ast)?;
         return Err(Diagnostic::new(toks[0].pos, "E_UNSUPPORTED",
             "namespace-scoped actor declarations and mtd methods are syntax-only, not browser-lowered"));
-    }
-    let program = parser::Parser::new(toks).parse_program()?;
+    } else {
+        parser::Parser::new(toks).parse_program()?
+    };
     let typed = check::check(&program)?;
-    let bytes = wasm::emit(&typed);
+    let bytes = if isolated { wasm::emit_isolated_core(&typed)? } else { wasm::emit(&typed) };
     if bytes.len() > wasm::MAX_OUTPUT {
         return Err(Diagnostic::new(
             Pos { line: 1, col: 1 },
@@ -183,8 +285,13 @@ mod abi {
                     ),
                 );
             }
-            // SAFETY: single-threaded wasm; the host wrote `length` bytes before calling.
-            let input: &[u8] = unsafe { &(*std::ptr::addr_of!(INPUT))[..length as usize] };
+            // SAFETY: the checked length is within the initialized static INPUT buffer.
+            // The single-threaded Wasm ABI does not allow host writes while compile runs.
+            // Form only the requested byte slice, not an implicit reference to the
+            // entire raw array. This keeps dangerous_implicit_autorefs enabled.
+            let input: &[u8] = unsafe {
+                std::slice::from_raw_parts(std::ptr::addr_of!(INPUT).cast::<u8>(), length as usize)
+            };
             let source = match std::str::from_utf8(input) {
                 Ok(s) => s,
                 Err(_) => {

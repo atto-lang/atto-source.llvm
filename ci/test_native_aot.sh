@@ -3,12 +3,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export CARGO_NET_OFFLINE=true
-test "$(git hash-object frontend/src/check.rs)" = "fc8806e97d94f408fd145f48b73ab33324dae2fa"
-test "$(git hash-object frontend/src/parser.rs)" = "156aadd760c0156277223e6b2defaab3be7ae11f"
-test "$(git hash-object frontend/src/lexer.rs)" = "f48dc2b2c9759dcebec77d30daecd4fc8e412944"
+test "$(git hash-object frontend/src/check.rs)" = "07634eb1445c35ee523d649cdcef4ddbd1a2e241"
+test "$(git hash-object frontend/src/parser.rs)" = "13a3261355b088d1b4fc6a976f5ddf45ac302cd7"
+test "$(git hash-object frontend/src/lexer.rs)" = "f12cc53cf4d59f9ee4c0918ef708673e3d2031d8"
 
-cargo test --offline
-cargo build --offline --release --bin atto-llvm
+cargo test --locked --offline
+cargo build --locked --offline --release --bin atto-llvm
 clang --version | head -n 1
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -214,5 +214,9 @@ if find "$work" -type f -name '*.atto-stage-*.tmp' | grep -q .; then
   echo "FAIL: temporary compiler artifacts leaked" >&2; exit 1
 fi
 echo "PASS atomic output, failure preservation, and cleanup"
+
+bash ci/test_int_membership_native.sh
+bash ci/test_guard_dual_form_native.sh
+bash ci/test_safe_signed_division_native.sh
 
 echo "PASS LLVM_NATIVE_AOT_SCALAR_GUEST cases=$total toolchain=clang no_guest_vm=1 zero_gc_scalar=1"

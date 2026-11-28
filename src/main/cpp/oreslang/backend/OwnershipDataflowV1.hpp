@@ -75,6 +75,13 @@ public:
     static constexpr std::size_t MaxBlocks = 4096;
     static constexpr std::size_t MaxEdges = 16384;
     static constexpr std::size_t MaxOperationsPerBlock = 1024;
+    static constexpr std::size_t MaxShadowEventsV0 = 65536;
+    struct ShadowEventV0 {
+        std::size_t block;
+        std::size_t operation;
+        OwnershipV1OpKind kind;
+        std::size_t owner;
+    };
     static constexpr std::size_t MaxBorrowsPerOwner = 65535;
 
     static OwnershipV1Result analyze(const OwnershipV1Graph& graph,
@@ -103,6 +110,14 @@ public:
                 if (next >= graph.blocks.size()) fail("invalid CFG successor");
         }
 
+        std::vector<ShadowEventV0> stagedShadow;
+        const auto recordShadow = [&](std::size_t block, std::size_t operation,
+                                      OwnershipV1OpKind kind, std::size_t owner) {
+            if (shadow == nullptr) return;
+            if (stagedShadow.size() >= MaxShadowEventsV0)
+                fail("shadow event budget exceeded before trace publication");
+            stagedShadow.push_back({block, operation, kind, owner});
+        };
         State initial(graph.owners.size());
         std::vector<bool> reached(graph.blocks.size(), false);
         std::vector<State> incoming(graph.blocks.size());
@@ -159,14 +174,12 @@ public:
                                    state[rhs].acquisition_order;
                         });
                     result.normal_exits.push_back(std::move(plan));
-                    if (shadow != nullptr)
-                        shadow(shadow_context, index, op_index, op.kind, op.owner);
+                    recordShadow(index, op_index, op.kind, op.owner);
                     has_exit = true;
                     break;
                 }
                 apply(op, state, graph.owners.size(), next_acquisition_order);
-                if (shadow != nullptr)
-                    shadow(shadow_context, index, op_index, op.kind, op.owner);
+                recordShadow(index, op_index, op.kind, op.owner);
             }
             if (has_exit) continue;
             if (block.successors.empty())
@@ -215,6 +228,11 @@ public:
         }
         if (topological_count != reachable_count)
             fail("cyclic CFG requires a separate bounded-loop ownership proof");
+        // Publish only after successful CFG verification. A throwing
+        // consumer may see a prefix and must discard it on failure.
+        if (shadow != nullptr)
+            for (const auto& event : stagedShadow)
+                shadow(shadow_context, event.block, event.operation, event.kind, event.owner);
         return result;
     }
 
