@@ -169,8 +169,45 @@ static void reject_with_diagnostic(std::string_view source,
 }
 
 int main(int argc, char** argv) {
-    if (argc != 2) throw std::runtime_error("expected canonical .atto fixture directory");
+    const bool arrow_only = argc == 3 && std::string_view(argv[2]) == "--binding-arrow-only";
+    if (argc != 2 && !arrow_only) throw std::runtime_error("expected canonical .atto fixture directory");
     const std::string root(argv[1]);
+    // Real native parser + type/ownership admission. No object emission
+    // or executable guest claim is made by this unit test.
+    for (const auto* body : {
+            "let a <- 42; return a;",
+            "let int a <- 42; return a;",
+            "let a = 0; set a <- 42; return a;",
+            "let bool flag <- true; return flag ? 42 : 0;"}) {
+        const auto program = oreslang::parse_program(
+            std::string("pub fnc main(): int { ") + body + " }");
+        if (program.functions.size() != 1 || !program.functions[0].result)
+            throw std::runtime_error("native literal arrow lost main");
+    }
+    for (const auto* body : {
+            "const a <- 42; return a;",
+            "int a <- 42; return a;",
+            "val a <- 42; return a;",
+            "let a = 0; set! a <- 42; return a;",
+            "let a = 0; a <- 42; return a;",
+            "set missing <- 42; return 0;",
+            "const a = 0; set a <- 42; return a;",
+            "let a = 0; set a <- true; return a;",
+            "let a < - 42; return a;",
+            "let a • 42; return a;",
+            "let b = 42; let a <- b; return a;",
+            "let a <- 21 + 21; return a;"}) {
+        bool rejected = false;
+        try {
+            (void)oreslang::parse_program(
+                std::string("pub fnc main(): int { ") + body + " }");
+        } catch (const std::runtime_error&) { rejected = true; }
+        if (!rejected)
+            throw std::runtime_error(std::string("unexpected arrow admission: ") + body);
+    }
+
+    if (arrow_only) return 0;
+
     // Compiler-created ASTs must independently validate absolute-value
     // operand types, not rely solely on parser or codegen checks.
     {
