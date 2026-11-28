@@ -2063,13 +2063,15 @@ static std::string emit_verified_llvm_ir_impl(const Program& source, bool wasm32
         // converted from a host address. Linear ActorRef cannot escape into
         // source scalar values, native calls, or foreign FFI.
         std::unordered_map<std::string, llvm::Value*> actorRefs;
-        for (const auto& spawn : fn.actor_spawns) {
+        auto emit_actor_spawn = [&](const ActorSpawnBinding& spawn) {
+            if (tenant_vm_guest && spawn.after_actor_effect)
+                throw std::runtime_error("late actor spawn requires physical host stop semantics");
             if (tenant_vm_guest) {
                 const auto kind = std::find_if(source.actors.begin(), source.actors.end(),
                     [&](const ActorDecl& a) { return a.name == spawn.actor_type; }) - source.actors.begin();
                 actorRefs.emplace(spawn.name, builder.CreateCall(sourceSpawn,
                     {llvm::ConstantInt::get(i64, static_cast<std::uint64_t>(kind))}, spawn.name + ".actor.ref"));
-                continue;
+                return;
             }
             llvm::Value* ctor = builder.CreatePointerCast(actorInits.at(spawn.actor_type),
                 native_ptr);
@@ -2083,7 +2085,9 @@ static std::string emit_verified_llvm_ir_impl(const Program& source, bool wasm32
                         actor->fields.size() + actor->on_message.locals.size())},
                 spawn.name + ".actor.checked.id");
             actorRefs.emplace(spawn.name, ref);
-        }
+        };
+        for (const auto& spawn : fn.actor_spawns)
+            if (!spawn.after_actor_effect) emit_actor_spawn(spawn);
         // An explicitly "owned int" lives in a bounded native C region;
         // ordinary int remains stack-owned. Both allow only call-scoped loans.
         struct LocalSlot {
@@ -3268,10 +3272,12 @@ static std::string emit_verified_llvm_ir_impl(const Program& source, bool wasm32
                 },
                 "future.await.done.result");
         } else {
-            // Emit observable actor effects in source order. Reordering all
-            // sends ahead of all stops executes stopped workers' messages.
+            // Emit observable actor effects in source order, including
+            // late construction after the earlier actor physically retires.
             for (const auto& action : fn.actor_actions) {
-                if (action.kind == ActorAction::Kind::Send) {
+                if (action.kind == ActorAction::Kind::Spawn) {
+                    emit_actor_spawn(fn.actor_spawns.at(action.index));
+                } else if (action.kind == ActorAction::Kind::Send) {
                     const auto& send = fn.actor_sends.at(action.index);
                     llvm::Value* payload = lower(
                         *send.payload,

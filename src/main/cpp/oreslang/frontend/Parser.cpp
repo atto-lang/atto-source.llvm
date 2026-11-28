@@ -5932,6 +5932,37 @@ private:
                 continue;
             }
             if (ready_future_local()) continue;
+            // Late immutable ActorRef binding in the straight-line root actor
+            // bootstrap. Keep it in lexical effect order instead of hoisting
+            // construction above a preceding physical stop or DATA send.
+            if ((token_.text == "const" || token_.text == "val") && [&] {
+                    Lexer look = lexer_;
+                    return look.next().kind == Kind::Identifier
+                        && look.next().text == "=" && look.next().text == "spawn";
+                }()) {
+                if (!owner.empty() || value.name != "main" ||
+                        !value.parameters.empty() || value.returns_void ||
+                        value.actor_actions.empty() || !value.locals.empty() ||
+                        !value.statements.empty() || !value.early_returns.empty() ||
+                        !value.ready_await_actor.empty() || !value.done_await_actor.empty() ||
+                        !value.ready_future_name.empty() || !value.source_tasks.empty() ||
+                        !value.future_pipelines.empty() || terminal_try_finally)
+                    fail("late actor spawn requires straight-line synchronous root actor bootstrap");
+                ActorSpawnBinding spawned;
+                spawned.offset = token_.offset;
+                spawned.after_actor_effect = true;
+                advance();
+                spawned.name = identifier();
+                require("="); require("spawn");
+                spawned.actor_type = identifier();
+                spawned.declared_type.kind = SourceType::Kind::ActorRef;
+                spawned.declared_type.argument = spawned.actor_type;
+                require("("); require(")"); require(";");
+                value.actor_spawns.push_back(std::move(spawned));
+                value.actor_actions.push_back({ActorAction::Kind::Spawn,
+                                               value.actor_spawns.size() - 1});
+                continue;
+            }
             if (token_.text == "const" || token_.text == "val" || token_.text == "let" ||
                         token_.text == "int" || token_.text == "bool" ||
                         token_.text == "string" || token_.text == "String") {
@@ -9418,10 +9449,18 @@ private:
                 const auto it = actor_types.find(spawn.actor_type);
                 if (it == actor_types.end())
                     throw std::runtime_error("unknown actor type '" + spawn.actor_type + "'");
-                if (!live_actors.insert(spawn.name).second || params.count(spawn.name))
+                if (references.count(spawn.name) || params.count(spawn.name))
                     throw std::runtime_error("duplicate actor reference '" + spawn.name + "'");
                 references.emplace(spawn.name, it->second);
+                if (!spawn.after_actor_effect) live_actors.insert(spawn.name);
             }
+            if (std::any_of(fn.actor_spawns.begin(), fn.actor_spawns.end(),
+                    [](const ActorSpawnBinding& spawn) { return spawn.after_actor_effect; }) &&
+                    (!fn.ready_await_actor.empty() || !fn.done_await_actor.empty() ||
+                     !fn.ready_future_name.empty() || !fn.locals.empty() ||
+                     !fn.statements.empty() || !fn.source_tasks.empty() ||
+                     !fn.future_pipelines.empty()))
+                throw std::runtime_error("late actor spawn requires straight-line synchronous root actor bootstrap");
             if (!fn.ready_future_name.empty()) {
                 // A Future<void> alias must be consumed once, cannot shadow
                 // any live actor/parameter/local, and cannot be forged from
@@ -9785,9 +9824,21 @@ private:
                 check_statement_names(stmt, params);
             // Validate effects in lexical order. In particular, a send after
             // stop must not pass by consulting the all-spawns reference map.
+            std::unordered_set<std::string> not_yet_spawned;
+            for (const auto& spawn : fn.actor_spawns)
+                if (spawn.after_actor_effect) not_yet_spawned.insert(spawn.name);
             for (const auto& action : fn.actor_actions) {
+                if (action.kind == ActorAction::Kind::Spawn) {
+                    const auto& spawn = fn.actor_spawns.at(action.index);
+                    if (!not_yet_spawned.erase(spawn.name) ||
+                            !live_actors.insert(spawn.name).second)
+                        throw std::runtime_error("invalid or repeated late actor spawn");
+                    continue;
+                }
                 if (action.kind == ActorAction::Kind::Send) {
                     const auto& send = fn.actor_sends.at(action.index);
+                    if (not_yet_spawned.count(send.reference))
+                        throw std::runtime_error("actor message sent before spawn '" + send.reference + "'");
                     if (!references.count(send.reference))
                         throw std::runtime_error("unknown actor message receiver '" + send.reference + "'");
                     if (!live_actors.count(send.reference))
@@ -9822,6 +9873,8 @@ private:
                         throw std::runtime_error("invalid or repeated actor stop '" + stop + "'");
                 }
             }
+            if (!not_yet_spawned.empty())
+                throw std::runtime_error("missing late actor spawn action");
             if (!fn.done_await_actor.empty() && live_actors.count(fn.done_await_actor))
                 throw std::runtime_error("await get_done requires stop before await");
             if (!live_actors.empty())

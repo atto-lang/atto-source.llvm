@@ -1,0 +1,389 @@
+name: Actor execution ledger exact-head
+on:
+  pull_request:
+    paths:
+      - src/main/cpp/oreslang/main.cpp
+      - src/main/cpp/oreslang/frontend/**
+      - src/main/cpp/oreslang/types/**
+      - src/main/cpp/oreslang/backend/**
+      - src/main/cpp/oreslang/runtime/**
+      - src/main/cpp/oreslang/runtime/ActorExecutionLedger.hpp
+      - src/main/cpp/oreslang/runtime/ActorLedgerLeaseAdapter.hpp
+      - src/main/cpp/oreslang/runtime/NativeActorScheduler.c
+      - src/main/cpp/oreslang/runtime/NativeActorScheduler.h
+      - src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h
+      - src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c
+      - tests/native_actor_ledger_scheduler_bridge_test.cpp
+      - tests/native_actor_retained_data_stop_test.c
+      - tests/native_actor_retained_data_ordering_test.c
+      - tests/native_actor_retained_cleanup_autoadmit_test.c
+      - tests/native_actor_retained_cleanup_unused_reservation_test.c
+      - tests/native_actor_retained_stop_wake_race_test.c
+      - tests/actor_owned_heap_lifecycle_test.cpp
+      - tests/pinned_actor_heap_suspend_test.cpp
+      - src/main/cpp/oreslang/runtime/PinnedContinuationGate.hpp
+      - src/main/cpp/oreslang/runtime/AsyncIoCompletionGate.hpp
+      - tests/native_actor_execution_ledger_test.cpp
+      - tests/native_actor_compiled_guest_ledger_bridge_test.c
+      - tests/rust-harness/src/retained_guest.rs
+      - tests/fixtures/native-retained-guest-steps.atto
+      - tests/fixtures/source-actor-suspend-method-reject.ores
+      - docs/ACTOR_EXECUTION_LEDGER_V1.md
+      - CMakeLists.txt
+      - .github/workflows/actor-execution-ledger-exact-head.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  actor-ledger-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout original repository immutable head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact commit and Git blobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          head="$(git rev-parse HEAD)"
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          echo "EXACT_HEAD=$head EXACT_TREE=$tree"
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            test "$head" = "${{ github.event.pull_request.head.sha }}"
+          fi
+          # Fail if the checked-out compiler or actor source was changed by
+          # checkout hooks or generated files before the immutable blob audit.
+          test -z "$(git status --porcelain --untracked-files=all)"
+          for path in \
+            src/main/cpp/oreslang/runtime/ActorExecutionLedger.hpp \
+            src/main/cpp/oreslang/runtime/ActorLedgerLeaseAdapter.hpp \
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+            src/main/cpp/oreslang/runtime/NativeActorScheduler.h \
+            src/main/cpp/oreslang/runtime/NativeExecutionAuthority.h \
+            src/main/cpp/oreslang/runtime/NativeExecutionContext.h \
+            src/main/cpp/oreslang/runtime/NativePhysicalTurnGate.h \
+            tests/native_actor_execution_ledger_test.cpp \
+            tests/native_actor_ledger_scheduler_bridge_test.cpp \
+            tests/native_actor_retained_data_stop_test.c \
+            tests/native_actor_retained_data_ordering_test.c \
+            tests/native_actor_retained_cleanup_autoadmit_test.c \
+            tests/native_actor_retained_cleanup_unused_reservation_test.c \
+            tests/native_actor_retained_stop_wake_race_test.c \
+            src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c \
+            src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h \
+            src/main/cpp/oreslang/runtime/PinnedContinuationGate.hpp \
+            src/main/cpp/oreslang/runtime/AsyncIoCompletionGate.hpp \
+            tests/actor_owned_heap_lifecycle_test.cpp \
+            tests/pinned_actor_heap_suspend_test.cpp \
+            tests/source_actor_await_trace_runtime_test.c \
+            src/main/cpp/oreslang/runtime/NativeOresVM.c \
+            src/main/cpp/oreslang/runtime/NativeActorFuture.c \
+            src/main/cpp/oreslang/runtime/SourceActorBootstrap.c \
+            src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c \
+            src/main/cpp/oreslang/runtime/NativeContinuationStore.c \
+            src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c \
+            src/main/cpp/oreslang/runtime/NativeLogicalTrace.c \
+            tests/native_actor_compiled_guest_ledger_bridge_test.c \
+            tests/rust-harness/src/retained_guest.rs \
+            tests/fixtures/native-retained-guest-steps.atto \
+            tests/fixtures/source-actor-suspend-method-reject.ores; do
+            expected="$(git rev-parse "HEAD:$path")"
+            actual="$(git hash-object "$path")"
+            test "$actual" = "$expected"
+            echo "EXACT_BLOB $path $actual"
+          done
+      - name: GCC and Clang strict native execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/actor-ledger-gate
+          for cxx in g++ clang++; do
+            "$cxx" -std=c++17 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+              -Isrc/main/cpp tests/native_actor_execution_ledger_test.cpp \
+              -o "build/actor-ledger-gate/test-${cxx//+/p}"
+            "build/actor-ledger-gate/test-${cxx//+/p}"
+          done
+      - name: Clang ASan and UBSan
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euo pipefail
+          clang++ -std=c++17 -O1 -g -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Isrc/main/cpp tests/native_actor_execution_ledger_test.cpp \
+            -o build/actor-ledger-gate/test-sanitized
+          build/actor-ledger-gate/test-sanitized
+
+      - name: Exact-head actor-owned heap negative and pinned-loan regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Existing CMake fixtures cover foreign slots, stale turns, borrowed
+          # mutation, actor reentry, cancellation and physical loan quiescence.
+          for tool in gcc clang; do
+            if [[ "$tool" = gcc ]]; then cxx=g++; else cxx=clang++; fi
+            "$tool" -std=c11 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+              -pthread -Isrc/main/cpp -c \
+              src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c \
+              -o "build/actor-ledger-gate/heap-$tool.o"
+            for fixture in actor_owned_heap_lifecycle_test pinned_actor_heap_suspend_test; do
+              "$cxx" -std=c++17 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+                -pthread -Isrc/main/cpp "tests/$fixture.cpp" \
+                "build/actor-ledger-gate/heap-$tool.o" \
+                -o "build/actor-ledger-gate/$fixture-$tool"
+              "build/actor-ledger-gate/$fixture-$tool"
+            done
+          done
+      - name: Exact-head actor-owned heap Clang ASan and UBSan
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O1 -g -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+            -pthread -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Isrc/main/cpp -c \
+            src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c \
+            -o build/actor-ledger-gate/heap-sanitized.o
+          for fixture in actor_owned_heap_lifecycle_test pinned_actor_heap_suspend_test; do
+            clang++ -std=c++17 -O1 -g -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+              -pthread -fsanitize=address,undefined -fno-omit-frame-pointer \
+              -Isrc/main/cpp "tests/$fixture.cpp" \
+              build/actor-ledger-gate/heap-sanitized.o \
+              -o "build/actor-ledger-gate/$fixture-sanitized"
+            "build/actor-ledger-gate/$fixture-sanitized"
+          done
+      - name: Existing native source actor trace runtime regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          # This target is already registered as source_actor_await_trace_runtime
+          # in CMakeLists.txt. Run directly here without requiring the LLVM
+          # compiler build or a cross-organization checkout.
+          for tool in gcc clang; do
+            "$tool" -std=c11 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+              -pthread -Isrc/main/cpp \
+              tests/source_actor_await_trace_runtime_test.c \
+              src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c \
+              src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+              src/main/cpp/oreslang/runtime/NativeOresVM.c \
+              src/main/cpp/oreslang/runtime/NativeActorFuture.c \
+              src/main/cpp/oreslang/runtime/SourceActorBootstrap.c \
+              src/main/cpp/oreslang/runtime/NativeExecutionContextStore.c \
+              src/main/cpp/oreslang/runtime/NativeContinuationStore.c \
+              src/main/cpp/oreslang/runtime/NativeAwaitTraceBridge.c \
+              src/main/cpp/oreslang/runtime/NativeLogicalTrace.c \
+              -o "build/actor-ledger-gate/source-trace-$tool"
+            "build/actor-ledger-gate/source-trace-$tool"
+
+      - name: Real native scheduler DATA/WAKE bridge under GCC and Clang
+        shell: bash
+        run: |
+          set -euo pipefail
+          for tool in gcc clang; do
+            case "$tool" in
+              gcc) cxx=g++ ;;
+              clang) cxx=clang++ ;;
+            esac
+            "$tool" -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror -pthread \
+              -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+              -o "build/actor-ledger-gate/scheduler-$tool.o"
+            "$cxx" -std=c++17 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+              -pthread -Isrc/main/cpp \
+              tests/native_actor_ledger_scheduler_bridge_test.cpp \
+              "build/actor-ledger-gate/scheduler-$tool.o" \
+              -o "build/actor-ledger-gate/bridge-$tool"
+            "build/actor-ledger-gate/bridge-$tool"
+          done
+      - name: Retained DATA mailbox quota, STOP and physical retirement
+        shell: bash
+        run: |
+          set -euo pipefail
+          for tool in gcc clang; do
+            "$tool" -std=c11 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+              -pthread -Isrc/main/cpp \
+              tests/native_actor_retained_data_stop_test.c \
+              src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+              -o "build/actor-ledger-gate/retained-stop-$tool"
+            "build/actor-ledger-gate/retained-stop-$tool"
+          done
+      - name: Retained A blocks later DATA B until authenticated WAKE
+        shell: bash
+        run: |
+          set -euo pipefail
+          for tool in gcc clang; do
+            "$tool" -std=c11 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+              -pthread -Isrc/main/cpp \
+              tests/native_actor_retained_data_ordering_test.c \
+              src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+              -o "build/actor-ledger-gate/retained-order-$tool"
+            "build/actor-ledger-gate/retained-order-$tool"
+          done
+      - name: STOP pre-reserved cleanup success and explicit failure
+        shell: bash
+        run: |
+          set -euo pipefail
+          for tool in gcc clang; do
+            "$tool" -std=c11 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+              -pthread -Isrc/main/cpp \
+              tests/native_actor_retained_cleanup_autoadmit_test.c \
+              src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+              -o "build/actor-ledger-gate/prepaid-cleanup-$tool"
+            "build/actor-ledger-gate/prepaid-cleanup-$tool"
+          done
+      - name: Normal Future resumes and returns unused cleanup credit
+        shell: bash
+        run: |
+          set -euo pipefail
+          for tool in gcc clang; do
+            "$tool" -std=c11 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+              -pthread -Isrc/main/cpp \
+              tests/native_actor_retained_cleanup_unused_reservation_test.c \
+              src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+              -o "build/actor-ledger-gate/unused-cleanup-$tool"
+            "build/actor-ledger-gate/unused-cleanup-$tool"
+          done
+      - name: Competing STOP and Future wake publication under native scheduler
+        shell: bash
+        run: |
+          set -euo pipefail
+          for tool in gcc clang; do
+            "$tool" -std=c11 -O2 -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+              -pthread -Isrc/main/cpp \
+              tests/native_actor_retained_stop_wake_race_test.c \
+              src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+              -o "build/actor-ledger-gate/stop-wake-race-$tool"
+            "build/actor-ledger-gate/stop-wake-race-$tool"
+          done
+      - name: Native scheduler bridge Clang ASan and UBSan
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euo pipefail
+          clang -std=c11 -O1 -g -Wall -Wextra -Wpedantic -Werror \
+            -pthread -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Isrc/main/cpp -c src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+            -o build/actor-ledger-gate/scheduler-sanitized.o
+          clang++ -std=c++17 -O1 -g -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+            -pthread -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Isrc/main/cpp tests/native_actor_ledger_scheduler_bridge_test.cpp \
+            build/actor-ledger-gate/scheduler-sanitized.o \
+            -o build/actor-ledger-gate/bridge-sanitized
+          build/actor-ledger-gate/bridge-sanitized
+          clang -std=c11 -O1 -g -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+            -pthread -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Isrc/main/cpp \
+            tests/native_actor_retained_data_stop_test.c \
+            build/actor-ledger-gate/scheduler-sanitized.o \
+            -o build/actor-ledger-gate/retained-stop-sanitized
+          build/actor-ledger-gate/retained-stop-sanitized
+          clang -std=c11 -O1 -g -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+            -pthread -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Isrc/main/cpp \
+            tests/native_actor_retained_data_ordering_test.c \
+            build/actor-ledger-gate/scheduler-sanitized.o \
+            -o build/actor-ledger-gate/retained-order-sanitized
+          build/actor-ledger-gate/retained-order-sanitized
+          clang -std=c11 -O1 -g -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+            -DORES_NATIVE_CLEANUP_SUCCESS_ONLY=1 \
+            -pthread -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Isrc/main/cpp \
+            tests/native_actor_retained_cleanup_autoadmit_test.c \
+            build/actor-ledger-gate/scheduler-sanitized.o \
+            -o build/actor-ledger-gate/prepaid-cleanup-sanitized
+          build/actor-ledger-gate/prepaid-cleanup-sanitized
+          clang -std=c11 -O1 -g -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+            -pthread -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Isrc/main/cpp \
+            tests/native_actor_retained_cleanup_unused_reservation_test.c \
+            build/actor-ledger-gate/scheduler-sanitized.o \
+            -o build/actor-ledger-gate/unused-cleanup-sanitized
+          build/actor-ledger-gate/unused-cleanup-sanitized
+          clang -std=c11 -O1 -g -UNDEBUG -Wall -Wextra -Wpedantic -Werror \
+            -pthread -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Isrc/main/cpp \
+            tests/native_actor_retained_stop_wake_race_test.c \
+            build/actor-ledger-gate/scheduler-sanitized.o \
+            -o build/actor-ledger-gate/stop-wake-race-sanitized
+          build/actor-ledger-gate/stop-wake-race-sanitized
+
+  compiled-ores-guest:
+    # Genuine guest code compiled by oreslang-llvmc, not an IR fixture or
+    # a C mock. Only trusted checkout of the source repo's exact PR tree.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout original private repository at immutable PR head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify source identity and compiled guest gate blobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "EXACT_GUEST_HEAD=$(git rev-parse HEAD)"
+          echo "EXACT_GUEST_TREE=$(git rev-parse 'HEAD^{tree}')"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          fi
+          for path in \
+              tests/fixtures/native-retained-guest-steps.atto \
+              tests/rust-harness/src/retained_guest.rs \
+              tests/native_actor_compiled_guest_ledger_bridge_test.c \
+              tests/fixtures/source-actor-suspend-method-reject.ores \
+              src/main/cpp/oreslang/runtime/NativeActorScheduler.c \
+              src/main/cpp/oreslang/runtime/NativeActorScheduler.h \
+              src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.c \
+              src/main/cpp/oreslang/runtime/ActorOwnedI64Heap.h \
+              CMakeLists.txt \
+              src/main/cpp/oreslang/main.cpp \
+              src/main/cpp/oreslang/frontend/Parser.cpp \
+              src/main/cpp/oreslang/frontend/ModuleLoader.cpp \
+              src/main/cpp/oreslang/frontend/MethodResolver.cpp \
+              src/main/cpp/oreslang/types/NativeScalarTypes.cpp \
+              src/main/cpp/oreslang/types/OwnershipChecker.cpp \
+              src/main/cpp/oreslang/backend/LlvmCodegen.cpp \
+              src/main/cpp/oreslang/backend/ScalarLoopLowering.cpp; do
+            test "$(git hash-object "$path")" = "$(git rev-parse "HEAD:$path")"
+          done
+      - name: Build real Oreslang LLVM compiler against installed LLVM
+        shell: bash
+        run: |
+          set -euo pipefail
+          llvm_cmake="$(find /usr/lib/llvm-* -path '*/lib/cmake/llvm/LLVMConfig.cmake' \
+            -print 2>/dev/null | sort -V | tail -n 1)"
+          if [[ -z "$llvm_cmake" ]]; then
+            sudo apt-get update
+            sudo apt-get install -y llvm-dev
+            llvm_cmake="$(find /usr/lib/llvm-* -path '*/lib/cmake/llvm/LLVMConfig.cmake' \
+              -print 2>/dev/null | sort -V | tail -n 1)"
+          fi
+          test -f "$llvm_cmake"
+          cmake -S . -B build/actor-ledger-guest -G Ninja \
+            -DBUILD_TESTING=OFF -DLLVM_DIR="$(dirname "$llvm_cmake")"
+          cmake --build build/actor-ledger-guest --target oreslang-llvmc -j 2
+      - name: Compile and execute actual guest segments under native retained DATA/WAKE
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --manifest-path tests/rust-harness/Cargo.toml --locked --release \
+            --target-dir build/actor-ledger-rust
+          rustc --edition=2021 -D warnings scripts/audit_no_gc_ir.rs -o build/actor-ledger-no-gc
+          build/actor-ledger-rust/release/oreslang-llvm-test-harness retained-guest \
+            "$PWD/build/actor-ledger-guest/oreslang-llvmc" clang "$PWD" \
+            "$PWD/build/actor-ledger-no-gc" release
+          build/actor-ledger-rust/release/oreslang-llvm-test-harness retained-guest \
+            "$PWD/build/actor-ledger-guest/oreslang-llvmc" clang "$PWD" \
+            "$PWD/build/actor-ledger-no-gc" sanitize

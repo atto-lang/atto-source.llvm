@@ -15,6 +15,7 @@
 typedef struct {
     OresNativeActorScheduler* scheduler;
     OresNativeActorRef producer;
+    pthread_t publisher_thread; /* The thread publishing readiness is not a guest carrier. */
     pthread_mutex_t lock;
     pthread_cond_t cv;
     int blocked, entered, release, events[32], events_len;
@@ -38,6 +39,8 @@ static void event(Fixture* f, int code) {
 }
 static void on_data(void* raw, size_t actor, uint64_t payload) {
     Fixture* f = (Fixture*)raw;
+    if (pthread_equal(pthread_self(), f->publisher_thread))
+        atomic_fetch_add(&f->errors, 1);
     if (actor != 0 || !ores_native_actor_scheduler_is_current_actor(
             f->scheduler, f->producer))
         atomic_fetch_add(&f->errors, 1);
@@ -56,6 +59,8 @@ static void on_data(void* raw, size_t actor, uint64_t payload) {
 }
 static void on_control(void* raw, size_t actor, uint64_t payload) {
     Fixture* f = (Fixture*)raw;
+    if (pthread_equal(pthread_self(), f->publisher_thread))
+        atomic_fetch_add(&f->errors, 1);
     if (actor != 0 || payload != 31 || atomic_fetch_add(&f->active, 1) != 0)
         atomic_fetch_add(&f->errors, 1);
     atomic_fetch_add(&f->controls, 1);
@@ -65,6 +70,10 @@ static void on_control(void* raw, size_t actor, uint64_t payload) {
 static void on_wake(void* raw, size_t actor, OresNativeWakeTicket ticket,
         OresNativeWakeOutcome outcome) {
     Fixture* f = (Fixture*)raw;
+    /* A producer, reactor, or completion publisher cannot execute a guest
+     * continuation: only the admitted native actor carrier owns the turn. */
+    if (pthread_equal(pthread_self(), f->publisher_thread))
+        atomic_fetch_add(&f->errors, 1);
     if (actor != 0 || !ores_native_actor_scheduler_is_current_wake(
             f->scheduler, ticket)
             || !ores_native_actor_scheduler_is_current_actor(
@@ -100,6 +109,7 @@ static OresNativeWakeTicket reserve(Fixture* f, uint64_t descriptor) {
     return ticket;
 }
 static void setup(Fixture* f) {
+    f->publisher_thread = pthread_self();
     CHECK(pthread_mutex_init(&f->lock, NULL) == 0);
     CHECK(pthread_cond_init(&f->cv, NULL) == 0);
     f->scheduler = ores_native_actor_scheduler_open_with_wakes(

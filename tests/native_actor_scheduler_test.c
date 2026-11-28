@@ -17,10 +17,17 @@ typedef struct {
     atomic_uint_fast64_t allocation_domain[ACTORS];
     atomic_uint_fast64_t allocation_generation[ACTORS];
     atomic_int hold;
+    atomic_int require_worker_dispatch;
+    pthread_t submitter_thread;
     OresNativeActorScheduler* scheduler;
 } State;
 static void run(void* raw, size_t actor, uint64_t msg) {
     State* s = (State*)raw;
+    /* An I/O completion or submitting host thread only publishes readiness.
+     * Actor guest work must execute under a scheduler carrier claim. */
+    if (atomic_load(&s->require_worker_dispatch)
+            && pthread_equal(pthread_self(), s->submitter_thread))
+        atomic_fetch_add(&s->errors, 1);
     OresNativeExecutionContext execution = {0};
     if (!s->scheduler
             || !ores_native_actor_scheduler_current_execution_context(
@@ -150,6 +157,8 @@ static void test_single_carrier_fairness(void) {
 int main(void) {
     test_single_carrier_fairness();
     State s = {0};
+    s.submitter_thread = pthread_self();
+    atomic_store(&s.require_worker_dispatch, 1);
     OresNativeActorScheduler* scheduler =
         ores_native_actor_scheduler_open(ACTORS, EACH, 8, run, &s);
     check(scheduler != NULL);

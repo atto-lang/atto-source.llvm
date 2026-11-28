@@ -21,6 +21,8 @@
 #define SOURCE_ROOT_CONTROL_RESUME UINT64_C(2)
 #define SOURCE_ROOT_CONTROL_DONE_SUSPEND UINT64_C(3)
 #define SOURCE_ROOT_CONTROL_DONE_RESUME UINT64_C(4)
+/* Current source actor bootstrap supports a single immutable code image. */
+#define SOURCE_ACTOR_BOOTSTRAP_CODE_GENERATION UINT64_C(1)
 
 typedef struct {
     uint64_t magic;
@@ -401,7 +403,7 @@ static void root_suspend_turn(void) {
         origin,
         no_parent,
         ORES_CONTINUATION_BOUNDARY_AWAIT,
-        1,
+        SOURCE_ACTOR_BOOTSTRAP_CODE_GENERATION,
         frame->source_token,
         &frame->link));
 
@@ -448,11 +450,12 @@ static void root_resume_turn(void) {
 
     OresNativeExecutionHandle resumed = {0, 0};
     OresNativeExecutionContext logical = {0};
-    ensure(ores_native_await_trace_ready_resume_begin(
+    ensure(ores_native_await_trace_ready_resume_begin_current_code(
         group.executions,
         group.continuations,
         physical.id,
         link,
+        SOURCE_ACTOR_BOOTSTRAP_CODE_GENERATION,
         &resumed,
         &logical));
 
@@ -508,7 +511,7 @@ static void root_done_suspend_turn(void) {
         origin,
         no_parent,
         ORES_CONTINUATION_BOUNDARY_AWAIT,
-        1,
+        SOURCE_ACTOR_BOOTSTRAP_CODE_GENERATION,
         frame->source_token,
         &frame->link));
     ensure(ores_native_execution_context_store_release(
@@ -797,6 +800,10 @@ static void open_group_locked(void) {
     group.continuations = ores_native_continuation_store_open(
         SOURCE_TRACE_CONTINUATIONS, group.executions);
     ensure(group.continuations != NULL);
+    /* The traced source compiler emits one bootstrap image. Register that
+     * image with the runtime before any actor or continuation is admitted. */
+    ensure(ores_native_continuation_store_rotate_code_generation(
+        group.continuations, SOURCE_ACTOR_BOOTSTRAP_CODE_GENERATION));
 
     OresNativeVMConfig cfg = {0};
     for (int i = 0; i < ORES_NATIVE_VM_DOMAIN_COUNT; ++i) {
@@ -916,7 +923,7 @@ void* oreslang_source_actor_spawn(
         ensure(ores_native_vm_started_carriers(
             group.vm, ORES_NATIVE_VM_UNTRUSTED) == 0);
         fprintf(stderr,
-            "SOURCE_ACTOR_FIRST_CARRIER_READY main=1 shared=0 private=0 untrusted=0\\n");
+            "SOURCE_ACTOR_FIRST_CARRIER_READY main=1 shared=0 private=0 untrusted=0\n");
     }
 #endif
     group.live++;
