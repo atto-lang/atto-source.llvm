@@ -1038,7 +1038,8 @@ void validate_i64_ownership(Program& program) {
             if (!binding.class_name.empty()) {
                 if (!class_fields.count(binding.class_name))
                     throw std::runtime_error("native scoped value has unknown class");
-                entry.mode = Mode::Borrow; entry.record_view = true;
+                entry.mode = binding.explicit_factory_take ? Mode::Value : Mode::Borrow;
+                entry.record_view = !binding.explicit_factory_take;
                 entry.mutable_paths = layouts.mutable_paths(binding.class_name);
                 entry.subobjects = layouts.at(binding.class_name).subobjects;
                 entry.class_fields = class_fields.at(binding.class_name);
@@ -1172,7 +1173,33 @@ void validate_i64_ownership(Program& program) {
                 if (state.count(local.name))
                     throw std::runtime_error("ownership violation: branch local shadows live owner at byte " +
                         std::to_string(local.offset));
-                if (local.int_array && local.initializer) {
+                if (local.explicit_factory_take) {
+                    // Independently authenticate this bounded root-only profile.
+                    // The existing factory ABI transfers array handles directly
+                    // into caller-owned storage; never reinterpret an i64 result.
+                    const bool ordered_root = std::any_of(function.statements.begin(),
+                        function.statements.end(), [&](const Statement& item) { return &item == &stmt; });
+                    if (!ordered_root || function.name != "main" || !function.parameters.empty() ||
+                            function.returns_void || function.return_type != ScalarType::I64 ||
+                            !function.return_class.empty() || !local.owner_mutable ||
+                            local.assignable || !local.record_view || local.class_name.empty() ||
+                            !class_arrays.count(local.class_name) ||
+                            class_arrays.at(local.class_name).empty() ||
+                            !layouts.at(local.class_name).subobjects.empty() ||
+                            !local.initializer || local.initializer->kind != Expression::Kind::Call)
+                        throw std::runtime_error("E_ORDERED_OWNER_PROFILE: requires flat owned factory in native main");
+                    const auto& init = *local.initializer;
+                    const auto called = functions.find(native_function_slot(init.name, init.arguments.size()));
+                    if (called == functions.end() || called->second->return_class != local.class_name)
+                        reject(init, "E_ORDERED_OWNER_PROFILE: matching nominal owned result required");
+                    // First slice: no owner-taking argument, nested call or
+                    // effectful evaluation. Ordinary scalar literal arguments.
+                    for (const auto& arg : init.arguments)
+                        if (arg->kind != Expression::Kind::Integer &&
+                                arg->kind != Expression::Kind::Boolean)
+                            reject(*arg, "E_ORDERED_OWNER_PROFILE: literal factory arguments required");
+                    check_value(init, state, functions);
+                } else if (local.int_array && local.initializer) {
                     const Expression& split = *local.initializer;
                     if (local.array_element_type != ScalarType::String ||
                             split.kind != Expression::Kind::ArrayCall ||

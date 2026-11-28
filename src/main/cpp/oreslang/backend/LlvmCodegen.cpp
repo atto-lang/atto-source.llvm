@@ -1348,6 +1348,10 @@ static std::string emit_verified_llvm_ir_impl(const Program& source, bool wasm32
         for (const auto& arg : e->arguments) scan_string(arg.get());
     };
     std::function<void(const Statement&)> scan_statement = [&](const Statement& s) {
+        if (s.branch_local && s.branch_local->explicit_factory_take &&
+                (wasm32_target || cortex_m_target || bounded_allocator_provider ||
+                 tenant_vm_guest || actor_region_v1 || !isolate_entry.empty()))
+            throw std::runtime_error("E_ORDERED_OWNER_PROFILE: requires hosted native scoped cleanup");
         if (s.branch_local && s.branch_local->int_array) {
             if (wasm32_target)
                 throw std::runtime_error("wasm32 scoped array owners require allocator-provider scope qualification");
@@ -1650,7 +1654,8 @@ static std::string emit_verified_llvm_ir_impl(const Program& source, bool wasm32
     // Emit declarations only for functions that actually own Array<int>
     // locals. Opaque, unique handles are never exposed as guest values.
     std::function<bool(const Statement&)> contains_scoped_array = [&](const Statement& stmt) {
-        return (stmt.kind == Statement::Kind::ScopedLocal && stmt.branch_local->int_array) ||
+        return (stmt.kind == Statement::Kind::ScopedLocal &&
+                    (stmt.branch_local->int_array || stmt.branch_local->explicit_factory_take)) ||
             std::any_of(stmt.then_statements.begin(), stmt.then_statements.end(), contains_scoped_array) ||
             std::any_of(stmt.else_statements.begin(), stmt.else_statements.end(), contains_scoped_array);
     };
@@ -2065,6 +2070,9 @@ static std::string emit_verified_llvm_ir_impl(const Program& source, bool wasm32
         std::function<void(const Statement&)> count_scoped_arrays = [&](const Statement& stmt) {
             if (stmt.kind == Statement::Kind::ScopedLocal && stmt.branch_local->int_array)
                 ++array_owner_count;
+            if (stmt.kind == Statement::Kind::ScopedLocal && stmt.branch_local->explicit_factory_take)
+                for (const auto& fld : record_classes.at(stmt.branch_local->class_name)->fields)
+                    if (fld.int_array) ++array_owner_count;
             for (const auto& child : stmt.then_statements) count_scoped_arrays(child);
             for (const auto& child : stmt.else_statements) count_scoped_arrays(child);
         };
@@ -2715,7 +2723,7 @@ static std::string emit_verified_llvm_ir_impl(const Program& source, bool wasm32
             ? llvm::BasicBlock::Create(context, "exit.cleanup", function) : nullptr;
         llvm::Value* structured_snapshot = structured_returns && !fn.returns_void
             ? builder.CreateAlloca(i64, nullptr, "return.snapshot.slot") : nullptr;
-        struct ScopedSlot { std::string name; llvm::Value* address; std::size_t bytes; std::vector<std::string> fields; std::vector<std::string> subobjects; llvm::Value* array_shadow = nullptr; };
+        struct ScopedSlot { std::string name; llvm::Value* address; std::size_t bytes; std::vector<std::string> fields; std::vector<std::string> subobjects; llvm::Value* array_shadow = nullptr; std::vector<std::string> owned_fields; };
         auto scoped_value = [&](const LocalBinding& local, llvm::Value* init) {
             const bool record = !local.class_name.empty();
             llvm::Type* shape = record ? static_cast<llvm::Type*>(class_types.at(local.class_name)) : i64;
@@ -2727,8 +2735,55 @@ static std::string emit_verified_llvm_ir_impl(const Program& source, bool wasm32
             // Array handle slots remain addressable for the whole invocation:
             // a common return epilogue may inspect an unreached declaration.
             // The resource itself is still created/dropped at lexical edges.
-            if (!local.int_array) native_lifetime_start(builder, slot, bytes);
-            ScopedSlot result{local.name, slot, bytes, {}, {}};
+            if (!local.int_array && !local.explicit_factory_take) native_lifetime_start(builder, slot, bytes);
+            ScopedSlot result{local.name, slot, bytes, {}, {}, nullptr, {}};
+            if (local.explicit_factory_take) {
+                // Entry-dominating, zero-initialized field and cleanup slots:
+                // an earlier return must see no owned handles for a declaration
+                // it did not reach. Keep the backing stack storage live for
+                // the whole invocation; acquire resources only at this point.
+                const auto& cls = *record_classes.at(local.class_name);
+                if (!array_region || !array_handle_shadows || !local.initializer ||
+                        !class_owns_arrays(local.class_name))
+                    throw std::runtime_error("E_ORDERED_OWNER_PROFILE: missing owning result ABI");
+                // Publish field mappings only after evaluating the factory call.
+                std::vector<std::pair<std::string, llvm::Value*>> staged;
+                llvm::IRBuilder<> shadow_slots(llvm::cast<llvm::Instruction>(array_handle_shadows)->getNextNode());
+                for (std::size_t i = 0; i < cls.fields.size(); ++i) {
+                    const auto& field = cls.fields[i];
+                    const auto key = field_key(local.name, field.name);
+                    auto* address = entry_slots.CreateStructGEP(class_types.at(local.class_name), slot,
+                        static_cast<unsigned>(i), key + ".ordered.field");
+                    entry_slots.CreateStore(llvm::ConstantInt::get(i64, 0), address);
+                    staged.emplace_back(key, address);
+                    result.fields.push_back(key);
+                    if (field.int_array) {
+                        if (next_array_shadow >= array_owner_count)
+                            throw std::runtime_error("missing ordered owning result cleanup slot");
+                        auto* shadow = shadow_slots.CreateGEP(i64, array_handle_shadows,
+                            llvm::ConstantInt::get(i64, next_array_shadow++), key + ".ordered.shadow");
+                        if (!array_failure_places.emplace(key, shadow).second)
+                            throw std::runtime_error("duplicate ordered owner shadow");
+                        result.owned_fields.push_back(key);
+                    }
+                }
+                RegionMoveLowering call_moves = region_moves;
+                call_moves.result_destination = slot;
+                call_moves.result_region = array_region;
+                lower(*local.initializer, builder, i64, storage, field_storage, declarations, &call_moves);
+                for (const auto& field : staged) {
+                    if (!field_storage.emplace(field.first, field.second).second)
+                        throw std::runtime_error("ordered owner field collision");
+                }
+                for (const auto& key : result.owned_fields) {
+                    builder.CreateStore(builder.CreateLoad(i64, field_storage.at(key)), array_failure_places.at(key));
+                    array_field_keys.insert(key);
+                }
+                if (!storage.emplace(local.name, slot).second ||
+                        !class_array_regions.emplace(local.name, array_region).second)
+                    throw std::runtime_error("ordered owner storage collision");
+                return result;
+            }
             if (local.int_array) {
                 llvm::Value* split_source = nullptr;
                 llvm::Value* split_delimiter = nullptr;
@@ -2786,6 +2841,22 @@ static std::string emit_verified_llvm_ir_impl(const Program& source, bool wasm32
             return result;
         };
         auto finish_scope = [&](const ScopedSlot& slot) {
+            if (!slot.owned_fields.empty()) {
+                for (auto it = slot.owned_fields.rbegin(); it != slot.owned_fields.rend(); ++it) {
+                    auto* address = field_storage.at(*it);
+                    auto* handle = builder.CreateLoad(i64, address);
+                    auto* drop = llvm::BasicBlock::Create(context, "ordered.owner.drop", function);
+                    auto* next = llvm::BasicBlock::Create(context, "ordered.owner.drop.next", function);
+                    builder.CreateCondBr(builder.CreateICmpNE(handle, llvm::ConstantInt::get(i64, 0)), drop, next);
+                    builder.SetInsertPoint(drop);
+                    builder.CreateCall(arrayDrop, {array_region, handle});
+                    builder.CreateStore(llvm::ConstantInt::get(i64, 0), address);
+                    builder.CreateStore(llvm::ConstantInt::get(i64, 0), array_failure_places.at(*it));
+                    builder.CreateBr(next);
+                    builder.SetInsertPoint(next);
+                }
+                return;
+            }
             if (slot.array_shadow) {
                 // The cleanup shadow outlives lexical storage and is also
                 // consumed by the resource-failure epilogue. Retire both
@@ -2997,7 +3068,7 @@ static std::string emit_verified_llvm_ir_impl(const Program& source, bool wasm32
             if (builder.GetInsertBlock()->getTerminator()) break;
             if (stmt.kind == Statement::Kind::ScopedLocal) {
                 const auto& local = *stmt.branch_local;
-                auto* value = (local.initializer && !local.int_array)
+                auto* value = (local.initializer && !local.int_array && !local.explicit_factory_take)
                     ? lower(*local.initializer, builder, i64, storage, field_storage, declarations, &region_moves)
                     : nullptr;
                 ordered_root_scopes.push_back(scoped_value(local, value));
