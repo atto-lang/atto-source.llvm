@@ -1,0 +1,107 @@
+name: AttoLang LLVM compiler signed provenance
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/atto-llvm-compiler-attestation.yml'
+      - 'tests/atto_llvm_compiler_attestation_workflow.test.mjs'
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-only-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact workflow source head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact workflow head and execute contract tests
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          node --version
+          node --test tests/atto_llvm_compiler_attestation_workflow.test.mjs
+  signed-compiler:
+    # Never sign a build from unreviewed PR code, a non-main branch,
+    # unprotected main, or a cross-org/private-source carrier.
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && github.repository == 'ores-truffle-oreslang/oreslang-source.llvm'
+    needs: source-only-contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout exact protected main compiler source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Require protected and unchanged main and zero untracked source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+          protected="$(gh api repos/ores-truffle-oreslang/oreslang-source.llvm/branches/main --jq '.protected')"
+          test "$protected" = true
+          live_sha="$(gh api repos/ores-truffle-oreslang/oreslang-source.llvm/branches/main --jq '.commit.sha')"
+          test "$live_sha" = "$GITHUB_SHA"
+          echo "LLVM_ATTEST_SOURCE_SHA=$GITHUB_SHA"
+          echo "LLVM_ATTEST_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Install native LLVM compiler prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends build-essential clang cmake ninja-build llvm-dev
+          llvm-config --version
+          cmake --version
+          clang --version
+      - name: Build real oreslang-llvmc from the exact reviewed Git tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          build="$RUNNER_TEMP/atto-llvmc-attested-build"
+          cmake -G Ninja -S . -B "$build" -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DLLVM_DIR="$(llvm-config --cmakedir)"
+          cmake --build "$build" --target oreslang-llvmc --parallel 2
+          test -f "$build/oreslang-llvmc"
+          test -x "$build/oreslang-llvmc"
+          test "$(head -c 4 "$build/oreslang-llvmc" | od -An -tx1 | tr -d ' \n')" = 7f454c46
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+          sha256sum "$build/oreslang-llvmc"
+      - name: Verify main did not move during compiler build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(gh api repos/ores-truffle-oreslang/oreslang-source.llvm/branches/main --jq '.protected')" = true
+          test "$(gh api repos/ores-truffle-oreslang/oreslang-source.llvm/branches/main --jq '.commit.sha')" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+      - name: Sign native compiler build provenance with GitHub OIDC
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: ${{ runner.temp }}/atto-llvmc-attested-build/oreslang-llvmc
+      - name: Retain only the signed native compiler binary
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: atto-llvmc-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/atto-llvmc-attested-build/oreslang-llvmc
+          if-no-files-found: error
+          retention-days: 30
