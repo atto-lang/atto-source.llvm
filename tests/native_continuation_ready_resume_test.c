@@ -527,6 +527,18 @@ int main(void) {
         continuations, link.continuation, &record));
     check(record.state == ORES_CONTINUATION_READY);
     check(!ores_native_store_handle_valid(resumed));
+    /* A matching numeric code generation alone is not authority. The
+     * trusted runtime must first register the image in this store. */
+    check(ores_native_continuation_store_current_code_generation(continuations) == 0);
+    check(!ores_native_await_trace_ready_resume_begin_current_code(
+        executions, continuations, (OresNativeExecutionId){88, 9},
+        link, 77, &resumed, &resumed_context));
+    check(!ores_native_store_handle_valid(resumed));
+    check(ores_native_continuation_store_get(
+        continuations, link.continuation, &record));
+    check(record.state == ORES_CONTINUATION_READY);
+    check(ores_native_continuation_store_rotate_code_generation(
+        continuations, 77));
     check(ores_native_await_trace_ready_resume_begin_current_code(
         executions, continuations, (OresNativeExecutionId){88, 9},
         link, 77, &resumed, &resumed_context));
@@ -594,8 +606,6 @@ int main(void) {
      * upgrade atomically fences both the guarded and legacy READY claim
      * paths, even if a producer published READY just before rotation.
      */
-    check(ores_native_continuation_store_rotate_code_generation(
-        continuations, 77));
     check(ores_native_continuation_store_current_code_generation(
         continuations) == 77);
     check(!ores_native_continuation_store_rotate_code_generation(

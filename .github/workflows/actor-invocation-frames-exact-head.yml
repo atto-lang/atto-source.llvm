@@ -1,0 +1,81 @@
+name: Native invocation frame store exact-head
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/cpp/oreslang/runtime/ActorInvocationFrames.hpp'
+      - 'src/main/cpp/oreslang/runtime/ActorExecutionLedger.hpp'
+      - 'tests/native_actor_invocation_frames_test.cpp'
+      - 'CMakeLists.txt'
+      - 'docs/ACTOR_INVOCATION_STACK_FRAMES_V1.md'
+      - '.github/workflows/actor-invocation-frames-exact-head.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  invocation-frames-native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout immutable submitted head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact HEAD TREE and source blobs before compiling
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          echo "EXACT_HEAD=$(git rev-parse HEAD)"
+          echo "EXACT_TREE=$(git rev-parse 'HEAD^{tree}')"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          for path in \
+            src/main/cpp/oreslang/runtime/ActorInvocationFrames.hpp \
+            src/main/cpp/oreslang/runtime/ActorExecutionLedger.hpp \
+            tests/native_actor_invocation_frames_test.cpp \
+            CMakeLists.txt; do
+            expected="$(git rev-parse "HEAD:$path")"
+            observed="$(git hash-object "$path")"
+            test "$expected" = "$observed"
+            echo "EXACT_BLOB $path $observed"
+          done
+      - name: GCC and Clang O2 strict native frame execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/invocation-frame-exact-head
+          for compiler in g++ clang++; do
+            output="build/invocation-frame-exact-head/${compiler//+/p}"
+            "$compiler" -std=c++17 -O2 -UNDEBUG \
+              -Wall -Wextra -Wpedantic -Werror \
+              -Isrc/main/cpp tests/native_actor_invocation_frames_test.cpp \
+              -o "$output"
+            "$output"
+            echo "ACTOR_INVOCATION_FRAMES_NATIVE_PASS compiler=$compiler"
+          done
+      - name: Clang ASan UBSan logical stack fault matrix
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euo pipefail
+          clang++ -std=c++17 -O1 -g -UNDEBUG \
+            -Wall -Wextra -Wpedantic -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Isrc/main/cpp tests/native_actor_invocation_frames_test.cpp \
+            -o build/invocation-frame-exact-head/sanitized
+          build/invocation-frame-exact-head/sanitized
+          echo "ACTOR_INVOCATION_FRAMES_SANITIZED_PASS"
+      - name: State exact-tree evidence boundary
+        shell: bash
+        run: |
+          echo "HOST_CPP_RUNTIME_FRAMES_EXECUTED"
+          echo "ATTO_COMPILER_GUEST_SUSPENSION_NOT_VERIFIED"
+          echo "NATIVE_HARD_REALTIME_NOT_VERIFIED"
+          echo "FIVE_BACKEND_PARITY_NOT_VERIFIED"

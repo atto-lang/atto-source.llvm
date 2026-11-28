@@ -1,4 +1,5 @@
 mod checked_i64;
+mod retained_guest;
 mod native_cast_parity;
 #[cfg(test)]
 mod actor_io_half_close;
@@ -1279,6 +1280,15 @@ fn path_arg(args: &[String], index: usize, usage: &str) -> Result<PathBuf, Strin
 fn real_main() -> Result<(), String> {
     let args: Vec<String> = env::args().collect();
     match args.get(1).map(String::as_str) {
+        Some("retained-guest") => {
+            let usage = "usage: retained-guest <compiler> <clang> <root> <no-gc-auditor> <release|sanitize>";
+            let compiler = path_arg(&args, 2, usage)?;
+            let clang = path_arg(&args, 3, usage)?;
+            let root = path_arg(&args, 4, usage)?;
+            let auditor = path_arg(&args, 5, usage)?;
+            let mode = args.get(6).ok_or_else(|| usage.to_string())?;
+            retained_guest::run_cases(&compiler, &clang, &root, &auditor, mode)
+        }
         Some("checked-i64") => {
             let compiler = path_arg(&args, 2, "usage: checked-i64 <compiler> <clang>")?;
             let clang = path_arg(&args, 3, "usage: checked-i64 <compiler> <clang>")?;
